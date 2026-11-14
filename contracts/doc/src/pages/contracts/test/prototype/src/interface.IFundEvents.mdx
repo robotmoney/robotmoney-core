@@ -1,0 +1,308 @@
+---
+title: "IFundEvents"
+description: "Events and errors shared by the fund and the rebalancer. Both inherit this interface (through IRobotMoneyFund / IRebalancer), so tests can `emit IFundEvents.X(...)`."
+---
+
+# IFundEvents
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+**Title:** IFundEvents
+
+Events and errors shared by the fund and the rebalancer. Both inherit this interface
+(through IRobotMoneyFund / IRebalancer), so tests can `emit IFundEvents.X(...)`.
+
+## Events
+
+### PlanOpened
+
+A plan opened (§5.1 step 3). Emitted after the previous live plan's
+`PlanStatusChanged(..., Superseded)`.
+
+```solidity
+event PlanOpened(
+        uint256 indexed planId,
+        bytes32 indexed receiptId,
+        uint16[] startBps,
+        uint16[] endBps,
+        uint64 startTime,
+        uint64 endTime,
+        uint256 turnoverUsdc,
+        uint256 costBudget
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| receiptId | `bytes32` |  |
+| startBps | `uint16[]` |  |
+| endBps | `uint16[]` |  |
+| startTime | `uint64` |  |
+| endTime | `uint64` |  |
+| turnoverUsdc | `uint256` |  |
+| costBudget | `uint256` |  |
+
+### PlanStatusChanged
+
+A plan moved between statuses (§5.5). Every transition emits exactly one.
+
+```solidity
+event PlanStatusChanged(uint256 indexed planId, PlanStatus from, PlanStatus to);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| from | `PlanStatus` |  |
+| to | `PlanStatus` |  |
+
+### PlanBudgetExtended
+
+ADMIN raised a plan's budget (§5.5 "Safe extends").
+
+```solidity
+event PlanBudgetExtended(uint256 indexed planId, uint256 addedUsdc, uint256 newBudget);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| addedUsdc | `uint256` |  |
+| newBudget | `uint256` |  |
+
+### StepExecuted
+
+The fund executed a step's legs (emitted by RobotMoneyFund inside `executeStep`).
+
+```solidity
+event StepExecuted(
+        uint256 indexed planId,
+        uint256 sellIndex,
+        uint256 buyIndex,
+        uint256 notionalUsdc,
+        uint256 amountIn,
+        uint256 usdcMoved,
+        uint256 amountOut,
+        uint256 navBefore,
+        uint256 navAfter,
+        uint256 cost
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| sellIndex | `uint256` |  |
+| buyIndex | `uint256` |  |
+| notionalUsdc | `uint256` |  |
+| amountIn | `uint256` |  |
+| usdcMoved | `uint256` |  |
+| amountOut | `uint256` |  |
+| navBefore | `uint256` |  |
+| navAfter | `uint256` |  |
+| cost | `uint256` |  |
+
+### RebalanceStep
+
+A step executed. `sellPathBps` / `buyPathBps` are the legs' path targets at the
+step's timestamp (idle's path for an IDLE_INDEX leg).
+
+```solidity
+event RebalanceStep(
+        uint256 indexed planId,
+        uint256 sellIndex,
+        uint256 buyIndex,
+        uint256 notionalUsdc,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 cost,
+        uint256 sellPathBps,
+        uint256 buyPathBps
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| sellIndex | `uint256` |  |
+| buyIndex | `uint256` |  |
+| notionalUsdc | `uint256` |  |
+| amountIn | `uint256` |  |
+| amountOut | `uint256` |  |
+| cost | `uint256` |  |
+| sellPathBps | `uint256` |  |
+| buyPathBps | `uint256` |  |
+
+### RebalanceStepSkipped
+
+`step()` returned without trading. `sellIndex` / `buyIndex` are the chosen legs when
+known, else IDLE_INDEX. `detail`: asset index for MarketDeviation, revert selector
+for StepFailed, the notional for BelowMinStep, the seconds remaining for Cooldown,
+0 otherwise.
+
+```solidity
+event RebalanceStepSkipped(
+        uint256 indexed planId,
+        SkipReason reason,
+        uint256 sellIndex,
+        uint256 buyIndex,
+        uint256 detail
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| reason | `SkipReason` |  |
+| sellIndex | `uint256` |  |
+| buyIndex | `uint256` |  |
+| detail | `uint256` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### InvalidParam
+
+```solidity
+error InvalidParam();
+```
+
+### TargetAssetNotActive
+
+A target vector names `asset`, which is not an active fund asset (unknown or
+deactivated).
+
+```solidity
+error TargetAssetNotActive(address asset);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+
+### TargetAssetDuplicate
+
+A target vector names `asset` more than once.
+
+```solidity
+error TargetAssetDuplicate(address asset);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+
+### TargetAssetMissing
+
+A target vector leaves out the active asset `asset`. An explicit 0 is required to
+sell an asset, so a vector can never sell one by forgetting it.
+
+```solidity
+error TargetAssetMissing(address asset);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+
+### TargetSumInvalid
+
+A target vector's weights do not sum to 10 000. A single weight above 10 000 reverts
+at once and reports that weight.
+
+```solidity
+error TargetSumInvalid(uint256 sum);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sum | `uint256` |  |
+
+### TargetExceedsCap
+
+A Lending asset's target exceeds its `capBps` (a risk ceiling on one venue).
+
+```solidity
+error TargetExceedsCap(uint256 index, uint256 targetBps, uint256 capBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| targetBps | `uint256` |  |
+| capBps | `uint256` |  |
+
+### InvalidAssetIndex
+
+An asset index is out of range, inactive, or IDLE_INDEX where not allowed.
+
+```solidity
+error InvalidAssetIndex(uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+### PlanParamOutOfBounds
+
+A plan parameter is out of its §5.6 bound.
+
+```solidity
+error PlanParamOutOfBounds();
+```
+
+### StepParamOutOfBounds
+
+A step parameter is out of its §5.6 bound.
+
+```solidity
+error StepParamOutOfBounds();
+```
+
+### BoundAtOrBelowPoolFee
+
+A slippage or deviation bound is at or below the asset's pool fee (§5.6 last para).
+
+```solidity
+error BoundAtOrBelowPoolFee(uint256 index, uint256 boundBps, uint256 poolFeeBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| boundBps | `uint256` |  |
+| poolFeeBps | `uint256` |  |
+

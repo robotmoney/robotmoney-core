@@ -1,0 +1,229 @@
+---
+title: "MechSwapAdapter"
+description: "A swap venue for `FlowQueue.t.sol` that `vm.etch` places over the harness's exact-output swap adapter (whose code keeps no storage). It trades on the real Uniswap V3 pools through SwapRouter02, as the adapter copy does, and can misbehave on purpose: - `HONEST`: the same as `UniswapV3ExactOutSwapAdapter`. - `UNDER_DELIVER`: an exact-output purchase buys `amountOut` but hands the fund `bps` less and keeps the rest. It reports the true input. From the fund's side this is a purchase of the wrong amount, which the fund's own proportion check (check 10, RB-13) must refuse. - `CHARGE_MAX`: an exact-output purchase delivers `amountOut` and reports `maxAmountIn` as spent, keeping the difference: every basket leg costs exactly its per-swap limit (the worst case the bound allows). Any mode also runs the re-entry probe (`MechReentry`) while armed. Basket tokens that a mode keeps stay in this contract: no new account is touched."
+---
+
+# MechSwapAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/mocks/MechSwapAdapter.sol)
+
+**Inherits:** [MechReentry](/contracts/test/prototype/mocks/abstract.MechReentry), [IExactOutSwapAdapter](/contracts/test/prototype/src/interfaces/interface.IExactOutSwapAdapter)
+
+**Title:** MechSwapAdapter
+
+A swap venue for `FlowQueue.t.sol` that `vm.etch` places over the harness's exact-output swap adapter (whose
+code keeps no storage). It trades on the real Uniswap V3 pools through SwapRouter02, as the adapter copy
+does, and can misbehave on purpose:
+- `HONEST`: the same as `UniswapV3ExactOutSwapAdapter`.
+- `UNDER_DELIVER`: an exact-output purchase buys `amountOut` but hands the fund `bps` less and keeps the
+rest. It reports the true input. From the fund's side this is a purchase of the wrong amount, which the
+fund's own proportion check (check 10, RB-13) must refuse.
+- `CHARGE_MAX`: an exact-output purchase delivers `amountOut` and reports `maxAmountIn` as spent, keeping
+the difference: every basket leg costs exactly its per-swap limit (the worst case the bound allows).
+Any mode also runs the re-entry probe (`MechReentry`) while armed.
+Basket tokens that a mode keeps stay in this contract: no new account is touched.
+
+## Constants
+
+### HONEST
+
+```solidity
+uint8 public constant HONEST = 0;
+```
+
+### UNDER_DELIVER
+
+```solidity
+uint8 public constant UNDER_DELIVER = 1;
+```
+
+### CHARGE_MAX
+
+```solidity
+uint8 public constant CHARGE_MAX = 2;
+```
+
+### ROUTER
+
+```solidity
+address public immutable ROUTER;
+```
+
+## State Variables
+
+### mode
+
+```solidity
+uint8 public mode;
+```
+
+### underDeliverBps
+
+```solidity
+uint16 public underDeliverBps;
+```
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address router_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| router_ | `address` |  |
+
+<a id="setmode-uint8-uint16"></a>
+
+### setMode
+
+Test knob (no access control: a test mock).
+
+```solidity
+function setMode(uint8 mode_, uint16 underDeliverBps_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mode_ | `uint8` |  |
+| underDeliverBps_ | `uint16` |  |
+
+<a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swap
+
+Exact-input swap, as the production `UniswapV3SwapAdapter.swap` (the fund's sale, step legs).
+
+```solidity
+function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| amountIn | `uint256` |  |
+| minAmountOut | `uint256` |  |
+| recipient | `address` |  |
+| deadline | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+<a id="twapprice-address-address-address-uint256-uint32"></a>
+
+### twapPrice
+
+TWAP quote, as the production adapter (the fund's NAV reads it).
+
+```solidity
+function twapPrice(
+        address pool,
+        address baseToken,
+        address quoteToken,
+        uint256 baseAmount,
+        uint32 window
+    ) external view returns (uint256 quoteAmount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| baseToken | `address` |  |
+| quoteToken | `address` |  |
+| baseAmount | `uint256` |  |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| quoteAmount | `uint256` |  |
+
+<a id="swapexactout-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swapExactOut
+
+Exact-output purchase (the fund's `mintInKind` basket legs), with the mode's misbehaviour.
+
+```solidity
+function swapExactOut(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountOut,
+        uint256 maxAmountIn,
+        address recipient,
+        uint256 deadline
+    ) external returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| amountOut | `uint256` |  |
+| maxAmountIn | `uint256` |  |
+| recipient | `address` |  |
+| deadline | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### ZeroWindow
+
+```solidity
+error ZeroWindow();
+```
+
+### DeadlineExpired
+
+```solidity
+error DeadlineExpired(uint256 deadline, uint256 nowTs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deadline | `uint256` |  |
+| nowTs | `uint256` |  |
+

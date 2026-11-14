@@ -1,0 +1,66 @@
+---
+title: "IAerodromeSlipstreamRouterExactOut"
+description: "Aerodrome Slipstream (Velodrome Slipstream periphery `ISwapRouter`) exact-output entry point."
+---
+
+# IAerodromeSlipstreamRouterExactOut
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/AerodromeExactOutSwapAdapter.sol)
+
+Aerodrome Slipstream (Velodrome Slipstream periphery `ISwapRouter`) exact-output entry point.
+
+## Functions
+
+<a id="exactoutputsingle-exactoutputsingleparams"></a>
+
+### exactOutputSingle
+
+```solidity
+function exactOutputSingle(ExactOutputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `ExactOutputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+
+## Structs
+
+### ExactOutputSingleParams
+
+```solidity
+struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        int24 tickSpacing;
+        address recipient;
+        uint256 deadline;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| tickSpacing | `int24` |  |
+| recipient | `address` |  |
+| deadline | `uint256` |  |
+| amountOut | `uint256` |  |
+| amountInMaximum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+

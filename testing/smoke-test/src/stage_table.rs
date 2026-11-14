@@ -13,13 +13,28 @@ struct Stage {
     name: String,
     #[serde(default)]
     manifest: Option<String>,
-    /// Issue 1892: the system the stage belongs to (`vaults` or `gateway`). Absent in a table from before the split: every stage is the vaults run.
+    /// Issue 1892: the system the stage belongs to (`vaults`, `gateway` or `fund`). Absent in a table from before the split: every stage is the vaults run.
     #[serde(default)]
     system: Option<String>,
 }
 
+/// The vaults system's name in the table (issue 1892).
+pub const VAULTS_SYSTEM: &str = "vaults";
+
 /// The gateway system's name in the table (issue 1892).
 pub const GATEWAY_SYSTEM: &str = "gateway";
+
+/// The systems this harness publishes: the vaults run, then the gateway run. Any other system in the table
+/// (Deploy 4's `fund`, the one-vault prototype) is its own independent run that this harness never makes, so
+/// its manifests are neither expected nor counted here.
+const HARNESS_SYSTEMS: [&str; 2] = [VAULTS_SYSTEM, GATEWAY_SYSTEM];
+
+impl Stage {
+    /// The stage's system; a stage of a table from before the split is a vaults stage.
+    fn system_name(&self) -> &str {
+        self.system.as_deref().unwrap_or(VAULTS_SYSTEM)
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,10 +114,12 @@ impl StageTable {
             })
     }
 
-    /// Every manifest a full publish writes: one per stage that has one.
+    /// Every manifest a full harness publish (the vaults run, then the gateway run) writes: one per stage of those
+    /// systems that has one.
     pub fn all_manifests(&self) -> Vec<String> {
         self.stages
             .iter()
+            .filter(|s| HARNESS_SYSTEMS.contains(&s.system_name()))
             .filter_map(|s| s.manifest.as_deref())
             .map(file_name)
             .collect()
@@ -112,20 +129,21 @@ impl StageTable {
         self.all_manifests().len()
     }
 
-    /// Issue 1892: the manifests the vaults system writes (every stage that is not a gateway-system stage). A vaults run writes these and no gateway manifest.
+    /// Issue 1892: the manifests the vaults system writes (every `vaults` stage, and every stage of a table from before the split). A vaults run writes these and no
+    /// gateway or fund manifest.
     pub fn vaults_manifests(&self) -> Vec<String> {
-        self.system_manifests(false)
+        self.system_manifests(VAULTS_SYSTEM)
     }
 
     /// Issue 1892: the manifests the gateway system writes (`gateway.json`, `gateway-handover.json`). Empty in a table from before the split.
     pub fn gateway_manifests(&self) -> Vec<String> {
-        self.system_manifests(true)
+        self.system_manifests(GATEWAY_SYSTEM)
     }
 
-    fn system_manifests(&self, gateway: bool) -> Vec<String> {
+    fn system_manifests(&self, system: &str) -> Vec<String> {
         self.stages
             .iter()
-            .filter(|s| (s.system.as_deref() == Some(GATEWAY_SYSTEM)) == gateway)
+            .filter(|s| s.system_name() == system)
             .filter_map(|s| s.manifest.as_deref())
             .map(file_name)
             .collect()
@@ -215,6 +233,41 @@ mod tests {
         assert!(t.gateway_present(tmp.path()).is_empty());
         std::fs::write(tmp.path().join("gateway.json"), "{}").unwrap();
         assert_eq!(t.gateway_present(tmp.path()), ["gateway.json"]);
+    }
+
+    #[test]
+    fn a_third_system_is_neither_vaults_nor_gateway_nor_expected() {
+        let t = StageTable::parse(
+            r#"{"stages":[{"name":"a","manifest":"d/<chain>/a.json","system":"vaults"},{"name":"g","manifest":"d/<chain>/g.json","system":"gateway"},{"name":"f","manifest":"d/<chain>/f.json","system":"fund"}],"vaults":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(t.vaults_manifests(), ["a.json"]);
+        assert_eq!(t.gateway_manifests(), ["g.json"]);
+        assert_eq!(t.all_manifests(), ["a.json", "g.json"]);
+        assert_eq!(t.expected_manifest_count(), 2);
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.json"), "{}").unwrap();
+        assert!(t.vaults_missing(tmp.path()).is_empty());
+        assert_eq!(t.missing(tmp.path()), ["g.json"]);
+        assert_eq!(t.manifest_of("f").unwrap(), "f.json");
+    }
+
+    #[test]
+    fn real_table_keeps_the_fund_system_out_of_the_harness_runs() {
+        let t = StageTable::load_default().unwrap();
+        let all = t.all_manifests();
+        for f in [
+            "fund.json",
+            "fund-libs.json",
+            "queue.json",
+            "fund-timelock.json",
+        ] {
+            assert!(
+                !all.contains(&f.to_string()),
+                "{f} is not a harness manifest"
+            );
+        }
+        assert_eq!(t.manifest_of("fund").unwrap(), "fund.json");
     }
 
     #[test]

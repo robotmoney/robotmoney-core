@@ -1,0 +1,97 @@
+---
+title: "FlowEpochs"
+description: "Epoch arithmetic that survives a change of `epochLength` (step 3 finish plan §3.1 item 3)."
+---
+
+# FlowEpochs
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+**Title:** FlowEpochs
+
+Epoch arithmetic that survives a change of `epochLength` (step 3 finish plan §3.1 item 3).
+
+The scaffold computed an epoch as `timestamp / epochLength` everywhere. A new length then re-indexed every
+epoch: open requests kept indices of the old scale, so after a longer length they lay in the "future"
+(nothing could settle, every settle reverted `Window`) and after a shorter one they lay below the range
+(orphaned, read as expired). Here indices only ever grow. A new length applies from the end of the epoch
+in progress, which keeps its own end; epochs closed before keep theirs too (`epochEnd`). Settlement order,
+expiry in epochs and the cap periods all count these indices.
+
+## Functions
+
+<a id="current-flowstate"></a>
+
+### current
+
+The epoch in progress now.
+
+```solidity
+function current(FlowState storage s) internal view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="endof-flowstate-uint64"></a>
+
+### endOf
+
+When epoch `e` ends; its requests may settle from `endOf(e) + settleWindow`. For an epoch older than the
+last change of `epochLength` that held no open request then, an upper bound (`epochAnchorTime`).
+
+```solidity
+function endOf(FlowState storage s, uint64 e) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| e | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="newestendedby-flowstate-uint256-uint64"></a>
+
+### newestEndedBy
+
+The newest epoch, at or above `floor`, that ended at or before time `t` and can hold a request
+(`found` false if none). Ends grow with the index, so every epoch from `floor` to it ended by `t`.
+
+```solidity
+function newestEndedBy(FlowState storage s, uint256 t, uint64 floor)
+        internal
+        view
+        returns (bool found, uint64 e);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| t | `uint256` |  |
+| floor | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| found | `bool` |  |
+| e | `uint64` |  |
+

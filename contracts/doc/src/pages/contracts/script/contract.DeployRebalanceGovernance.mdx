@@ -1,0 +1,90 @@
+---
+title: "DeployRebalanceGovernance"
+description: "The `fund-governance` stage (Deploy 4): `RebalanceGovernance` behind its ERC-1967 proxy, initialized with the fund, the fund system's own receipt register, the deployer as ADMIN_ROLE and TARGET_SETTER_ROLE until the handover (the timelock then applies receipts alone), the default plan parameters and the predicted fund-system timelock as its only upgrade authority. The wiring stage grants it the register's RECEIPT_RELEASER_ROLE and the fund's GOVERNANCE_ROLE."
+---
+
+# DeployRebalanceGovernance
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployRebalanceGovernance.s.sol)
+
+**Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
+
+**Title:** DeployRebalanceGovernance
+
+The `fund-governance` stage (Deploy 4): `RebalanceGovernance` behind its ERC-1967 proxy, initialized with the
+fund, the fund system's own receipt register, the deployer as ADMIN_ROLE and TARGET_SETTER_ROLE until the
+handover (the timelock then applies receipts alone), the default plan parameters and the predicted fund-system
+timelock as its only upgrade authority. The wiring stage grants it the register's RECEIPT_RELEASER_ROLE and
+the fund's GOVERNANCE_ROLE.
+
+Required env vars (no defaults): ADMIN_ADDRESS, FUND_ADDRESS, FUND_RECEIPT_ADDRESS, PLAN_DURATION,
+PLAN_COST_BUDGET_BPS, SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "fund-governance.json";
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_writedeploymentjson-deployed"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+## Structs
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address governance;
+        address governanceImplementation;
+        address fund;
+        address receipts;
+        PlanParams plan;
+        UpgradeConfig upgrade;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| governance | `address` |  |
+| governanceImplementation | `address` |  |
+| fund | `address` |  |
+| receipts | `address` |  |
+| plan | `PlanParams` |  |
+| upgrade | `UpgradeConfig` |  |
+

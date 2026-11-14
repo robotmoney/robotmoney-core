@@ -1,0 +1,34 @@
+---
+title: "AttackPnl"
+description: "One attack's profit and loss (eng plan §4.1, gate G8). Every amount is in USDC units (6 decimals), valued at the REFERENCE prices: each basket token at its pool's spot when the attack starts, each fund share at the fund's NAV per share at those prices. A held token or share therefore counts at what it was worth before the attacker touched anything, so a price the attacker moved never inflates its own result."
+---
+
+# AttackPnl
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+
+One attack's profit and loss (eng plan §4.1, gate G8). Every amount is in USDC units (6 decimals), valued
+at the REFERENCE prices: each basket token at its pool's spot when the attack starts, each fund share at the
+fund's NAV per share at those prices. A held token or share therefore counts at what it was worth before
+the attacker touched anything, so a price the attacker moved never inflates its own result.
+
+```solidity
+struct AttackPnl {
+    int256 attackerNet;
+    uint256 flashBorrowed;
+    uint256 holdersLoss;
+    uint256 pendingLoss;
+    uint256 navRef;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| attackerNet | `int256` | The attacker's value at the end minus its value at the start, with a flash-loan fee of 0<br/>(Morpho). This is the number G8 scores (the stricter case for the defender). |
+| flashBorrowed | `uint256` | The USDC value the attacker spent in its one-transaction price moves: what a flash loan had<br/>to lend. The report also shows the net after Aave V3's 5 bps fee on it. |
+| holdersLoss | `uint256` | NAV the share supply after the attack lost against the NAV per share before it, at the<br/>reference prices (0 when it rose). Every holder's loss is inside this number. |
+| pendingLoss | `uint256` | What pending users paid more (or received less) than in the same settlement without the<br/>attack. 0 where no counterfactual applies. |
+| navRef | `uint256` | NAV at the reference prices when the attack started (the G8 1 bps scale). |
+

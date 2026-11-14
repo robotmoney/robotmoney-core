@@ -1,0 +1,354 @@
+---
+title: "FundStepLib"
+description: "The rebalance step of `RobotMoneyFund` (`executeStep`, §5.3 steps 5 to 8, with the step 3e layers of §5.10), as an externally linked library. `FundFlowsLib.executeStep` forwards to it, so it runs by nested DELEGATECALL as the fund: `address(this)` is the fund, approvals and balances are the fund's. Moved out of `FundFlowsLib` in step 3e for size (§6.1): with the step 3e checks that library would have sat 483 bytes under EIP-170."
+---
+
+# FundStepLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundStepLib.sol)
+
+**Title:** FundStepLib
+
+The rebalance step of `RobotMoneyFund` (`executeStep`, §5.3 steps 5 to 8, with the step 3e layers of
+§5.10), as an externally linked library. `FundFlowsLib.executeStep` forwards to it, so it runs by nested
+DELEGATECALL as the fund: `address(this)` is the fund, approvals and balances are the fund's. Moved out of
+`FundFlowsLib` in step 3e for size (§6.1): with the step 3e checks that library would have sat 483 bytes
+under EIP-170.
+
+Every swap goes through `BasketSwaps.swap` with the asset's allowlisted `IBasketSwapAdapter` and pays the
+fund itself; every USDC that leaves the fund here goes to an allowlisted Lending adapter or a Basket swap
+adapter (RB-3, INV-1). Nothing here reads spot except ORA-4 (RB-5).
+
+## Functions
+
+<a id="executestep-fundstate-steporder"></a>
+
+### executeStep
+
+The legs of one rebalance step (`IRobotMoneyFund.executeStep`). The fund checks the role and
+holds `nonReentrant`. Order: plan Open → legs valid and counted, ORA-4 on Basket legs (RB-5)
+→ step 3e feed checks (checks 2 and 4 of §5.9.3, `StepFeedCheckFailed`) → RB-7 path guard at
+`navBefore` → snapshot → sell leg → buy leg → `navAfter` → RB-19 balance check → the cost at the feeds
+and at the TWAP, each capped (RB-4) → plan accounting and the budget halt → `StepExecuted`.
+
+<i>
+
+Step 3e (proposal §5.10, RB-19; step-3 finish plan §3.5), all inside the fund so no caller can skip it:
+- Feed health and TWAP against feed before any trade (`StepFeedLib.check`, the settlement's own
+parameters from the bound queue; no queue fails closed).
+- Balance check: after the legs the share supply is unchanged, every counted asset other than the two legs
+holds exactly what it held, the sell leg did not grow and the buy leg did not shrink. Idle USDC is free.
+- Cost booked against the feeds: `cost` = the fall of idle USDC plus both legs valued at the feeds, floored
+at 0. Every other asset is unchanged, so this is the fund's NAV change at prices the fund cannot move
+(cost report §4). The plan books it (`costSpent`, `StepExecuted.cost`, the budget halt). The TWAP cost
+(`navBefore − navAfter`) is still measured, and the larger of the two must stay within `maxCostUsdc`:
+the fund-side mirror of the order's limit from the stricter of the two prices. `StepCostBooked` logs
+both.
+The order's floors (`minSellUsdcOut`, `minBuyOut`) come from the stricter of the TWAP and the feed in
+`Rebalancer._buildOrder`; the fund enforces them as before.
+
+</i>
+
+```solidity
+function executeStep(FundState storage s, StepOrder memory o)
+        public
+        returns (StepResult memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `StepResult` |  |
+
+<a id="_checkleg-fundstate-uint256"></a>
+
+### _checkLeg
+
+<i>
+
+A non-idle leg must name a counted (active, not excluded) asset, and a Basket leg must pass ORA-4
+(RB-5 defence in depth: the Rebalancer already masks failing assets).
+
+</i>
+
+```solidity
+function _checkLeg(FundState storage s, uint256 i) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+<a id="_stepfeeds-fundstate"></a>
+
+### _stepFeeds
+
+<i>
+
+Step 3e: checks 2 and 4 of §5.9.3 on the step (`StepFeedLib.check`), else `StepFeedCheckFailed`. Returns
+every basket asset's feed and TWAP price for the cost at the feeds.
+
+</i>
+
+```solidity
+function _stepFeeds(FundState storage s) private view returns (StepPrices memory px);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| px | `StepPrices` |  |
+
+<a id="_stepbook-fundstate-steporder-stepsnap-stepprices-uint256"></a>
+
+### _stepBook
+
+<i>
+
+Step 3e after the legs: the RB-19 balance check against the snapshot `b`, then the cost at the feeds and
+the cap on the larger of it and `twapCost` (RB-4). Emits `StepCostBooked`. Returns the cost the plan books.
+
+</i>
+
+```solidity
+function _stepBook(
+        FundState storage s,
+        StepOrder memory o,
+        StepSnap memory b,
+        StepPrices memory px,
+        uint256 twapCost
+    ) private returns (uint256 cost);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+| b | `StepSnap` |  |
+| px | `StepPrices` |  |
+| twapCost | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cost | `uint256` |  |
+
+<a id="_legsatfeed-stepprices-steporder-uint256"></a>
+
+### _legsAtFeed
+
+<i>
+
+The step's two legs (held amounts `held`) at the feeds; an idle leg adds nothing (idle is counted apart).
+
+</i>
+
+```solidity
+function _legsAtFeed(StepPrices memory px, StepOrder memory o, uint256[] memory held)
+        private
+        pure
+        returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| px | `StepPrices` |  |
+| o | `StepOrder` |  |
+| held | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_pathguard-fundstate-steporder"></a>
+
+### _pathGuard
+
+<i>
+
+RB-7 guard: at `navBefore` and `now`, the sell leg sits over its `pathTarget` value by at least the
+notional and a non-idle buy leg sits under it by at least the notional (`PlanMath.pathTargetValue`,
+the same function the Rebalancer sizes with). Returns `navBefore`.
+
+</i>
+
+```solidity
+function _pathGuard(FundState storage s, StepOrder memory o)
+        private
+        view
+        returns (uint256 navBefore);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navBefore | `uint256` |  |
+
+<a id="_sellleg-fundstate-steporder-stepresult"></a>
+
+### _sellLeg
+
+<i>
+
+Sell leg → USDC (§5.3 step 6). Idle: take `notional` of idle (`InsufficientIdle`). Lending:
+`withdraw(notional)`, measured by the fund's balance delta. Basket: sell
+`min(balance, TWAP tokens for notional)` with floor `minSellUsdcOut`. Then require the USDC
+received ≥ `minSellUsdcOut` (`StepBelowMinOut`).
+
+</i>
+
+```solidity
+function _sellLeg(FundState storage s, StepOrder memory o, StepResult memory r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+| r | `StepResult` |  |
+
+<a id="_buyleg-fundstate-steporder-stepresult"></a>
+
+### _buyLeg
+
+<i>
+
+Buy leg (§5.3 step 6) with `spend = min(received, notional)`: idle keeps it; Lending deploys it
+(USDC the venue hands back stays idle; `amountOut` is what the adapter kept); Basket buys with floor
+`minBuyOut × spend / notional` (`StepBelowMinOut`). USDC received beyond the notional stays idle.
+
+</i>
+
+```solidity
+function _buyLeg(FundState storage s, StepOrder memory o, StepResult memory r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+| r | `StepResult` |  |
+
+<a id="_emitstep-uint256-steporder-stepresult"></a>
+
+### _emitStep
+
+<i>
+
+`StepExecuted` in its own frame (stack depth without viaIR).
+
+</i>
+
+```solidity
+function _emitStep(uint256 planId, StepOrder memory o, StepResult memory r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| o | `StepOrder` |  |
+| r | `StepResult` |  |
+
+<a id="_swap-assetconfig-address-address-uint256-uint256"></a>
+
+### _swap
+
+<i>
+
+Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund, clear
+approval). Returns `tokenOut` received by balance delta. (A copy of `FundFlowsLib._swap`.)
+
+</i>
+
+```solidity
+function _swap(
+        AssetConfig memory a,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| minOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+## Structs
+
+### StepSnap
+
+<i>
+
+The check 7 style snapshot of a step (RB-19): the supply, idle USDC and every counted asset's held amount
+before the legs.
+
+</i>
+
+```solidity
+struct StepSnap {
+        uint256 supply;
+        uint256 idle;
+        uint256[] held;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| supply | `uint256` |  |
+| idle | `uint256` |  |
+| held | `uint256[]` |  |
+

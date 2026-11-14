@@ -1,0 +1,43 @@
+---
+title: "FundInitParams"
+description: "`RobotMoneyFund.initialize` parameters (ERC-4626 over USDC, share `rmFUND`)."
+---
+
+# FundInitParams
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+`RobotMoneyFund.initialize` parameters (ERC-4626 over USDC, share `rmFUND`).
+
+```solidity
+struct FundInitParams {
+    address usdc;
+    string name;
+    string symbol;
+    uint256 tvlCap;
+    uint256 perDepositCap;
+    uint256 exitFeeBps;
+    address feeRecipient;
+    uint256 maxSlippageBps;
+    uint256 navDeviationGuardBps;
+    address admin;
+    address emergency;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` | The underlying asset. |
+| name | `string` | Share name (e.g. "Robot Money Fund"). |
+| symbol | `string` | Share symbol ("rmFUND"). |
+| tvlCap | `uint256` | Max total assets after a deposit. |
+| perDepositCap | `uint256` | Max USDC per deposit. |
+| exitFeeBps | `uint256` | Exit fee on realized redeem proceeds, &lt;= 100. |
+| feeRecipient | `address` | Exit fee recipient. |
+| maxSlippageBps | `uint256` | Redeem/deposit swap floor vs TWAP, &lt;= 500, above every basket pool fee. |
+| navDeviationGuardBps | `uint256` | ORA-4 band; 0 disables; else above every basket pool fee, &lt;= 2 000. |
+| admin | `address` | Receives ADMIN_ROLE (deployer, then the timelock). |
+| emergency | `address` | Receives EMERGENCY_ROLE. |
+

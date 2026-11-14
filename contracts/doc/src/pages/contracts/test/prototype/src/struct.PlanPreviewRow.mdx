@@ -1,0 +1,29 @@
+---
+title: "PlanPreviewRow"
+description: "One row of `Rebalancer.previewPlan` (§5.7 \"Previewed\")."
+---
+
+# PlanPreviewRow
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+One row of `Rebalancer.previewPlan` (§5.7 "Previewed").
+
+```solidity
+struct PlanPreviewRow {
+    uint256 currentBps;
+    uint256 targetBps;
+    uint256 turnoverUsdc;
+    uint256 estCostUsdc;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| currentBps | `uint256` | Actual TWAP weight now. |
+| targetBps | `uint256` | This asset's target in the proposed per-asset vector (0 for an inactive asset). |
+| turnoverUsdc | `uint256` | \|targetBps − currentBps\| × NAV / 10 000. |
+| estCostUsdc | `uint256` | turnoverUsdc × poolFeeBps / 10 000 (0 for Lending). |
+

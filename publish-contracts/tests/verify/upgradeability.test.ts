@@ -20,7 +20,7 @@ const ADDR: Record<string, `0x${string}`> = { gateway: GATEWAY, registry: REGIST
 
 /** Rewrite every proxy manifest's upgrade_mode (the deploy wrote the sheet's mode). */
 function manifestMode(w: World, mode: string): void {
-  for (const s of table.stages.filter((x) => x.proxies)) {
+  for (const s of table.stages.filter((x) => x.proxies && x.system !== "fund")) {
     const p = join(w.manifestDir, stageManifestFile(table, s.name));
     writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), upgrade_mode: mode }));
   }

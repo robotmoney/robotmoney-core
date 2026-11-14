@@ -1,0 +1,72 @@
+---
+title: "AaveV3RateAdapter"
+description: "Test copy of the production `AaveV3Adapter` (step 3d, E15): every production function is inherited unchanged; `ratePerUnit()` is added. The production adapter does not change (eng plan §3.3)."
+---
+
+# AaveV3RateAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/AaveV3RateAdapter.sol)
+
+**Inherits:** [AaveV3Adapter](/contracts/adapters/contract.AaveV3Adapter), [ILendingRateAdapter](/contracts/test/prototype/src/interfaces/interface.ILendingRateAdapter)
+
+**Title:** AaveV3RateAdapter
+
+Test copy of the production `AaveV3Adapter` (step 3d, E15): every production function is inherited
+unchanged; `ratePerUnit()` is added. The production adapter does not change (eng plan §3.3).
+
+## Constants
+
+### RAY_TO_WAD
+
+<i>
+
+ray (1e27) → 1e18.
+
+</i>
+
+```solidity
+uint256 private constant RAY_TO_WAD = 1e9;
+```
+
+## Functions
+
+<a id="constructor-address-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address pool_, address usdc_, address aToken_, address vault_)
+        AaveV3Adapter(pool_, usdc_, aToken_, vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool_ | `address` |  |
+| usdc_ | `address` |  |
+| aToken_ | `address` |  |
+| vault_ | `address` |  |
+
+<a id="rateperunit"></a>
+
+### ratePerUnit
+
+<i>
+
+The reserve's normalized income (ray) scaled to 1e18, rounded DOWN. It is the venue's own exchange rate:
+a supply, a withdrawal or a gift of aTokens or USDC to this adapter does not move it; only interest
+accrual does (check 5).
+
+</i>
+
+```solidity
+function ratePerUnit() external view returns (uint256 rate1e18);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rate1e18 | `uint256` |  |
+

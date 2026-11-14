@@ -1,0 +1,527 @@
+---
+title: "FundValuationLib"
+description: "NAV, TWAP pricing and the ORA-4 market check of `RobotMoneyFund` (§4.2), as an externally linked library: it runs by DELEGATECALL as the fund, so `address(this)` is the fund."
+---
+
+# FundValuationLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/lib/FundValuationLib.sol)
+
+**Title:** FundValuationLib
+
+NAV, TWAP pricing and the ORA-4 market check of `RobotMoneyFund` (§4.2), as an externally linked
+library: it runs by DELEGATECALL as the fund, so `address(this)` is the fund.
+
+NAV = idle USDC + Σ counted Lending `adapter.totalAssets()` + Σ active Basket balance × TWAP.
+This is the union of `RobotMoneyVault.totalAssets` (with ADP-2 exclusion) and
+`BasketVault.totalAssets` (TWAP through the asset's `IBasketSwapAdapter.twapPrice`, never spot).
+
+## Constants
+
+### ORA4_PROBE_USDC
+
+<i>
+
+USDC probe for the ORA-4 check: 1 USDC priced into the token (BasketViews.checkNavDeviation).
+
+</i>
+
+```solidity
+uint256 internal constant ORA4_PROBE_USDC = 1e6;
+```
+
+## Functions
+
+<a id="iscounted-fundstate-uint256"></a>
+
+### isCounted
+
+Asset `i` counts in NAV and may trade: active, and for Lending also an allowed adapter code
+hash and no open exclusion record (`RobotMoneyVaultOps.isCounted`, simplified: the adapter's
+`VAULT`/`USDC` binding is checked once at `addAsset` and pinned by the code hash, since both
+are immutables baked into the runtime code the hash covers).
+
+```solidity
+function isCounted(FundState storage s, uint256 i) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="anyexcluded-fundstate"></a>
+
+### anyExcluded
+
+True while an active Lending asset is excluded (ADP-2). Deposits close meanwhile, as on
+`RobotMoneyVault` (core 1788): a deposit would mint against a NAV the excluded value left.
+
+```solidity
+function anyExcluded(FundState storage s) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="heldbalance-fundstate-uint256"></a>
+
+### heldBalance
+
+What the holders own of asset `i`: Basket the fund's token balance, Lending the adapter's
+`totalAssets()`, each less `deferredTotal[i]` (owed to past in-kind exits, §4.4), floored at 0.
+Every NAV read and every pro-rata leg uses this, never the raw balance.
+
+```solidity
+function heldBalance(FundState storage s, uint256 i) internal view returns (uint256 bal);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bal | `uint256` |  |
+
+<a id="assetvalue-fundstate-uint256"></a>
+
+### assetValue
+
+USDC value of asset `i` at TWAP (Lending: `heldBalance`, 1:1). 0 when not counted.
+
+```solidity
+function assetValue(FundState storage s, uint256 i) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="nav-fundstate"></a>
+
+### nav
+
+`totalAssets()`: idle plus every counted asset's value.
+
+```solidity
+function nav(FundState storage s) public view returns (uint256 sum);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sum | `uint256` |  |
+
+<a id="portfolio-fundstate"></a>
+
+### portfolio
+
+One-call valuation: `nav == idle + Σ values == totalAssets()`.
+
+```solidity
+function portfolio(FundState storage s)
+        public
+        view
+        returns (uint256 total, uint256 idle, uint256[] memory values);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+| idle | `uint256` |  |
+| values | `uint256[]` |  |
+
+<a id="usdcvalue-fundstate-uint256-uint256"></a>
+
+### usdcValue
+
+USDC value of `amount` of asset `i` at TWAP. Lending: identity.
+
+```solidity
+function usdcValue(FundState storage s, uint256 i, uint256 amount)
+        public
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="tokenvalue-fundstate-uint256-uint256"></a>
+
+### tokenValue
+
+Amount of asset `i` worth `usdcAmount` at TWAP. Lending: identity.
+
+```solidity
+function tokenValue(FundState storage s, uint256 i, uint256 usdcAmount)
+        public
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| usdcAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="marketcheck-fundstate-uint256"></a>
+
+### marketCheck
+
+ORA-4 for asset `i`. Never reverts. `ok` for a counted Lending asset and whenever the guard is
+0. An excluded Lending asset reads NOT ok (so the Rebalancer's eligibility mask drops it: it
+cannot take or return USDC). A Basket asset whose TWAP, spot or probe read fails reads not ok
+with `deviationBps == type(uint256).max`. Otherwise `ok` iff |spot − TWAP| / TWAP ≤ guard
+(`TwapTickMath.deviationBps` arithmetic, with every external read wrapped in try/catch).
+
+```solidity
+function marketCheck(FundState storage s, uint256 i)
+        public
+        view
+        returns (bool ok, uint256 deviationBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| deviationBps | `uint256` |  |
+
+<a id="requiredepositable-fundstate"></a>
+
+### requireDepositable
+
+Revert `NavMarketDeviationExceeded` unless every active Basket asset passes ORA-4, and
+`DepositsClosedDuringExclusion` while a Lending asset is excluded (ADP-2, core 1788). The deposit gate
+(§4.3), one linked call.
+
+```solidity
+function requireDepositable(FundState storage s) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+<a id="requiremarket-fundstate-uint256"></a>
+
+### requireMarket
+
+Revert `NavMarketDeviationExceeded` when asset `i` fails ORA-4.
+
+```solidity
+function requireMarket(FundState storage s, uint256 i) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+<a id="_deviation-address-assetconfig"></a>
+
+### _deviation
+
+<i>
+
+|spot − TWAP| / TWAP in bps on a 1 USDC probe of the token; `read` false when any read reverts.
+
+</i>
+
+```solidity
+function _deviation(address usdc, AssetConfig storage a)
+        private
+        view
+        returns (bool read, uint256 dev);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| a | `AssetConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| read | `bool` |  |
+| dev | `uint256` |  |
+
+<a id="_trymeantick-address-uint32"></a>
+
+### _tryMeanTick
+
+<i>
+
+`TwapTickMath.meanTick` with the `observe` read wrapped in try/catch (Uniswap OracleLibrary rounding).
+
+</i>
+
+```solidity
+function _tryMeanTick(address pool, uint32 window) private view returns (bool ok, int24 tick);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| tick | `int24` |  |
+
+<a id="poolfeebps-fundstate-uint256"></a>
+
+### poolFeeBps
+
+Asset `i`'s pool fee in bps rounded up; 0 for Lending. For an Aerodrome asset `poolFee` is the
+tick spacing the adapter takes, so the fee is read from the pool's `fee()` (pips) when it
+answers, else `poolFee` is used.
+
+```solidity
+function poolFeeBps(FundState storage s, uint256 i) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxpoolfeebps-fundstate"></a>
+
+### maxPoolFeeBps
+
+Largest `poolFeeBps` over active Basket assets and its index (0, 0 when none).
+
+```solidity
+function maxPoolFeeBps(FundState storage s)
+        public
+        view
+        returns (uint256 maxBps, uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxBps | `uint256` |  |
+| index | `uint256` |  |
+
+<a id="requireabovefees-fundstate-uint256"></a>
+
+### requireAboveFees
+
+Revert `BoundAtOrBelowPoolFee` unless `bps` is strictly above every active Basket pool fee
+(§5.6 last paragraph: a floor or band at or below the pool fee fails every trade).
+
+```solidity
+function requireAboveFees(FundState storage s, uint256 bps) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| bps | `uint256` |  |
+
+<a id="maxtwapwindow-fundstate"></a>
+
+### maxTwapWindow
+
+Longest `twapWindow` over active Basket assets (0 when none).
+
+```solidity
+function maxTwapWindow(FundState storage s) public view returns (uint32 w);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `uint32` |  |
+
+<a id="pathtarget-fundstate-uint256"></a>
+
+### pathTarget
+
+`pathTarget(t)` of the current plan per asset and idle (`PlanMath.pathTargetsBps`); zeros (one
+per asset) before the first plan.
+
+```solidity
+function pathTarget(FundState storage s, uint256 t)
+        public
+        view
+        returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| t | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+
+<a id="currenttargetbps-fundstate"></a>
+
+### currentTargetBps
+
+The target deposits route against (§4.3): `pathTarget(now)` while the plan is live (Open,
+Halted, Paused), else the persistent `targetBps`.
+
+```solidity
+function currentTargetBps(FundState storage s) public view returns (uint256[] memory bps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+
+<a id="currentweightsbps-fundstate"></a>
+
+### currentWeightsBps
+
+Actual TWAP weights per asset and idle, rounded down.
+
+```solidity
+function currentWeightsBps(FundState storage s)
+        public
+        view
+        returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+

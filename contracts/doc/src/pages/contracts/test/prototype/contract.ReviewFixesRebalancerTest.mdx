@@ -1,0 +1,82 @@
+---
+title: "ReviewFixesRebalancerTest"
+description: "One test per error the adversarial review of 2026-11-12 found in the rebalancer, each failing on the code before its fix (logs in the evidence folder named in proposal §14)."
+---
+
+# ReviewFixesRebalancerTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/ReviewFixes.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+**Title:** ReviewFixesRebalancerTest
+
+One test per error the adversarial review of 2026-11-12 found in the rebalancer, each failing on the code
+before its fix (logs in the evidence folder named in proposal §14).
+
+## Functions
+
+<a id="test_rf1_adepthcappedassetismaskedandtherestoftheplantrades"></a>
+
+### test_RF1_aDepthCappedAssetIsMaskedAndTheRestOfThePlanTrades
+
+R-F1: a basket asset whose step cap is below `minStepUsdc` (here: its depth cannot be read) must not
+become a leg that can only skip `BelowMinStep`; the next asset behind it trades.
+
+```solidity
+function test_RF1_aDepthCappedAssetIsMaskedAndTheRestOfThePlanTrades() public fixtureCovered;
+```
+
+<a id="test_rf1_onlydepthcappedassetsleftskipsdepthcap"></a>
+
+### test_RF1_onlyDepthCappedAssetsLeftSkipsDepthCap
+
+R-F1: with every remaining pair masked by its cap the skip names the reason (`DepthCap`).
+
+```solidity
+function test_RF1_onlyDepthCappedAssetsLeftSkipsDepthCap() public fixtureCovered;
+```
+
+<a id="test_rf4_anunsetdepthslotreadsasthedefault"></a>
+
+### test_RF4_anUnsetDepthSlotReadsAsTheDefault
+
+R-F4: a proxy upgraded from an implementation without the depth slot reads 0 there; the cap must
+still be the default, never off or zero.
+
+```solidity
+function test_RF4_anUnsetDepthSlotReadsAsTheDefault() public fixtureCovered;
+```
+
+<a id="test_rf5_aconvergedplanisnotlabelledexpiredattheoverrunedge"></a>
+
+### test_RF5_aConvergedPlanIsNotLabelledExpiredAtTheOverrunEdge
+
+R-F5: a plan that sits inside tolerance of its end is Converged, even when the first call after it
+lands past `endTime + maxOverrun`.
+
+```solidity
+function test_RF5_aConvergedPlanIsNotLabelledExpiredAtTheOverrunEdge() public fixtureCovered;
+```
+
+<a id="_depthunreadable-address"></a>
+
+### _depthUnreadable
+
+<i>
+
+Make every depth read of `pool` revert (both the 2-point read of the code before the R-F2 fix and the
+13-point read after it), leaving its TWAP reads (a 30-minute window) untouched.
+
+</i>
+
+```solidity
+function _depthUnreadable(address pool) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+

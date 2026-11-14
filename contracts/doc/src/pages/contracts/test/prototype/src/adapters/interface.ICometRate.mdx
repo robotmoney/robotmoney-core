@@ -1,0 +1,75 @@
+---
+title: "ICometRate"
+description: "The Comet reads the rate needs (not in the production `IComet`)."
+---
+
+# ICometRate
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/CompoundV3RateAdapter.sol)
+
+The Comet reads the rate needs (not in the production `IComet`).
+
+## Functions
+
+<a id="totalsupply"></a>
+
+### totalSupply
+
+Total supplied base (USDC) with interest accrued to `block.timestamp`.
+
+```solidity
+function totalSupply() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="totalsbasic"></a>
+
+### totalsBasic
+
+The stored totals; `totalSupplyBase` is the principal sum.
+
+```solidity
+function totalsBasic() external view returns (TotalsBasic memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `TotalsBasic` |  |
+
+## Structs
+
+### TotalsBasic
+
+```solidity
+struct TotalsBasic {
+        uint64 baseSupplyIndex;
+        uint64 baseBorrowIndex;
+        uint64 trackingSupplyIndex;
+        uint64 trackingBorrowIndex;
+        uint104 totalSupplyBase;
+        uint104 totalBorrowBase;
+        uint40 lastAccrualTime;
+        uint8 pauseFlags;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| baseSupplyIndex | `uint64` |  |
+| baseBorrowIndex | `uint64` |  |
+| trackingSupplyIndex | `uint64` |  |
+| trackingBorrowIndex | `uint64` |  |
+| totalSupplyBase | `uint104` |  |
+| totalBorrowBase | `uint104` |  |
+| lastAccrualTime | `uint40` |  |
+| pauseFlags | `uint8` |  |
+

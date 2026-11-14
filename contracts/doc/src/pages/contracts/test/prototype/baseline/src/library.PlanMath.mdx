@@ -1,0 +1,680 @@
+---
+title: "PlanMath"
+description: "The single home of the glide-path and weight math. Both `RobotMoneyFund` (start snapshot, turnover, deficit-first deposits, the RB-7 guard in `executeStep`) and `Rebalancer` (leg picking, sizing, convergence) call it, so the two can never disagree on what `pathTarget(now)` is."
+---
+
+# PlanMath
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/PlanMath.sol)
+
+**Title:** PlanMath
+
+The single home of the glide-path and weight math. Both `RobotMoneyFund` (start snapshot,
+turnover, deficit-first deposits, the RB-7 guard in `executeStep`) and `Rebalancer` (leg
+picking, sizing, convergence) call it, so the two can never disagree on what
+`pathTarget(now)` is.
+
+Units. Weights are basis points of fund NAV (10 000 = 100%). Values are USDC base units
+(6 decimals) at TWAP. "Idle" is the fund's own USDC balance; its target is always 0 and
+its path glides from the plan's `startIdleBps` to 0.
+
+Rounding. Path targets round toward the plan's START weight, so the path never runs
+ahead of the linear schedule and the rebalancer never moves past `pathTarget(now)`
+(RB-7). Weights of actual holdings round down.
+
+All functions are `internal pure`: inlined into each caller, no linking.
+
+## Functions
+
+<a id="assetid-assetconfig"></a>
+
+### assetId
+
+The id a target vector uses for fund asset `a`: its fund asset address. That is
+`token` for a Basket asset and `adapter` for a Lending asset.
+
+```solidity
+function assetId(AssetConfig memory a) internal pure returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="assettargets-address-uint256-assetconfig"></a>
+
+### assetTargets
+
+Turn a per-asset target vector `(ids, bps)` into index-aligned end targets over the
+fund's asset list `cfgs` (§4.1, §5.1 step 2). Inactive assets get 0. These are the
+only checks on a vector (§4.1, RB-9), each with its own error:
+- every listed id is an ACTIVE fund asset (`TargetAssetNotActive`);
+- no id is listed twice (`TargetAssetDuplicate`);
+- a Lending target is at or below its `capBps` (`TargetExceedsCap`);
+- the weights sum to 10 000 (`TargetSumInvalid`; a single weight above 10 000
+reverts at once and reports that weight);
+- every active asset is listed exactly once (`TargetAssetMissing`). An explicit 0
+sells an asset. Forgetting it never does.
+The per-entry checks run in list order, then the sum, then the missing-asset scan.
+
+<i>
+
+Reverts `InvalidParam` when `ids` and `bps` differ in length. Ids are `assetId`.
+
+</i>
+
+```solidity
+function assetTargets(address[] memory ids, uint256[] memory bps, AssetConfig[] memory cfgs)
+        internal
+        pure
+        returns (uint16[] memory targets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| bps | `uint256[]` |  |
+| cfgs | `AssetConfig[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `uint16[]` |  |
+
+<a id="_activeindexof-assetconfig-address"></a>
+
+### _activeIndexOf
+
+<i>
+
+Index of the ACTIVE entry whose `assetId` is `id`. `addAsset` keeps that entry unique.
+Reverts `TargetAssetNotActive` when no active entry matches (unknown or deactivated).
+
+</i>
+
+```solidity
+function _activeIndexOf(AssetConfig[] memory cfgs, address id) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cfgs | `AssetConfig[]` |  |
+| id | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="weightbps-uint256-uint256"></a>
+
+### weightBps
+
+`value` as bps of `nav`, rounded down. 0 when `nav` is 0.
+
+```solidity
+function weightBps(uint256 value, uint256 nav) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` |  |
+| nav | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="weightsbps-uint256-uint256-uint256"></a>
+
+### weightsBps
+
+Actual weights of every asset and of idle, rounded down.
+
+```solidity
+function weightsBps(uint256[] memory values, uint256 idle, uint256 nav)
+        internal
+        pure
+        returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` |  |
+| idle | `uint256` |  |
+| nav | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+
+<a id="snapshotstart-uint256-uint256-uint16"></a>
+
+### snapshotStart
+
+The plan's start point (§5.1 step 3): actual TWAP weights, floor-rounded, with idle
+absorbing the rounding so `Σ start + startIdle == 10 000`. When `nav` is 0 there is
+nothing to glide: start equals `endBps` and `startIdle` is 0, so the first deposits
+allocate straight to the target (§9 step 2) and the rebalancer has nothing to do.
+
+```solidity
+function snapshotStart(uint256[] memory values, uint256 nav, uint16[] memory endBps)
+        internal
+        pure
+        returns (uint16[] memory startBps, uint16 startIdleBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` |  |
+| nav | `uint256` |  |
+| endBps | `uint16[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| startBps | `uint16[]` |  |
+| startIdleBps | `uint16` |  |
+
+<a id="turnoverusdc-uint16-uint16-uint256"></a>
+
+### turnoverUsdc
+
+One-sided planned turnover in USDC: `nav × Σ max(end_i − start_i, 0) / 10 000`.
+Idle is excluded (its end is 0, so it never adds buy-side turnover).
+
+```solidity
+function turnoverUsdc(uint16[] memory startBps, uint16[] memory endBps, uint256 nav)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| startBps | `uint16[]` |  |
+| endBps | `uint16[]` |  |
+| nav | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="progress-uint64-uint64-uint256"></a>
+
+### progress
+
+`(elapsed, duration)` with `elapsed = clamp(t − startTime, 0, duration)`.
+`f(t) = elapsed / duration`. A zero-length window returns (1, 1) (fully elapsed).
+
+```solidity
+function progress(uint64 startTime, uint64 endTime, uint256 t)
+        internal
+        pure
+        returns (uint256 elapsed, uint256 duration);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| startTime | `uint64` |  |
+| endTime | `uint64` |  |
+| t | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| elapsed | `uint256` |  |
+| duration | `uint256` |  |
+
+<a id="pathbps-uint256-uint256-uint256-uint256"></a>
+
+### pathBps
+
+`start + (end − start) × elapsed / duration`, in bps, rounded toward `start`.
+
+```solidity
+function pathBps(uint256 startBps, uint256 endBps, uint256 elapsed, uint256 duration)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| startBps | `uint256` |  |
+| endBps | `uint256` |  |
+| elapsed | `uint256` |  |
+| duration | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="pathtargetsbps-plan-uint256"></a>
+
+### pathTargetsBps
+
+`pathTarget(t)` of plan `p` for every asset and for idle (§5.2), in bps.
+
+```solidity
+function pathTargetsBps(Plan memory p, uint256 t)
+        internal
+        pure
+        returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Plan` |  |
+| t | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+
+<a id="pathtargetvalue-plan-uint256-uint256-uint256"></a>
+
+### pathTargetValue
+
+USDC path target of asset `index` (or idle for IDLE_INDEX) under plan `p` at `t`,
+for a fund valued at `nav`. Uses `pathValue` (no bps truncation).
+
+```solidity
+function pathTargetValue(Plan memory p, uint256 index, uint256 t, uint256 nav)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Plan` |  |
+| index | `uint256` |  |
+| t | `uint256` |  |
+| nav | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="pathvalue-uint256-uint256-uint256-uint256-uint256"></a>
+
+### pathValue
+
+A path target as a USDC value, computed without the intermediate bps truncation:
+`nav × (start × d + (end − start) × e) / (d × 10 000)`, rounded toward `start`'s value.
+
+```solidity
+function pathValue(
+        uint256 startBps,
+        uint256 endBps,
+        uint256 elapsed,
+        uint256 duration,
+        uint256 nav
+    ) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| startBps | `uint256` |  |
+| endBps | `uint256` |  |
+| elapsed | `uint256` |  |
+| duration | `uint256` |  |
+| nav | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deviation-uint256-uint256"></a>
+
+### deviation
+
+`(over, under)` of a holding against its target value. At most one is non-zero.
+
+```solidity
+function deviation(uint256 value, uint256 targetValue)
+        internal
+        pure
+        returns (uint256 over, uint256 under);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` |  |
+| targetValue | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| over | `uint256` |  |
+| under | `uint256` |  |
+
+<a id="picklegs-uint256-uint256-uint256-plan-uint256-bool"></a>
+
+### pickLegs
+
+Pick the most-overweight and most-underweight holdings against `pathTarget(now)`.
+Idle USDC is a candidate on both sides (target: its own glide path to 0). Asset `i`
+is a candidate only when `eligible[i]` (the caller masks out inactive assets, assets
+failing ORA-4, assets with `maxStepUsdc == 0`, frozen venues).
+
+<i>
+
+Because Σ path == 10 000 (to rounding) and Σ actual == 10 000, total over == total
+under, so when every holding is eligible an over always has a matching under.
+`sellIndex != buyIndex` whenever both `over` and `under` are non-zero.
+Sizing rule for the caller: `notional = min(over, under, maxStepUsdc[sell], maxStepUsdc[buy])`
+(idle legs have no cap). That keeps both legs on their side of the path (RB-7).
+
+</i>
+
+```solidity
+function pickLegs(
+        uint256[] memory values,
+        uint256 idle,
+        uint256 nav,
+        Plan memory p,
+        uint256 t,
+        bool[] memory eligible
+    ) internal pure returns (Legs memory legs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` | TWAP value per asset (length n). |
+| idle | `uint256` | Idle USDC. |
+| nav | `uint256` | `idle + Σ values` (the caller passes the same NAV it valued with). |
+| p | `Plan` | The plan (`fund.plan()`); uses startBps, endBps, startIdleBps, start/endTime. |
+| t | `uint256` | Evaluation time (normally `block.timestamp`). |
+| eligible | `bool[]` | Per-asset candidate mask (length n). |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| legs | `Legs` | See `Legs`. |
+
+<a id="_consider-legs-uint256-uint256-uint256"></a>
+
+### _consider
+
+<i>
+
+`pickLegs` inner step: replace the best sell / buy candidate when asset `i` is strictly
+further over / under its target value.
+
+</i>
+
+```solidity
+function _consider(Legs memory legs, uint256 i, uint256 value, uint256 targetValue)
+        private
+        pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| legs | `Legs` |  |
+| i | `uint256` |  |
+| value | `uint256` |  |
+| targetValue | `uint256` |  |
+
+<a id="withintolerance-uint256-uint256-uint256-uint16-uint256"></a>
+
+### withinTolerance
+
+True when every asset and idle sit within `toleranceBps` of NAV of their END
+target: `|value_i − end_i × nav / 10 000| ≤ toleranceBps × nav / 10 000`, and
+`idle ≤ toleranceBps × nav / 10 000`. Callers also require `now ≥ endTime` before
+marking a plan Converged. A zero NAV is converged.
+
+```solidity
+function withinTolerance(
+        uint256[] memory values,
+        uint256 idle,
+        uint256 nav,
+        uint16[] memory endBps,
+        uint256 toleranceBps
+    ) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` |  |
+| idle | `uint256` |  |
+| nav | `uint256` |  |
+| endBps | `uint16[]` |  |
+| toleranceBps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="deficitsplit-uint256-uint256-uint256-uint256"></a>
+
+### deficitSplit
+
+Split a deposit of `amount` USDC across assets, deficit-first (§4.3, D7), against the
+CURRENT plan target `curBps` (`pathTarget(now)` while a plan is live, else the end target),
+taken at the post-deposit NAV `navAfter = navBefore + amount`.
+Idle USDC is a holding like any other: while a plan is live its target is its own glide
+path `idlePath = 10 000 − Σ curBps` (§5.2), exactly as the rebalancer sees it.
+- `deficit_i = max(curBps_i × navAfter / 10 000 − value_i, 0)` per asset, and
+`deficit_idle = max(idlePath × navAfter / 10 000 − idleBefore, 0)` with
+`idleBefore = navBefore − Σ values`.
+- If `Σ deficit ≥ amount`: each holding gets `amount × deficit / Σ deficit` (idle's share
+simply stays idle). The rounding remainder goes to the largest asset shortfall when idle
+has none, else it stays idle.
+- Else every deficit is filled and the rest is split by `curBps`; idle's path share stays
+idle. With no live plan `Σ curBps = 10 000`, so the rounding remainder goes to the asset
+with the largest `curBps`.
+So a deposit during a plan never pushes an asset past `pathTarget(now)` while idle sits
+under its own path; the rebalancer would only sell that back (a swap round trip every
+holder pays, against §4.3 "free rebalancing" and §5.7 "reduced by deficit-first deposits").
+The caller (the fund) clips Lending allocations at `capBps` headroom and leaves any clipped
+or venue-refused USDC idle.
+
+```solidity
+function deficitSplit(
+        uint256[] memory values,
+        uint256 navBefore,
+        uint256 amount,
+        uint256[] memory curBps
+    ) internal pure returns (uint256[] memory alloc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` |  |
+| navBefore | `uint256` |  |
+| amount | `uint256` |  |
+| curBps | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| alloc | `uint256[]` |  |
+
+<a id="_assetdeficits-uint256-uint256-uint256-uint256"></a>
+
+### _assetDeficits
+
+<i>
+
+Write each asset's deficit at `navAfter` into `alloc`; return the sums.
+
+</i>
+
+```solidity
+function _assetDeficits(
+        uint256[] memory values,
+        uint256 navAfter,
+        uint256[] memory curBps,
+        uint256[] memory alloc
+    ) private pure returns (DeficitAcc memory acc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| values | `uint256[]` |  |
+| navAfter | `uint256` |  |
+| curBps | `uint256[]` |  |
+| alloc | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| acc | `DeficitAcc` |  |
+
+<a id="_idledeficit-uint256-uint256-uint256-uint256"></a>
+
+### _idleDeficit
+
+<i>
+
+Idle's shortfall under its path at `navAfter`: `idlePath = 10 000 − Σ curBps` when that is
+positive (a live plan), else 0. `idleBefore = navBefore − Σ values`.
+
+</i>
+
+```solidity
+function _idleDeficit(uint256 navBefore, uint256 navAfter, uint256 sumVal, uint256 sumBps)
+        private
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navBefore | `uint256` |  |
+| navAfter | `uint256` |  |
+| sumVal | `uint256` |  |
+| sumBps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Structs
+
+### Legs
+
+Result of `pickLegs`.
+
+```solidity
+struct Legs {
+        uint256 sellIndex;
+        uint256 over;
+        uint256 buyIndex;
+        uint256 under;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sellIndex | `uint256` | Most-overweight candidate, or IDLE_INDEX; meaningless when `over == 0`. |
+| over | `uint256` | Its excess over path in USDC (0 means: nothing to sell). |
+| buyIndex | `uint256` | Most-underweight candidate, or IDLE_INDEX; meaningless when `under == 0`. |
+| under | `uint256` | Its shortfall under path in USDC (0 means: nothing to buy). |
+
+### DeficitAcc
+
+<i>
+
+`deficitSplit` accumulator (stack depth).
+
+</i>
+
+```solidity
+struct DeficitAcc {
+        uint256 totalDef;
+        uint256 maxDefIdx;
+        uint256 maxDef;
+        uint256 sumBps;
+        uint256 sumVal;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalDef | `uint256` |  |
+| maxDefIdx | `uint256` |  |
+| maxDef | `uint256` |  |
+| sumBps | `uint256` |  |
+| sumVal | `uint256` |  |
+

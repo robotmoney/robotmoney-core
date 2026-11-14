@@ -30,6 +30,10 @@ import { join } from "node:path";
 export const VERBS = ["go", "nonce", "report", "signoff"] as const;
 export const FLAGS = ["kind", "run-dir", "evidence-dir", "manifest-dir", "rpc", "sha", "target", "chain-id", "sheet", "tag", "step", "vaults", "release", "sender", "mark"] as const;
 export const VAULT_MANIFESTS = ["vault", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault"] as const;
+/** Deploy 4: the fund system's one vault, fund.json (its address field is `fund`). Never in the default list: a release names it with --vaults (its `vaults:`). */
+export const FUND_MANIFEST = "fund";
+/** The manifest names --vaults accepts, and the field each holds its vault address in. */
+const VAULT_FIELD: Readonly<Record<string, string>> = { ...Object.fromEntries(VAULT_MANIFESTS.map((m) => [m, "vault"])), [FUND_MANIFEST]: "fund" };
 const TARGETS = ["twin", "rehearsal", "production"];
 
 const sha256 = (file: string): string => createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -99,7 +103,7 @@ export const pauseReportsOf = (evidenceFiles: string[]): string[] => evidenceFil
 export function vaultsOf(raw: string | undefined): readonly string[] {
   if (raw === undefined) return VAULT_MANIFESTS;
   const names = raw.split(",").map((n) => n.trim());
-  for (const n of names) if (n === "" || !(VAULT_MANIFESTS as readonly string[]).includes(n)) throw new Error(`--vaults names ${VAULT_MANIFESTS.join("|")}, got '${n}'`);
+  for (const n of names) if (n === "" || !(n in VAULT_FIELD)) throw new Error(`--vaults names ${Object.keys(VAULT_FIELD).join("|")}, got '${n}'`);
   const dup = names.find((n, i) => names.indexOf(n) !== i);
   if (dup !== undefined) throw new Error(`--vaults names '${dup}' twice`);
   return names;
@@ -115,7 +119,7 @@ function vaultReads(manifestDir: string, rpc: string, vaults: readonly string[])
   return vaults.map((m) => {
     const p = join(manifestDir, `${m}.json`);
     if (!existsSync(p)) return { manifest: m, vault: "?", read: "no manifest" };
-    const vault = String(JSON.parse(readFileSync(p, "utf8")).vault ?? "?");
+    const vault = String(JSON.parse(readFileSync(p, "utf8"))[VAULT_FIELD[m] ?? "vault"] ?? "?");
     const r = spawnSync("cast", ["call", vault, "depositsPaused()(bool)", "--rpc-url", rpc], { encoding: "utf8", env: process.env });
     return { manifest: m, vault, read: r.status === 0 ? r.stdout.trim() : `cast exit ${r.status}` };
   });

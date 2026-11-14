@@ -81,6 +81,7 @@
 // The wait is the timelock's real delay. On a Twin fork (chain id is not 8453 and the RPC answers anvil_nodeInfo) it runs by ONE time warp to one second
 // past the latest ready time. On 8453 there is no warp and no long sleep: the run exits GOVERN_PENDING once, with the ready time and the exact next
 // command, and the same command resumes the stage.
+import { scopeTable } from "./stage-table.ts";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
@@ -789,9 +790,9 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
   if (early !== undefined) throw new PublishError("USAGE", early);
   const selected: PlannedRow | undefined = o.row === undefined || releasing || applying || registering || clearing || redeploying || retiring || guarding || freezing || upgrading || selfAdminRow !== undefined ? undefined : resolveGovernRow(o.row);
   // Issue 1842: the upgrade row's arguments are checked before the Safe is read.
-  const upgradeSpec = upgrading ? proxySpecs(getStageTable()).find((x) => x.name === o.proxy) : undefined;
+  const upgradeSpec = upgrading ? proxySpecs(scopeTable(getStageTable(), "legacy")).find((x) => x.name === o.proxy) : undefined;
   if (upgrading) {
-    if (!upgradeSpec) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME, one of ${proxySpecs(getStageTable()).map((x) => x.name).join(", ")}; got ${String(o.proxy)}`);
+    if (!upgradeSpec) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --proxy NAME, one of ${proxySpecs(scopeTable(getStageTable(), "legacy")).map((x) => x.name).join(", ")}; got ${String(o.proxy)}`);
     if (!/^0x[0-9a-fA-F]{40}$/.test(o.implementation ?? "")) throw new PublishError("USAGE", `--row ${UPGRADE_ROW} needs --implementation 0x<address> (the new implementation, already deployed), got ${String(o.implementation)}`);
     // Issue 1910: an unknown migration, or one on a proxy that has none, is refused before the Safe is read.
     if (o.migration !== undefined) {

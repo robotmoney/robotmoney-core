@@ -1,0 +1,455 @@
+---
+title: "AttackSimBaselineTest"
+description: "The four sim attacks against the frozen synchronous fund (eng plan §5 work package 3), on the §4.5 basket (deSPXA listed at weight 0). World: a 1-day (65, 35) target at NAV 0, then alice, the attacker, the victim and ten runners deposit 5M USDC in 245,000 USDC deposits, which route to target (deficit-first), one per slot while the market runs. Flows are synchronous: a deposit mints on the TWAP NAV's realized change, a redemption pays the realized proceeds of a pro-rata slice. Opt-in: PROTO_SIM_ATTACKS=1."
+---
+
+# AttackSimBaselineTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/AttackSim.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness), [AttackSimCore](/contracts/test/prototype/sim/abstract.AttackSimCore)
+
+**Title:** AttackSimBaselineTest
+
+The four sim attacks against the frozen synchronous fund (eng plan §5 work package 3), on the §4.5 basket
+(deSPXA listed at weight 0). World: a 1-day (65, 35) target at NAV 0, then alice, the attacker, the
+victim and ten runners deposit 5M USDC in 245,000 USDC deposits, which route to target (deficit-first),
+one per slot while the market runs. Flows are synchronous: a deposit mints on the TWAP NAV's realized
+change, a redemption pays the realized proceeds of a pro-rata slice. Opt-in: PROTO_SIM_ATTACKS=1.
+
+## Constants
+
+### B_LEND_N
+
+```solidity
+uint256 internal constant B_LEND_N = 3;
+```
+
+## State Variables
+
+### b6Shares
+
+```solidity
+uint256 internal b6Shares;
+```
+
+### b6Since
+
+```solidity
+uint256 internal b6Since;
+```
+
+### b6Spent
+
+```solidity
+uint256 internal b6Spent;
+```
+
+### b6Hedge
+
+```solidity
+int256 internal b6Hedge;
+```
+
+### b6Q
+
+```solidity
+uint256[2] internal b6Q;
+```
+
+### b6Px
+
+```solidity
+uint256[2] internal b6Px;
+```
+
+### b9Refused
+
+```solidity
+uint256 internal b9Refused;
+```
+
+## Functions
+
+<a id="_skipoptin-string"></a>
+
+### _skipOptIn
+
+<i>
+
+`BaseFixture._skipCovered`, reached through the concrete test (this core is not a BaseFixture): the
+coverage check runs before the skip, so the recorder proves the skip without recording it.
+
+</i>
+
+```solidity
+function _skipOptIn(string memory why) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `string` |  |
+
+<a id="_mkfundusdc-address-uint256"></a>
+
+### _mkFundUsdc
+
+<i>
+
+Credit `amount` USDC to `to` (the harness's `fundUsdc`). The arbitrageur and the noise trader mint their
+input, as in step 3.
+
+</i>
+
+```solidity
+function _mkFundUsdc(address to, uint256 amount) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_fixturecheckbydefault"></a>
+
+### _fixtureCheckByDefault
+
+<i>
+
+Whether replay runs the coverage check when PROTO_FIXTURE_CHECK is unset.
+
+</i>
+
+```solidity
+function _fixtureCheckByDefault() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="test_a2_sim_baseline_twappushheldagainstarbitrage"></a>
+
+### test_A2_sim_baseline_twapPushHeldAgainstArbitrage
+
+```solidity
+function test_A2_sim_baseline_twapPushHeldAgainstArbitrage() public fixtureCovered;
+```
+
+<a id="test_a10_sim_baseline_slowrampagainstarbitrage"></a>
+
+### test_A10_sim_baseline_slowRampAgainstArbitrage
+
+```solidity
+function test_A10_sim_baseline_slowRampAgainstArbitrage() public fixtureCovered;
+```
+
+<a id="test_a6_sim_baseline_twaplagwithhedge"></a>
+
+### test_A6_sim_baseline_twapLagWithHedge
+
+```solidity
+function test_A6_sim_baseline_twapLagWithHedge() public fixtureCovered;
+```
+
+<a id="test_a9_sim_baseline_run"></a>
+
+### test_A9_sim_baseline_run
+
+```solidity
+function test_A9_sim_baseline_run() public fixtureCovered;
+```
+
+<a id="_worldb"></a>
+
+### _worldB
+
+```solidity
+function _worldB() internal;
+```
+
+<a id="worlddepositsb-address-uint256"></a>
+
+### worldDepositsB
+
+```solidity
+function worldDepositsB(address[] calldata hs, uint256[] calldata amts) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hs | `address[]` |  |
+| amts | `uint256[]` |  |
+
+<a id="seedprepb-uint256"></a>
+
+### seedPrepB
+
+```solidity
+function seedPrepB(uint256 s) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `uint256` |  |
+
+<a id="_bslot"></a>
+
+### _bSlot
+
+<i>
+
+The market slot with the attacker in it: noise (+600), walk and arbitrage (+1200); the attacker starts at
+`startAt` and re-pushes after each event.
+
+</i>
+
+```solidity
+function _bSlot() internal;
+```
+
+<a id="_buntil-uint256"></a>
+
+### _bUntil
+
+```solidity
+function _bUntil(uint256 t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+<a id="_gridb-uint256-string-var-uint8"></a>
+
+### _gridB
+
+```solidity
+function _gridB(uint256 scn, string memory id, Var[] memory vs, uint8[] memory flows) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+| id | `string` |  |
+| vs | `Var[]` |  |
+| flows | `uint8[]` |  |
+
+<a id="flowrunb-var"></a>
+
+### flowRunB
+
+Self-call: the attacker's own deposit (after a push down, held) or its own redemption (into a push up,
+held) four slots from now (`aimAt`); the attacker unwinds right after it. After a deposit it redeems
+everything an hour later (two TWAP windows). The run ends an hour after `aimAt`.
+
+```solidity
+function flowRunB(Var calldata v) external returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `Var` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_bdeposit-address-uint256"></a>
+
+### _bDeposit
+
+<i>
+
+A synchronous deposit that may revert (ORA-4, a per-swap floor): false and nothing moves then. The USDC
+is minted to `who` either way, so both twins hold the same amount.
+
+</i>
+
+```solidity
+function _bDeposit(address who, uint256 usdc) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_bredeemall-address"></a>
+
+### _bRedeemAll
+
+```solidity
+function _bRedeemAll(address who) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_resultb"></a>
+
+### _resultB
+
+```solidity
+function _resultB() internal view returns (Res memory r);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_navrefb"></a>
+
+### _navRefB
+
+<i>
+
+NAV at the reference walk: idle, the lending values, wETH and cbBTC balances at the reference, deSPXA at
+the fund's own value (the fund holds none here).
+
+</i>
+
+```solidity
+function _navRefB() internal view returns (uint256 v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="a6runb-bool-uint256"></a>
+
+### a6RunB
+
+Self-call: 4 days of market; when armed, the attacker deposits on the lag, hedges, and redeems one
+TWAP window later.
+
+```solidity
+function a6RunB(bool armed, uint256 theta) external returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| armed | `bool` |  |
+| theta | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_b6step-uint256"></a>
+
+### _b6Step
+
+```solidity
+function _b6Step(uint256 theta) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| theta | `uint256` |  |
+
+<a id="_b6exit"></a>
+
+### _b6Exit
+
+```solidity
+function _b6Exit() internal;
+```
+
+<a id="_lagbpsb"></a>
+
+### _lagBpsB
+
+```solidity
+function _lagBpsB() internal view returns (int256 lag);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lag | `int256` |  |
+
+<a id="a9runb-bool"></a>
+
+### a9RunB
+
+Self-call: when `run`, runners 0-4 redeem everything now, one after another, and runners 5-9 six hours
+later. 12 hours of market. Logs each runner's USDC against its shares' value at the reference.
+
+```solidity
+function a9RunB(bool run) external returns (Res memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| run | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Res` |  |
+
+<a id="_b9redeem-uint256"></a>
+
+### _b9Redeem
+
+```solidity
+function _b9Redeem(uint256 from) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `uint256` |  |
+

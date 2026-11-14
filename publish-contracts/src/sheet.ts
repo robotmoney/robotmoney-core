@@ -79,8 +79,34 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
   GOVERN_UNPAUSE_VAULTS: { kind: "string" },
   GOVERN_NEW_DELAY: { kind: "uint" },
 };
+/**
+ * Deploy 4: the fund system's own sheet names (the one-vault prototype, contracts/test/prototype/src), read by its stage scripts and refused in a vaults or gateway sheet.
+ * Each FLOW_* name is one FlowParams field of the queue (proposal 5.9.5), each REBALANCER_* one step parameter (5.6). FLOW_BASKET_CALL_BPS and REBALANCER_STEP_DEPTH_BPS are
+ * levers the contracts' initializers set (FlowLevers.basketCallBps, Rebalancer.stepDepthBps): no stage sets them, so the fund sheet holds
+ * them at those initializers' value (FUND_LEVER_INIT_VALUES) and the fund verifier reads both back.
+ */
+export const FUND_ONLY_NAMES = [
+  "KEEPER_ADDRESS",
+  "FUND_TVL_CAP", "FUND_PER_DEPOSIT_CAP", "FUND_EXIT_FEE_BPS", "FUND_MAX_SLIPPAGE_BPS", "FUND_NAV_DEVIATION_BPS", "FUND_LENDING_CAP_BPS", "FUND_MIN_SEED_USDC",
+  "REBALANCER_KEEPER_GRACE", "REBALANCER_MAX_OVERRUN", "REBALANCER_MAX_STEP_COST_BPS", "REBALANCER_TOLERANCE_BPS", "REBALANCER_MIN_STEP_USDC",
+  "REBALANCER_LENDING_MAX_STEP_USDC", "REBALANCER_MAJOR_MAX_STEP_USDC", "REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS", "REBALANCER_STEP_DEPTH_BPS",
+  "PLAN_DURATION", "PLAN_COST_BUDGET_BPS",
+  "FLOW_EPOCH_LENGTH", "FLOW_SETTLE_WINDOW", "FLOW_MIN_HOLD", "FLOW_KEEPER_GRACE", "FLOW_MAX_EPOCH_FLOW_BPS", "FLOW_EPOCH_FLOOR_USDC", "FLOW_MAX_SHARE_PRICE_MOVE_BPS",
+  "FLOW_MAX_ROLL", "FLOW_MIN_REQUEST_USDC", "FLOW_MAX_FREEZE", "FLOW_SLICES", "FLOW_QUORUM", "FLOW_DISPERSION_BPS", "FLOW_REF_BAND_BPS", "FLOW_LEG_BAND_BPS",
+  "FLOW_SEQUENCER_GRACE", "FLOW_USDC_PEG_BAND_BPS", "FLOW_MAX_LEND_RATE_GROWTH_BPS", "FLOW_BASKET_CALL_BPS",
+] as const;
+/** The levers the fund sheet carries that no stage sets: each must equal the value the contract's initializer sets (see FUND_ONLY_NAMES). */
+export const FUND_LEVER_INIT_VALUES: Readonly<Record<string, bigint>> = { FLOW_BASKET_CALL_BPS: 5n, REBALANCER_STEP_DEPTH_BPS: 5n };
+/** Every name a fund sheet may carry: the shared names it reads, and its own. Required: all but FUND_OPTIONAL. */
+export const FUND_SHEET_NAMES = [
+  "CHAIN_ID", "EXPECTED_CHAIN_ID", "DEPLOYMENT_KIND", "USDC_ADDRESS", "ADMIN_ADDRESS", "PAUSER_ADDRESS", "EMERGENCY_ADDRESS", "RECEIPT_ADMIN_ADDRESS",
+  "SAFE_OWNERS", "SAFE_THRESHOLD", "SAFE_VERSION", "SAFE_SALT_NONCE", "FEE_RECIPIENT_ADDRESS", "SWAP_ROUTER", "SEED_DEPOSIT_USDC", "TIMELOCK_MIN_DELAY",
+  "UPGRADE_MODE", "UPGRADE_FREEZE_DEADLINE", ...FUND_ONLY_NAMES,
+] as const;
+const FUND_OPTIONAL = new Set(["DEPLOYMENT_KIND", "USDC_ADDRESS", "SAFE_VERSION", "SAFE_SALT_NONCE", "UPGRADE_FREEZE_DEADLINE"]);
+const FUND_NAMES: Record<string, NameSpec> = Object.fromEntries(FUND_ONLY_NAMES.map((n) => [n, { kind: (n === "KEEPER_ADDRESS" ? "address" : "uint") as Kind }]));
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
-export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES };
+export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES, ...FUND_NAMES };
 
 /**
  * Names with no default and no skip. SAFE_VERSION, SAFE_SALT_NONCE, DEPLOYMENT_KIND (absent means production), USDC_ADDRESS (a constant: when present it must equal it) and
@@ -95,7 +121,8 @@ const GATEWAY_REQUIRED = GATEWAY_SHEET_NAMES.filter((n) => !["DEPLOYMENT_KIND", 
 /** The release modes (issue 1809). The words are the deploy scripts' (UpgradeAuthority.parseUpgradeMode in core). */
 export const UPGRADE_MODES = ["upgradeable", "frozen"] as const;
 export type UpgradeMode = (typeof UPGRADE_MODES)[number];
-export const REQUIRED_NAMES = Object.keys(SHEET_SPEC).filter((n) => !OPTIONAL_NAMES.has(n));
+/** The vaults sheet's required names (the fund names are the fund sheet's alone). */
+export const REQUIRED_NAMES = Object.keys(SHEET_SPEC).filter((n) => !OPTIONAL_NAMES.has(n) && !(FUND_ONLY_NAMES as readonly string[]).includes(n));
 
 /** Refused by name with a reason. Anything else not in the whitelist is refused as unknown. */
 const REFUSED: [RegExp, string][] = [
@@ -103,7 +130,7 @@ const REFUSED: [RegExp, string][] = [
   [/^(REHEARSAL|ALLOW_SHORT_TIMELOCK_DELAY|SKIP_ROUTER_ADMIN_GRANT|BASKET_VAULT_AUDIT_COMPLETE|MOCK_ALL|CONFIG_PATH)$/, "this switch is deleted: one deployment scheme, floors are keyed to the chain id"],
   [/^(RPC|RPC_URL|ETH_RPC_URL|RPC_ENDPOINT)$/, "the RPC is a CLI argument, never a sheet value"],
   [/^(PRIVATE_KEY|ETH_PRIVATE_KEY|MNEMONIC|ETH_MNEMONIC|ETH_PASSWORD|CHAIN_SIGNER_KEYSTORE|CHAIN_SIGNER_PASSWORD|[A-Z_]*(PRIVATE_KEY|PASSWORD|PASSPHRASE|SECRET|MNEMONIC)[A-Z_]*)$/, "a secret never goes in a sheet: use the credential engine or an encrypted keystore with a typed passphrase"],
-  [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
+  [/^(SAFE_ADDRESS|REGISTRY_ADDRESS|ROUTER_ADDRESS|GATEWAY_ADDRESS|GOVERNANCE_ADDRESS|CONSENSUS_RECEIPT_ADDRESS|VAULT_ADDRESS|VAULT_ADDRESSES|TIMELOCK_ADDRESS|AGENT_ADDRESSES|DEPLOYMENT_OUT|DEPLOY_SHA|FUND_ADDRESS|REBALANCER_ADDRESS|FUND_GOVERNANCE_ADDRESS|QUEUE_ADDRESS|FUND_RECEIPT_ADDRESS)$/, "this value is produced by a stage or given as an argument: it is read from manifests, never typed"],
   [/^(AGENT_ADDRESS|AGENT_VALID_UNTIL|AGENT_MAX_PER_PAYMENT|AGENT_MAX_PER_WINDOW|AGENT_MAX_WITHDRAW_PER_PAYMENT|AGENT_MAX_WITHDRAW_PER_WINDOW)$/, "the deploy authorizes no agent: an agent belongs to a depositor, who authorizes it through commitAuthorization and revealAuthorization (architecture 5.2 and 6.3)"],
   [/^GOVERN_(?!UNPAUSE_VAULTS$|NEW_DELAY$)[A-Z_]*$/, "govern (stage 13) carries the four vault unpauses only. Vault setters, eligibility and router default weights are deploy-time configuration the deployer sets before the timelock handover (ELIGIBLE_VAULTS, ROUTER_WEIGHTS, VAULT_<KEY>_*). Router weights change on demand through the apply-receipt row (--row apply-receipt), never through a GOVERN_ sheet name"],
   [/^(VOTER_ADDRESSES|VOTER_POWER|QUORUM_THRESHOLD|VOTING_PERIOD|EXECUTION_DELAY)$/, "there is no voting by anyone: RouterGovernance has no voter, voting power, quorum, voting period or execution delay (issue 1698). Router weights change only when the Safe applies a consensus receipt through the timelock (govern row apply-receipt). Delete the line"],
@@ -124,6 +151,8 @@ export interface Sheet {
   /** Issue 1892: `gateway` for the gateway system's sheet (then `gateway` below is set and the vaults-only fields are inert). Absent: the vaults sheet. */
   system?: SystemName;
   gateway?: { admin: Address; upgradeTimelock: Address };
+  /** Deploy 4: the fund system's own inputs (`system: "fund"`). Every value is also in `values` under its sheet name, which the stage env reads. */
+  fund?: FundSheet;
   /** Normalised raw values by name, exactly what the sheet said (addresses checksummed). */
   values: Record<string, string>;
   chainId: number;
@@ -269,7 +298,14 @@ function checkNames(raw: Record<string, string>, system: SystemName = "vaults", 
     for (const [re, why] of REFUSED) if (re.test(name)) throw err(`${name} is refused: ${why}`, { name });
     if (!(name in SHEET_SPEC)) throw err(`${name} is not a sheet name (the sheet is a whitelist)`, { name });
     if (system === "vaults" && (GATEWAY_ONLY_NAMES as readonly string[]).includes(name)) throw err(`${name} is refused in a vaults sheet: it belongs to the gateway system's own sheet (--system gateway). The vaults system has no gateway input`, { name });
+    if (system === "vaults" && (FUND_ONLY_NAMES as readonly string[]).includes(name)) throw err(`${name} is refused in a vaults sheet: it belongs to the fund system's own sheet (--system fund, Deploy 4)`, { name });
+    if (system === "fund" && !(FUND_SHEET_NAMES as readonly string[]).includes(name)) throw err(`${name} is refused in a fund sheet: it is a vaults or gateway input. The fund system reads nothing of the other systems`, { name });
     if (system === "gateway" && !(GATEWAY_SHEET_NAMES as readonly string[]).includes(name)) throw err(`${name} is refused in a gateway sheet: it is a vaults-system input. The gateway system reads the vaults system's addresses from its manifests, and the vaults timelock is not one of its inputs`, { name });
+  }
+  if (system === "fund") {
+    const missing = FUND_SHEET_NAMES.filter((n) => !FUND_OPTIONAL.has(n) && (!(n in raw) || raw[n] === ""));
+    if (missing.length) throw err(`the fund sheet is missing required names: ${missing.join(", ")}. Nothing has a default.`, { missing });
+    return;
   }
   if (system === "gateway") {
     const missing = GATEWAY_REQUIRED.filter((n) => !(n in raw) || raw[n] === "");
@@ -329,14 +365,15 @@ export function parseSheet(text: string, opts: ParseSheetOpts = {}): Sheet {
   const raw = parseSheetText(text);
   dropLegacyVaultName(text, raw, opts);
   const written = { ...raw };
-  const retiredVaults = opts.system === "gateway" ? [] : takeRetiredVaultLines(raw, opts);
+  const retiredVaults = opts.system === "gateway" || opts.system === "fund" ? [] : takeRetiredVaultLines(raw, opts);
   // Core 2008 (ADR-0018): a follow-on verb on a prior line reads a sheet that predates rmHARD. A vault of ADDED_VAULT_KEYS is absent when the sheet carries none of its lines; a deploy
   // run never treats it as absent (its required names are then missing), and a sheet that carries some of its lines must carry all of them.
   const followOn = (RETIRED_VAULT_VERBS as readonly string[]).includes(opts.verb ?? "");
   const allNames = (k: VaultKey): string[] => [...vaultSheetNames(k), ...(k === "USDC" ? [] : basketSheetNames(k))];
-  const absentVaults: VaultKey[] = opts.system === "gateway" || !followOn ? [] : ADDED_VAULT_KEYS.filter((k) => allNames(k).every((n) => !(n in raw)));
+  const absentVaults: VaultKey[] = opts.system === "gateway" || opts.system === "fund" || !followOn ? [] : ADDED_VAULT_KEYS.filter((k) => allNames(k).every((n) => !(n in raw)));
   checkNames(raw, opts.system, absentVaults);
   if (opts.system === "gateway") return gatewaySheet(raw);
+  if (opts.system === "fund") return fundSheet(raw, opts);
   const v = raw;
 
   const chainId = asSafeInt("CHAIN_ID", v.CHAIN_ID!);
@@ -495,6 +532,108 @@ function gatewaySheet(v: Record<string, string>): Sheet {
     // inert: the gateway system has no Safe, no emergency key, no receipt, no vault and no govern row
     emergency: ZERO_ADDRESS, receiptAdmin: ZERO_ADDRESS, safeOwners: [], safeThreshold: 0, swapRouter: ZERO_ADDRESS, feeRecipient: "@safe", seedDeposit: 0n, timelockMinDelay: 0n,
     vaults: {} as Record<VaultKey, SheetVault>, eligibleVaults: [], weights: [], govern: { unpauseVaults: [], newDelay: 0n },
+  };
+}
+
+/** Deploy 4: what the fund sheet decides, beyond the shared fields. */
+export interface FundSheet {
+  keeper: Address;
+  tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint; maxSlippageBps: bigint; navDeviationBps: bigint; lendingCapBps: bigint; minSeedUsdc: bigint;
+  /** Every FLOW_*, REBALANCER_* and PLAN_* value, by sheet name. */
+  params: Record<string, bigint>;
+}
+/** The fund's own ceilings (contracts/test/prototype/src/lib/FundStorage.sol), refused here before any transaction. */
+export const FUND_MAX_EXIT_FEE_BPS = 100n, FUND_MAX_SLIPPAGE_BPS = 500n, FUND_MAX_NAV_DEVIATION_BPS = 2000n;
+/** The queue's hard bounds a sheet value must sit in (contracts/test/prototype/src/FlowTypes.sol). The queue's initializer is the authority; this refuses early. */
+export const FUND_FLOW_BOUNDS: Readonly<Record<string, [bigint, bigint]>> = {
+  FLOW_EPOCH_LENGTH: [3600n, 604800n], FLOW_SETTLE_WINDOW: [600n, 86400n], FLOW_MIN_HOLD: [86400n, 604800n], FLOW_KEEPER_GRACE: [3600n, 604800n],
+  FLOW_MAX_EPOCH_FLOW_BPS: [1n, 10000n], FLOW_EPOCH_FLOOR_USDC: [0n, 100_000_000_000_000n], FLOW_MAX_SHARE_PRICE_MOVE_BPS: [1n, 5000n], FLOW_MAX_ROLL: [1n, 64n],
+  FLOW_MIN_REQUEST_USDC: [1n, 1_000_000_000_000n], FLOW_MAX_FREEZE: [3600n, 1_209_600n], FLOW_SLICES: [3n, 48n], FLOW_QUORUM: [1n, 48n], FLOW_DISPERSION_BPS: [1n, 2000n],
+  FLOW_REF_BAND_BPS: [1n, 2000n], FLOW_LEG_BAND_BPS: [1n, 2000n], FLOW_SEQUENCER_GRACE: [0n, 86400n], FLOW_USDC_PEG_BAND_BPS: [1n, 1000n], FLOW_MAX_LEND_RATE_GROWTH_BPS: [1n, 1000n],
+  PLAN_DURATION: [86400n, 7_776_000n], PLAN_COST_BUDGET_BPS: [0n, 500n],
+  REBALANCER_KEEPER_GRACE: [1800n, 604800n], REBALANCER_MAX_OVERRUN: [0n, 2_592_000n], REBALANCER_MAX_STEP_COST_BPS: [1n, 500n], REBALANCER_TOLERANCE_BPS: [1n, 500n],
+  REBALANCER_MIN_STEP_USDC: [0n, (1n << 128n) - 1n], REBALANCER_LENDING_MAX_STEP_USDC: [1n, (1n << 128n) - 1n], REBALANCER_MAJOR_MAX_STEP_USDC: [1n, (1n << 128n) - 1n],
+  REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS: [0n, 10000n],
+};
+
+/**
+ * Deploy 4: the fund system's sheet. The shared rules of the vaults sheet hold here unchanged (chain ids, kind, the rehearsal delay and its explicit Safe salt, at least 3 distinct
+ * Safe owners with a threshold from 2 to N-1, distinct operational keys, the receipt admin is the deployer, the fee recipient is never the deployer, the release mode), plus the
+ * fund's own: the keeper is a key of its own, the caps and the seed are coherent (the seed at least FUND_MIN_SEED_USDC and within the TVL cap), and every flow, step and plan
+ * value sits inside the contracts' hard bounds. Vault, router and gateway names are refused (checkNames).
+ */
+function fundSheet(v: Record<string, string>, opts: ParseSheetOpts): Sheet {
+  const chainId = asSafeInt("CHAIN_ID", v.CHAIN_ID!);
+  const expectedChainId = asSafeInt("EXPECTED_CHAIN_ID", v.EXPECTED_CHAIN_ID!);
+  if (chainId <= 0) throw err("CHAIN_ID must be positive");
+  if (expectedChainId !== chainId) throw err(`EXPECTED_CHAIN_ID ${expectedChainId} differs from CHAIN_ID ${chainId}`);
+  const kindRaw = v.DEPLOYMENT_KIND ?? "production";
+  if (!(DEPLOYMENT_KINDS as readonly string[]).includes(kindRaw)) throw err(`DEPLOYMENT_KIND must be ${DEPLOYMENT_KINDS.join(" or ")}, got '${kindRaw}'`, { name: "DEPLOYMENT_KIND" });
+  const kind = kindRaw as DeploymentKind;
+  const admin = asAddress("ADMIN_ADDRESS", v.ADMIN_ADDRESS!);
+  const pauser = asAddress("PAUSER_ADDRESS", v.PAUSER_ADDRESS!);
+  const emergency = asAddress("EMERGENCY_ADDRESS", v.EMERGENCY_ADDRESS!);
+  const keeper = asAddress("KEEPER_ADDRESS", v.KEEPER_ADDRESS!);
+  const receiptAdmin = asAddress("RECEIPT_ADMIN_ADDRESS", v.RECEIPT_ADMIN_ADDRESS!);
+  const safeOwners = asList("SAFE_OWNERS", v.SAFE_OWNERS!);
+  const safeThreshold = asSafeInt("SAFE_THRESHOLD", v.SAFE_THRESHOLD!);
+  if (v.SAFE_VERSION !== undefined && v.SAFE_VERSION !== "1.4.1") throw err(`SAFE_VERSION must be 1.4.1 (the only supported version), got '${v.SAFE_VERSION}'`);
+  if (lc(receiptAdmin) !== lc(admin)) throw err(`RECEIPT_ADMIN_ADDRESS ${receiptAdmin} must equal ADMIN_ADDRESS ${admin}: the deployer holds the receipt roles until the fund-timelock stage revokes them`);
+  assertDistinct("roles", [["ADMIN_ADDRESS", admin], ["PAUSER_ADDRESS", pauser], ["EMERGENCY_ADDRESS", emergency], ["KEEPER_ADDRESS", keeper]]);
+  assertDistinct("Safe owners", safeOwners.map((a, i) => [`SAFE_OWNERS[${i}]`, a]));
+  const roleSet = new Map<string, string>([[lc(admin), "ADMIN_ADDRESS"], [lc(pauser), "PAUSER_ADDRESS"], [lc(emergency), "EMERGENCY_ADDRESS"], [lc(keeper), "KEEPER_ADDRESS"]]);
+  for (const o of safeOwners) { const r = roleSet.get(lc(o)); if (r) throw err(`Safe owner ${o} is also ${r}: signers are separate from the deployer and the operational keys`); }
+  const n = safeOwners.length;
+  if (n < 3) throw err(`a Safe needs at least 3 owners (got ${n}): threshold from 2 to N-1`);
+  if (safeThreshold < 2 || safeThreshold > n - 1) throw err(`SAFE_THRESHOLD ${safeThreshold} must be from 2 to ${n - 1} for ${n} owners`);
+  if (v.USDC_ADDRESS !== undefined && lc(asAddress("USDC_ADDRESS", v.USDC_ADDRESS)) !== lc(USDC_ADDRESS)) throw err(`USDC_ADDRESS must be ${USDC_ADDRESS} on every chain (the Base USDC), got ${v.USDC_ADDRESS}`);
+  const swapRouter = asAddress("SWAP_ROUTER", v.SWAP_ROUTER!);
+  const feeRecipient: Address | "@safe" = v.FEE_RECIPIENT_ADDRESS === "@safe" ? "@safe" : asAddress("FEE_RECIPIENT_ADDRESS", v.FEE_RECIPIENT_ADDRESS!);
+  if (feeRecipient !== "@safe" && lc(feeRecipient) === lc(admin)) throw err("FEE_RECIPIENT_ADDRESS equals ADMIN_ADDRESS (the deployer): the fee recipient is never the deployer. Use the treasury Safe, @safe or another treasury address");
+  const timelockMinDelay = asUint("TIMELOCK_MIN_DELAY", v.TIMELOCK_MIN_DELAY!);
+  if (timelockMinDelay < 1n) throw err("TIMELOCK_MIN_DELAY must be at least 1 second on every chain");
+  if (kind === "rehearsal") {
+    const why = rehearsalDelayProblem(timelockMinDelay);
+    if (why) throw err(`TIMELOCK_MIN_DELAY ${why} (DEPLOYMENT_KIND=rehearsal)`, { name: "TIMELOCK_MIN_DELAY" });
+    if (v.SAFE_SALT_NONCE === undefined || v.SAFE_SALT_NONCE === "") throw err("DEPLOYMENT_KIND=rehearsal needs an explicit SAFE_SALT_NONCE: the same owners, threshold and salt predict a Safe that may already exist. Choose a salt no earlier run used.", { name: "SAFE_SALT_NONCE" });
+  }
+  const upgrade = parseUpgrade(v, chainId, kind, (LEGACY_VAULT_NAME_VERBS as readonly string[]).includes(opts.verb ?? "") ? undefined : { minDelay: timelockMinDelay, nowMs: (opts.now ?? Date.now)() });
+  const u = (name: string): bigint => asUint(name, v[name]!);
+  const seedDeposit = u("SEED_DEPOSIT_USDC"), minSeedUsdc = u("FUND_MIN_SEED_USDC"), tvlCap = u("FUND_TVL_CAP"), perDepositCap = u("FUND_PER_DEPOSIT_CAP");
+  const exitFeeBps = u("FUND_EXIT_FEE_BPS"), maxSlippageBps = u("FUND_MAX_SLIPPAGE_BPS"), navDeviationBps = u("FUND_NAV_DEVIATION_BPS"), lendingCapBps = u("FUND_LENDING_CAP_BPS");
+  if (tvlCap === 0n) throw err("FUND_TVL_CAP must be above 0: a zero TVL cap is refused");
+  if (perDepositCap > tvlCap) throw err("FUND_PER_DEPOSIT_CAP exceeds FUND_TVL_CAP: the per-deposit cap is never above the TVL cap");
+  if (minSeedUsdc < 1_000_000n) throw err("FUND_MIN_SEED_USDC is below the fund's own floor of 1 USDC (MIN_MIN_SEED_USDC)", { name: "FUND_MIN_SEED_USDC" });
+  if (seedDeposit < minSeedUsdc) throw err(`SEED_DEPOSIT_USDC ${seedDeposit} is below FUND_MIN_SEED_USDC ${minSeedUsdc}: the fund refuses the seed`, { name: "SEED_DEPOSIT_USDC" });
+  if (seedDeposit > tvlCap) throw err("SEED_DEPOSIT_USDC exceeds FUND_TVL_CAP", { name: "SEED_DEPOSIT_USDC" });
+  if (exitFeeBps > FUND_MAX_EXIT_FEE_BPS) throw err(`FUND_EXIT_FEE_BPS is above the fund's ceiling ${FUND_MAX_EXIT_FEE_BPS}`, { name: "FUND_EXIT_FEE_BPS" });
+  // proposal 5.6: a slippage or deviation bound at or below the pool fee (5 bps on the fee-500 pools) would make every step fail
+  if (maxSlippageBps <= 5n || maxSlippageBps > FUND_MAX_SLIPPAGE_BPS) throw err(`FUND_MAX_SLIPPAGE_BPS must be above the 5 bps pool fee and at most ${FUND_MAX_SLIPPAGE_BPS}`, { name: "FUND_MAX_SLIPPAGE_BPS" });
+  if (navDeviationBps <= 5n || navDeviationBps > FUND_MAX_NAV_DEVIATION_BPS) throw err(`FUND_NAV_DEVIATION_BPS must be above the 5 bps pool fee and at most ${FUND_MAX_NAV_DEVIATION_BPS}`, { name: "FUND_NAV_DEVIATION_BPS" });
+  if (lendingCapBps === 0n || lendingCapBps > 10000n) throw err("FUND_LENDING_CAP_BPS must be from 1 to 10000", { name: "FUND_LENDING_CAP_BPS" });
+  const params: Record<string, bigint> = {};
+  for (const [name, [lo, hi]] of Object.entries(FUND_FLOW_BOUNDS)) {
+    const x = u(name);
+    if (x < lo || x > hi) throw err(`${name} ${x} is outside the contract's bounds ${lo}..${hi}`, { name });
+    params[name] = x;
+  }
+  for (const [name, want] of Object.entries(FUND_LEVER_INIT_VALUES)) {
+    const x = u(name);
+    if (x !== want) throw err(`${name} is ${x}, but no stage sets it: it holds the value the contract's initializer sets (${want}), so the sheet must say ${want}`, { name });
+    params[name] = x;
+  }
+  if (params.FLOW_SETTLE_WINDOW! >= params.FLOW_EPOCH_LENGTH!) throw err("FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH", { name: "FLOW_SETTLE_WINDOW" });
+  if (params.FLOW_QUORUM! > params.FLOW_SLICES!) throw err("FLOW_QUORUM exceeds FLOW_SLICES", { name: "FLOW_QUORUM" });
+  if (params.REBALANCER_MIN_STEP_USDC! > params.REBALANCER_LENDING_MAX_STEP_USDC! || params.REBALANCER_MIN_STEP_USDC! > params.REBALANCER_MAJOR_MAX_STEP_USDC!) throw err("REBALANCER_MIN_STEP_USDC exceeds a per-asset max step (MaxStepBelowMinStep)", { name: "REBALANCER_MIN_STEP_USDC" });
+  const values: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
+  return {
+    system: "fund", values, chainId, expectedChainId, kind, admin, pauser, emergency, receiptAdmin, safeOwners, safeThreshold, safeSalt: v.SAFE_SALT_NONCE,
+    usdc: USDC_ADDRESS as Address, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade,
+    fund: { keeper, tvlCap, perDepositCap, exitFeeBps, maxSlippageBps, navDeviationBps, lendingCapBps, minSeedUsdc, params },
+    // inert: the fund system has no share receiver (the seed is minted to the fund itself), no vault of the vaults system, no router vector and no unpause row. The update-delay
+    // target is the deployed delay itself: the fund system has no update-delay row, and nothing lower than the floor is ever named.
+    shareReceiver: ZERO_ADDRESS, vaults: {} as Record<VaultKey, SheetVault>, eligibleVaults: [], weights: [], govern: { unpauseVaults: [], newDelay: timelockMinDelay },
   };
 }
 

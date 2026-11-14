@@ -1,0 +1,62 @@
+---
+title: "FlowLibsPinTest"
+description: "TwapSlicesLib on the real Base pools at the fixture pin, without moving time (plan §9 \"pool history\"). Uses the replay fixture and its coverage check."
+---
+
+# FlowLibsPinTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+**Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
+
+**Title:** FlowLibsPinTest
+
+TwapSlicesLib on the real Base pools at the fixture pin, without moving time (plan §9 "pool history").
+Uses the replay fixture and its coverage check.
+
+## Constants
+
+### WETH_POOL
+
+```solidity
+address internal constant WETH_POOL = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
+```
+
+### CBBTC_POOL
+
+```solidity
+address internal constant CBBTC_POOL = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+```
+
+## State Variables
+
+### h
+
+```solidity
+FlowLibsHarness internal h;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_pin_slicemedian_realpools"></a>
+
+### test_pin_sliceMedian_realPools
+
+<i>
+
+The §5.9.5 defaults: a 1 h window, 12 slices, quorum 9, 100 bps.
+
+</i>
+
+```solidity
+function test_pin_sliceMedian_realPools() public fixtureCovered;
+```
+

@@ -1,0 +1,1710 @@
+---
+title: "PrototypeHarness"
+description: "One-vault experiment, step 3d (timed flows). Deploys the full prototype on the real Base fixture state and gives every live prototype test the same helpers. Production wiring, in miniature:"
+---
+
+# PrototypeHarness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/PrototypeHarness.sol)
+
+**Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
+
+**Title:** PrototypeHarness
+
+One-vault experiment, step 3d (timed flows). Deploys the full prototype on the real Base fixture state and
+gives every live prototype test the same helpers. Production wiring, in miniature:
+
+- `timelock`: an OpenZeppelin `TimelockController` with a small non-zero delay. This test contract is
+its only proposer and executor (the Safe stand-in). It ends up holding `ADMIN_ROLE` on the fund, the
+queue, the rebalancer and the governance contract, `TARGET_SETTER_ROLE` on governance, the receipt
+register's `ADMIN_ROLE` (INV-3), and the upgrade authority of every proxy (RB-1).
+- `receipts`: the real `ConsensusRecommendationReceipt` behind its ERC-1967 proxy (RB-8).
+- `fund`: `RobotMoneyFund` behind its proxy, with the §4.5 asset list: three lending venues (Aave V3,
+Moonwell through the Morpho adapter, Compound V3) through the step 3d rate adapter copies (E15, check
+5), and wETH and cbBTC on their Uniswap V3 fee-500 USDC pools through the exact-output swap adapter copy
+(E3, checks 8 and 9), each with its real Chainlink feed address and `maxFeedAge` (E15, E16). deSPXA is
+not listed (§4.5 rule 1: no live feed).
+- `queue`: the `FlowQueue` behind its proxy (E1), holding the fund's `FLOW_ROLE` (bound once), with the
+§5.9.5 defaults, the USDC / USD feed and the sequencer uptime feed. `keeper` holds its `KEEPER_ROLE`,
+`emergency` its `EMERGENCY_ROLE`.
+- The fund is seeded once (E14) with `SEED_USDC`, minted to the fund itself.
+- `rebalancer` (fund `REBALANCER_ROLE`) and `governance` (fund `GOVERNANCE_ROLE`) as in step 3c.
+
+Feeds. Each real feed address gets a `MockAggregator` (vm.etch) before any asset is added, because
+`addAsset` refuses an unhealthy feed (E15). The basket feeds start at the pool's own price at the pin
+(`slot0`), which is what the slice-median TWAP of check 3 extrapolates to once the window lies after the
+pin, so check 4 (TWAP within `refBandBps` of the feed) passes in a quiet market. `refreshFeeds` re-stamps
+every feed at `block.timestamp` with its stored price; `setFeedPrice` changes a stored price.
+
+Compound V3. The replay fixture lacks Comet's extension delegate, so `CompoundV3RateAdapter.ratePerUnit`
+reverts in replay and `addAsset` refuses it (requests.md, queue and fund-extras entries). The harness
+lists Compound only when that account has code (`cometListed`): on the recorder's fork and in replay
+after the re-record it is listed; in replay before it, the fund runs on four assets. Compound is the LAST
+asset (`IDX_COMET = 4`) so the other indices never move. Vectors are always five wide; a vector must
+give Compound 0 while it is not listed.
+
+Fixture coverage. The fund and the adapters are created from the same deployer nonces as in the step 3c
+harness the fixture was recorded with (timelock 1, receipts 2-3, fund 4-5, the four adapters 6-9), so each
+venue slot keyed by the fund or an adapter address is the recorded one. Forge counts every top-level call
+of this contract in its nonce, so nothing may call out between those creations. The queue is new: its
+slots (its USDC balance, for one) miss until the re-record.
+
+Tests never hard-code market prices or amounts out: they assert relationships, because the fixture pin
+moves at re-record time.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### WETH
+
+```solidity
+address internal constant WETH = 0x4200000000000000000000000000000000000006;
+```
+
+### CBBTC
+
+```solidity
+address internal constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+```
+
+### WETH_POOL
+
+```solidity
+address internal constant WETH_POOL = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
+```
+
+### CBBTC_POOL
+
+```solidity
+address internal constant CBBTC_POOL = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+```
+
+### ROUTER
+
+```solidity
+address internal constant ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### AAVE_POOL
+
+```solidity
+address internal constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+```
+
+### AAVE_A_USDC
+
+```solidity
+address internal constant AAVE_A_USDC = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+```
+
+### COMET
+
+```solidity
+address internal constant COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+```
+
+### COMET_EXTENSION
+
+<i>
+
+Comet's extension delegate (`COMET.extensionDelegate()` at the pin). `totalsBasic()` lives there.
+
+</i>
+
+```solidity
+address internal constant COMET_EXTENSION = 0x0d4Bd55A755134950027cE1F43190A354e648e20;
+```
+
+### MOONWELL
+
+```solidity
+address internal constant MOONWELL = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+```
+
+### POOL_FEE
+
+```solidity
+uint24 internal constant POOL_FEE = 500;
+```
+
+### FEED_ETH
+
+```solidity
+address internal constant FEED_ETH = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+```
+
+### FEED_CBBTC
+
+```solidity
+address internal constant FEED_CBBTC = 0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D;
+```
+
+### FEED_USDC
+
+```solidity
+address internal constant FEED_USDC = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+```
+
+### FEED_SEQUENCER
+
+```solidity
+address internal constant FEED_SEQUENCER = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
+```
+
+### ETH_FEED_MAX_AGE
+
+<i>
+
+`maxFeedAge` = heartbeat + 5 minutes (§5.9.5): ETH / USD 20 min, cbBTC / USD and USDC / USD 24 h.
+
+</i>
+
+```solidity
+uint32 internal constant ETH_FEED_MAX_AGE = 1_500;
+```
+
+### DAY_FEED_MAX_AGE
+
+```solidity
+uint32 internal constant DAY_FEED_MAX_AGE = 86_700;
+```
+
+### IDX_AAVE
+
+```solidity
+uint256 internal constant IDX_AAVE = 0;
+```
+
+### IDX_MOONWELL
+
+```solidity
+uint256 internal constant IDX_MOONWELL = 1;
+```
+
+### IDX_WETH
+
+```solidity
+uint256 internal constant IDX_WETH = 2;
+```
+
+### IDX_CBBTC
+
+```solidity
+uint256 internal constant IDX_CBBTC = 3;
+```
+
+### IDX_COMET
+
+```solidity
+uint256 internal constant IDX_COMET = 4;
+```
+
+### N_ASSETS
+
+<i>
+
+Width of every target vector. `fund.assetCount()` is 5 when Compound is listed, else 4.
+
+</i>
+
+```solidity
+uint256 internal constant N_ASSETS = 5;
+```
+
+### BUCKET_AGENT
+
+```solidity
+uint256 internal constant BUCKET_AGENT = 0;
+```
+
+### BUCKET_STABLE
+
+```solidity
+uint256 internal constant BUCKET_STABLE = 1;
+```
+
+### BUCKET_PROTOCOL
+
+```solidity
+uint256 internal constant BUCKET_PROTOCOL = 2;
+```
+
+### BUCKET_RWA
+
+```solidity
+uint256 internal constant BUCKET_RWA = 3;
+```
+
+### N_BUCKETS
+
+```solidity
+uint256 internal constant N_BUCKETS = 4;
+```
+
+### TIMELOCK_DELAY
+
+<i>
+
+Small but non-zero, so every governed call really waits in the timelock.
+
+</i>
+
+```solidity
+uint256 internal constant TIMELOCK_DELAY = 60;
+```
+
+### TWAP_WINDOW
+
+```solidity
+uint32 internal constant TWAP_WINDOW = 1_800;
+```
+
+### TVL_CAP
+
+```solidity
+uint256 internal constant TVL_CAP = 10_000_000e6;
+```
+
+### PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant PER_DEPOSIT_CAP = 1_000_000e6;
+```
+
+### EXIT_FEE_BPS
+
+```solidity
+uint256 internal constant EXIT_FEE_BPS = 10;
+```
+
+### MAX_SLIPPAGE_BPS
+
+<i>
+
+Swap floor of the rebalance step and the emergency unwind. Above every pool fee (5 bps).
+
+</i>
+
+```solidity
+uint256 internal constant MAX_SLIPPAGE_BPS = 200;
+```
+
+### NAV_DEVIATION_BPS
+
+<i>
+
+ORA-4 band. Above every pool fee.
+
+</i>
+
+```solidity
+uint256 internal constant NAV_DEVIATION_BPS = 200;
+```
+
+### LENDING_CAP_BPS
+
+<i>
+
+ADP ramp control: no single lending venue above 60% of NAV.
+
+</i>
+
+```solidity
+uint16 internal constant LENDING_CAP_BPS = 6_000;
+```
+
+### SEED_USDC
+
+<i>
+
+E14: the seed, minted to the fund itself (at least `minSeedUsdc`, 10 000 USDC).
+
+</i>
+
+```solidity
+uint256 internal constant SEED_USDC = 100_000e6;
+```
+
+### PLAN_DURATION
+
+```solidity
+uint64 internal constant PLAN_DURATION = 7 days;
+```
+
+### COST_BUDGET_BPS
+
+```solidity
+uint16 internal constant COST_BUDGET_BPS = 30;
+```
+
+### KEEPER_GRACE
+
+```solidity
+uint32 internal constant KEEPER_GRACE = 6 hours;
+```
+
+### MAX_OVERRUN
+
+```solidity
+uint32 internal constant MAX_OVERRUN = 7 days;
+```
+
+### MAX_STEP_COST_BPS
+
+```solidity
+uint16 internal constant MAX_STEP_COST_BPS = 50;
+```
+
+### TOLERANCE_BPS
+
+```solidity
+uint16 internal constant TOLERANCE_BPS = 50;
+```
+
+### MIN_STEP_USDC
+
+```solidity
+uint128 internal constant MIN_STEP_USDC = 100e6;
+```
+
+### LENDING_MAX_STEP_USDC
+
+```solidity
+uint128 internal constant LENDING_MAX_STEP_USDC = 500_000e6;
+```
+
+### MAJOR_MAX_STEP_USDC
+
+```solidity
+uint128 internal constant MAJOR_MAX_STEP_USDC = 50_000e6;
+```
+
+### MAJOR_SLIPPAGE_OVER_FEE_BPS
+
+<i>
+
+Per-step slippage room above the pool fee for wETH and cbBTC (fee 5 bps → 50 bps floor).
+
+</i>
+
+```solidity
+uint256 internal constant MAJOR_SLIPPAGE_OVER_FEE_BPS = 45;
+```
+
+### SETTLE_MAX_REQUESTS
+
+<i>
+
+`settle(maxRequests, ·)` of the helpers: the queue's own per-call ceiling (FlowSettleLib).
+
+</i>
+
+```solidity
+uint256 internal constant SETTLE_MAX_REQUESTS = 256;
+```
+
+## State Variables
+
+### keeper
+
+```solidity
+address internal keeper = makeAddr("keeper");
+```
+
+### submitter
+
+```solidity
+address internal submitter = makeAddr("receiptSubmitter");
+```
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+### timelock
+
+```solidity
+TimelockController internal timelock;
+```
+
+### receipts
+
+```solidity
+ConsensusRecommendationReceipt internal receipts;
+```
+
+### fund
+
+```solidity
+IRobotMoneyFundFull internal fund;
+```
+
+### rebalancer
+
+```solidity
+Rebalancer internal rebalancer;
+```
+
+### governance
+
+```solidity
+RebalanceGovernance internal governance;
+```
+
+### queue
+
+```solidity
+FlowQueue internal queue;
+```
+
+### aaveAdapter
+
+```solidity
+AaveV3RateAdapter internal aaveAdapter;
+```
+
+### cometAdapter
+
+```solidity
+CompoundV3RateAdapter internal cometAdapter;
+```
+
+### moonwellAdapter
+
+```solidity
+MorphoRateAdapter internal moonwellAdapter;
+```
+
+### swapAdapter
+
+```solidity
+UniswapV3ExactOutSwapAdapter internal swapAdapter;
+```
+
+### cometListed
+
+<i>
+
+Compound V3 is in the fund's asset list (see the contract note). Set in `setUp`.
+
+</i>
+
+```solidity
+bool internal cometListed;
+```
+
+### feedPrice8
+
+<i>
+
+Stored price of each feed (8 decimals) that `refreshFeeds` writes. The sequencer's `startedAt` is fixed
+at setUp (up for a day by then), so it stays past `sequencerGrace` whatever the test warps.
+
+</i>
+
+```solidity
+mapping(address feed => int256 price8) internal feedPrice8;
+```
+
+### sequencerUpSince
+
+```solidity
+uint256 internal sequencerUpSince;
+```
+
+### receiptPayload
+
+<i>
+
+Canonical payload string of each receipt `recordReceipt` made (its digest is keccak256 of it).
+
+</i>
+
+```solidity
+mapping(bytes32 receiptId => string payload) internal receiptPayload;
+```
+
+### _receiptNonce
+
+```solidity
+uint256 private _receiptNonce;
+```
+
+### _saltNonce
+
+```solidity
+uint256 private _saltNonce;
+```
+
+### _lastRecordedAt
+
+```solidity
+uint64 private _lastRecordedAt;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public virtual override;
+```
+
+<a id="_beforehandover"></a>
+
+### _beforeHandover
+
+<i>
+
+Runs while this contract is still every deployer admin, right before the timelock handover. No-op by
+default.
+
+</i>
+
+```solidity
+function _beforeHandover() internal virtual;
+```
+
+<a id="_bindqueueatsetup"></a>
+
+### _bindQueueAtSetUp
+
+<i>
+
+Whether setUp binds the fund's FLOW_ROLE to the queue. A test that plays the queue itself (fund-core's
+unit test) returns false and binds itself.
+
+</i>
+
+```solidity
+function _bindQueueAtSetUp() internal virtual returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_seedusdc"></a>
+
+### _seedUsdc
+
+<i>
+
+USDC the deployer admin seeds the fund with at setUp (E14). 0: no seed (a test of `seed` itself).
+
+</i>
+
+```solidity
+function _seedUsdc() internal virtual returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_deploytimelock"></a>
+
+### _deployTimelock
+
+```solidity
+function _deployTimelock() private;
+```
+
+<a id="_deployreceipts"></a>
+
+### _deployReceipts
+
+<i>
+
+The receipt register's ADMIN_ROLE is the timelock's alone from initialization (INV-3).
+
+</i>
+
+```solidity
+function _deployReceipts() private;
+```
+
+<a id="_deployfund"></a>
+
+### _deployFund
+
+<i>
+
+This contract is the deployer admin until `_handOverToTimelock`, as the stage scripts are.
+
+</i>
+
+```solidity
+function _deployFund() private;
+```
+
+<a id="_placefeeds"></a>
+
+### _placeFeeds
+
+<i>
+
+A mock aggregator at each real feed address (E16), before any asset is added (E15 refuses an unhealthy
+feed). The basket feeds start at the pool's own price at the pin; USDC at 1; the sequencer up for a day.
+`vm.etch` of the runtime code uses no deployer nonce.
+
+</i>
+
+```solidity
+function _placeFeeds() private;
+```
+
+<a id="_deployadapters"></a>
+
+### _deployAdapters
+
+<i>
+
+The four adapters, right after the fund and before any call from this contract (forge counts each
+top-level call in the deployer nonce), in the step 3c order (aave, comet, moonwell, swap), so they get
+the step 3c addresses (nonces 6 to 9) the fixture's venue slots are keyed by. Compound's adapter is
+created even when it is not listed, to keep that order.
+
+</i>
+
+```solidity
+function _deployAdapters() private;
+```
+
+<a id="_addassets"></a>
+
+### _addAssets
+
+<i>
+
+§4.5: three lending venues and two basket tokens, each feed already healthy (`_placeFeeds`).
+
+</i>
+
+```solidity
+function _addAssets() private;
+```
+
+<a id="lendingconfig-address"></a>
+
+### lendingConfig
+
+A lending asset config (E15: a rate adapter, no feed, `maxFeedAge` 0).
+
+```solidity
+function lendingConfig(address adapter) internal pure returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="basketconfig-address-address-address-uint32"></a>
+
+### basketConfig
+
+A basket asset config on the exact-output swap adapter copy, with its feed and `maxFeedAge` (E15).
+
+```solidity
+function basketConfig(address token, address pool, address feed, uint32 maxFeedAge)
+        internal
+        view
+        returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| pool | `address` |  |
+| feed | `address` |  |
+| maxFeedAge | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="_deployrebalancer"></a>
+
+### _deployRebalancer
+
+<i>
+
+§5.6 suggested starts. `stepInterval` is the longest TWAP window (or 30 min). Per-asset slippage is
+pool-fee aware: wETH and cbBTC sit `MAJOR_SLIPPAGE_OVER_FEE_BPS` above their fee; lending withdrawals
+are 1:1 so 0.
+
+</i>
+
+```solidity
+function _deployRebalancer() private;
+```
+
+<a id="_deploygovernance"></a>
+
+### _deployGovernance
+
+```solidity
+function _deployGovernance() private;
+```
+
+<a id="_deployqueue"></a>
+
+### _deployQueue
+
+<i>
+
+The queue after the fund and its assets: `initialize` checks `legBandBps` above `fund.maxPoolFeeBps()`.
+
+</i>
+
+```solidity
+function _deployQueue() private;
+```
+
+<a id="defaultflowparams"></a>
+
+### defaultFlowParams
+
+The §5.9.5 working defaults (FlowParams holds all but `poolShareBps`, `minSeedUsdc` and the feeds'
+ages). The fund's in-kind allowance defaults (500 bps, 250 000 USDC, 6 h) equal the cap values here
+(coordinator ruling 6), so the harness does not set it.
+
+```solidity
+function defaultFlowParams() internal pure returns (FlowParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `FlowParams` |  |
+
+<a id="_wireroles"></a>
+
+### _wireRoles
+
+<i>
+
+Fund plan roles and FLOW_ROLE bound once by the deployer admin (self-administered afterwards, RB-1, E1);
+receipt roles through the timelock (the register's only admin).
+
+</i>
+
+```solidity
+function _wireRoles() private;
+```
+
+<a id="_seed"></a>
+
+### _seed
+
+<i>
+
+E14: the deployer admin seeds once, at zero supply. The seed stays idle until a plan moves it.
+
+</i>
+
+```solidity
+function _seed() private;
+```
+
+<a id="_handovertotimelock"></a>
+
+### _handOverToTimelock
+
+<i>
+
+Stage-script handover: the timelock gains every admin role, then the deployer renounces its own.
+
+</i>
+
+```solidity
+function _handOverToTimelock() private;
+```
+
+<a id="_proxy-address-bytes"></a>
+
+### _proxy
+
+```solidity
+function _proxy(address impl, bytes memory initData) private returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| impl | `address` |  |
+| initData | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="refreshfeeds"></a>
+
+### refreshFeeds
+
+Re-stamp every mock feed at `block.timestamp` with its stored price (USDC at its stored peg, the
+sequencer up since setUp). Call after a warp: the ETH feed's `maxFeedAge` is 25 minutes, and the
+fund's `totalAssets` and the convert views revert on a stale feed (E19).
+
+```solidity
+function refreshFeeds() internal;
+```
+
+<a id="setfeedprice-uint256-uint256"></a>
+
+### setFeedPrice
+
+Set the stored USD price (8 decimals) of basket asset `index`'s feed and write it now.
+
+```solidity
+function setFeedPrice(uint256 index, uint256 price8) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| price8 | `uint256` |  |
+
+<a id="setusdcfeedprice-uint256"></a>
+
+### setUsdcFeedPrice
+
+Set the stored USDC / USD price (8 decimals) and write it now.
+
+```solidity
+function setUsdcFeedPrice(uint256 price8) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| price8 | `uint256` |  |
+
+<a id="alignfeedstopools"></a>
+
+### alignFeedsToPools
+
+Set every listed basket feed to its pool's current price. A test calls this after the fund's own
+trades moved a pool: it models an outside market that has caught up with the pool (the feed and the
+pool agree again), never a pushed pool, so check 4 then compares like with like.
+
+```solidity
+function alignFeedsToPools() internal;
+```
+
+<a id="poolprice8-address-address"></a>
+
+### poolPrice8
+
+USD price (8 decimals, with USDC at 1) of one whole `token` at `pool`'s current tick (`slot0`): the
+price the slice-median TWAP of check 3 reads once its window lies after the pool's last observation.
+
+```solidity
+function poolPrice8(address pool, address token) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="fundusdc-address-uint256"></a>
+
+### fundUsdc
+
+Add `amount` USDC to `to`'s balance (real FiatToken balance slot: mapping at slot 9, balance in
+the low 255 bits; the same write `scripts/devnet/twin-fork.ts fund-usdc` makes).
+
+```solidity
+function fundUsdc(address to, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="opendepositrequest-address-uint256-uint256"></a>
+
+### openDepositRequest
+
+Fund `user` with `usdc` and open a deposit request for it with the limit `maxUsdcPerShare`
+(PRICE_SCALE units). The user approves the queue and is the caller and the owner.
+
+```solidity
+function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare)
+        internal
+        returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| usdc | `uint256` |  |
+| maxUsdcPerShare | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="openredeemrequest-address-uint256-uint256"></a>
+
+### openRedeemRequest
+
+`user` approves the queue for `shares` and opens a redemption request with the limit
+`minUsdcPerShare` (PRICE_SCALE units, after the exit fee).
+
+```solidity
+function openRedeemRequest(address user, uint256 shares, uint256 minUsdcPerShare)
+        internal
+        returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| shares | `uint256` |  |
+| minUsdcPerShare | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="warptosettleable-uint256"></a>
+
+### warpToSettleable
+
+Warp to the end of request `id`'s settlement window (no-op if that time has passed).
+
+```solidity
+function warpToSettleable(uint256 id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="warpforward-uint256"></a>
+
+### warpForward
+
+Warp to `t` if it lies ahead.
+
+```solidity
+function warpForward(uint256 t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+<a id="settleall"></a>
+
+### settleAll
+
+Refresh the feeds, then settle as the keeper until no epoch with an open request is settleable
+(check 1 `Window`) or two calls in a row record nothing (every request left is skipped or capped).
+Any failed check reverts here with the queue's `SettleBlocked`, so a test sees why.
+
+```solidity
+function settleAll() internal returns (uint256 settled);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settled | `uint256` | Settlements recorded. |
+
+<a id="deposit-address-uint256"></a>
+
+### deposit
+
+The whole deposit path for `user`: request `usdc` with no price limit, wait for the window, settle
+(period after period while the flow cap leaves part of it pending, E20), wait out the hold, and
+deliver every unlocked share to the user. Refreshes the feeds at the end so the fund's views read.
+Returns the shares the user received.
+
+```solidity
+function deposit(address user, uint256 usdc) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="settleuntilfilled-uint256"></a>
+
+### settleUntilFilled
+
+Warp to request `id`'s window, then settle, moving one `epochLength` (one cap period) at a time
+until the request is filled. Fails if it is not filled within `maxRoll` periods (it would expire).
+
+```solidity
+function settleUntilFilled(uint256 id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="deliverafterhold-address"></a>
+
+### deliverAfterHold
+
+Warp past the hold of every deposit claim `user` has (the latest unlock time), then deliver all of
+them. Returns the shares delivered (0 if none). Anyone may trigger delivery (E8); the harness does.
+
+```solidity
+function deliverAfterHold(address user) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="redeem-address-uint256"></a>
+
+### redeem
+
+The whole redemption path for `user`: request `shares` with no price limit, wait for the window,
+settle (period after period under the cap), and take the settled USDC to the user. Returns the USDC
+paid. The feeds are fresh at return (`settleAll` refreshed them in this block).
+
+```solidity
+function redeem(address user, uint256 shares) internal returns (uint256 usdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+<a id="investfund-uint16-5"></a>
+
+### investFund
+
+Open a 1-day plan to `v` through the timelock and step it until it ends, so the seed (and anything
+else idle) is spread over the assets. Refreshes the feeds at the end.
+
+```solidity
+function investFund(uint16[5] memory v) internal returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="recordreceipt-uint16-5"></a>
+
+### recordReceipt
+
+Record a well-formed schema 1.1 consensus receipt for the per-asset vector `v` (index-aligned to
+the fund's asset list) as the submitter. The payload is a canonical JSON string with the four
+bucket `weights` (the audit field, each the sum of its labelled assets) and the `assets` list
+(stable key, bucket label, weight) of the listed assets. `digest = keccak256(payload)` (kept in
+`receiptPayload[id]`), and `id` comes from the register's own `computeReceiptId`. Warps 1 s when
+needed so every receipt's `recordedAt` is strictly later than the previous one.
+
+```solidity
+function recordReceipt(uint16[5] memory v) internal returns (bytes32 id, bytes32 digest);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+
+<a id="_assetsjson-uint16-5"></a>
+
+### _assetsJson
+
+```solidity
+function _assetsJson(uint16[5] memory v) private view returns (string memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `string` |  |
+
+<a id="_bucketsjson-uint16-5"></a>
+
+### _bucketsJson
+
+```solidity
+function _bucketsJson(uint16[5] memory v) private pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="applyreceiptviatimelock-bytes32-bytes32-uint16-5"></a>
+
+### applyReceiptViaTimelock
+
+Apply a recorded receipt through the timelock (schedule, warp `TIMELOCK_DELAY`, execute), the
+only path RB-1 allows. Returns the opened plan id.
+
+```solidity
+function applyReceiptViaTimelock(bytes32 id, bytes32 digest, uint16[5] memory v)
+        internal
+        returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="recordandapply-uint16-5"></a>
+
+### recordAndApply
+
+Record a receipt for `v` and apply it through the timelock. Returns the plan id.
+
+```solidity
+function recordAndApply(uint16[5] memory v) internal returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="settargetviatimelock-uint16-5-planparams"></a>
+
+### setTargetViaTimelock
+
+Open a receipt-less plan (`governance.setTarget`, ADMIN) through the timelock.
+
+```solidity
+function setTargetViaTimelock(uint16[5] memory v, PlanParams memory params)
+        internal
+        returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+| params | `PlanParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="assetidof-uint256"></a>
+
+### assetIdOf
+
+The asset id a target vector uses for fund asset `index` (`PlanMath.assetId`: the token for a
+basket asset, the adapter for a lending asset).
+
+```solidity
+function assetIdOf(uint256 index) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="listedassets"></a>
+
+### listedAssets
+
+Number of assets in the fund's list: 5 with Compound, 4 without (see the contract note).
+
+```solidity
+function listedAssets() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assetarrays-uint16-5"></a>
+
+### assetArrays
+
+The parallel (asset id, weight) arrays `applyReceipt` / `setTarget` / `previewPlan` take for the
+index-aligned vector `v`. Every listed asset is listed, zeros included (§4.1). While Compound is not
+listed, `v[IDX_COMET]` must be 0.
+
+```solidity
+function assetArrays(uint16[5] memory v)
+        internal
+        view
+        returns (address[] memory ids, uint256[] memory w);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+
+<a id="assetvec-uint16-uint16-uint16-uint16-uint16"></a>
+
+### assetVec
+
+An explicit per-asset vector in index order [aave, moonwell, wETH, cbBTC, comet].
+
+```solidity
+function assetVec(uint16 aave, uint16 moonwell, uint16 weth, uint16 cbbtc, uint16 comet)
+        internal
+        pure
+        returns (uint16[5] memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| aave | `uint16` |  |
+| moonwell | `uint16` |  |
+| weth | `uint16` |  |
+| cbbtc | `uint16` |  |
+| comet | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+<a id="bucketvec-uint16-uint16"></a>
+
+### bucketVec
+
+A per-asset vector written as bucket totals (stable + protocol = 10 000; the agent and real-world
+buckets are 0 on this list, §4.5): lending 40 / 30 / 30 over Aave, Moonwell and Compound (40 / 60
+over Aave and Moonwell while Compound is not listed), wETH and cbBTC 50 / 50. The bucket's last asset
+takes the rounding remainder. A test-side helper, not a contract rule (§11 D8).
+
+```solidity
+function bucketVec(uint16 stable, uint16 protocol) internal view returns (uint16[5] memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| stable | `uint16` |  |
+| protocol | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+<a id="isbasketindex-uint256"></a>
+
+### isBasketIndex
+
+Whether fund asset `index` is a basket asset (wETH, cbBTC).
+
+```solidity
+function isBasketIndex(uint256 index) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="assetbucket-uint256"></a>
+
+### assetBucket
+
+The receipt bucket label of fund asset `index` (test-side table, §4.1).
+
+```solidity
+function assetBucket(uint256 index) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="bucketsof-uint16-5"></a>
+
+### bucketsOf
+
+Bucket totals [agent, stable, protocol, rwa] of the per-asset vector `v` (the audit sums).
+
+```solidity
+function bucketsOf(uint16[5] memory v) internal pure returns (uint256[4] memory b);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256[4]` |  |
+
+<a id="timelockexecute-address-bytes"></a>
+
+### timelockExecute
+
+Schedule `data` on `target` in the timelock as the Safe stand-in, warp the delay, execute.
+Reverts with the target's revert data when the call fails.
+
+```solidity
+function timelockExecute(address target, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+<a id="timelockexecutebatch-address-uint256-bytes"></a>
+
+### timelockExecuteBatch
+
+Batch form of `timelockExecute`.
+
+```solidity
+function timelockExecuteBatch(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory payloads
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `address[]` |  |
+| values | `uint256[]` |  |
+| payloads | `bytes[]` |  |
+
+<a id="stepuntildone-uint256"></a>
+
+### stepUntilDone
+
+Keeper loop: up to `maxSteps` times, warp `rebalancer.effectiveStepInterval()` and call
+`step()` as the keeper. Stops early once the plan is no longer Open (Converged, Expired, Halted,
+Paused or Superseded). Skips (cooldown, ORA-4, nothing to trade, ...) count as calls. In replay it
+runs the fixture coverage check every 16 calls (`coverageCheckpoint`), so one state-diff decode never
+holds a whole plan.
+
+```solidity
+function stepUntilDone(uint256 maxSteps)
+        internal
+        returns (uint256 executed, uint256 calls, PlanStatus status);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxSteps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| executed | `uint256` | Steps that traded. |
+| calls | `uint256` |    `step()` calls made. |
+| status | `PlanStatus` |   The plan status at return. |
+
+<a id="coveragecheckpoint"></a>
+
+### coverageCheckpoint
+
+Replay only: run the fixture coverage check on what was recorded so far and restart the recording,
+with gas metering paused. The decode of a long phase's state diff is the fixture's own bookkeeping
+(as `BaseFixture`'s index is), not code under test, and can cost more gas than a test has. Do not call
+it while metering is already paused: it resumes metering.
+
+```solidity
+function coverageCheckpoint() internal;
+```
+
+<a id="keeperstep"></a>
+
+### keeperStep
+
+One keeper `step()` now, with no warp.
+
+```solidity
+function keeperStep() internal returns (bool executed, SkipReason reason);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| executed | `bool` |  |
+| reason | `SkipReason` |  |
+
+<a id="moveprice-address-uint256-bool"></a>
+
+### movePrice
+
+Arbitrage-sized trade on a token/USDC V3 `pool` through SwapRouter02, from this contract.
+`buy`: spend `usdcAmount` USDC on the token (token price up). `!buy`: sell the amount of token
+worth `usdcAmount` at the pool's current spot (token price down); the token is minted with
+`deal`. Returns the amount out.
+
+```solidity
+function movePrice(address pool, uint256 usdcAmount, bool buy) internal returns (uint256 out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| usdcAmount | `uint256` |  |
+| buy | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `uint256` |  |
+
+<a id="spottokenforusdc-address-uint256"></a>
+
+### spotTokenForUsdc
+
+Token amount worth `usdcAmount` at `pool`'s current spot (slot0), raw units.
+
+```solidity
+function spotTokenForUsdc(address pool, uint256 usdcAmount) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| usdcAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assetweightsbps"></a>
+
+### assetWeightsBps
+
+Actual TWAP weight per asset (index-aligned) and of idle USDC, in bps of NAV, rounded down
+(`fund.currentWeightsBps()`).
+
+```solidity
+function assetWeightsBps() internal view returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+
+<a id="bucketweightsbps"></a>
+
+### bucketWeightsBps
+
+Actual TWAP weight per receipt bucket [agent, stable, protocol, rwa] and of idle USDC, in bps of
+NAV, from `fund.portfolioValues()` grouped by the test-side `assetBucket` labels (per-bucket floor
+of the summed value, so it does not compound per-asset rounding).
+
+```solidity
+function bucketWeightsBps() internal view returns (uint256[4] memory bps, uint256 idleBps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[4]` |  |
+| idleBps | `uint256` |  |
+

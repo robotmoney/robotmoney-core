@@ -152,10 +152,13 @@ jobs:
         # so excluding them at the runner is the cleanest seam. The 24 vanilla
         # ERC-4626 properties in RobotMoneyVault4626Conformance still run.
         #
+        # contracts/test/prototype/** (the one-vault experiment and the Deploy 4 fund system) runs in its own
+        # job, forge-prototype-tests, below: its invariant, random-seed fuzz and simulation suites alone take
+        # longer than this job's 20-minute budget. Every one of its tests still gates the sha there.
         run: >-
           forge test -vvv
           --no-match-test "^testFail_"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,HardAssetsVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,FourVaultInitialState,UpgradeLifecycleFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit.t.sol,SafeIntegration.t.sol,VaultForkRegressions.t.sol,GovernanceExecutePathAfterHandover.t.sol,RwaBasketVaultFork.t.sol,HardAssetsVaultFork.t.sol,CoreStagesFork.t.sol,WithdrawalsNeverFrozen.t.sol,UniswapV4SwapAdapterFork.t.sol,RecorderManipulationFork.t.sol,FourVaultInitialState.t.sol,UpgradeLifecycleFork.t.sol,prototype/**}"
 
       # Issue 1808: governed UUPS upgrades and the one-way freeze of the ten proxied core contracts
       # (implementation lock, initializer replay, release mode, timelock-only authority, freeze at
@@ -345,6 +348,46 @@ jobs:
         # #865). It runs OUTSIDE `forge coverage` (which instruments bytecode and
         # inflates every contract past the limit).
         run: bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract "VaultCodeSizeGuard"
+
+  # The one-vault experiment (contracts/test/prototype/**): RobotMoneyFund, its rebalancer, governance and flow
+  # queue, which Deploy 4 deploys from contracts/test/prototype/src. Its own job because its stateful invariants,
+  # the random-seed queue fuzz and the simulations take longer than forge-unit-tests' 20-minute budget. It runs
+  # the full prototype tree with the forge-config each suite pins, under the executed-test guard (issue 1643).
+  prototype:
+    name: forge-prototype-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI_CLASS: feature-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+
+      - name: Cache Foundry build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            cache
+            out
+          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test (one-vault prototype and Deploy 4 fund system)
+        # -vv, not -vvv: -vvv makes forge keep an execution trace of every test in case it fails, and the replay
+        # suites run hundreds of millions of gas each. Measured with the runner's 4 threads: 19.7 GB peak with -vvv,
+        # 2.4 GB without, on a runner with 16 GB, where the step was killed (exit 143) twice at about 28 minutes.
+        # Which tests run and what passes are unchanged; for a failure's trace rerun that test locally with -vvvv.
+        run: bash .github/scripts/forge_test_require_executed.sh -vv --no-match-test "^testFail_" --match-path "contracts/test/prototype/**"
 
   invariant:
     name: forge-invariant-fuzz-tests
@@ -683,12 +726,24 @@ jobs:
         # The wrapper measures the run's peak RSS and fails the job above 50% of
         # runner RAM, so the next contract-adding PR meets an explanatory red gate
         # instead of rediscovering the OOM as an unfixable "flake".
+        # contracts/test/prototype/** is not instrumented here: the gate below reads gateway coverage only, the
+        # prototype suites run uninstrumented in forge-prototype-tests, and its EIP-170 SizeGate tests would
+        # fail on instrumented bytecode for the same reason VaultCodeSizeGuard is excluded.
+        # Nor is it compiled here (--skip): not running its tests is not enough, because forge coverage still
+        # compiles every source, and the prototype tree with the Deploy 4 fund scripts and helper that import it
+        # raised this compile's peak from 5.28 GiB (dev, 42a4d2e1) to 8.65 GiB (43ff6a5f), past the 50% ceiling.
+        # The ceiling is unchanged. The skipped files are exactly those that import contracts/test/prototype/.
         run: >-
           python3 .github/scripts/run_coverage_memory_guard.py
           forge coverage --report lcov
+          --skip "contracts/test/prototype/**" contracts/script/DeployFund.s.sol contracts/script/DeployFundLibs.s.sol
+          contracts/script/DeployFundTimelock.s.sol contracts/script/DeployFundWiring.s.sol
+          contracts/script/DeployFlowQueue.s.sol contracts/script/DeployRebalancer.s.sol
+          contracts/script/DeployRebalanceGovernance.s.sol contracts/script/FundSystemBase.sol
+          contracts/test/helpers/FundUpgradeV2.sol
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
-          --no-match-path "contracts/test/{DeploySeedDeposit,SafeIntegration,VaultForkRegressions,GovernanceExecutePathAfterHandover,RwaBasketVaultFork,HardAssetsVaultFork,CoreStagesFork,WithdrawalsNeverFrozen,UniswapV4SwapAdapterFork,RecorderManipulationFork,UpgradeLifecycleFork}.t.sol"
+          --no-match-path "contracts/test/{DeploySeedDeposit.t.sol,SafeIntegration.t.sol,VaultForkRegressions.t.sol,GovernanceExecutePathAfterHandover.t.sol,RwaBasketVaultFork.t.sol,HardAssetsVaultFork.t.sol,CoreStagesFork.t.sol,WithdrawalsNeverFrozen.t.sol,UniswapV4SwapAdapterFork.t.sol,RecorderManipulationFork.t.sol,UpgradeLifecycleFork.t.sol,prototype/**}"
 
       - name: Enforce branch-coverage gate
         run: python3 .github/scripts/check_gateway_coverage.py lcov.info

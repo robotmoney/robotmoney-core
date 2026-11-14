@@ -160,7 +160,7 @@ describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
     w.sheet.upgradeMode = "upgradeable";
     w.sheet.freezeDeadline = due;
     w.opts.now = BigInt(Date.parse(due) / 1000) + 1n;
-    for (const st of getStageTable().stages.filter((x) => x.proxies)) {
+    for (const st of getStageTable().stages.filter((x) => x.proxies && x.system !== "fund")) {
       const p = join(w.manifestDir, stageManifestFile(getStageTable(), st.name));
       writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), upgrade_mode: "upgradeable" }));
     }
@@ -173,8 +173,12 @@ describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
   }
   test("a freeze names the gateway system's proxy only when the record lists it (issue 1892)", () => {
     const table = getStageTable();
-    const specs = proxySpecs(table);
     const sys = (stage: string) => table.stages.find((x) => x.name === stage)?.system;
+    // Deploy 4: a fund-system proxy names the fund system's own timelock, so a vaults freeze never names it, even when a record lists it
+    const all = proxySpecs(table);
+    const fundRecord = { proxies: Object.fromEntries(all.map((s) => [s.name, {}])) };
+    expect(freezeSpecsFor(all, sys, fundRecord).filter((s) => sys(s.stage) === "fund")).toEqual([]);
+    const specs = all.filter((s) => sys(s.stage) !== "fund");
     expect(specs.map((s) => s.name)).toContain("gateway");
     const vaultsRecord = { proxies: Object.fromEntries(specs.filter((s) => s.name !== "gateway").map((s) => [s.name, {}])) };
     expect(freezeSpecsFor(specs, sys, vaultsRecord).map((s) => s.name)).toEqual(specs.map((s) => s.name).filter((n) => n !== "gateway"));

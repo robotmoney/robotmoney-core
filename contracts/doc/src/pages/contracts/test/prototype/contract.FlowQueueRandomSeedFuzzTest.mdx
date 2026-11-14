@@ -1,0 +1,121 @@
+---
+title: "FlowQueueRandomSeedFuzzTest"
+description: "RB-13 with an UNFIXED fuzz seed (`hardening`, step 3 plan §3.3 item 3): every `forge test` draws new deposit sizes and redemption fractions, unlike `FlowQueueTest.testFuzz_RB13_*`, whose fixed seed replays the inputs the recorder drew."
+---
+
+# FlowQueueRandomSeedFuzzTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** FlowQueueRandomSeedFuzzTest
+
+RB-13 with an UNFIXED fuzz seed (`hardening`, step 3 plan §3.3 item 3): every `forge test` draws new
+deposit sizes and redemption fractions, unlike `FlowQueueTest.testFuzz_RB13_*`, whose fixed seed replays the
+inputs the recorder drew.
+
+Why the holdings are fixed here (setUp invests once, the default 65 / 35 plan). Replay serves only the
+state the fixture recorded, and a random input must not wander onto state it never saw. With the plan
+fixed, every input reads a subset of what the largest input reads: the deposit's exact-output purchases
+and the redemption's sales stay inside the tick range the largest deposit crosses from the same start,
+Morpho's supply and withdraw queues visit a prefix of the markets the largest amounts visit, and Aave and
+Comet read the same slots at any size. The number of pool trades, so the oracle's write positions and
+every time warp, is the same for every input. `test_RB13_unfixedSeedCorners_*` runs the largest and the
+smallest inputs, so the recorder's fork run puts both ends in the fixture. A slot outside them still
+fails with `FixtureSlotMiss` naming it: that is a recording gap to report, never a skip.
+The fixed-seed variant keeps the holdings as a fuzz input (the plan's stable / protocol split).
+
+## Constants
+
+### MIN_DEPOSIT
+
+<i>
+
+The default `minRequestUsdc`.
+
+</i>
+
+```solidity
+uint256 internal constant MIN_DEPOSIT = 100e6;
+```
+
+### MAX_DEPOSIT
+
+<i>
+
+The default `epochFlowFloorUsdc`: the cap of one period at this NAV, so one settlement fills it.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_DEPOSIT = 250_000e6;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_rb13_unfixedseedcorners_largestandsmallestflows"></a>
+
+### test_RB13_unfixedSeedCorners_largestAndSmallestFlows
+
+The two ends of the unfixed-seed variant's input range: the largest deposit redeemed in full, then
+(from the same state) the smallest deposit with the smallest fraction. Both keep every amount per share.
+
+```solidity
+function test_RB13_unfixedSeedCorners_largestAndSmallestFlows() public fixtureCovered;
+```
+
+<a id="testfuzz_rb13_unfixedseed_depositthenredeemkeepseveryamountpershare-uint256-uint256"></a>
+
+### testFuzz_RB13_unfixedSeed_depositThenRedeemKeepsEveryAmountPerShare
+
+RB-13 over a random deposit size (100 to 250 000 USDC) and a random fraction of the delivered shares
+redeemed, with a fresh seed on every run (no `fuzz.seed` in the inline config or the profile).
+forge-config: default.fuzz.runs = 256
+
+```solidity
+function testFuzz_RB13_unfixedSeed_depositThenRedeemKeepsEveryAmountPerShare(
+        uint256 usdc,
+        uint256 redeemBps
+    ) public fixtureCovered;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| redeemBps | `uint256` |  |
+
+<a id="_depositthenredeem-uint256-uint256-string"></a>
+
+### _depositThenRedeem
+
+<i>
+
+Alice deposits `usdc` (any price), takes her shares after the hold, redeems `redeemBps` of them (her
+whole balance when that slice is under the minimum request), and every settlement keeps every amount
+per share, fills inside its limit and leaves the queue's books equal to its balances.
+
+</i>
+
+```solidity
+function _depositThenRedeem(uint256 usdc, uint256 redeemBps, string memory label) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| redeemBps | `uint256` |  |
+| label | `string` |  |
+

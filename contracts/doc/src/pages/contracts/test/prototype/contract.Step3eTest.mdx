@@ -1,0 +1,1098 @@
+---
+title: "Step3eTest"
+description: "Step 3e (proposal §5.10, RB-19, A20) on the live harness and the real Base fixture (replay, no RPC): - the feed checks of a step (checks 2 and 4 of §5.9.3), in the Rebalancer (a skip with a reason, no backoff) and inside the fund (`StepFeedCheckFailed`, nothing moves); - the order's limits from the stricter of TWAP and feed, for each direction; - the cost booked at the feeds, and capped there; - the RB-19 balance check inside the fund; - backoff only on the keeper's own failed calls; - A20: a keeper's sandwich of a step, and a budget halt forced by feed noise."
+---
+
+# Step3eTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Step3e.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+**Title:** Step3eTest
+
+Step 3e (proposal §5.10, RB-19, A20) on the live harness and the real Base fixture (replay, no RPC):
+- the feed checks of a step (checks 2 and 4 of §5.9.3), in the Rebalancer (a skip with a reason, no
+backoff) and inside the fund (`StepFeedCheckFailed`, nothing moves);
+- the order's limits from the stricter of TWAP and feed, for each direction;
+- the cost booked at the feeds, and capped there;
+- the RB-19 balance check inside the fund;
+- backoff only on the keeper's own failed calls;
+- A20: a keeper's sandwich of a step, and a budget halt forced by feed noise.
+
+The world model. The replay fixture has no arbitrageur and the mock feeds post only when a test writes
+them. A step loop here therefore re-posts every feed before each step (a live Chainlink feed posts at
+least once per heartbeat) and, where the test models a market that follows the fund's own trades,
+moves each basket feed to its pool (`alignFeedsToPools`, the harness's own model for settlements). A
+test that measures a feed check sets the feed explicitly and says so.
+
+Every attack number is in USDC units (6 decimals) at REFERENCE prices: each basket token at its pool's
+spot when the attack starts (where the feed also sits). A `G8` log line per result has the scaffold's
+format `id,attackerNet,attackerNetAaveFee,flashBorrowed,holdersLoss,pendingLoss,navRef` (holdersLoss is
+the loss beyond the honest step's own cost; pendingLoss is 0: a step has no pending user).
+
+## Constants
+
+### FLASH_USDC
+
+```solidity
+uint256 internal constant FLASH_USDC = 30_000_000e6;
+```
+
+### AAVE_FLASH_FEE_BPS
+
+```solidity
+uint256 internal constant AAVE_FLASH_FEE_BPS = 5;
+```
+
+### G8_HOLDER_LOSS_BPS
+
+<i>
+
+G8 (proposal §13): holders lose at most 1 bps of NAV.
+
+</i>
+
+```solidity
+uint256 internal constant G8_HOLDER_LOSS_BPS = 1;
+```
+
+### ETH_FEED_DEV_BPS
+
+<i>
+
+The feeds' deviation thresholds the timed sim models (sim/TimedSimBase.sol: ETH / USD 0.15 %, cbBTC / USD
+0.3 %): a live feed lags its market by up to this much between rounds.
+
+</i>
+
+```solidity
+uint256 internal constant ETH_FEED_DEV_BPS = 15;
+```
+
+### CBBTC_FEED_DEV_BPS
+
+```solidity
+uint256 internal constant CBBTC_FEED_DEV_BPS = 30;
+```
+
+## State Variables
+
+### alice
+
+<i>
+
+Labels shared with Attacks.t.sol, so their fixture slots are the recorded ones.
+
+</i>
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("dave");
+```
+
+### refWeth
+
+```solidity
+uint256 internal refWeth;
+```
+
+### refCbbtc
+
+```solidity
+uint256 internal refCbbtc;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_rb19_feedchecks_quietmarket_steptrades"></a>
+
+### test_RB19_feedChecks_quietMarket_stepTrades
+
+Quiet market, feeds at the pools: the step passes its feed checks and trades.
+
+```solidity
+function test_RB19_feedChecks_quietMarket_stepTrades() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_sequencerdown_nostep"></a>
+
+### test_RB19_feedCheck_sequencerDown_noStep
+
+```solidity
+function test_RB19_feedCheck_sequencerDown_noStep() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_sequenceringrace_nostep"></a>
+
+### test_RB19_feedCheck_sequencerInGrace_noStep
+
+```solidity
+function test_RB19_feedCheck_sequencerInGrace_noStep() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_basketfeedstale_nostep"></a>
+
+### test_RB19_feedCheck_basketFeedStale_noStep
+
+<i>
+
+The ETH / USD feed one second past its `maxFeedAge` (heartbeat + 5 minutes).
+
+</i>
+
+```solidity
+function test_RB19_feedCheck_basketFeedStale_noStep() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_otherbasketfeednonpositive_nostep"></a>
+
+### test_RB19_feedCheck_otherBasketFeedNonPositive_noStep
+
+<i>
+
+A feed of an asset the step does not trade (cbBTC) also blocks it: every basket TWAP feeds the NAV the
+path targets come from.
+
+</i>
+
+```solidity
+function test_RB19_feedCheck_otherBasketFeedNonPositive_noStep() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_usdcoffpeg_nostep"></a>
+
+### test_RB19_feedCheck_usdcOffPeg_noStep
+
+<i>
+
+USDC at 0.994 (60 bps off, the band is 50): `detail` is the USDC price.
+
+</i>
+
+```solidity
+function test_RB19_feedCheck_usdcOffPeg_noStep() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_twapoutsiderefband_nostep"></a>
+
+### test_RB19_feedCheck_twapOutsideRefBand_noStep
+
+<i>
+
+The wETH feed 100 bps above its pool (the band is 90) (the TWAP sits at the pool in a quiet market): check 4 fails,
+`detail` is the deviation in bps, rounded up, computed as the check does.
+
+</i>
+
+```solidity
+function test_RB19_feedCheck_twapOutsideRefBand_noStep() public fixtureCovered;
+```
+
+<a id="test_rb19_feedcheck_twapinsiderefband_steps"></a>
+
+### test_RB19_feedCheck_twapInsideRefBand_steps
+
+<i>
+
+40 bps off (inside the 90 bps band) passes check 4: the band is the only bound. The buy still meets
+its floor (feed below TWAP would tighten it; here the feed is above, so the TWAP sets it).
+
+</i>
+
+```solidity
+function test_RB19_feedCheck_twapInsideRefBand_steps() public fixtureCovered;
+```
+
+<a id="test_3e_limit_purchase_fromtheloweroftwapandfeed"></a>
+
+### test_3e_limit_purchase_fromTheLowerOfTwapAndFeed
+
+A purchase pays at most the LOWER of TWAP and feed, plus the asset's slippage bound. Feed below the
+TWAP: the feed sets the floor. Feed above: the TWAP does. Either way the floor is at least the step 3c
+TWAP-only floor.
+
+```solidity
+function test_3e_limit_purchase_fromTheLowerOfTwapAndFeed() public fixtureCovered;
+```
+
+<a id="test_3e_limit_sale_fromthehigheroftwapandfeed"></a>
+
+### test_3e_limit_sale_fromTheHigherOfTwapAndFeed
+
+A sale receives at least the HIGHER of TWAP and feed, less the asset's slippage bound.
+
+```solidity
+function test_3e_limit_sale_fromTheHigherOfTwapAndFeed() public fixtureCovered;
+```
+
+<a id="test_3e_limit_salebelowthefeedrefused_wherethetwapfloorwouldpass"></a>
+
+### test_3e_limit_saleBelowTheFeedRefused_whereTheTwapFloorWouldPass
+
+The feed 45 bps above the pool (inside the 90 bps band): a wETH sale must receive at least
+feed x (1 - 50 bps), about the pool price less 5 bps, which the 5 bps pool fee alone denies. The step
+fails inside the swap and trades nothing, where the step 3c TWAP-only floor (pool less 50 bps) would
+have let it sell 45 bps under the outside price.
+
+```solidity
+function test_3e_limit_saleBelowTheFeedRefused_whereTheTwapFloorWouldPass()
+        public
+        fixtureCovered;
+```
+
+<a id="test_3e_costbookedatthefeeds"></a>
+
+### test_3e_costBookedAtTheFeeds
+
+A wETH purchase with the feed 20 bps under the pool: the cost booked is the fall of NAV at the feeds
+(recomputed here from the held amounts), not the TWAP's. The plan books exactly it, and the step's
+`cost` reports it.
+
+```solidity
+function test_3e_costBookedAtTheFeeds() public fixtureCovered;
+```
+
+<a id="test_3e_costcapappliesatthefeeds"></a>
+
+### test_3e_costCapAppliesAtTheFeeds
+
+The cap applies to the cost at the feeds: an order the fund receives with a cap of 30 bps, for a
+wETH purchase with the feed 40 bps under the pool, reverts `StepCostExceeded` with the feed cost,
+although the TWAP cost is a few bps. The floors are left loose here, so only the cap can refuse.
+
+```solidity
+function test_3e_costCapAppliesAtTheFeeds() public fixtureCovered;
+```
+
+<a id="test_rb19_everyexecutedstep_changesonlyitslegsandidle"></a>
+
+### test_RB19_everyExecutedStep_changesOnlyItsLegsAndIdle
+
+Every step of a plan that moves between all five kinds of holding: seen from outside, each executed
+step changed only its two legs (sell down, buy up) and idle, and never the supply.
+
+```solidity
+function test_RB19_everyExecutedStep_changesOnlyItsLegsAndIdle() public fixtureCovered;
+```
+
+<a id="test_rb19_balancecheck_refusesastepthatmovesathirdasset"></a>
+
+### test_RB19_balanceCheck_refusesAStepThatMovesAThirdAsset
+
+A venue that moves a third asset inside the step (a hostile swap adapter that sends cbBTC to the fund
+during a wETH purchase): the fund refuses the step (`StepBalanceChanged` on cbBTC) and nothing moves.
+
+```solidity
+function test_RB19_balanceCheck_refusesAStepThatMovesAThirdAsset() public fixtureCovered;
+```
+
+<a id="test_rb19_supplycannotchangeinsideastep_reentryrefused"></a>
+
+### test_RB19_supplyCannotChangeInsideAStep_reentryRefused
+
+The supply half of RB-19: a venue that tries to change the supply inside a step (`redeemInKind` from
+the swap callback) is refused by the fund's reentrancy guard before the balance check is reached. The
+`StepSupplyChanged` check is defence in depth behind it; no path reaches it.
+
+```solidity
+function test_RB19_supplyCannotChangeInsideAStep_reentryRefused() public fixtureCovered;
+```
+
+<a id="test_3e_backoff_onlyonthekeepersownfailedcall"></a>
+
+### test_3e_backoff_onlyOnTheKeepersOwnFailedCall
+
+After keeperGrace a stranger pushes the wETH pool past the step's floor and calls `step()` in the
+same transaction: the step fails and nothing backs off. The keeper's own failed call does back off.
+
+```solidity
+function test_3e_backoff_onlyOnTheKeepersOwnFailedCall() public fixtureCovered;
+```
+
+<a id="test_a20_keepersandwichofastep_purchase"></a>
+
+### test_A20_keeperSandwichOfAStep_purchase
+
+The keeper (or anyone who orders trades around the keeper's call) buys wETH to push the pool up, calls
+`step()` while the step buys wETH (12,707 USDC: the depth cap, 5 bps of the pool's time-weighted depth, binds
+under `maxStepUsdc` 50,000), and sells back. Push sizes inside and past the step's
+limit; the best is scored. Holders' loss is measured beyond the honest step's own cost.
+
+```solidity
+function test_A20_keeperSandwichOfAStep_purchase() public fixtureCovered;
+```
+
+<a id="test_a20_keepersandwichofastep_purchase_fundof1m"></a>
+
+### test_A20_keeperSandwichOfAStep_purchase_fundOf1M
+
+The same purchase sandwich in a fund of about 1,000,000 USDC (alice deposits 900,000 through the queue
+first), so the step is a small part of NAV: G8's holders' bound is in bps of
+NAV, the attacker's net is not.
+
+```solidity
+function test_A20_keeperSandwichOfAStep_purchase_fundOf1M() public fixtureCovered;
+```
+
+<a id="test_a20_keepersandwichofastep_sale"></a>
+
+### test_A20_keeperSandwichOfAStep_sale
+
+The same around a sale: the attacker sells wETH first, the step sells wETH (15,806 USDC, at the depth cap) into the
+lowered pool, the attacker buys back.
+
+```solidity
+function test_A20_keeperSandwichOfAStep_sale() public fixtureCovered;
+```
+
+<a id="test_a20_keepersandwichafteratwapdrag_purchase"></a>
+
+### test_A20_keeperSandwichAfterATwapDrag_purchase
+
+A sandwich after the attacker held the pushed price for one TWAP window (no arbitrage: holding is free
+in this model). The TWAP has followed the pool; the feed (the outside market) has not. Check 4 lets a
+push inside `refBandBps` through, and the purchase limit then comes from the feed, the lower price.
+Pushes 30, 45 and 10 bps inside the band in force (`refBandBps` − 10: +80 at the default 90).
+
+```solidity
+function test_A20_keeperSandwichAfterATwapDrag_purchase() public fixtureCovered;
+```
+
+<a id="test_a20_noisehalt_alternatinglagatthefeedthresholds"></a>
+
+### test_A20_noiseHalt_alternatingLagAtTheFeedThresholds
+
+Each basket feed lags its pool by its deviation threshold, alternating above and below at each step
+(zero-mean noise at the sim's thresholds). The plan buys 80 % basket from idle over one day. Does the
+booking at the feeds (floored at 0 per step) halt it?
+
+```solidity
+function test_A20_noiseHalt_alternatingLagAtTheFeedThresholds() public fixtureCovered;
+```
+
+<a id="test_a20_noisehalt_keepertimesadverselag_atthefeedthresholds"></a>
+
+### test_A20_noiseHalt_keeperTimesAdverseLag_atTheFeedThresholds
+
+The keeper steps only when each traded feed lags against the fund (below the pool for a purchase,
+above for a sale) by its deviation threshold: the most a keeper's timing books with live feeds.
+
+```solidity
+function test_A20_noiseHalt_keeperTimesAdverseLag_atTheFeedThresholds() public fixtureCovered;
+```
+
+<a id="test_a20_noisehalt_keepertimesadverselag_40bps"></a>
+
+### test_A20_noiseHalt_keeperTimesAdverseLag_40bps
+
+The same at a 40 bps lag (inside `refBandBps`, and the most a purchase can book and still meet its
+floor: slippage bound 50 less the 5 bps fee and impact). A gap this wide needs a feed that lags past its
+own deviation threshold, or a TWAP that lags the pool.
+
+```solidity
+function test_A20_noiseHalt_keeperTimesAdverseLag_40bps() public fixtureCovered;
+```
+
+<a id="test_3e_stepgas_underthefloor"></a>
+
+### test_3e_stepGas_underTheFloor
+
+The step 3e step reads the feeds twice (Rebalancer and fund) and the held amounts twice. The costliest
+step (two swaps, every asset held) must stay under half the Rebalancer's `STEP_GAS_FLOOR`, the
+margin the scaffold's gas-starvation test asserts (Adversarial.t.sol).
+
+```solidity
+function test_3e_stepGas_underTheFloor() public fixtureCovered;
+```
+
+<a id="_freshfeeds"></a>
+
+### _freshFeeds
+
+<i>
+
+Re-post every feed now and move each basket feed to its pool (a market that follows the fund's own
+trades; see the contract note).
+
+</i>
+
+```solidity
+function _freshFeeds() internal;
+```
+
+<a id="_buywethready"></a>
+
+### _buyWethReady
+
+<i>
+
+The seed (100,000 USDC) is idle. A 1-day plan to (aave 15 %, moonwell 15 %, wETH 50 %, cbBTC 20 %); warp to
+its end; fresh feeds. The next step buys 50,000 USDC of wETH with idle USDC.
+
+</i>
+
+```solidity
+function _buyWethReady() internal returns (uint256 planId);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="_sellwethready"></a>
+
+### _sellWethReady
+
+<i>
+
+Invest the seed at (aave 25 %, moonwell 25 %, wETH 50 %), then a plan to (aave 50 %, moonwell 30 %,
+cbBTC 20 %): the next step sells wETH into Aave.
+
+</i>
+
+```solidity
+function _sellWethReady() internal;
+```
+
+<a id="_investatend-uint16-5"></a>
+
+### _investAtEnd
+
+<i>
+
+Open a 1-day plan to `v`, warp to its end and step (fresh feeds before each step) until it is no longer
+Open: a quick way to hold every asset.
+
+</i>
+
+```solidity
+function _investAtEnd(uint16[5] memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+<a id="_setfeedoffsetbps-uint256-int256"></a>
+
+### _setFeedOffsetBps
+
+<i>
+
+Set basket asset `index`'s feed `bps` away from its pool's spot (positive: above), written now.
+
+</i>
+
+```solidity
+function _setFeedOffsetBps(uint256 index, int256 bps) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| bps | `int256` |  |
+
+<a id="_feedpx-uint256"></a>
+
+### _feedPx
+
+<i>
+
+The feed price of `index` in USDC per whole token, as `StepFeedLib` converts it (USDC / USD feed).
+
+</i>
+
+```solidity
+function _feedPx(uint256 index) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_twapvsfeedbps-uint256"></a>
+
+### _twapVsFeedBps
+
+<i>
+
+Check 4's deviation for `index` now, as `StepFeedLib` computes it (bps, rounded up).
+
+</i>
+
+```solidity
+function _twapVsFeedBps(uint256 index) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_assertfeedblocked-stepfeedcheck-uint256-uint256"></a>
+
+### _assertFeedBlocked
+
+<i>
+
+The step is ready; one feed check is broken. Asserts: the preview and `step()` skip `FeedCheck` with
+the right event, nothing moves, nothing backs off; and the fund itself refuses the honest order with
+`StepFeedCheckFailed(check, index, detail)`.
+
+</i>
+
+```solidity
+function _assertFeedBlocked(StepFeedCheck check, uint256 index, uint256 detail) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `StepFeedCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+<a id="_assertstepskipsfeed-stepfeedcheck-uint256-uint256"></a>
+
+### _assertStepSkipsFeed
+
+```solidity
+function _assertStepSkipsFeed(StepFeedCheck check, uint256 index, uint256 detail) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `StepFeedCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+<a id="_assertfundrefusesfeed-stepfeedcheck-uint256-uint256"></a>
+
+### _assertFundRefusesFeed
+
+<i>
+
+Defence in depth: the fund refuses the step itself, whatever the order.
+
+</i>
+
+```solidity
+function _assertFundRefusesFeed(StepFeedCheck check, uint256 index, uint256 detail) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `StepFeedCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+<a id="_lastcostbooked"></a>
+
+### _lastCostBooked
+
+<i>
+
+The last `StepCostBooked` the fund emitted in the recorded logs.
+
+</i>
+
+```solidity
+function _lastCostBooked()
+        internal
+        returns (uint256 fb, uint256 fa, uint256 feedCost, uint256 twapCost);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fb | `uint256` |  |
+| fa | `uint256` |  |
+| feedCost | `uint256` |  |
+| twapCost | `uint256` |  |
+
+<a id="_etchhostile-uint256-address-uint256"></a>
+
+### _etchHostile
+
+<i>
+
+Put `Step3eHostileSwapAdapter` over the harness swap adapter. Its TWAP reads go to a real copy.
+
+</i>
+
+```solidity
+function _etchHostile(uint256 gift, address reenterFund, uint256 shares) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gift | `uint256` |  |
+| reenterFund | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_sandwich-bool-string"></a>
+
+### _sandwich
+
+<i>
+
+The honest step from this state (a snapshot), then each push size from the same state.
+
+</i>
+
+```solidity
+function _sandwich(bool purchase, string memory id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| purchase | `bool` |  |
+| id | `string` |  |
+
+<a id="_honestloss"></a>
+
+### _honestLoss
+
+<i>
+
+The holders' loss of the honest step from this state, at reference prices (rolled back).
+
+</i>
+
+```solidity
+function _honestLoss() internal returns (uint256 loss);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| loss | `uint256` |  |
+
+<a id="_pnl-uint256-uint256-uint256-uint256-bool"></a>
+
+### _pnl
+
+```solidity
+function _pnl(uint256 v0, uint256 nav0, uint256 honest, uint256 borrowedUsdc, bool did)
+        internal
+        view
+        returns (Pnl memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v0 | `uint256` |  |
+| nav0 | `uint256` |  |
+| honest | `uint256` |  |
+| borrowedUsdc | `uint256` |  |
+| did | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Pnl` |  |
+
+<a id="_report-string-pnl"></a>
+
+### _report
+
+```solidity
+function _report(string memory id, Pnl memory r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| r | `Pnl` |  |
+
+<a id="_g8orfinding-string-pnl"></a>
+
+### _g8OrFinding
+
+<i>
+
+G8 (proposal §13), both clauses: the attacker's net is at most zero, and the holders lose at most 1 bps of
+NAV beyond the honest step's own cost. Unlike a flow (where Attacks.t.sol hard-asserts the holders' bound,
+because the design says holders never lose to a flow), a step's cost is the holders' by design (§5.7), and
+the step's own slippage bound is what a keeper's sandwich can take. So BOTH clauses are scored as a design
+finding: logged `G8 FINDING` with the numbers and skipped (PROTO_ATTACK_FINDINGS_FAIL=1 makes it fail),
+as the scaffold scores design findings. Nothing is loosened: either clause failing is a G8 fail.
+
+</i>
+
+```solidity
+function _g8OrFinding(string memory id, Pnl memory r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| r | `Pnl` |  |
+
+<a id="_finding-string"></a>
+
+### _finding
+
+```solidity
+function _finding(string memory why) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `string` |  |
+
+<a id="_setref"></a>
+
+### _setRef
+
+<i>
+
+Reference prices: each pool's spot now.
+
+</i>
+
+```solidity
+function _setRef() internal;
+```
+
+<a id="_navref"></a>
+
+### _navRef
+
+<i>
+
+NAV at reference prices: idle, the lending holders' parts, each basket token at its reference.
+
+</i>
+
+```solidity
+function _navRef() internal view returns (uint256 nav);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+
+<a id="_valueof-address"></a>
+
+### _valueOf
+
+```solidity
+function _valueOf(address who) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_pushbps-address-address-address-int256"></a>
+
+### _pushBps
+
+<i>
+
+`who` moves `token`'s USDC price at `pool` by `bps` (positive: buys the token) through SwapRouter02 with a
+price limit, so the pool stops at the target. Returns the input spent and the output received.
+
+</i>
+
+```solidity
+function _pushBps(address who, address pool, address token, int256 bps)
+        internal
+        returns (uint256 spent, uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| pool | `address` |  |
+| token | `address` |  |
+| bps | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+| got | `uint256` |  |
+
+<a id="_pushtarget-address-address-int256"></a>
+
+### _pushTarget
+
+<i>
+
+The sqrt price that moves `token`'s USDC price at `pool` by `bps`.
+
+</i>
+
+```solidity
+function _pushTarget(address pool, address token, int256 bps) internal view returns (uint160);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| bps | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+
+<a id="_sellexact-address-address-address-address-uint256"></a>
+
+### _sellExact
+
+<i>
+
+`who` sells exactly `amountIn` of `tokenIn` for `tokenOut` at `pool` (the unwind of a push).
+
+</i>
+
+```solidity
+function _sellExact(
+        address who,
+        address pool,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) internal returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| pool | `address` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="_noiserun-uint256-uint256-bool-string"></a>
+
+### _noiseRun
+
+<i>
+
+A 1-day plan from the idle seed to (aave 10 %, moonwell 10 %, wETH 40 %, cbBTC 40 %), stepped by the
+keeper every `effectiveStepInterval` until it is no longer Open. Before each step every feed is re-posted
+at its pool, then each basket feed is set `devWeth` / `devCbbtc` bps off it: alternating in sign at each
+call (`adverse` false), or against the fund on the step's own basket legs (below the pool for a purchase,
+above for a sale; `adverse` true). Logs the plan's booked cost against its budget and turnover, the TWAP
+cost and the signed cost at the feeds (what a booking that nets gains against losses would hold).
+
+</i>
+
+```solidity
+function _noiseRun(uint256 devWeth, uint256 devCbbtc, bool adverse, string memory id) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| devWeth | `uint256` |  |
+| devCbbtc | `uint256` |  |
+| adverse | `bool` |  |
+| id | `string` |  |
+
+<a id="_adversesign-steporder-uint256-skipreason"></a>
+
+### _adverseSign
+
+<i>
+
+The sign of the feed lag that books the most cost on basket asset `i` for order `o`: below the pool when
+the step buys `i`, above when it sells `i`, none otherwise.
+
+</i>
+
+```solidity
+function _adverseSign(StepOrder memory o, uint256 i, SkipReason pr)
+        internal
+        pure
+        returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `StepOrder` |  |
+| i | `uint256` |  |
+| pr | `SkipReason` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_noisereport-string-noise"></a>
+
+### _noiseReport
+
+```solidity
+function _noiseReport(string memory id, Noise memory z) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| z | `Noise` |  |
+
+## Structs
+
+### Pnl
+
+<i>
+
+One A20 result.
+
+</i>
+
+```solidity
+struct Pnl {
+        int256 attackerNet;
+        uint256 borrowed;
+        uint256 holdersLoss;
+        uint256 extraLoss;
+        uint256 navRef;
+        bool stepped;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| attackerNet | `int256` |  |
+| borrowed | `uint256` |  |
+| holdersLoss | `uint256` |  |
+| extraLoss | `uint256` |  |
+| navRef | `uint256` |  |
+| stepped | `bool` |  |
+
+### Noise
+
+<i>
+
+Totals of one noise run.
+
+</i>
+
+```solidity
+struct Noise {
+        uint256 calls;
+        uint256 executed;
+        uint256 failed;
+        uint256 feedSkips;
+        uint256 booked;
+        uint256 twapCost;
+        int256 signedFeed;
+        uint256 maxStepBooked;
+        uint256 haltedAtCall;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| calls | `uint256` |  |
+| executed | `uint256` |  |
+| failed | `uint256` |  |
+| feedSkips | `uint256` |  |
+| booked | `uint256` |  |
+| twapCost | `uint256` |  |
+| signedFeed | `int256` |  |
+| maxStepBooked | `uint256` |  |
+| haltedAtCall | `uint256` |  |
+

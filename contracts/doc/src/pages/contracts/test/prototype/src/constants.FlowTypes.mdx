@@ -1,0 +1,219 @@
+---
+title: "FlowTypes Constants"
+---
+
+# FlowTypes Constants
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+## MIN_EPOCH_LENGTH
+
+```solidity
+uint32 constant MIN_EPOCH_LENGTH = 1 hours;
+```
+
+## MAX_EPOCH_LENGTH
+
+```solidity
+uint32 constant MAX_EPOCH_LENGTH = 7 days;
+```
+
+## MIN_SETTLE_WINDOW
+
+```solidity
+uint32 constant MIN_SETTLE_WINDOW = 10 minutes;
+```
+
+## MAX_SETTLE_WINDOW
+
+```solidity
+uint32 constant MAX_SETTLE_WINDOW = 1 days;
+```
+
+## MIN_HOLD
+
+```solidity
+uint32 constant MIN_HOLD = 1 days;
+```
+
+## MAX_HOLD
+
+```solidity
+uint32 constant MAX_HOLD = 7 days;
+```
+
+## MIN_FLOW_KEEPER_GRACE
+
+```solidity
+uint32 constant MIN_FLOW_KEEPER_GRACE = 1 hours;
+```
+
+## MAX_FLOW_KEEPER_GRACE
+
+```solidity
+uint32 constant MAX_FLOW_KEEPER_GRACE = 7 days;
+```
+
+## MAX_EPOCH_FLOW_BPS
+
+```solidity
+uint16 constant MAX_EPOCH_FLOW_BPS = 10_000;
+```
+
+## MAX_EPOCH_FLOW_FLOOR_USDC
+
+```solidity
+uint128 constant MAX_EPOCH_FLOW_FLOOR_USDC = 100_000_000e6;
+```
+
+## MAX_SHARE_PRICE_MOVE_BPS
+
+```solidity
+uint16 constant MAX_SHARE_PRICE_MOVE_BPS = 5_000;
+```
+
+## MAX_ROLL
+
+```solidity
+uint16 constant MAX_ROLL = 64;
+```
+
+## MAX_MIN_REQUEST_USDC
+
+```solidity
+uint128 constant MAX_MIN_REQUEST_USDC = 1_000_000e6;
+```
+
+## MIN_FREEZE
+
+```solidity
+uint32 constant MIN_FREEZE = 1 hours;
+```
+
+## MAX_FREEZE
+
+```solidity
+uint32 constant MAX_FREEZE = 14 days;
+```
+
+## MIN_SLICES
+
+```solidity
+uint8 constant MIN_SLICES = 3;
+```
+
+## MAX_SLICES
+
+```solidity
+uint8 constant MAX_SLICES = 48;
+```
+
+## MIN_SLICE_SECONDS
+
+```solidity
+uint32 constant MIN_SLICE_SECONDS = 60;
+```
+
+## MAX_DISPERSION_BPS
+
+```solidity
+uint16 constant MAX_DISPERSION_BPS = 2_000;
+```
+
+## MAX_REF_BAND_BPS
+
+```solidity
+uint16 constant MAX_REF_BAND_BPS = 2_000;
+```
+
+## MAX_LEG_BAND_BPS
+
+```solidity
+uint16 constant MAX_LEG_BAND_BPS = 2_000;
+```
+
+## MAX_SEQUENCER_GRACE
+
+```solidity
+uint32 constant MAX_SEQUENCER_GRACE = 1 days;
+```
+
+## MAX_USDC_PEG_BAND_BPS
+
+```solidity
+uint16 constant MAX_USDC_PEG_BAND_BPS = 1_000;
+```
+
+## MAX_LEND_RATE_GROWTH_BPS
+
+```solidity
+uint16 constant MAX_LEND_RATE_GROWTH_BPS = 1_000;
+```
+
+## PRICE_KIND_NONE
+
+<i>
+
+`AssetPrice.kind` values.
+
+</i>
+
+```solidity
+uint8 constant PRICE_KIND_NONE = 0;
+```
+
+## PRICE_KIND_LENDING
+
+```solidity
+uint8 constant PRICE_KIND_LENDING = 1;
+```
+
+## PRICE_KIND_BASKET
+
+```solidity
+uint8 constant PRICE_KIND_BASKET = 2;
+```
+
+## MAX_BASKET_CALL_BPS
+
+<i>
+
+Hard bounds of `FlowLevers`.
+
+</i>
+
+```solidity
+uint16 constant MAX_BASKET_CALL_BPS = 10_000;
+```
+
+## DEFAULT_BASKET_CALL_BPS
+
+<i>
+
+The owner's decided default for `FlowLevers.basketCallBps` (owner delegation, 2026-11-12; lever L5 of the
+step 3 finish report §8): 5 bps of each basket pool's time-weighted USDC depth per call. `initialize` sets it.
+
+</i>
+
+```solidity
+uint16 constant DEFAULT_BASKET_CALL_BPS = 5;
+```
+
+## LEG_PRICE_STRICTER
+
+```solidity
+uint8 constant LEG_PRICE_STRICTER = 0;
+```
+
+## LEG_PRICE_TWAP_ONLY
+
+```solidity
+uint8 constant LEG_PRICE_TWAP_ONLY = 1;
+```
+
+## LEG_PRICE_FEED_ONLY
+
+```solidity
+uint8 constant LEG_PRICE_FEED_ONLY = 2;
+```
+

@@ -1,0 +1,28 @@
+---
+title: "Fill"
+description: "One fill handed to a side of a settlement: `amount` of request `requestId` (USDC for a deposit, shares for a redemption) and the cap value it uses (USDC, E20)."
+---
+
+# Fill
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+One fill handed to a side of a settlement: `amount` of request `requestId` (USDC for a deposit, shares for
+a redemption) and the cap value it uses (USDC, E20).
+
+```solidity
+struct Fill {
+    uint256 requestId;
+    uint256 amount;
+    uint256 capValue;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| amount | `uint256` |  |
+| capValue | `uint256` |  |
+

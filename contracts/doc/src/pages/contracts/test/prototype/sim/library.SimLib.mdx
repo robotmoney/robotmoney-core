@@ -1,0 +1,351 @@
+---
+title: "SimLib"
+description: "Pure helpers of the rebalance simulation (RebalanceSim.t.sol): seeded draws, the approximate normal, V3 depth and spot conversions. Every draw is a keccak of constants, so a record run and a replay run make identical calls and touch identical pool ticks and slots."
+---
+
+# SimLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/SimLib.sol)
+
+Pure helpers of the rebalance simulation (RebalanceSim.t.sol): seeded draws, the approximate normal,
+V3 depth and spot conversions. Every draw is a keccak of constants, so a record run and a replay run
+make identical calls and touch identical pool ticks and slots.
+
+## Constants
+
+### ONE
+
+```solidity
+uint256 internal constant ONE = 1e18;
+```
+
+### Q96
+
+```solidity
+uint256 internal constant Q96 = 1 << 96;
+```
+
+### SQRT3
+
+<i>
+
+sqrt(3) × 1e18: a sum of 4 U[0,1) has variance 1/3.
+
+</i>
+
+```solidity
+uint256 internal constant SQRT3 = 1_732_050_807_568_877_293;
+```
+
+### TAG_WALK
+
+```solidity
+uint256 internal constant TAG_WALK = 1;
+```
+
+### TAG_ARB
+
+```solidity
+uint256 internal constant TAG_ARB = 2;
+```
+
+### TAG_NOISE_N
+
+```solidity
+uint256 internal constant TAG_NOISE_N = 3;
+```
+
+### TAG_NOISE_DIR
+
+```solidity
+uint256 internal constant TAG_NOISE_DIR = 4;
+```
+
+### TAG_NOISE_SIZE
+
+```solidity
+uint256 internal constant TAG_NOISE_SIZE = 5;
+```
+
+### TAG_FLOW
+
+```solidity
+uint256 internal constant TAG_FLOW = 6;
+```
+
+### TAG_FLOW_DIR
+
+```solidity
+uint256 internal constant TAG_FLOW_DIR = 7;
+```
+
+### TAG_FLOW_SIZE
+
+```solidity
+uint256 internal constant TAG_FLOW_SIZE = 8;
+```
+
+### TAG_FLOW_WHO
+
+```solidity
+uint256 internal constant TAG_FLOW_WHO = 9;
+```
+
+## Functions
+
+<a id="seedof-uint256-uint256-uint256"></a>
+
+### seedOf
+
+The run seed: keccak256("rm-sim-v1", scenario, fund size, seed index).
+
+```solidity
+function seedOf(uint256 scenarioId, uint256 fundUsdc, uint256 k)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scenarioId | `uint256` |  |
+| fundUsdc | `uint256` |  |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="draw-uint256-uint256-uint256-uint256"></a>
+
+### draw
+
+One raw draw for (slot, stream, asset).
+
+```solidity
+function draw(uint256 seed, uint256 slot, uint256 tag, uint256 asset)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+| slot | `uint256` |  |
+| tag | `uint256` |  |
+| asset | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="unit-uint256-uint256-uint256-uint256"></a>
+
+### unit
+
+U[0,1) in 1e18 fixed point.
+
+```solidity
+function unit(uint256 seed, uint256 slot, uint256 tag, uint256 asset)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+| slot | `uint256` |  |
+| tag | `uint256` |  |
+| asset | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="normal-uint256-uint256-uint256-uint256"></a>
+
+### normal
+
+Approximately N(0,1) in 1e18 fixed point: (sum of 4 uniforms − 2) × sqrt(3).
+
+```solidity
+function normal(uint256 seed, uint256 slot, uint256 tag, uint256 asset)
+        internal
+        pure
+        returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+| slot | `uint256` |  |
+| tag | `uint256` |  |
+| asset | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="depth10bps-uint128-uint160-bool"></a>
+
+### depth10Bps
+
+USDC notional that moves an in-range V3 pool's price by 10 bps (sqrt price by ~5 bps).
+USDC as token1: Δy = L·ΔsqrtP/2^96. USDC as token0: Δx = L·2^96·Δ(1/sqrtP).
+
+```solidity
+function depth10Bps(uint128 liquidity, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| liquidity | `uint128` |  |
+| sqrtP | `uint160` |  |
+| usdcIsToken0 | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="spotusdc-uint256-uint160-bool"></a>
+
+### spotUsdc
+
+USDC value of `amount` token units at sqrt price `sqrtP` (raw units both sides).
+
+```solidity
+function spotUsdc(uint256 amount, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+| sqrtP | `uint160` |  |
+| usdcIsToken0 | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="spotusdcsigned-int256-uint160-bool"></a>
+
+### spotUsdcSigned
+
+Signed USDC value of a signed token delta at spot.
+
+```solidity
+function spotUsdcSigned(int256 delta, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| delta | `int256` |  |
+| sqrtP | `uint160` |  |
+| usdcIsToken0 | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="stdevofdiffs-int256"></a>
+
+### stdevOfDiffs
+
+Sample standard deviation of the first differences of `xs` (same unit as `xs`).
+
+```solidity
+function stdevOfDiffs(int256[] memory xs) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| xs | `int256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="pos-int256"></a>
+
+### pos
+
+```solidity
+function pos(int256 x) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sub-uint256-uint256"></a>
+
+### sub
+
+```solidity
+function sub(uint256 a, uint256 b) internal pure returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+

@@ -1,0 +1,200 @@
+---
+title: "AttackSimSpec"
+description: "What the four sim attacks measure, for both funds. The market is the step 3 sim's (`SimMarket`): a seeded zero-drift reference walk per basket pool with the pool's own 30-minute volatility, noise sized from the pool's depth, and an arbitrageur that pulls each pool a seeded 50 to 100 % of the way to the reference once per 30-minute slot. The timed arm adds the feeds following the walk and the keeper settling every window end (`TimedSimBase`). The attacker joins that loop: it trades to its target price at its start time and again after every market event (noise, arbitrage) and right before the call it aims at, and pays whatever the arbitrageur takes from it. It unwinds right after that call, into its own push."
+---
+
+# AttackSimSpec
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/AttackSim.t.sol)
+
+**Title:** AttackSimSpec
+
+What the four sim attacks measure, for both funds. The market is the step 3 sim's (`SimMarket`): a seeded
+zero-drift reference walk per basket pool with the pool's own 30-minute volatility, noise sized from the
+pool's depth, and an arbitrageur that pulls each pool a seeded 50 to 100 % of the way to the reference once
+per 30-minute slot. The timed arm adds the feeds following the walk and the keeper settling every window end
+(`TimedSimBase`). The attacker joins that loop: it trades to its target price at its start time and again
+after every market event (noise, arbitrage) and right before the call it aims at, and pays whatever the
+arbitrageur takes from it. It unwinds right after that call, into its own push.
+
+Every attack is measured against its honest twin: the same seed, the same slots and the same flows without
+the attacker's trades. The walk does not depend on pool state, so both runs end at the same reference
+prices. `attackerNet` is the attacker's value at the reference walk at the end (USDC, tokens, shares at NAV
+per share at the reference, queue claims) minus its value in the honest twin. `pendingLoss` is the same
+difference for the pending user, the other way round. `holdersLoss` is the fall of NAV per share at the
+reference against the twin, times the holders' shares. Scored by G8 (proposal §13): the worst variant of
+every attack must net the attacker at most zero, and holders may lose at most 1 bps of NAV.
+
+- A2, a push held 1 block, 5 minutes, 30 minutes or one settle window, of 25, 50 or 100 bps on each pool,
+around a settlement (timed) or a flow (baseline). Timed flows: a stranger's deposit (push up: the fund
+buys from the attacker's pushed pool), the attacker's own redemption (push up), a stranger's redemption
+(push down) and the attacker's own deposit (push down). Baseline: the attacker's own deposit after a push
+down, its own redemption into a push up.
+- A10, a slow ramp of 5, 10 or 20 bps per slot over 2, 4 or 8 slots, same flows, the level at the call
+being rate × slots.
+- A6, the TWAP lag with a hedge and no manipulation: whenever the reference sits more than 25 or 50 bps
+above the fund's TWAP (basket-weighted), the attacker deposits 200,000 USDC, shorts the shares' basket
+tokens at the reference, and exits as fast as the fund allows (baseline: one TWAP window later; timed:
+after the hold, through the queue). Net over a whole seeded run (4 days).
+- A9, a run: ten holders with half of NAV redeem everything over two epochs while the market moves. Timed:
+a redeemer still waiting 24 hours after its request exits the rest in kind. Who gets USDC first, the
+waits, the in-kind exits with their lending position claims, and the stayers' loss against the twin.
+
+## Constants
+
+### SCN_A2_PUSH_HELD
+
+```solidity
+uint256 internal constant SCN_A2_PUSH_HELD = 0;
+```
+
+### SCN_A6_TWAP_LAG
+
+```solidity
+uint256 internal constant SCN_A6_TWAP_LAG = 1;
+```
+
+### SCN_A9_RUN
+
+```solidity
+uint256 internal constant SCN_A9_RUN = 2;
+```
+
+### SCN_A10_RAMP
+
+```solidity
+uint256 internal constant SCN_A10_RAMP = 3;
+```
+
+### SEEDS
+
+<i>
+
+The seeds each scenario runs: SimLib.seedOf(scenario, FUND_USDC, k), k &lt; SEEDS (PROTO_SIM_ATTACK_SEEDS
+may lower it for a quick look; the scored run uses SEEDS).
+
+</i>
+
+```solidity
+uint256 internal constant SEEDS = 4;
+```
+
+### FUND_USDC
+
+```solidity
+uint256 internal constant FUND_USDC = 5_000_000e6;
+```
+
+### FLOW_USDC
+
+<i>
+
+The attacker's own holding, the victim's holding and each flow aimed at.
+
+</i>
+
+```solidity
+uint256 internal constant FLOW_USDC = 250_000e6;
+```
+
+### N_RUNNERS
+
+```solidity
+uint256 internal constant N_RUNNERS = 10;
+```
+
+### RUNNER_USDC
+
+```solidity
+uint256 internal constant RUNNER_USDC = 250_000e6;
+```
+
+### A6_USDC
+
+```solidity
+uint256 internal constant A6_USDC = 200_000e6;
+```
+
+### FLASH_USDC
+
+```solidity
+uint256 internal constant FLASH_USDC = 50_000_000e6;
+```
+
+### WORLD_CHUNK_USDC
+
+```solidity
+uint256 internal constant WORLD_CHUNK_USDC = 245_000e6;
+```
+
+### WARMUP_SLOTS
+
+```solidity
+uint256 internal constant WARMUP_SLOTS = 4;
+```
+
+### SLOT
+
+```solidity
+uint256 internal constant SLOT = 1_800;
+```
+
+### A6_SLOTS
+
+```solidity
+uint256 internal constant A6_SLOTS = 192;
+```
+
+### FLOW_STRANGER_DEPOSIT
+
+<i>
+
+Flows aimed at (A2, A10).
+
+</i>
+
+```solidity
+uint8 internal constant FLOW_STRANGER_DEPOSIT = 0;
+```
+
+### FLOW_OWN_REDEEM
+
+```solidity
+uint8 internal constant FLOW_OWN_REDEEM = 1;
+```
+
+### FLOW_STRANGER_REDEEM
+
+```solidity
+uint8 internal constant FLOW_STRANGER_REDEEM = 2;
+```
+
+### FLOW_OWN_DEPOSIT
+
+```solidity
+uint8 internal constant FLOW_OWN_DEPOSIT = 3;
+```
+
+## Functions
+
+<a id="_seedof-uint256-uint256"></a>
+
+### _seedOf
+
+```solidity
+function _seedOf(uint256 scenario, uint256 k) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scenario | `uint256` |  |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

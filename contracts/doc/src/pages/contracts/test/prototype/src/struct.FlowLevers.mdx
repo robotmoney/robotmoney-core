@@ -1,0 +1,30 @@
+---
+title: "FlowLevers"
+description: "Candidate levers for the sandwich (D-AT-1, A7), slow-ramp (D-AT-2, A10) findings, built behind parameters so the owner can choose (step 3 finish plan §3.2, §4). `initialize` sets `basketCallBps` to `DEFAULT_BASKET_CALL_BPS` (5) and `legPriceMode` to `LEG_PRICE_STRICTER`, the decided defaults. Every field 0 leaves the queue exactly as proposal §5.9 first described it (the lever measurements' L0 row). Kept out of `FlowParams` on purpose: that struct is built field by field in tests other agents own, so a new field there would break them (FlowParams stays append-free)."
+---
+
+# FlowLevers
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+Candidate levers for the sandwich (D-AT-1, A7), slow-ramp (D-AT-2, A10) findings, built behind
+parameters so the owner can choose (step 3 finish plan §3.2, §4). `initialize` sets `basketCallBps` to
+`DEFAULT_BASKET_CALL_BPS` (5) and `legPriceMode` to `LEG_PRICE_STRICTER`, the decided defaults. Every field
+0 leaves the queue exactly as proposal §5.9 first described it (the lever measurements' L0 row).
+Kept out of `FlowParams` on purpose: that struct is built field by field in tests other agents own, so a
+new field there would break them (FlowParams stays append-free).
+
+```solidity
+struct FlowLevers {
+    uint16 basketCallBps;
+    uint8 legPriceMode;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| basketCallBps | `uint16` | Per-call cap on each basket leg of a settlement: one call may buy or sell at most<br/>`basketCallBps` of the pool's time-weighted USDC depth over `settleWindow`<br/>(`FundValuationLib.poolUsdcDepth`, the depth the §4.5 pool-share rule reads) of each basket<br/>asset. Each side's room shrinks so that its pro-rata leg in every basket asset stays under the<br/>cap; a larger flow fills in parts over several calls (a partial fill keeps the cursor, RB-20).<br/>While on, at most one settlement that trades is recorded per block, so the parts land in<br/>different blocks. Why: a one-block sandwich gains about (the fund's own price impact − 2 ×<br/>the pool fee) on the attacker's pushed volume; with the cap at the pool fee in bps the<br/>fund's own impact (≈ 2 × leg / depth) is at most twice the fee. 0: off. |
+| legPriceMode | `uint8` | The price the per-swap limits (checks 8 and 9) and the bound prices start from:<br/>`LEG_PRICE_STRICTER` (0, the design: a purchase from the lower of TWAP and feed, a sale from<br/>the higher), `LEG_PRICE_TWAP_ONLY` (1) or `LEG_PRICE_FEED_ONLY` (2). Check 4 is unchanged. |
+

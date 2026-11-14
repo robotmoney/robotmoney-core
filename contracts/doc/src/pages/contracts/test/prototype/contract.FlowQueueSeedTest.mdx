@@ -1,0 +1,71 @@
+---
+title: "FlowQueueSeedTest"
+description: "E14 on a fund the harness does not seed."
+---
+
+# FlowQueueSeedTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** FlowQueueSeedTest
+
+E14 on a fund the harness does not seed.
+
+## Functions
+
+<a id="_seedusdc"></a>
+
+### _seedUsdc
+
+<i>
+
+USDC the deployer admin seeds the fund with at setUp (E14). 0: no seed (a test of `seed` itself).
+
+</i>
+
+```solidity
+function _seedUsdc() internal pure override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_timelockseed-uint256-bytes"></a>
+
+### _timelockSeed
+
+<i>
+
+Seed `usdc` through the timelock (the admin), expecting `err` when non-empty.
+
+</i>
+
+```solidity
+function _timelockSeed(uint256 usdc, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| err | `bytes` |  |
+
+<a id="test_e14_seedonceatzerosupplyatorabovetheminimum_anditssharesnevermove"></a>
+
+### test_E14_seedOnceAtZeroSupplyAtOrAboveTheMinimum_andItsSharesNeverMove
+
+E14: an unseeded fund cannot mint in kind and cannot settle; `seed` is ADMIN only, at least
+`minSeedUsdc`, once; its shares belong to the fund and never move, also after flows.
+
+```solidity
+function test_E14_seedOnceAtZeroSupplyAtOrAboveTheMinimum_andItsSharesNeverMove()
+        public
+        fixtureCovered;
+```
+

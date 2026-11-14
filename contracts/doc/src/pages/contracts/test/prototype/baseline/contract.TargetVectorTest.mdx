@@ -1,0 +1,388 @@
+---
+title: "TargetVectorTest"
+description: "RB-9: a target vector names every active asset exactly once and sums to 10 000. Each refused vector reverts with its own error through all three doors (`applyReceipt`, `setTarget`, `previewPlan`). A refused `applyReceipt` releases nothing, so the same receipt then applies with its valid vector."
+---
+
+# TargetVectorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/TargetVector.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+RB-9: a target vector names every active asset exactly once and sums to 10 000. Each refused vector
+reverts with its own error through all three doors (`applyReceipt`, `setTarget`, `previewPlan`). A
+refused `applyReceipt` releases nothing, so the same receipt then applies with its valid vector.
+
+## State Variables
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### _salt
+
+```solidity
+uint256 private _salt;
+```
+
+### _planBase
+
+<i>
+
+Plans opened before the refusal under test (a test may refuse more than once).
+
+</i>
+
+```solidity
+uint256 private _planBase;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_valid"></a>
+
+### _valid
+
+<i>
+
+The valid vector every test starts from: (60, 30, 10) split over the six assets.
+
+</i>
+
+```solidity
+function _valid() internal pure returns (uint16[6] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16[6]` |  |
+
+<a id="test_rb9_unlistedactiveasset_reverts"></a>
+
+### test_rb9_unlistedActiveAsset_reverts
+
+<i>
+
+An active asset left out (its weight moved to wETH, so the sum stays 10 000) is refused. An
+explicit 0 is the only way to sell an asset.
+
+</i>
+
+```solidity
+function test_rb9_unlistedActiveAsset_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_duplicateasset_reverts"></a>
+
+### test_rb9_duplicateAsset_reverts
+
+<i>
+
+The same asset listed twice is refused, even with a zero second weight and a 10 000 sum.
+
+</i>
+
+```solidity
+function test_rb9_duplicateAsset_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_inactiveasset_reverts"></a>
+
+### test_rb9_inactiveAsset_reverts
+
+<i>
+
+A deactivated asset may not be named, not even with weight 0. The vector without it applies.
+
+</i>
+
+```solidity
+function test_rb9_inactiveAsset_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_unknownasset_reverts"></a>
+
+### test_rb9_unknownAsset_reverts
+
+<i>
+
+An address that is no fund asset is refused with the same error as an inactive one.
+
+</i>
+
+```solidity
+function test_rb9_unknownAsset_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_badsum_reverts"></a>
+
+### test_rb9_badSum_reverts
+
+<i>
+
+Weights that sum to anything but 10 000 are refused. A single weight above 10 000 reverts at once.
+
+</i>
+
+```solidity
+function test_rb9_badSum_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_capbreach_reverts"></a>
+
+### test_rb9_capBreach_reverts
+
+<i>
+
+A lending target above its `capBps` is refused, even when the vector is otherwise valid.
+
+</i>
+
+```solidity
+function test_rb9_capBreach_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_lengthmismatch_reverts"></a>
+
+### test_rb9_lengthMismatch_reverts
+
+<i>
+
+Parallel arrays of different length are refused (`InvalidParam`).
+
+</i>
+
+```solidity
+function test_rb9_lengthMismatch_reverts() public fixtureCovered;
+```
+
+<a id="test_rb9_anyorder_setsexactperassettargets"></a>
+
+### test_rb9_anyOrder_setsExactPerAssetTargets
+
+<i>
+
+The order of the vector does not matter, and each asset gets exactly its listed weight.
+
+</i>
+
+```solidity
+function test_rb9_anyOrder_setsExactPerAssetTargets() public fixtureCovered;
+```
+
+<a id="test_applyreceipt_wrongdigest_reverts"></a>
+
+### test_applyReceipt_wrongDigest_reverts
+
+<i>
+
+A wrong payload digest is refused before the vector is read. The receipt stays unreleased, no plan
+opens, and the same receipt then applies with its recorded digest.
+
+</i>
+
+```solidity
+function test_applyReceipt_wrongDigest_reverts() public fixtureCovered;
+```
+
+<a id="test_deactivate_targetedasset_reverts"></a>
+
+### test_deactivate_targetedAsset_reverts
+
+<i>
+
+An asset the persistent target still weights cannot be deactivated, even with no live plan and no
+holdings. Once a vector names it with 0, it deactivates, and its target stays 0 for deposits.
+
+</i>
+
+```solidity
+function test_deactivate_targetedAsset_reverts() public fixtureCovered;
+```
+
+<a id="test_addasset_duplicateid_reverts_and_relist_maps_to_new_index"></a>
+
+### test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index
+
+<i>
+
+`addAsset` refuses a second active entry with the same asset id, for a Basket token and a Lending
+adapter. After deactivation the same token may be re-added, and a vector naming it maps to the new
+index.
+
+</i>
+
+```solidity
+function test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index()
+        public
+        fixtureCovered;
+```
+
+<a id="_expectrefused-address-uint256-bytes"></a>
+
+### _expectRefused
+
+<i>
+
+The refused vector reverts `err` through every door, releases nothing, and the same receipt then
+applies with the valid vector.
+
+</i>
+
+```solidity
+function _expectRefused(address[] memory ids, uint256[] memory w, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+| err | `bytes` |  |
+
+<a id="_expectrefusednoapply-address-uint256-bytes"></a>
+
+### _expectRefusedNoApply
+
+<i>
+
+Record a valid receipt, then refuse `(ids, w)` through `applyReceipt` (the timelock path),
+`setTarget` and `previewPlan`. Returns the still-unreleased receipt.
+
+</i>
+
+```solidity
+function _expectRefusedNoApply(address[] memory ids, uint256[] memory w, bytes memory err)
+        internal
+        returns (bytes32 rid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+| err | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rid | `bytes32` |  |
+
+<a id="_applyraw-bytes32-address-uint256"></a>
+
+### _applyRaw
+
+<i>
+
+Apply `rid` with `(ids, w)` through the timelock, expecting success.
+
+</i>
+
+```solidity
+function _applyRaw(bytes32 rid, address[] memory ids, uint256[] memory w) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rid | `bytes32` |  |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+
+<a id="_scheduleapply-bytes32-bytes32-address-uint256-bytes"></a>
+
+### _scheduleApply
+
+<i>
+
+Schedule `applyReceipt` on the timelock, wait the delay, execute. A non-empty `err` is the expected
+revert data (the timelock bubbles the target's revert).
+
+</i>
+
+```solidity
+function _scheduleApply(
+        bytes32 rid,
+        bytes32 digest,
+        address[] memory ids,
+        uint256[] memory w,
+        bytes memory err
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rid | `bytes32` |  |
+| digest | `bytes32` |  |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+| err | `bytes` |  |
+
+<a id="_timelockexpectrevert-address-bytes-bytes"></a>
+
+### _timelockExpectRevert
+
+<i>
+
+Schedule `data` on the timelock, wait the delay, and expect the execution to revert with `err`.
+
+</i>
+
+```solidity
+function _timelockExpectRevert(address target, bytes memory data, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+| err | `bytes` |  |
+
+<a id="_append-address-uint256-address-uint256"></a>
+
+### _append
+
+```solidity
+function _append(address[] memory ids, uint256[] memory w, address id, uint256 bps)
+        internal
+        pure
+        returns (address[] memory ids2, uint256[] memory w2);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+| id | `address` |  |
+| bps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids2 | `address[]` |  |
+| w2 | `uint256[]` |  |
+

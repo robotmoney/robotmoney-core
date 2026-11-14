@@ -1,0 +1,263 @@
+---
+title: "DeployFund"
+description: "The `fund` stage (Deploy 4): `RobotMoneyFund` behind its ERC-1967 proxy, initialized atomically with the predicted fund-system timelock as its only upgrade authority (`UpgradeAuthority`); its four adapter copies (Aave V3, Compound V3, Moonwell through the Morpho adapter, the Uniswap V3 exact-output swap adapter); the adapter code hash allowlist; the §4.5 asset list with the real Base feeds and pools; the seed floor; and the seed (E14), paid by the deployer and minted to the fund itself."
+---
+
+# DeployFund
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFund.s.sol)
+
+**Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
+
+**Title:** DeployFund
+
+The `fund` stage (Deploy 4): `RobotMoneyFund` behind its ERC-1967 proxy, initialized atomically with the
+predicted fund-system timelock as its only upgrade authority (`UpgradeAuthority`); its four adapter copies
+(Aave V3, Compound V3, Moonwell through the Morpho adapter, the Uniswap V3 exact-output swap adapter); the
+adapter code hash allowlist; the §4.5 asset list with the real Base feeds and pools; the seed floor; and the
+seed (E14), paid by the deployer and minted to the fund itself.
+
+The deployer holds ADMIN_ROLE until the fund-timelock stage hands it to the timelock. EMERGENCY_ROLE goes to
+EMERGENCY_ADDRESS at initialization, never to the deployer (ACL-1).
+
+Required env vars (no defaults):
+ADMIN_ADDRESS          — the deployer; ADMIN_ROLE until the handover
+EMERGENCY_ADDRESS      — the emergency key (EMERGENCY_ROLE), never the deployer
+FEE_RECIPIENT          — the exit fee recipient
+SWAP_ROUTER            — the Uniswap V3 SwapRouter02 of the swap adapter
+FUND_TVL_CAP, FUND_PER_DEPOSIT_CAP, FUND_EXIT_FEE_BPS, FUND_MAX_SLIPPAGE_BPS, FUND_NAV_DEVIATION_BPS
+FUND_LENDING_CAP_BPS   — each lending venue's cap of NAV (the ADP ramp control)
+FUND_MIN_SEED_USDC     — the seed floor set before the seed (§5.9.5 minSeedUsdc)
+SEED_DEPOSIT_USDC      — the seed, at least FUND_MIN_SEED_USDC
+SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE — the upgrade authority and release mode
+DEPLOYMENT_OUT         — the output JSON path
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "fund.json";
+```
+
+### FUND_NAME
+
+```solidity
+string public constant FUND_NAME = "Robot Money Fund";
+```
+
+### FUND_SYMBOL
+
+```solidity
+string public constant FUND_SYMBOL = "rmFUND";
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_readinputs"></a>
+
+### _readInputs
+
+```solidity
+function _readInputs() internal view returns (Inputs memory i);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `Inputs` |  |
+
+<a id="_deploy-inputs-upgradeconfig"></a>
+
+### _deploy
+
+```solidity
+function _deploy(Inputs memory i, UpgradeConfig memory u) internal returns (Deployed memory d);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `Inputs` |  |
+| u | `UpgradeConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_lending-address-uint16"></a>
+
+### _lending
+
+```solidity
+function _lending(address adapter, uint16 capBps) internal pure returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| capBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="_basket-address-address-address-address-uint32"></a>
+
+### _basket
+
+```solidity
+function _basket(address adapter, address token, address pool, address feed, uint32 maxAge)
+        internal
+        pure
+        returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+| token | `address` |  |
+| pool | `address` |  |
+| feed | `address` |  |
+| maxAge | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="_check-deployed-inputs"></a>
+
+### _check
+
+<i>
+
+Read back what the stage set: a stage that left any of it otherwise is not one a later stage builds on.
+
+</i>
+
+```solidity
+function _check(Deployed memory d, Inputs memory i) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| i | `Inputs` |  |
+
+<a id="_writedeploymentjson-deployed-inputs"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d, Inputs memory i) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| i | `Inputs` |  |
+
+## Structs
+
+### Inputs
+
+```solidity
+struct Inputs {
+        address admin;
+        address emergency;
+        address feeRecipient;
+        address swapRouter;
+        uint256 tvlCap;
+        uint256 perDepositCap;
+        uint256 exitFeeBps;
+        uint256 maxSlippageBps;
+        uint256 navDeviationBps;
+        uint16 lendingCapBps;
+        uint256 minSeedUsdc;
+        uint256 seedUsdc;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| admin | `address` |  |
+| emergency | `address` |  |
+| feeRecipient | `address` |  |
+| swapRouter | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| maxSlippageBps | `uint256` |  |
+| navDeviationBps | `uint256` |  |
+| lendingCapBps | `uint16` |  |
+| minSeedUsdc | `uint256` |  |
+| seedUsdc | `uint256` |  |
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address fund;
+        address fundImplementation;
+        address ledger;
+        address aaveAdapter;
+        address cometAdapter;
+        address moonwellAdapter;
+        address swapAdapter;
+        uint256 seedShares;
+        uint256 assetCount;
+        UpgradeConfig upgrade;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` |  |
+| fundImplementation | `address` |  |
+| ledger | `address` |  |
+| aaveAdapter | `address` |  |
+| cometAdapter | `address` |  |
+| moonwellAdapter | `address` |  |
+| swapAdapter | `address` |  |
+| seedShares | `uint256` |  |
+| assetCount | `uint256` |  |
+| upgrade | `UpgradeConfig` |  |
+

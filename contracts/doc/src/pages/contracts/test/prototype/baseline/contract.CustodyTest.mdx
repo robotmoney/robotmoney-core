@@ -1,0 +1,88 @@
+---
+title: "CustodyTest"
+description: "One-vault experiment (plan Step 2, G3): the two custody invariants the other suites leave open. INV-3: fee recipient, fee parameters and quarantine change only through the timelock. INV-2: donations accrue pro rata to holders, and share inflation by a first depositor does not pay."
+---
+
+# CustodyTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/Custody.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+One-vault experiment (plan Step 2, G3): the two custody invariants the other suites leave open.
+INV-3: fee recipient, fee parameters and quarantine change only through the timelock.
+INV-2: donations accrue pro rata to holders, and share inflation by a first depositor does not pay.
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="_expectallrefused-bytes"></a>
+
+### _expectAllRefused
+
+```solidity
+function _expectAllRefused(bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+<a id="test_inv3_feeandquarantineonlyviatimelock"></a>
+
+### test_INV3_feeAndQuarantineOnlyViaTimelock
+
+```solidity
+function test_INV3_feeAndQuarantineOnlyViaTimelock() public fixtureCovered;
+```
+
+<a id="test_inv2_donationaccruesprorata"></a>
+
+### test_INV2_donationAccruesProRata
+
+<i>
+
+A USDC donation raises every holder's claim pro rata. The donor gets nothing back.
+
+</i>
+
+```solidity
+function test_INV2_donationAccruesProRata() public fixtureCovered;
+```
+
+<a id="test_inv2_firstdepositorinflationdoesnotpay"></a>
+
+### test_INV2_firstDepositorInflationDoesNotPay
+
+<i>
+
+Classic first-depositor attack: mint a dust share, donate to inflate the price, let the victim's
+deposit round down. The 18-decimal offset makes the victim's loss negligible and the attack a loss.
+
+</i>
+
+```solidity
+function test_INV2_firstDepositorInflationDoesNotPay() public fixtureCovered;
+```
+

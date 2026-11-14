@@ -1,0 +1,25 @@
+---
+title: "AssetStepParams"
+description: "Per-asset step parameters held by the Rebalancer, keyed by fund asset index (§5.6)."
+---
+
+# AssetStepParams
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+Per-asset step parameters held by the Rebalancer, keyed by fund asset index (§5.6).
+
+```solidity
+struct AssetStepParams {
+    uint128 maxStepUsdc;
+    uint16 maxStepSlippageBps;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxStepUsdc | `uint128` | Largest single-step notional touching this asset (from pool depth).<br/>0 means the asset is never traded by the rebalancer. |
+| maxStepSlippageBps | `uint16` | Floor against TWAP for this asset's leg. Basket: strictly above the<br/>asset's `poolFeeBps` and &lt;= `fund.maxSlippageBps()`. Lending: &lt;= that<br/>same ceiling; 0 allowed (withdrawals are 1:1). |
+

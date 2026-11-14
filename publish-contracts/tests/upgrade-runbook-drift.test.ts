@@ -26,12 +26,13 @@ const u = table.upgradeAuthority!;
 describe("runbook 4.12 and the stage table agree (issue 1809)", () => {
   test("the proxy table lists the stage table's proxies, in stage order, with the same fields and contracts", () => {
     const rows = [...SECTION.matchAll(/^\| `([\w-]+)` \| `(\w+)` \| `(\w+)` \| `(\w+)` \|$/gm)].map((m) => [m[1], m[2], m[3], m[4]]);
-    const want = table.stages.flatMap((s) => (s.proxies ?? []).map((p) => [s.name, p.field, p.implementationField, p.contract]));
+    // Deploy 4: the fund system (a rehearsal of the one-vault prototype) is not a production upgrade line of runbook 4.12; its proxies are pinned by the layout gate and its own verifier
+    const want = table.stages.filter((s) => s.system !== "fund").flatMap((s) => (s.proxies ?? []).map((p) => [s.name, p.field, p.implementationField, p.contract]));
     expect(want.length).toBe(9); // core 2008: rmHARD (HardAssetsVault) is the ninth proxy
     expect(rows).toEqual(want);
   });
   test("the upgrade authority is deployed last, at the stated CREATE2 address, and each proxy is the stated number of transactions", () => {
-    expect(table.stages.filter((s) => s.system !== "gateway").at(-1)!.name).toBe(u.stage); // issue 1892: last of the vaults system; the gateway system runs after it
+    expect(table.stages.filter((s) => s.system === "vaults").at(-1)!.name).toBe(u.stage); // issue 1892: last of the vaults system; the gateway system runs after it
     expect(SECTION).toContain(`the \`${u.stage}\` stage, which deploys the upgrade authority LAST`);
     expect(SECTION).toContain(`Each proxy is ${u.transactionsPerProxy} deployer transactions`);
     expect(SECTION).toContain(`\`${u.factory}\``);

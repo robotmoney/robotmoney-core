@@ -1,0 +1,304 @@
+---
+title: "AttackBook"
+description: "Mixin for the two attack contracts (timed fund, frozen baseline). It holds no state and names no harness symbol, so it linearizes after either harness without a clash."
+---
+
+# AttackBook
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+
+**Inherits:** Test
+
+Mixin for the two attack contracts (timed fund, frozen baseline). It holds no state and names no harness
+symbol, so it linearizes after either harness without a clash.
+
+## Constants
+
+### AAVE_FLASH_FEE_BPS
+
+<i>
+
+Aave V3's flash-loan premium (eng plan §4.1). Morpho's is 0.
+
+</i>
+
+```solidity
+uint256 internal constant AAVE_FLASH_FEE_BPS = 5;
+```
+
+### G8_HOLDER_LOSS_BPS
+
+<i>
+
+G8: holders lose at most 1 bps of NAV (proposal §13).
+
+</i>
+
+```solidity
+uint256 internal constant G8_HOLDER_LOSS_BPS = 1;
+```
+
+### G8_BLOCK_FLOOR_USDC
+
+<i>
+
+G8: no way to block settlement for a day may cost less than 1,000 USDC (proposal §13, a proposal the
+owner can change until step 3d runs).
+
+</i>
+
+```solidity
+uint256 internal constant G8_BLOCK_FLOOR_USDC = 1_000e6;
+```
+
+### ATK_ROUTER
+
+<i>
+
+SwapRouter02 on Base (the harnesses' `ROUTER`).
+
+</i>
+
+```solidity
+address internal constant ATK_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+## Functions
+
+<a id="_reportpnl-string-attackpnl"></a>
+
+### _reportPnl
+
+Log one attack's result, human-readable and as one `G8` line that the verify agent can collect:
+`id,attackerNet,attackerNetAaveFee,flashBorrowed,holdersLoss,pendingLoss,navRef`.
+
+```solidity
+function _reportPnl(string memory id, AttackPnl memory r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| r | `AttackPnl` |  |
+
+<a id="_assertg8-string-attackpnl"></a>
+
+### _assertG8
+
+G8 (proposal §13): the attacker's net is at most zero and the holders lose at most 1 bps of NAV.
+
+```solidity
+function _assertG8(string memory id, AttackPnl memory r) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| r | `AttackPnl` |  |
+
+<a id="_g8orfinding-string-attackpnl"></a>
+
+### _g8OrFinding
+
+G8 where the measured result may be a design finding rather than a code defect: when the attacker's
+net is positive (or a blocking way costs less than its floor), the test does not pass and does not
+weaken the check. It logs `G8 FINDING` and is skipped with the measured number in the reason (scaffold
+plan §7.6: a failing test that shows a defect stays in place, skipped with the reason, and goes into
+defects.md). The holders' bound is always asserted.
+
+```solidity
+function _g8OrFinding(string memory id, AttackPnl memory r) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| r | `AttackPnl` |  |
+
+<a id="_finding-string"></a>
+
+### _finding
+
+<i>
+
+Record a G8 finding: skipped with the reason by default; PROTO_ATTACK_FINDINGS_FAIL=1 makes it fail
+instead, so `forge test -vv` prints every log line of the attack (a skipped test prints none).
+
+</i>
+
+```solidity
+function _finding(string memory why) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `string` |  |
+
+<a id="_g8blockfloororfinding-string-uint256"></a>
+
+### _g8BlockFloorOrFinding
+
+G8's blocking floor (proposal §13): a way to block settlement for a day must cost at least
+1,000 USDC. Below it the test logs `G8 FINDING` and is skipped with the measured cost (see
+`_g8OrFinding`).
+
+```solidity
+function _g8BlockFloorOrFinding(string memory id, uint256 costPerDayUsdc) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| costPerDayUsdc | `uint256` |  |
+
+<a id="_spotpx-address-address-address"></a>
+
+### _spotPx
+
+Spot price of one whole `token` in USDC units at `pool` (raw `slot0`, no TWAP).
+
+```solidity
+function _spotPx(address pool, address token, address usdc) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| usdc | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_pushbps-address-address-address-address-int256"></a>
+
+### _pushBps
+
+`who` moves `token`'s USDC price at `pool` by `bps` (positive: buys the token with USDC; negative:
+sells the token) through SwapRouter02 with a price limit, so the pool stops exactly at the target and
+`who` pays only the input it used. `who` must already hold enough of the input (a flash loan in the
+test). Returns the input spent (USDC, or token units when selling) and the output received.
+
+```solidity
+function _pushBps(address who, address pool, address token, address usdc, int256 bps)
+        internal
+        returns (uint256 spent, uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| pool | `address` |  |
+| token | `address` |  |
+| usdc | `address` |  |
+| bps | `int256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+| got | `uint256` |  |
+
+<a id="_swapto-address-address-address-address-uint160"></a>
+
+### _swapTo
+
+`who` swaps `tokenIn` for `tokenOut` at `pool` until the pool's sqrt price reaches `target`, using
+at most its whole `tokenIn` balance. Returns the input spent and the output received.
+
+```solidity
+function _swapTo(address who, address pool, address tokenIn, address tokenOut, uint160 target)
+        internal
+        returns (uint256 spent, uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| pool | `address` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| target | `uint160` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+| got | `uint256` |  |
+
+<a id="_sellexact-address-address-address-address-uint256"></a>
+
+### _sellExact
+
+`who` sells exactly `amountIn` of `tokenIn` for `tokenOut` at `pool` (no limit). The unwind of a push.
+
+```solidity
+function _sellExact(
+        address who,
+        address pool,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn
+    ) internal returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| pool | `address` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="_diff-uint256-uint256"></a>
+
+### _diff
+
+Signed difference `a − b` of two USDC values.
+
+```solidity
+function _diff(uint256 a, uint256 b) internal pure returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+

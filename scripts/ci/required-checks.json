@@ -9,6 +9,7 @@
     { "name": "natspec-single-source-guard", "source": "natspec-coverage.yml" },
     { "name": "natspec-doc-presence-check", "source": "natspec-coverage.yml" },
     { "name": "forge-unit-tests", "source": "suite-01-02-forge-tests.yml" },
+    { "name": "forge-prototype-tests", "source": "suite-01-02-forge-tests.yml" },
     { "name": "forge-invariant-fuzz-tests", "source": "suite-01-02-forge-tests.yml" },
     { "name": "forge-coverage-gate", "source": "suite-01-02-forge-tests.yml" },
     { "name": "contract-build-reproducibility", "source": "suite-01-02-forge-tests.yml" },

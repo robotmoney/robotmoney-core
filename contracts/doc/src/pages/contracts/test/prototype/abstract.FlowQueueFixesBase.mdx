@@ -1,0 +1,401 @@
+---
+title: "FlowQueueFixesBase"
+description: "Shared helpers of the fix tests. Everything runs on the harness deployment (real Base pools and venues from the replay fixture, mock aggregators at the real feed addresses, the FlowQueue with the §5.9.5 defaults, the fund seeded with `SEED_USDC`)."
+---
+
+# FlowQueueFixesBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueueFixes.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+Shared helpers of the fix tests. Everything runs on the harness deployment (real Base pools and venues
+from the replay fixture, mock aggregators at the real feed addresses, the FlowQueue with the §5.9.5
+defaults, the fund seeded with `SEED_USDC`).
+
+These tests were written against the queue of the step 3d scaffold first, where each one fails (the
+run's notes keep that log), and then against the fixed queue, where each one passes. Functions the fix
+adds (`sweep`, `settleCursor`) are reached with low-level calls, so this file compiles against both.
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### carol
+
+```solidity
+address internal carol = makeAddr("carol");
+```
+
+### dave
+
+```solidity
+address internal dave = makeAddr("dave");
+```
+
+### erin
+
+```solidity
+address internal erin = makeAddr("erin");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### _depId
+
+```solidity
+uint256 internal _depId;
+```
+
+### _redId
+
+```solidity
+uint256 internal _redId;
+```
+
+### _bobShares
+
+```solidity
+uint256 internal _bobShares;
+```
+
+## Functions
+
+<a id="_keepersettle"></a>
+
+### _keeperSettle
+
+```solidity
+function _keeperSettle() internal returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_trysettle-address-uint256-uint256"></a>
+
+### _trySettle
+
+```solidity
+function _trySettle(address caller, uint256 maxRequests, uint256 maxUsdc)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| maxRequests | `uint256` |  |
+| maxUsdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="_expectblocked-address-settlecheck-uint256"></a>
+
+### _expectBlocked
+
+```solidity
+function _expectBlocked(address caller, SettleCheck check, uint256 index)
+        internal
+        returns (uint256 detail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| detail | `uint256` |  |
+
+<a id="_decodeblocked-bytes"></a>
+
+### _decodeBlocked
+
+```solidity
+function _decodeBlocked(bytes memory ret)
+        internal
+        pure
+        returns (SettleCheck check, uint256 index, uint256 detail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ret | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+<a id="_selector-bytes"></a>
+
+### _selector
+
+```solidity
+function _selector(bytes memory data) internal pure returns (bytes4 sel);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sel | `bytes4` |  |
+
+<a id="_args-bytes"></a>
+
+### _args
+
+```solidity
+function _args(bytes memory data) internal pure returns (bytes memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `bytes` |  |
+
+<a id="_sidefailures-vm-log-requestkind"></a>
+
+### _sideFailures
+
+How many `SideFailed` logs of side `kind` the queue emitted in `logs`.
+
+```solidity
+function _sideFailures(Vm.Log[] memory logs, RequestKind kind)
+        internal
+        view
+        returns (uint256 n);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+<a id="_holder-address-uint256"></a>
+
+### _holder
+
+`user` deposits `usdc` through the whole timed path and takes its credit: a plain holder.
+
+```solidity
+function _holder(address user, uint256 usdc) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_invest"></a>
+
+### _invest
+
+The default invested fund (stable 65 %, protocol 35 %), then the outside market catches up with the
+fund's own trades, so feed and pool agree (check 4).
+
+```solidity
+function _invest() internal;
+```
+
+<a id="_twosided"></a>
+
+### _twoSided
+
+An invested fund, bob a holder, then in one epoch bob's redemption of half his shares (any price)
+and alice's deposit (any price); warp to the end of that epoch's window.
+
+```solidity
+function _twoSided() internal;
+```
+
+<a id="_assertbooks-string"></a>
+
+### _assertBooks
+
+The queue's books: with no gift, its balances equal the sums (eng plan §4.3).
+
+```solidity
+function _assertBooks(string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+
+<a id="_setparams-flowparams"></a>
+
+### _setParams
+
+Set the queue's parameters through the timelock (warps its delay).
+
+```solidity
+function _setParams(FlowParams memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `FlowParams` |  |
+
+<a id="_etchvenue"></a>
+
+### _etchVenue
+
+Place a `FixVenue` over the harness's Aave adapter, after allowlisting its code hash, so Aave stays
+counted. Warps the timelock delay; refreshes the feeds.
+
+```solidity
+function _etchVenue() internal returns (FixVenue v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `FixVenue` |  |
+
+<a id="_cursor-bool-requestkind"></a>
+
+### _cursor
+
+The walk cursor of `settle` for the keeper's calls or everyone else's, on one side
+(`FlowQueue.settleCursor`, added by the fix). `ok` false where the queue has no such view.
+
+```solidity
+function _cursor(bool keeperClass, RequestKind kind)
+        internal
+        view
+        returns (bool ok, uint64 epoch, uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| keeperClass | `bool` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| epoch | `uint64` |  |
+| index | `uint256` |  |
+
+<a id="_sweep-address"></a>
+
+### _sweep
+
+Low-level `sweep()` (added by the fix) by `caller`.
+
+```solidity
+function _sweep(address caller) internal returns (bool ok, uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+<a id="_contains-bytes-bytes"></a>
+
+### _contains
+
+Whether `hay` contains `needle`.
+
+```solidity
+function _contains(bytes memory hay, bytes memory needle) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hay | `bytes` |  |
+| needle | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

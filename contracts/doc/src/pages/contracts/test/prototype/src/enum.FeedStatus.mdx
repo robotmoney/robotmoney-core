@@ -1,0 +1,50 @@
+---
+title: "FeedStatus"
+description: "Result of one Chainlink read (`FeedLib`, E16, proposal §5.9.3 check 2). `Ok` is the zero value only for readability in tests: a function that has not read a feed never returns `Ok`. Shared by the fund (E19: `totalAssets` reverts on an unhealthy feed) and the queue (check 2)."
+---
+
+# FeedStatus
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+Result of one Chainlink read (`FeedLib`, E16, proposal §5.9.3 check 2). `Ok` is the zero value only
+for readability in tests: a function that has not read a feed never returns `Ok`.
+Shared by the fund (E19: `totalAssets` reverts on an unhealthy feed) and the queue (check 2).
+
+```solidity
+enum FeedStatus {
+    /// @dev The feed answered, the answer is positive, the round is complete and younger than `maxAge`.
+    Ok,
+    /// @dev No feed is configured for the asset (address(0)). A basket asset cannot be active so (RB-17).
+    NoFeed,
+    /// @dev `latestRoundData` reverted or returned malformed data.
+    ReadFailed,
+    /// @dev `answer <= 0`.
+    NonPositive,
+    /// @dev `updatedAt == 0` or `answeredInRound < roundId`: the round is not complete.
+    RoundIncomplete,
+    /// @dev `block.timestamp - updatedAt > maxAge`.
+    Stale,
+    /// @dev The L2 sequencer uptime feed reports down (answer 1).
+    SequencerDown,
+    /// @dev The sequencer is up, but came up less than `sequencerGrace` ago.
+    SequencerGrace,
+    /// @dev The USDC / USD feed is outside `usdcPegBandBps` of 1.
+    OffPeg
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Ok |  |
+| NoFeed |  |
+| ReadFailed |  |
+| NonPositive |  |
+| RoundIncomplete |  |
+| Stale |  |
+| SequencerDown |  |
+| SequencerGrace |  |
+| OffPeg |  |
+

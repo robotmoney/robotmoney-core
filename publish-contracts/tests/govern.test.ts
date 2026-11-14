@@ -2013,7 +2013,7 @@ describe("QA plan v1 D7: set-unwind-guard sets a basket vault's emergency unwind
 // Issue 1842: the operator rows of the governed upgrade lifecycle, on the govern world (an in-memory Safe and timelock; the GovernedUUPS proxies are faked with the
 // library's rules: timelock only, never once frozen, the freeze bound to the live implementation and its code hash). The real contracts run in the Twin rehearsal.
 describe("issue 1842: govern --row freeze-upgrades and --row upgrade-proxy", () => {
-  const SPECS = proxySpecs(getStageTable());
+  const SPECS = proxySpecs(getStageTable()).filter((x) => getStageTable().stages.find((st) => st.name === x.stage)?.system !== "fund"); // Deploy 4: the fund system's proxies answer to its own timelock
   const PINS = getStageTable().upgradeAuthority!.layoutPins;
   const GW = SPECS.find((x) => x.name === "gateway")!;
   const codeOf = (seed: string) => `0x6080604052${keccak256(toBytes(seed)).slice(2)}` as `0x${string}`;

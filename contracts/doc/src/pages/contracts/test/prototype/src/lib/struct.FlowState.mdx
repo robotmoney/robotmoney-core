@@ -1,0 +1,160 @@
+---
+title: "FlowState"
+description: "Every piece of FlowQueue state outside the OpenZeppelin namespaces, in one struct, so the queue's linked libraries (`Flow*Lib`) take one storage reference per call. Owned by the `queue` agent after the foundation agent (scaffold plan §6). Append-only once another agent reads a field. Ids of requests, claims and settlements start at 1; 0 means none."
+---
+
+# FlowState
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+Every piece of FlowQueue state outside the OpenZeppelin namespaces, in one struct, so the queue's linked
+libraries (`Flow*Lib`) take one storage reference per call. Owned by the `queue` agent after the
+foundation agent (scaffold plan §6). Append-only once another agent reads a field.
+Ids of requests, claims and settlements start at 1; 0 means none.
+
+**Note:**
+
+- **storage-location:** erc7201:robotmoney.storage.FlowQueue
+
+```solidity
+struct FlowState {
+    address fund;
+    address usdc;
+    address usdcFeed;
+    uint32 usdcFeedMaxAge;
+    address sequencerFeed;
+    FlowParams params;
+    bool paused;
+    mapping(uint256 id => Request) requests;
+    uint256 requestCount;
+    mapping(uint64 epoch => uint256[] ids) epochRequests;
+    uint64 oldestEpoch;
+    mapping(uint256 id => Claim) claims;
+    uint256 claimCount;
+    mapping(address owner => uint256[] ids) claimsOf;
+    mapping(address owner => uint256) claimCursor;
+    mapping(uint256 id => Settlement) settlements;
+    uint256 settlementCount;
+    mapping(address owner => uint256) usdcCredit;
+    mapping(address owner => uint256) shareCredit;
+    mapping(address owner => uint256) queuedShares;
+    mapping(uint256 period => uint256) depositUsed;
+    mapping(uint256 period => uint256) redeemUsed;
+    uint64 lastSettleAt;
+    uint256 lastSharePrice;
+    mapping(uint256 index => uint256) lastLendRate;
+    uint256 totalPendingUsdc;
+    uint256 totalEscrowShares;
+    uint256 totalHeldShares;
+    uint256 totalOwedUsdc;
+    uint256 totalCreditUsdc;
+    uint256 totalCreditShares;
+    // ── Appended by `queue` (2026-11-11) ──
+    /// @dev Per epoch: requests of that epoch not yet closed (settle and the Window check skip empty epochs).
+    mapping(uint64 epoch => uint256) epochOpen;
+    /// @dev Settle cursor (coordinator ruling 3): the next call continues at `epochRequests[cursorEpoch][cursorIndex]`.
+    ///      A call that reaches the end of the settleable range puts it back on the oldest epoch (FlowSettleLib._walk).
+    uint64 cursorEpoch;
+    uint256 cursorIndex;
+    /// @dev Claim ids per request (pending and claimable views).
+    mapping(uint256 requestId => uint256[] ids) requestClaims;
+    /// @dev Rounding dust the queue keeps on its own books, never paid to a flow user (conservation, eng plan §4.3):
+    ///      USDC left over from per-request splits, shares left over from per-request splits. `sweep` sends it to
+    ///      the fund with any gift (step 3 finish plan §3.1 item 7).
+    uint256 dustUsdc;
+    uint256 dustShares;
+    // ── Appended by `fix-queue` (2026-11-12, step 3 finish plan §3.1). Since then `epochRequests`, `cursorEpoch`
+    //    and `cursorIndex` above are no longer written; they stay for the layout. ──
+    /// @dev Request ids per epoch and side (index `uint8(RequestKind)`), in order. Each side walks its own list, so
+    ///      requests of one side that cannot fill never hold back the other side (item 2).
+    mapping(uint64 epoch => uint256[] ids)[2] sideIds;
+    /// @dev Per side and epoch: requests not yet closed (the walk passes over a side's empty epochs).
+    mapping(uint64 epoch => uint256)[2] sideOpen;
+    /// @dev Walk cursors `[class][side]`: class 0 holds the keeper's position, class 1 everyone else's. Only the
+    ///      keeper's own calls move the keeper's (item 2). `epoch == 0` means: start a new pass at the oldest epoch.
+    WalkCursor[2][2] cursors;
+    /// @dev Epoch anchor (item 3). Epoch `e ≥ epochAnchorIndex − 1` ends at
+    ///      `epochAnchorTime + (e + 1 − epochAnchorIndex) × epochLength`. Both are 0 until `epochLength` first changes,
+    ///      so until then the epoch of time `t` is `t / epochLength`, as in the scaffold.
+    uint64 epochAnchorIndex;
+    uint64 epochAnchorTime;
+    /// @dev End time of each epoch that held an open request when `epochLength` last changed (item 3). Later epochs
+    ///      follow the anchor.
+    mapping(uint64 epoch => uint64) epochEnd;
+    /// @dev The epoch of the last settlement: check 6 counts the epochs passed from it (item 3).
+    uint64 lastSettleEpoch;
+    /// @dev Bit `i` set: lending asset `i` was excluded at the last settlement (check 6 reference, item 9).
+    uint256 lastExcludedMask;
+    /// @dev Per lending asset index: its held amount per share at the last settlement, PRICE_SCALE (item 9).
+    mapping(uint256 index => uint256) lastLendPerShare;
+    // ── Appended by `levers` (2026-11-12, step 3 finish plan §3.2). All zero: no lever, the design as written. ──
+    /// @dev The attack-finding levers (`FlowLevers`), set by ADMIN_ROLE through `setFlowLevers`.
+    FlowLevers levers;
+    /// @dev The block of the last settlement that traded while `levers.basketCallBps` was on.
+    uint64 leverTradeBlock;
+    // ── Appended by the review fixes of 2026-11-12 (proposal §14). ──
+    /// @dev USDC value each side already traded in `leverTradeBlock`: the per-call cap is a per-block budget, so a
+    ///      small call in a block takes only its own part, not the whole block's room (review Q-F2).
+    uint128 leverBlockDep;
+    uint128 leverBlockRed;
+    /// @dev The exclusion ledger's record count at the last settlement (check 6, review Q-F3).
+    uint256 lastExclusionCount;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` | The RobotMoneyFund (share token). |
+| usdc | `address` | USDC. |
+| usdcFeed | `address` | Chainlink USDC / USD. |
+| usdcFeedMaxAge | `uint32` | Its maximum age. |
+| sequencerFeed | `address` | Chainlink L2 sequencer uptime. |
+| params | `FlowParams` | FlowParams (§5.9.5). |
+| paused | `bool` | EMERGENCY pause of requests and settlement. |
+| requests | `mapping(uint256 id => Request)` | By request id. |
+| requestCount | `uint256` | Last request id. |
+| epochRequests | `mapping(uint64 epoch => uint256[] ids)` | Request ids per epoch, in order (E18). |
+| oldestEpoch | `uint64` | Hint: the oldest epoch that may still hold a pending request (settle walks from here). Any<br/>`setFlowParams` resets it to 0 (step 3 finish plan §3.1 item 3). |
+| claims | `mapping(uint256 id => Claim)` | By claim id. |
+| claimCount | `uint256` | Last claim id. |
+| claimsOf | `mapping(address owner => uint256[] ids)` | Claim ids per owner, in order (oldest first for deposit / mint / redeem). |
+| claimCursor | `mapping(address owner => uint256)` | Per owner: index into `claimsOf` before which every claim is fully used. |
+| settlements | `mapping(uint256 id => Settlement)` | By settlement id. |
+| settlementCount | `uint256` | Last settlement id. |
+| usdcCredit | `mapping(address owner => uint256)` | Per owner: USDC waiting for `withdrawCredit` (E22). |
+| shareCredit | `mapping(address owner => uint256)` | Per owner: shares waiting for `withdrawCredit` (E22). |
+| queuedShares | `mapping(address owner => uint256)` | Per owner: escrowed redemption shares plus undelivered deposit shares plus share credits<br/>(E13, RB-22: every share the queue holds for the owner). |
+| depositUsed | `mapping(uint256 period => uint256)` | Per period (`timestamp / epochLength`): deposit USDC settled (E20). |
+| redeemUsed | `mapping(uint256 period => uint256)` | Per period: redemption value settled, USDC (E20). |
+| lastSettleAt | `uint64` | Time of the last settlement (check 5 and check 6 reference time). |
+| lastSharePrice | `uint256` | NAV per share at the feeds at the last settlement, PRICE_SCALE (check 6). |
+| lastLendRate | `mapping(uint256 index => uint256)` | Per lending asset index: the venue's rate per unit at the last settlement (check 5). |
+| totalPendingUsdc | `uint256` | Σ unfilled deposit escrow (conservation, eng plan §4.3). |
+| totalEscrowShares | `uint256` | Σ unfilled redemption escrow. |
+| totalHeldShares | `uint256` | Σ deposit shares held and not yet delivered or returned. |
+| totalOwedUsdc | `uint256` | Σ redemption USDC settled and not yet paid. |
+| totalCreditUsdc | `uint256` | Σ usdcCredit. |
+| totalCreditShares | `uint256` | Σ shareCredit. |
+| epochOpen | `mapping(uint64 epoch => uint256)` |  |
+| cursorEpoch | `uint64` |  |
+| cursorIndex | `uint256` |  |
+| requestClaims | `mapping(uint256 requestId => uint256[] ids)` |  |
+| dustUsdc | `uint256` |  |
+| dustShares | `uint256` |  |
+| sideIds | `mapping(uint64 epoch => uint256[] ids)[2]` |  |
+| sideOpen | `mapping(uint64 epoch => uint256)[2]` |  |
+| cursors | `WalkCursor[2][2]` |  |
+| epochAnchorIndex | `uint64` |  |
+| epochAnchorTime | `uint64` |  |
+| epochEnd | `mapping(uint64 epoch => uint64)` |  |
+| lastSettleEpoch | `uint64` |  |
+| lastExcludedMask | `uint256` |  |
+| lastLendPerShare | `mapping(uint256 index => uint256)` |  |
+| levers | `FlowLevers` |  |
+| leverTradeBlock | `uint64` |  |
+| leverBlockDep | `uint128` |  |
+| leverBlockRed | `uint128` |  |
+| lastExclusionCount | `uint256` |  |
+

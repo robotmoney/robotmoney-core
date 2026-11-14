@@ -1,0 +1,45 @@
+---
+title: "AssetConfig"
+description: "One fund asset (§4.1, §4.2). Index `i` in the fund's asset list is stable for the fund's life: assets are deactivated, never removed, so plan arrays stay aligned. There is no sleeve or category field (§4.1, RB-9): the receipt's sleeve is an off-chain label only. Each asset's target weight comes straight from the target vector. Asset id: a target vector names an asset by `PlanMath.assetId`, its fund asset address. That is `token` for a Basket asset and `adapter` for a Lending asset. At most one ACTIVE entry has a given id (`addAsset` refuses a second, `DuplicateAsset`)."
+---
+
+# AssetConfig
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/FundTypes.sol)
+
+One fund asset (§4.1, §4.2). Index `i` in the fund's asset list is stable for the
+fund's life: assets are deactivated, never removed, so plan arrays stay aligned.
+There is no sleeve or category field (§4.1, RB-9): the receipt's sleeve is an off-chain
+label only. Each asset's target weight comes straight from the target vector.
+Asset id: a target vector names an asset by `PlanMath.assetId`, its fund asset address.
+That is `token` for a Basket asset and `adapter` for a Lending asset. At most one ACTIVE
+entry has a given id (`addAsset` refuses a second, `DuplicateAsset`).
+
+```solidity
+struct AssetConfig {
+    AssetKind kind;
+    bool active;
+    uint16 capBps;
+    address adapter;
+    address token;
+    address pool;
+    uint24 poolFee;
+    uint32 twapWindow;
+    Venue venue;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `AssetKind` | Lending or Basket. |
+| active | `bool` | False after deactivation. An inactive asset has target 0 and must hold 0.<br/>A target vector may not name it (`TargetAssetNotActive`). |
+| capBps | `uint16` | Lending only: hard ceiling on this adapter's share of fund NAV (ADP ramp<br/>control, ported `capBps`). 0 means "no cap" for Basket, and is invalid for<br/>Lending (use 10 000 for uncapped). A target above `capBps` is refused at plan<br/>open (`TargetExceedsCap`). |
+| adapter | `address` | Lending: the `IStrategyAdapter` (binds an immutable VAULT == the fund).<br/>Basket: the vault-agnostic `IBasketSwapAdapter` (never address(0) here; the<br/>fund has no built-in SwapRouter path). Codehash-pinned and allowlisted. |
+| token | `address` | Basket: the held token. Lending: address(0). |
+| pool | `address` | Basket: the venue pool pairing `token` with USDC, used for both swap and TWAP<br/>(ORA-3 equality). Lending: address(0). |
+| poolFee | `uint24` | Basket: the pool parameter forwarded to the swap adapter. V3 / V4: the fee in<br/>Uniswap units (hundredths of a bp: 500 = 5 bps, 3000 = 30 bps). Aerodrome: the<br/>pool's TICK SPACING (what the Aerodrome adapter takes), NOT a fee; the fund's<br/>`poolFeeBps` reads the fee from the pool's `fee()` (pips) for this venue and<br/>falls back to `poolFee` only when that read fails. Lending: 0. |
+| twapWindow | `uint32` | Basket: TWAP window in seconds, within the BasketVault bounds<br/>[600, 86 400]. Lending: 0. |
+| venue | `Venue` | Basket venue (ignored for Lending). |
+

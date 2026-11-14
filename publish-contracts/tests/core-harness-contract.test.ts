@@ -88,7 +88,7 @@ describe("core harness contract: the argument vector and environment core builds
     if (r.code !== 0) console.error(r.stderr.split("\n").slice(-8).join("\n"));
     expect(r.code).toBe(0);
     // the same stage set as --stage deploy: safe first, then every table stage through timelock
-    const vaultStages = getStageTable().stages.filter((s) => s.system !== "gateway"); // issue 1892: the publish verb runs the vaults system
+    const vaultStages = getStageTable().stages.filter((s) => s.system === "vaults"); // issue 1892: the publish verb runs the vaults system
     const want = ["safe.json", ...vaultStages.map((s) => manifestFile(s.manifest))].sort();
     expect(readdirSync(c.manifestDir).sort()).toEqual(want);
     expect(existsSync(join(c.w.coreDir, "deployments", "918453"))).toBe(false);

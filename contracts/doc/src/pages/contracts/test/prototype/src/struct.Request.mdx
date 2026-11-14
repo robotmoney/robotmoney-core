@@ -1,0 +1,35 @@
+---
+title: "Request"
+description: "One request (E12, E18; eng plan §3.1 \"state per request\")."
+---
+
+# Request
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+One request (E12, E18; eng plan §3.1 "state per request").
+
+```solidity
+struct Request {
+    address owner;
+    RequestKind kind;
+    uint64 epoch;
+    uint256 amount;
+    uint256 remaining;
+    uint256 limit;
+    bool closed;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` | Owns the request and every claim from it. Named by the caller; never changed. |
+| kind | `RequestKind` | Deposit or Redeem. |
+| epoch | `uint64` | Epoch index the request was made in (`block.timestamp / epochLength` at the request). |
+| amount | `uint256` | Escrowed at the request: USDC (Deposit) or shares (Redeem). |
+| remaining | `uint256` | Still unfilled and still in escrow: USDC (Deposit) or shares (Redeem). |
+| limit | `uint256` | Deposit: the most USDC per share (`maxUsdcPerShare`); Redeem: the least USDC per share after the<br/>exit fee (`minUsdcPerShare`). In PRICE_SCALE units. |
+| closed | `bool` | Nothing is left in escrow for this request (see `RequestStatus.Closed`). |
+

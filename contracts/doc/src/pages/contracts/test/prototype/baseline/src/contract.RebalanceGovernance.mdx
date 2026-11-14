@@ -1,0 +1,312 @@
+---
+title: "RebalanceGovernance"
+description: "The fund's target setter (§5.1, §6). It holds the fund's `GOVERNANCE_ROLE` (the only gate on `setTargetAndOpenPlan`) and moves the fund's target in two ways: - `applyReceipt` releases a recorded Investment Committee consensus receipt and opens a plan to the receipt's per-asset target vector in the same call. `TARGET_SETTER_ROLE` only. - `setTarget` opens a plan with no receipt (bootstrap, drift correction; the old `setDefaultWeights`). `ADMIN_ROLE` only."
+---
+
+# RebalanceGovernance
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/RebalanceGovernance.sol)
+
+**Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalanceGovernance](/contracts/test/prototype/baseline/src/interfaces/interface.IRebalanceGovernance)
+
+**Title:** RebalanceGovernance
+
+The fund's target setter (§5.1, §6). It holds the fund's `GOVERNANCE_ROLE` (the only gate
+on `setTargetAndOpenPlan`) and moves the fund's target in two ways:
+- `applyReceipt` releases a recorded Investment Committee consensus receipt and opens a
+plan to the receipt's per-asset target vector in the same call. `TARGET_SETTER_ROLE` only.
+- `setTarget` opens a plan with no receipt (bootstrap, drift correction; the old
+`setDefaultWeights`). `ADMIN_ROLE` only.
+
+RB-1: both roles are held by the `TimelockController`, whose only proposer is the Safe.
+`TARGET_SETTER_ROLE` is self-administered, so no `ADMIN_ROLE` holder can grant it. A
+target or a plan therefore only comes from a timelock-executed call into this contract.
+
+RB-8 / INV-4: this contract calls the receipt register (`releaseReceipt`, views). The
+register never calls this contract, the fund or the rebalancer. This contract holds only
+the register's narrow `RECEIPT_RELEASER_ROLE`, never its `ADMIN_ROLE`.
+
+Payload-digest binding is unchanged from `RouterGovernance`: the call names the digest
+the vector was derived from (the payload's `assets` field, schema 1.1) and reverts unless
+it equals the stored digest. `ReceiptApplied` records the digest, the vector and the
+plan id together so anyone can re-derive the vector from the public payload and compare.
+The bucket audit check (§4.1) is off-chain. No contract stores or reads a sleeve (RB-9).
+
+Asset ids: a vector names each asset by its fund asset address (`PlanMath.assetId`):
+`token` for a Basket asset, `adapter` for a Lending asset.
+
+Released is not applied: a receipt released outside `applyReceipt` carries no
+target and `applyReceipt` refuses it forever (`ReceiptAlreadyReleased`). A refused
+vector reverts the whole call, so it releases nothing. The fund runs the §4.1 checks
+(RB-9): an inactive or unknown asset (`TargetAssetNotActive`), a duplicate
+(`TargetAssetDuplicate`), a missing active asset (`TargetAssetMissing`), a bad sum
+(`TargetSumInvalid`), a lending target above its cap (`TargetExceedsCap`).
+
+Runs behind its own ERC-1967 proxy (`GovernedUUPS`): `initialize` replaces the
+constructor, the implementation is locked, and only `upgradeTimelock()` can upgrade or
+freeze it. `fund` and `receipts` are set once at initialization and have no setter.
+
+## Constants
+
+### ADMIN_ROLE
+
+Gates `setTarget` and `setDefaultPlanParams`. Held by the `TimelockController`.
+
+```solidity
+bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
+```
+
+### TARGET_SETTER_ROLE
+
+The only role that can call `applyReceipt` (the `RouterGovernance`
+`WEIGHT_SETTER_ROLE` equivalent). Held by the `TimelockController`.
+Self-administered.
+
+```solidity
+bytes32 public constant TARGET_SETTER_ROLE = Roles.TARGET_SETTER_ROLE;
+```
+
+## State Variables
+
+### fund
+
+```solidity
+IRobotMoneyFund public fund;
+```
+
+### receipts
+
+```solidity
+IConsensusRecommendationReceipt public receipts;
+```
+
+### lastAppliedRecordedAt
+
+The `recordedAt` of the last receipt `applyReceipt` applied (0 until the first).
+`applyReceipt` refuses any receipt not recorded strictly later, so two ready apply
+operations executed out of order cannot make the older receipt's target live.
+
+```solidity
+uint64 public lastAppliedRecordedAt;
+```
+
+### _defaultPlanParams
+
+<i>
+
+Plan parameters `applyReceipt` opens plans with (§5.6). Exposed by `defaultPlanParams()`.
+
+</i>
+
+```solidity
+PlanParams private _defaultPlanParams;
+```
+
+## Functions
+
+<a id="initialize-address-address-address-planparams-address-upgrademode"></a>
+
+### initialize
+
+Atomic proxy initialization (the ERC1967Proxy constructor calls it).
+
+```solidity
+function initialize(
+        address fund_,
+        address receipts_,
+        address admin_,
+        PlanParams calldata defaultPlanParams_,
+        address upgradeTimelock_,
+        UpgradeMode upgradeMode_
+    ) external initializer;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund_ | `address` | The fund whose `setTargetAndOpenPlan` this contract calls. |
+| receipts_ | `address` | ConsensusRecommendationReceipt register. |
+| admin_ | `address` | Receives `ADMIN_ROLE` and `TARGET_SETTER_ROLE` (deployer, then the<br/>timelock stage hands both to the `TimelockController`). |
+| defaultPlanParams_ | `PlanParams` | Plan parameters for `applyReceipt`, bounded as §5.6. |
+| upgradeTimelock_ | `address` | The only upgrade and freeze authority. |
+| upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
+
+<a id="applyreceipt-bytes32-bytes32-address-uint256"></a>
+
+### applyReceipt
+
+Release `receiptId` and open a plan to its per-asset vector, in one call (§5.1 step 2-3).
+TARGET_SETTER_ROLE only (the timelock: RB-1). `nonReentrant`.
+Checks in order (RouterGovernance.applyReceipt, unchanged):
+recorded (`ReceiptNotRecorded`), not released (`ReceiptAlreadyReleased`), stored digest
+== `payloadDigest` (`PayloadDigestMismatch`), `recordedAt > lastAppliedRecordedAt`
+(`ReceiptNotNewerThanApplied`). Effects: `lastAppliedRecordedAt = recordedAt`,
+`receipts.releaseReceipt(receiptId)`, then
+`fund.setTargetAndOpenPlan(assets, bps, defaultPlanParams, receiptId)`, which runs
+the §4.1 vector checks (RB-9). Any revert, a refused vector included, undoes the
+release. Emits `ReceiptApplied`.
+
+<i>
+
+§5.1 steps 2-3, RB-1, RB-9. Check order is `RouterGovernance.applyReceipt` unchanged.
+The fund checks the vector inside `setTargetAndOpenPlan`. The release and the plan open
+happen in one call; any revert, a refused vector included, undoes both.
+
+</i>
+
+```solidity
+function applyReceipt(
+        bytes32 receiptId,
+        bytes32 payloadDigest,
+        address[] calldata assets,
+        uint256[] calldata bps
+    ) external onlyRole(TARGET_SETTER_ROLE) nonReentrant returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+| payloadDigest | `bytes32` |  |
+| assets | `address[]` | Asset ids, each active asset exactly once, any order. An id is the fund<br/>asset address (`PlanMath.assetId`): `token` for Basket, `adapter` for Lending. |
+| bps | `uint256[]` | Parallel target weights in bps of NAV, summing to 10 000. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` | The opened plan. |
+
+<a id="_checkandrelease-bytes32-bytes32"></a>
+
+### _checkAndRelease
+
+<i>
+
+`applyReceipt`'s receipt checks, in `RouterGovernance.applyReceipt` order, then the release (own
+frame for stack depth). The digest binding is unchanged.
+
+</i>
+
+```solidity
+function _checkAndRelease(bytes32 receiptId, bytes32 payloadDigest) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+| payloadDigest | `bytes32` |  |
+
+<a id="settarget-address-uint256-planparams"></a>
+
+### setTarget
+
+Open a plan with no receipt (§6: bootstrap and drift correction; the old
+`setDefaultWeights`). ADMIN_ROLE only. Same vector checks as `applyReceipt` (RB-9).
+Does not touch `lastAppliedRecordedAt`. Emits `TargetSet`.
+
+<i>
+
+§6 (the old `setDefaultWeights`), RB-1. Opens a plan with `receiptId == 0`. Does not
+touch `lastAppliedRecordedAt`, so a later receipt still applies.
+
+</i>
+
+```solidity
+function setTarget(
+        address[] calldata assets,
+        uint256[] calldata bps,
+        PlanParams calldata params
+    ) external onlyRole(ADMIN_ROLE) nonReentrant returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `address[]` |  |
+| bps | `uint256[]` |  |
+| params | `PlanParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="setdefaultplanparams-planparams"></a>
+
+### setDefaultPlanParams
+
+Set the plan parameters `applyReceipt` uses. ADMIN_ROLE only. Bounds as
+`setTargetAndOpenPlan` (`PlanParamOutOfBounds`). Emits `DefaultPlanParamsSet`.
+
+<i>
+
+§5.6 `duration` and `costBudgetBps` bounds.
+
+</i>
+
+```solidity
+function setDefaultPlanParams(PlanParams calldata params) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `PlanParams` |  |
+
+<a id="defaultplanparams"></a>
+
+### defaultPlanParams
+
+```solidity
+function defaultPlanParams() external view returns (PlanParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `PlanParams` |  |
+
+<a id="_setdefaultplanparams-planparams"></a>
+
+### _setDefaultPlanParams
+
+```solidity
+function _setDefaultPlanParams(PlanParams calldata params) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `PlanParams` |  |
+
+<a id="_checkplanparams-planparams"></a>
+
+### _checkPlanParams
+
+<i>
+
+§5.6: duration in [MIN_PLAN_DURATION, MAX_PLAN_DURATION], costBudgetBps in
+[1, MAX_COST_BUDGET_BPS]. The fund re-checks the same bounds in `setTargetAndOpenPlan`.
+
+</i>
+
+```solidity
+function _checkPlanParams(PlanParams calldata params) internal pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `PlanParams` |  |
+

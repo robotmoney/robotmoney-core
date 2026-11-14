@@ -1,0 +1,68 @@
+---
+title: "SettleCheck"
+description: "The checks of proposal §5.9.3, in order (E7). `checkSettle` returns the first that fails; `settle` reverts `SettleBlocked` with it. `Ok` means every check that can be evaluated before trading passes. RedeemLeg, DepositLeg, Proportion and RealizedPrice can only fail inside a settlement."
+---
+
+# SettleCheck
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+The checks of proposal §5.9.3, in order (E7). `checkSettle` returns the first that fails; `settle`
+reverts `SettleBlocked` with it. `Ok` means every check that can be evaluated before trading passes.
+RedeemLeg, DepositLeg, Proportion and RealizedPrice can only fail inside a settlement.
+
+```solidity
+enum SettleCheck {
+    /// @dev Every pre-trade check passes.
+    Ok,
+    /// @dev Check 1: no epoch with a pending request has its settlement window ended.
+    Window,
+    /// @dev Check 1: the caller is not the keeper and `keeperGrace` has not passed.
+    Caller,
+    /// @dev Check 1: the queue is paused.
+    Paused,
+    /// @dev Check 2: the sequencer feed reports down or is inside `sequencerGrace`.
+    Sequencer,
+    /// @dev Check 2: a basket asset's feed is stale, not positive, incomplete or unreadable. `index` names it.
+    Feed,
+    /// @dev Check 2: the USDC / USD feed is unhealthy or outside `usdcPegBandBps`.
+    UsdcPeg,
+    /// @dev Check 3: fewer than `quorum` slices sit within `dispersionBps` of the median. `index` names the asset.
+    TwapQuorum,
+    /// @dev Check 4: a TWAP is more than `refBandBps` from its feed. `index` names the asset.
+    TwapVsFeed,
+    /// @dev Check 5: a lending venue's rate per unit grew more than `maxLendRateGrowthBps` per day.
+    LendRate,
+    /// @dev Check 6: NAV per share at the feeds moved more than `maxSharePriceMoveBps` per epoch passed.
+    SharePrice,
+    /// @dev Check 8: a sale returned less than its limit (raised by the fund as `FlowLegLimit`).
+    RedeemLeg,
+    /// @dev Check 9: a purchase needed more than its limit (raised by the fund as `FlowLegLimit`).
+    DepositLeg,
+    /// @dev Check 10: the fund's proportion check failed (raised by the fund as `ProportionViolated`).
+    Proportion,
+    /// @dev Check 11: the realized price is outside a bound price.
+    RealizedPrice
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Ok |  |
+| Window |  |
+| Caller |  |
+| Paused |  |
+| Sequencer |  |
+| Feed |  |
+| UsdcPeg |  |
+| TwapQuorum |  |
+| TwapVsFeed |  |
+| LendRate |  |
+| SharePrice |  |
+| RedeemLeg |  |
+| DepositLeg |  |
+| Proportion |  |
+| RealizedPrice |  |
+

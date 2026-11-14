@@ -1,0 +1,60 @@
+---
+title: "HarnessSmokeTest"
+description: "One-vault experiment (plan Step 2.1): proves `BaselineHarness` deploys the full prototype on the Base fixture and that its helpers work. Not a behaviour suite."
+---
+
+# HarnessSmokeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/HarnessSmoke.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+One-vault experiment (plan Step 2.1): proves `BaselineHarness` deploys the full prototype on the
+Base fixture and that its helpers work. Not a behaviour suite.
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_deployanddeposit"></a>
+
+### test_deployAndDeposit
+
+<i>
+
+Wiring (RB-1, RB-8) plus one deposit with no plan: everything stays idle, so NAV is the deposit.
+
+</i>
+
+```solidity
+function test_deployAndDeposit() public fixtureCovered;
+```
+
+<a id="test_receiptplandepositstep"></a>
+
+### test_receiptPlanDepositStep
+
+<i>
+
+Receipt to plan through the timelock, a routed deposit, then a few keeper steps.
+
+</i>
+
+```solidity
+function test_receiptPlanDepositStep() public fixtureCovered;
+```
+

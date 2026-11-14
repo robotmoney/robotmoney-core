@@ -1,0 +1,1167 @@
+---
+title: "FundExtrasTest"
+---
+
+# FundExtrasTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FundExtras.t.sol)
+
+**Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### WETH
+
+```solidity
+address internal constant WETH = 0x4200000000000000000000000000000000000006;
+```
+
+### CBBTC
+
+```solidity
+address internal constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+```
+
+### WETH_POOL
+
+```solidity
+address internal constant WETH_POOL = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
+```
+
+### CBBTC_POOL
+
+```solidity
+address internal constant CBBTC_POOL = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+```
+
+### ROUTER
+
+```solidity
+address internal constant ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### AAVE_POOL
+
+```solidity
+address internal constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+```
+
+### AAVE_A_USDC
+
+```solidity
+address internal constant AAVE_A_USDC = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+```
+
+### COMET
+
+```solidity
+address internal constant COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+```
+
+### MOONWELL
+
+```solidity
+address internal constant MOONWELL = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+```
+
+### POOL_FEE
+
+```solidity
+uint24 internal constant POOL_FEE = 500;
+```
+
+### FEED_ETH
+
+```solidity
+address internal constant FEED_ETH = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+```
+
+### FEED_CBBTC
+
+```solidity
+address internal constant FEED_CBBTC = 0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D;
+```
+
+### FEED_USDC
+
+```solidity
+address internal constant FEED_USDC = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+```
+
+### FEED_SEQUENCER
+
+```solidity
+address internal constant FEED_SEQUENCER = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
+```
+
+### ETH_MAX_AGE
+
+<i>
+
+Heartbeat + 5 min (§5.9.5): ETH / USD 20 min, cbBTC / USD and USDC / USD 24 h.
+
+</i>
+
+```solidity
+uint32 internal constant ETH_MAX_AGE = 1_500;
+```
+
+### DAY_MAX_AGE
+
+```solidity
+uint32 internal constant DAY_MAX_AGE = 86_700;
+```
+
+### IDX_AAVE
+
+```solidity
+uint256 internal constant IDX_AAVE = 0;
+```
+
+### IDX_MOONWELL
+
+```solidity
+uint256 internal constant IDX_MOONWELL = 1;
+```
+
+### IDX_WETH
+
+```solidity
+uint256 internal constant IDX_WETH = 2;
+```
+
+### IDX_CBBTC
+
+```solidity
+uint256 internal constant IDX_CBBTC = 3;
+```
+
+### IDX_COMET
+
+```solidity
+uint256 internal constant IDX_COMET = 4;
+```
+
+### N_ASSETS
+
+```solidity
+uint256 internal constant N_ASSETS = 5;
+```
+
+### N_LENDING
+
+```solidity
+uint256 internal constant N_LENDING = 3;
+```
+
+### TVL_CAP
+
+```solidity
+uint256 internal constant TVL_CAP = 10_000_000e6;
+```
+
+### PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant PER_DEPOSIT_CAP = 1_000_000e6;
+```
+
+### EXIT_FEE_BPS
+
+```solidity
+uint256 internal constant EXIT_FEE_BPS = 10;
+```
+
+### MAX_SLIPPAGE_BPS
+
+```solidity
+uint256 internal constant MAX_SLIPPAGE_BPS = 200;
+```
+
+### NAV_DEVIATION_BPS
+
+```solidity
+uint256 internal constant NAV_DEVIATION_BPS = 200;
+```
+
+### LENDING_CAP_BPS
+
+```solidity
+uint16 internal constant LENDING_CAP_BPS = 6_000;
+```
+
+### TWAP_WINDOW
+
+```solidity
+uint32 internal constant TWAP_WINDOW = 1_800;
+```
+
+### SEED_USDC
+
+```solidity
+uint256 internal constant SEED_USDC = 100_000e6;
+```
+
+### LEG_BAND_BPS
+
+<i>
+
+Per-leg purchase limit and sale floor around the TWAP the test passes (the queue derives the real ones).
+
+</i>
+
+```solidity
+uint256 internal constant LEG_BAND_BPS = 300;
+```
+
+## State Variables
+
+### emergency
+
+```solidity
+address internal emergency = makeAddr("emergency");
+```
+
+### feeRecipient
+
+```solidity
+address internal feeRecipient = makeAddr("feeRecipient");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### fund
+
+```solidity
+IRobotMoneyFundFull internal fund;
+```
+
+### aave
+
+```solidity
+AaveV3RateAdapter internal aave;
+```
+
+### moonwell
+
+```solidity
+MorphoRateAdapter internal moonwell;
+```
+
+### swapAdapter
+
+```solidity
+UniswapV3ExactOutSwapAdapter internal swapAdapter;
+```
+
+### comet
+
+```solidity
+CompoundV3RateAdapter internal comet;
+```
+
+### ethPrice8
+
+<i>
+
+USD prices (8 decimals) the mock basket feeds report: each pool's own price at the pin (`_etchFeeds`).
+
+</i>
+
+```solidity
+int256 internal ethPrice8;
+```
+
+### cbbtcPrice8
+
+```solidity
+int256 internal cbbtcPrice8;
+```
+
+### queued
+
+<i>
+
+This contract plays the FlowQueue once `bindFlowRole` binds it.
+
+</i>
+
+```solidity
+mapping(address => uint256) internal queued;
+```
+
+### params
+
+```solidity
+FlowParams internal params;
+```
+
+## Functions
+
+<a id="queuedsharesof-address"></a>
+
+### queuedSharesOf
+
+```solidity
+function queuedSharesOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="flowparams"></a>
+
+### flowParams
+
+```solidity
+function flowParams() external view returns (FlowParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `FlowParams` |  |
+
+<a id="feeds"></a>
+
+### feeds
+
+```solidity
+function feeds() external pure returns (address, uint32, address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+| &lt;none&gt; | `uint32` |  |
+| &lt;none&gt; | `address` |  |
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_deployfund"></a>
+
+### _deployFund
+
+```solidity
+function _deployFund() internal returns (IRobotMoneyFundFull f);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+
+<a id="_lending-address"></a>
+
+### _lending
+
+```solidity
+function _lending(address adapter) internal pure returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="_basket-address-address-address-uint32"></a>
+
+### _basket
+
+```solidity
+function _basket(address token, address pool, address feed, uint32 maxAge)
+        internal
+        view
+        returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| pool | `address` |  |
+| feed | `address` |  |
+| maxAge | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="_etchfeeds"></a>
+
+### _etchFeeds
+
+<i>
+
+A mock aggregator at each real feed address, fresh now. Each basket feed reports its pool's own price at
+the pin (as the harness's feeds do), USDC 1.
+`hardening` (2026-11-12): the prices were round numbers (3 000 and 90 000 USD) while the fund's views read
+only feed health. Step 3e (proposal §5.10, RB-19) makes every rebalance step compare each TWAP with its
+feed (check 4), so a feed 30 % off its pool made every `executeStep` here revert `StepFeedCheckFailed`.
+A feed at the market price models a live market; no test here is about a feed's value.
+
+</i>
+
+```solidity
+function _etchFeeds() internal;
+```
+
+<a id="_poolprice8-address-address-uint256"></a>
+
+### _poolPrice8
+
+<i>
+
+USD price (8 decimals, USDC at 1) of one whole `token` at `pool`'s current tick.
+
+</i>
+
+```solidity
+function _poolPrice8(address pool, address token, uint256 unit)
+        internal
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| unit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_refreshfeeds"></a>
+
+### _refreshFeeds
+
+<i>
+
+Every feed fresh at `block.timestamp`, USDC at par, the sequencer up for a day.
+
+</i>
+
+```solidity
+function _refreshFeeds() internal;
+```
+
+<a id="fundusdc-address-uint256"></a>
+
+### fundUsdc
+
+```solidity
+function fundUsdc(address to, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_seed"></a>
+
+### _seed
+
+```solidity
+function _seed() internal;
+```
+
+<a id="_weights"></a>
+
+### _weights
+
+<i>
+
+The invested weights of `_seedAndInvest`, index-aligned: aave 25 %, moonwell 20 %, wETH 17.5 %, cbBTC
+17.5 %, Compound 20 % (lending 65 % over three venues, as the harness's default plan; was aave 35 %,
+moonwell 30 % before Compound was listed).
+
+</i>
+
+```solidity
+function _weights() internal pure returns (uint256[N_ASSETS] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256[N_ASSETS]` |  |
+
+<a id="_lendingidx-uint256"></a>
+
+### _lendingIdx
+
+<i>
+
+The asset index of lending venue `k` (0 to N_LENDING − 1): aave, moonwell, Compound.
+
+</i>
+
+```solidity
+function _lendingIdx(uint256 k) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_seedandinvest"></a>
+
+### _seedAndInvest
+
+<i>
+
+Seed, then invest the seed with the fund's own `executeStep` (this contract holds REBALANCER_ROLE): a
+1-day plan to `_weights()`, then one step from idle into each asset after the path's end. Every lending
+step goes through `FundPositionLib.supply`, so the positions get their units here.
+
+</i>
+
+```solidity
+function _seedAndInvest() internal;
+```
+
+<a id="_ids"></a>
+
+### _ids
+
+```solidity
+function _ids() internal view returns (address[] memory ids);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+
+<a id="_step-uint256-uint256"></a>
+
+### _step
+
+<i>
+
+One `executeStep` from idle into asset `i` for `notional` USDC.
+
+</i>
+
+```solidity
+function _step(uint256 i, uint256 notional) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| notional | `uint256` |  |
+
+<a id="_buylimits-uint256"></a>
+
+### _buyLimits
+
+<i>
+
+Per-leg purchase limits for `sharesOut` around the TWAP (as FundCore.t.sol).
+
+</i>
+
+```solidity
+function _buyLimits(uint256 sharesOut)
+        internal
+        view
+        returns (uint256[] memory limits, uint256 maxUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| limits | `uint256[]` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="_sellfloors-uint256"></a>
+
+### _sellFloors
+
+```solidity
+function _sellFloors(uint256 shares) internal view returns (uint256[] memory floors);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floors | `uint256[]` |  |
+
+<a id="_mintinkind-uint256"></a>
+
+### _mintInKind
+
+<i>
+
+Mint `sharesOut` through `mintInKind` (this contract is the queue) and return the USDC spent.
+
+</i>
+
+```solidity
+function _mintInKind(uint256 sharesOut) internal returns (uint256 spent);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+
+<a id="_giveshares-address-uint256"></a>
+
+### _giveShares
+
+<i>
+
+Give `who` `shares` new shares (bought pro rata through `mintInKind`, then transferred).
+
+</i>
+
+```solidity
+function _giveShares(address who, uint256 shares) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_setallowance-uint16-uint128"></a>
+
+### _setAllowance
+
+```solidity
+function _setAllowance(uint16 bps, uint128 floorUsdc) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+| floorUsdc | `uint128` |  |
+
+<a id="_units-uint256"></a>
+
+### _units
+
+```solidity
+function _units(uint256 i) internal view returns (uint256 total, uint256 claims);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+| claims | `uint256` |  |
+
+<a id="_assertpersharenotlower-uint256-uint256-uint256-string"></a>
+
+### _assertPerShareNotLower
+
+<i>
+
+Check 10 restated from outside: every held amount per share is at least what it was.
+
+</i>
+
+```solidity
+function _assertPerShareNotLower(
+        uint256 idle0,
+        uint256[] memory held0,
+        uint256 supply0,
+        string memory label
+    ) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle0 | `uint256` |  |
+| held0 | `uint256[]` |  |
+| supply0 | `uint256` |  |
+| label | `string` |  |
+
+<a id="test_e9_unitsfolloweverysupplyandwithdrawal"></a>
+
+### test_E9_unitsFollowEverySupplyAndWithdrawal
+
+Units start with the first supply, every holders' supply and withdrawal mints or burns them at the
+unit's value, and without a claim the holders own the whole position.
+
+```solidity
+function test_E9_unitsFollowEverySupplyAndWithdrawal() public fixtureCovered;
+```
+
+<a id="test_e20_defaultsandsetterbounds"></a>
+
+### test_E20_defaultsAndSetterBounds
+
+```solidity
+function test_E20_defaultsAndSetterBounds() public fixtureCovered;
+```
+
+<a id="test_e20_inkindinsideallowancepaysusdcnoclaim"></a>
+
+### test_E20_inKindInsideAllowancePaysUsdcNoClaim
+
+Inside the allowance an in-kind exit is paid in USDC and leaves no claim; the period's use grows by
+the lending USDC that left the venues.
+
+```solidity
+function test_E20_inKindInsideAllowancePaysUsdcNoClaim() public fixtureCovered;
+```
+
+<a id="test_e20_beyondallowancelendingbecomespositionclaims"></a>
+
+### test_E20_beyondAllowanceLendingBecomesPositionClaims
+
+With no allowance every lending leg becomes a claim on a share of its position (RB-21), keyed to the
+owner, with the exit fee's share as the fee recipient's own claim. Check 10 holds.
+
+```solidity
+function test_E20_beyondAllowanceLendingBecomesPositionClaims() public fixtureCovered;
+```
+
+<a id="test_e20_allowanceisprorataandperperiod"></a>
+
+### test_E20_allowanceIsProRataAndPerPeriod
+
+A total over the allowance is paid pro rata over the venues up to it; the rest becomes claims; the
+period's allowance is then spent, and a new period pays again.
+
+```solidity
+function test_E20_allowanceIsProRataAndPerPeriod() public fixtureCovered;
+```
+
+<a id="_aliceclaims"></a>
+
+### _aliceClaims
+
+<i>
+
+Alice exits in kind with no allowance, so she holds a claim on every lending position.
+
+</i>
+
+```solidity
+function _aliceClaims() internal;
+```
+
+<a id="test_rb21_depositorstepintovenuekeepsclaimvalue"></a>
+
+### test_RB21_depositOrStepIntoVenueKeepsClaimValue
+
+A deposit (mintInKind) or a rebalance step into a venue does not change a claim's value.
+
+```solidity
+function test_RB21_depositOrStepIntoVenueKeepsClaimValue() public fixtureCovered;
+```
+
+<a id="test_rb21_stepoutofvenuekeepsclaimvalue"></a>
+
+### test_RB21_stepOutOfVenueKeepsClaimValue
+
+A rebalance step OUT of a venue burns only holders' units: the claim's value is unchanged.
+
+```solidity
+function test_RB21_stepOutOfVenueKeepsClaimValue() public fixtureCovered;
+```
+
+<a id="test_rb21_claimgainswiththevenueprorata"></a>
+
+### test_RB21_claimGainsWithTheVenueProRata
+
+The claim gains with the venue pro rata with the holders (interest accrual over 30 days).
+
+```solidity
+function test_RB21_claimGainsWithTheVenueProRata() public fixtureCovered;
+```
+
+<a id="test_rb21_claimloseswiththevenueprorata"></a>
+
+### test_RB21_claimLosesWithTheVenueProRata
+
+The claim loses with the venue pro rata with the holders (a 10 % venue loss, mocked).
+
+```solidity
+function test_RB21_claimLosesWithTheVenueProRata() public fixtureCovered;
+```
+
+<a id="test_e9_claimpositionpaystodayvalueandburnsunits"></a>
+
+### test_E9_claimPositionPaysTodayValueAndBurnsUnits
+
+`claimPosition` pays today's value less the rounding margin to the address the owner names, burns the
+claim's units and leaves the holders' part whole.
+
+```solidity
+function test_E9_claimPositionPaysTodayValueAndBurnsUnits() public fixtureCovered;
+```
+
+<a id="test_e9_claimpositionshortfillkeepstheclaim"></a>
+
+### test_E9_claimPositionShortFillKeepsTheClaim
+
+A venue that cannot pay leaves the claim whole (`DeferredShortfall` on a short fill).
+
+```solidity
+function test_E9_claimPositionShortFillKeepsTheClaim() public fixtureCovered;
+```
+
+<a id="test_e9_emergencyunwindleavesclaimsinthevenue"></a>
+
+### test_E9_emergencyUnwindLeavesClaimsInTheVenue
+
+The emergency unwind drains the holders' part and leaves the claims' part in the venue.
+
+```solidity
+function test_E9_emergencyUnwindLeavesClaimsInTheVenue() public fixtureCovered;
+```
+
+<a id="test_rb13_flowskeeptheproportionwhileclaimsexist"></a>
+
+### test_RB13_flowsKeepTheProportionWhileClaimsExist
+
+Check 10 still holds for every flow while claims exist (holders' part = units, not the raw venue).
+
+```solidity
+function test_RB13_flowsKeepTheProportionWhileClaimsExist() public fixtureCovered;
+```
+
+<a id="test_e23_inkindexitsurvivesarevertingvenueread"></a>
+
+### test_E23_inKindExitSurvivesARevertingVenueRead
+
+An in-kind exit still works when one venue's value read reverts: that leg becomes a claim on the
+exiter's units with no read and no withdrawal; the other legs pay.
+
+```solidity
+function test_E23_inKindExitSurvivesARevertingVenueRead() public fixtureCovered;
+```
+
+<a id="test_e23_zeroreceiverrejected"></a>
+
+### test_E23_zeroReceiverRejected
+
+```solidity
+function test_E23_zeroReceiverRejected() public fixtureCovered;
+```
+
+<a id="test_e23_claimskeyedtotheowner"></a>
+
+### test_E23_claimsKeyedToTheOwner
+
+Claims are keyed to the owner, not the receiver; for shares the queue escrows (`owner == queue`) they
+are keyed to the receiver, the request's owner.
+
+```solidity
+function test_E23_claimsKeyedToTheOwner() public fixtureCovered;
+```
+
+<a id="test_e19_lastgoodnavisnowwhilehealthy"></a>
+
+### test_E19_lastGoodNavIsNowWhileHealthy
+
+```solidity
+function test_E19_lastGoodNavIsNowWhileHealthy() public fixtureCovered;
+```
+
+<a id="test_e19_stalefeedrevertsnavviewsandkeepslastgoodnav"></a>
+
+### test_E19_staleFeedRevertsNavViewsAndKeepsLastGoodNav
+
+A stale basket feed reverts `totalAssets` and the convert views; `lastGoodNav` returns the value the
+fund recorded at its last flow, with that time.
+
+```solidity
+function test_E19_staleFeedRevertsNavViewsAndKeepsLastGoodNav() public fixtureCovered;
+```
+
+<a id="test_e19_sequencerdownandusdcoffpegrevert"></a>
+
+### test_E19_sequencerDownAndUsdcOffPegRevert
+
+Once a queue is bound, the sequencer and the USDC peg gate the views too (check 2).
+
+```solidity
+function test_E19_sequencerDownAndUsdcOffPegRevert() public fixtureCovered;
+```
+
+<a id="_freshfundwithadapters"></a>
+
+### _freshFundWithAdapters
+
+```solidity
+function _freshFundWithAdapters()
+        internal
+        returns (IRobotMoneyFundFull f, address rate, address exactOut);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+| rate | `address` |  |
+| exactOut | `address` |  |
+
+<a id="test_rb17_basketwithoutafeedisrefused"></a>
+
+### test_RB17_basketWithoutAFeedIsRefused
+
+```solidity
+function test_RB17_basketWithoutAFeedIsRefused() public fixtureCovered;
+```
+
+<a id="test_rb17_basketwithoutpoolhistoryisrefused"></a>
+
+### test_RB17_basketWithoutPoolHistoryIsRefused
+
+```solidity
+function test_RB17_basketWithoutPoolHistoryIsRefused() public fixtureCovered;
+```
+
+<a id="test_rb17_lendingwithoutvenuerateisrefused"></a>
+
+### test_RB17_lendingWithoutVenueRateIsRefused
+
+```solidity
+function test_RB17_lendingWithoutVenueRateIsRefused() public fixtureCovered;
+```
+
+<a id="test_rb17_poolsharerulerefusesatargetoverthelimit"></a>
+
+### test_RB17_poolShareRuleRefusesATargetOverTheLimit
+
+The pool-share rule: a basket target times the TVL cap above `poolShareBps` of the pool's
+time-weighted USDC depth is refused; one at or under it is accepted.
+
+```solidity
+function test_RB17_poolShareRuleRefusesATargetOverTheLimit() public fixtureCovered;
+```
+
+<a id="test_rb17_liquidityaddednowdoesnotraisethelimit"></a>
+
+### test_RB17_liquidityAddedNowDoesNotRaiseTheLimit
+
+Liquidity added in the same transaction does not raise the limit; held for part of the window it
+counts only by its time-weighted share.
+
+```solidity
+function test_RB17_liquidityAddedNowDoesNotRaiseTheLimit() public fixtureCovered;
+```
+
+<a id="uniswapv3mintcallback-uint256-uint256-bytes"></a>
+
+### uniswapV3MintCallback
+
+<i>
+
+Pays the pool for `test_RB17_liquidityAddedNowDoesNotRaiseTheLimit`.
+
+</i>
+
+```solidity
+function uniswapV3MintCallback(uint256 amount0, uint256 amount1, bytes calldata) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount0 | `uint256` |  |
+| amount1 | `uint256` |  |
+| _ | `bytes` |  |
+
+<a id="_pay-address-uint256"></a>
+
+### _pay
+
+```solidity
+function _pay(address token, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amount | `uint256` |  |
+
+<a id="test_fixturemiss_cometrateatthepin"></a>
+
+### test_fixtureMiss_cometRateAtThePin
+
+Compound V3's venue rate (`CompoundV3RateAdapter.ratePerUnit`) at the pin. Comet serves
+`totalsBasic()` from its extension contract, which the fixture recorded on 2026-11-11 lacked (the
+call returned no data and the rate read reverted). `verify` re-recorded the fixture with that account
+and removed this test's skip; the name keeps the history. Since `hardening` (2026-11-12) this file's
+own fund lists Compound too (index 4), and the listed copy's rate is the same index.
+
+```solidity
+function test_fixtureMiss_cometRateAtThePin() public fixtureCovered;
+```
+
+<a id="test_bf1_anexcludedvenuewithdustcanberemoved"></a>
+
+### test_BF1_anExcludedVenueWithDustCanBeRemoved
+
+B-F1: an excluded lending venue holding only the fund's own rounding dust can be removed, so deposits
+reopen. Before the fix `deactivateAsset` needed `totalAssets() == 0` exactly.
+
+```solidity
+function test_BF1_anExcludedVenueWithDustCanBeRemoved() public fixtureCovered;
+```
+
+<a id="test_bf1_anexcludedvenuewhosereadfailscanberemoved"></a>
+
+### test_BF1_anExcludedVenueWhoseReadFailsCanBeRemoved
+
+B-F1: an excluded venue whose `totalAssets()` read fails can be removed too (its value is in the
+ledger already).
+
+```solidity
+function test_BF1_anExcludedVenueWhoseReadFailsCanBeRemoved() public fixtureCovered;
+```
+
+<a id="test_bf1_acountedvenuecannotberemovedunread_control"></a>
+
+### test_BF1_aCountedVenueCannotBeRemovedUnread_control
+
+B-F1 control: a counted venue whose read fails, or that holds more than dust, is never removed.
+
+```solidity
+function test_BF1_aCountedVenueCannotBeRemovedUnread_control() public fixtureCovered;
+```
+
+<a id="test_bf3_anadapterwithopenclaimscannotbelistedagain"></a>
+
+### test_BF3_anAdapterWithOpenClaimsCannotBeListedAgain
+
+B-F3: a lending adapter whose inactive entry still has open position claims cannot be listed again,
+or those claims would be paid from new holders' money.
+
+```solidity
+function test_BF3_anAdapterWithOpenClaimsCannotBeListedAgain() public fixtureCovered;
+```
+
+<a id="test_bf4_ahighertvlcapischeckedagainstthepoolshare"></a>
+
+### test_BF4_aHigherTvlCapIsCheckedAgainstThePoolShare
+
+B-F4: §4.5 rule 3 holds after a TVL cap rise: a cap that puts a live target over its pool share is
+refused. A lower cap is never refused.
+
+```solidity
+function test_BF4_aHigherTvlCapIsCheckedAgainstThePoolShare() public fixtureCovered;
+```
+
+<a id="test_bf5_nostepovershootstheplanbudget"></a>
+
+### test_BF5_noStepOvershootsThePlanBudget
+
+B-F5: a plan never spends more than its budget (RB-4): a last step whose cost would pass the budget is
+refused. Before the fix the step booked its cost and only then halted, past the budget.
+
+```solidity
+function test_BF5_noStepOvershootsThePlanBudget() public fixtureCovered;
+```
+

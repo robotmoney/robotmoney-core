@@ -126,7 +126,8 @@ export function decodeUpgradeCall(calldata: Hex): { implementation: Address; dat
  * it, a record of the combined deployment. Every other proxy of the table is required.
  */
 export function freezeSpecsFor(specs: readonly ProxySpec[], systemOfStage: (stage: string) => string | undefined, record: any): ProxySpec[] {
-  return specs.filter((s) => systemOfStage(s.stage) !== "gateway" || record?.proxies?.[s.name] !== undefined);
+  // Deploy 4: a fund-system proxy names the fund system's own timelock, so no freeze of the vaults timelock ever names it.
+  return specs.filter((s) => systemOfStage(s.stage) !== "fund" && (systemOfStage(s.stage) !== "gateway" || record?.proxies?.[s.name] !== undefined));
 }
 
 /** Every core proxy's freeze target from the verifier's record, or the problems that make the record unusable (a proxy missing, an address or hash malformed). */

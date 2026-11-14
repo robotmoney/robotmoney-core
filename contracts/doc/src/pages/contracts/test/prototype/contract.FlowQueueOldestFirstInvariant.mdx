@@ -1,0 +1,394 @@
+---
+title: "FlowQueueOldestFirstInvariant"
+description: "Step 3 finish plan §3.1 item 2: \"the oldest fillable request always fills first\", as invariants over random sequences of requests (both sides, admissible and tight limits), cancels, feed moves inside `refBandBps`, time, and settle calls by the keeper (whole budget) and by a stranger (small budgets, and `maxUsdc` 0). Request sizes keep every cap far away, so a fill never waits for room. - Keeper: a keeper call that succeeds fills every pending request in its range whose own limit admits that call's bound price (read with the quotes in the same state just before the call), so none waits behind a newer one. (A side that failed is exempt for that call.) - No room: a call with `maxUsdc` 0 fills nothing and moves no cursor. - Keeper first per epoch: a stranger never fills a request whose epoch's window end plus `keeperGrace` is still ahead. - A stranger's call never moves the keeper's cursor. forge-config: default.invariant.runs = 16 forge-config: default.invariant.depth = 32 forge-config: default.invariant.fail-on-revert = false forge-config: default.invariant.dictionary-weight = 0 forge-config: default.invariant.shrink-run-limit = 0"
+---
+
+# FlowQueueOldestFirstInvariant
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueueFixes.t.sol)
+
+**Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
+
+**Title:** FlowQueueOldestFirstInvariant
+
+Step 3 finish plan §3.1 item 2: "the oldest fillable request always fills first", as invariants over
+random sequences of requests (both sides, admissible and tight limits), cancels, feed moves inside
+`refBandBps`, time, and settle calls by the keeper (whole budget) and by a stranger (small budgets, and
+`maxUsdc` 0). Request sizes keep every cap far away, so a fill never waits for room.
+- Keeper: a keeper call that succeeds fills every pending request in its range whose own limit admits
+that call's bound price (read with the quotes in the same state just before the call), so none waits
+behind a newer one. (A side that failed is exempt for that call.)
+- No room: a call with `maxUsdc` 0 fills nothing and moves no cursor.
+- Keeper first per epoch: a stranger never fills a request whose epoch's window end plus `keeperGrace`
+is still ahead.
+- A stranger's call never moves the keeper's cursor.
+forge-config: default.invariant.runs = 16
+forge-config: default.invariant.depth = 32
+forge-config: default.invariant.fail-on-revert = false
+forge-config: default.invariant.dictionary-weight = 0
+forge-config: default.invariant.shrink-run-limit = 0
+
+## State Variables
+
+### users
+
+```solidity
+address[4] internal users;
+```
+
+### ghostViolations
+
+```solidity
+uint256 public ghostViolations;
+```
+
+### lastViolation
+
+```solidity
+string internal lastViolation;
+```
+
+### callsSettleKeeper
+
+```solidity
+uint256 public callsSettleKeeper;
+```
+
+### callsSettleStranger
+
+```solidity
+uint256 public callsSettleStranger;
+```
+
+### callsNoRoom
+
+```solidity
+uint256 public callsNoRoom;
+```
+
+### fillsChecked
+
+```solidity
+uint256 public fillsChecked;
+```
+
+### admissibleChecked
+
+```solidity
+uint256 public admissibleChecked;
+```
+
+### keeperMidPass
+
+```solidity
+bool internal keeperMidPass;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_violation-string"></a>
+
+### _violation
+
+```solidity
+function _violation(string memory why) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `string` |  |
+
+<a id="act_requestdeposit-uint256-uint256-uint256"></a>
+
+### act_requestDeposit
+
+A deposit of 200 to 2 000 USDC with a limit at the quote (admissible now), one unit under it (tight:
+refused now, maybe admissible after a feed move), or 1 (never).
+
+```solidity
+function act_requestDeposit(uint256 who, uint256 size, uint256 kindOfLimit) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `uint256` |  |
+| size | `uint256` |  |
+| kindOfLimit | `uint256` |  |
+
+<a id="act_requestredeem-uint256-uint256-bool"></a>
+
+### act_requestRedeem
+
+A redemption of 1 % to 5 % of a holder's shares, any price or tight (one unit over the quote).
+
+```solidity
+function act_requestRedeem(uint256 who, uint256 bps, bool tight) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `uint256` |  |
+| bps | `uint256` |  |
+| tight | `bool` |  |
+
+<a id="act_wait-uint256"></a>
+
+### act_wait
+
+```solidity
+function act_wait(uint256 secs) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| secs | `uint256` |  |
+
+<a id="act_movefeeds-uint256-bool"></a>
+
+### act_moveFeeds
+
+Both basket feeds move up to 25 bps around their pools (inside `refBandBps`).
+
+```solidity
+function act_moveFeeds(uint256 bps, bool down) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256` |  |
+| down | `bool` |  |
+
+<a id="act_cancel-uint256"></a>
+
+### act_cancel
+
+```solidity
+function act_cancel(uint256 seed) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed | `uint256` |  |
+
+<a id="act_settle-uint256-uint256-bool-bool"></a>
+
+### act_settle
+
+`settle` by the keeper (whole budget, any USDC) or a stranger (1 to 8 requests; any USDC or none).
+With `wait`, time first passes to the end of the oldest open request's window (and its keeper grace
+for a stranger), as a settler that waits for the window would.
+
+```solidity
+function act_settle(uint256 callerSeed, uint256 maxReq, bool noRoom, bool wait) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callerSeed | `uint256` |  |
+| maxReq | `uint256` |  |
+| noRoom | `bool` |  |
+| wait | `bool` |  |
+
+<a id="act_settleafterwindow-uint256-uint256-bool"></a>
+
+### act_settleAfterWindow
+
+`act_settle` after waiting for the oldest open request's window (and grace, for a stranger).
+
+```solidity
+function act_settleAfterWindow(uint256 callerSeed, uint256 maxReq, bool noRoom) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| callerSeed | `uint256` |  |
+| maxReq | `uint256` |  |
+| noRoom | `bool` |  |
+
+<a id="_waitforoldestwindow-bool"></a>
+
+### _waitForOldestWindow
+
+```solidity
+function _waitForOldestWindow(bool plusGrace) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| plusGrace | `bool` |  |
+
+<a id="_pre-bool"></a>
+
+### _pre
+
+```solidity
+function _pre(bool isKeeper) internal view returns (Pre memory pre);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| isKeeper | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Pre` |  |
+
+<a id="_post-pre-bool-bool-vm-log"></a>
+
+### _post
+
+```solidity
+function _post(Pre memory pre, bool isKeeper, bool noRoom, Vm.Log[] memory logs) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Pre` |  |
+| isKeeper | `bool` |  |
+| noRoom | `bool` |  |
+| logs | `Vm.Log[]` |  |
+
+<a id="_samecursor-pre-bool"></a>
+
+### _sameCursor
+
+```solidity
+function _sameCursor(Pre memory pre, bool isKeeper) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Pre` |  |
+| isKeeper | `bool` |  |
+
+<a id="_cancellednow-vm-log-uint256"></a>
+
+### _cancelledNow
+
+```solidity
+function _cancelledNow(Vm.Log[] memory logs, uint256 id) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="invariant_oldestfillablefillsfirst"></a>
+
+### invariant_oldestFillableFillsFirst
+
+```solidity
+function invariant_oldestFillableFillsFirst() public fixtureCovered;
+```
+
+<a id="_assertnoviolation"></a>
+
+### _assertNoViolation
+
+```solidity
+function _assertNoViolation() internal;
+```
+
+<a id="afterinvariant"></a>
+
+### afterInvariant
+
+```solidity
+function afterInvariant() public;
+```
+
+<a id="test_script_oldestfillablefillsfirst"></a>
+
+### test_script_oldestFillableFillsFirst
+
+The scripted run: the D-AT-3 pattern and the moved-bound pattern in a fixed order, then the checks.
+It runs every action once outside the random campaign, so the property is exercised whatever the
+campaign draws.
+
+```solidity
+function test_script_oldestFillableFillsFirst() public fixtureCovered;
+```
+
+## Structs
+
+### Pre
+
+```solidity
+struct Pre {
+        uint256[] ids;
+        uint256[] remaining;
+        bool[] admissible;
+        bool[] inRange;
+        bool keeperCursorOk;
+        uint64 kDepE;
+        uint256 kDepI;
+        uint64 kRedE;
+        uint256 kRedI;
+        uint64 pDepE;
+        uint256 pDepI;
+        uint64 pRedE;
+        uint256 pRedI;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `uint256[]` |  |
+| remaining | `uint256[]` |  |
+| admissible | `bool[]` |  |
+| inRange | `bool[]` |  |
+| keeperCursorOk | `bool` |  |
+| kDepE | `uint64` |  |
+| kDepI | `uint256` |  |
+| kRedE | `uint64` |  |
+| kRedI | `uint256` |  |
+| pDepE | `uint64` |  |
+| pDepI | `uint256` |  |
+| pRedE | `uint64` |  |
+| pRedI | `uint256` |  |
+

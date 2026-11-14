@@ -18,7 +18,7 @@
 # tell whether the trigger exists. This script is the half that can: it warms
 # `target/`, then changes ONLY files under `migrations/` and asserts, after
 # each change, that
-#   (a) explorer-indexer's OWN build script re-ran (its `output` file under
+#   (a) explorer-indexer's OWN build script re-ran (its stdout file under
 #       target/<profile>/build/ was rewritten) -- the direct evidence that the
 #       migrations directory is a tracked build input,
 #   (b) cargo recompiled `explorer-indexer`, and
@@ -107,13 +107,18 @@ fail() {
   FAILURES=$((FAILURES + 1))
 }
 
-# Newest mtime of any explorer-indexer build-script `output` file, or 0 when
+# Newest mtime of any explorer-indexer build-script stdout file, or 0 when
 # the crate has no build script at all. Cargo rewrites that file every time
-# the build script runs, and only then.
+# the build script runs, and only then. Two build-dir layouts exist:
+#   - cargo < 1.100: build/explorer-indexer-<hash>/output
+#   - cargo >= 1.100 (build-dir-new-layout, stabilized and always on):
+#     build/explorer-indexer/<hash>/run/stdout
 build_script_stamp() {
   local newest
-  newest="$(find "$BUILD_DIR" -maxdepth 2 -path "${BUILD_DIR}/explorer-indexer-*/output" \
-    -printf '%T@\n' 2>/dev/null | sort -n | tail -1)"
+  newest="$(find "$BUILD_DIR" -maxdepth 4 \( \
+      -path "${BUILD_DIR}/explorer-indexer-*/output" \
+      -o -path "${BUILD_DIR}/explorer-indexer/*/run/stdout" \
+    \) -printf '%T@\n' 2>/dev/null | sort -n | tail -1)"
   echo "${newest:-0}"
 }
 

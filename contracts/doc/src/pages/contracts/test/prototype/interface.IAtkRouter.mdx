@@ -1,0 +1,68 @@
+---
+title: "IAtkRouter"
+---
+
+# IAtkRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+
+<i>
+
+SwapRouter02 `exactInputSingle` (no deadline field). A non-zero `sqrtPriceLimitX96` stops the swap at that
+price and the router pulls only the input the pool used, so the pool sizes a push to a target price.
+
+</i>
+
+## Functions
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+## Structs
+
+### ExactInputSingleParams
+
+```solidity
+struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| recipient | `address` |  |
+| amountIn | `uint256` |  |
+| amountOutMinimum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+

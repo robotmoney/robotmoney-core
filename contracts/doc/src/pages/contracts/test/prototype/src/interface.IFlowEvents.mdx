@@ -1,0 +1,768 @@
+---
+title: "IFlowEvents"
+description: "Events and errors of the FlowQueue. `IFlowQueue` inherits this, so tests can `emit IFlowEvents.X(...)`. `NotImplemented(string)` is the file-level error of FundTypes.sol."
+---
+
+# IFlowEvents
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+**Title:** IFlowEvents
+
+Events and errors of the FlowQueue. `IFlowQueue` inherits this, so tests can `emit IFlowEvents.X(...)`.
+`NotImplemented(string)` is the file-level error of FundTypes.sol.
+
+## Events
+
+### DepositRequested
+
+```solidity
+event DepositRequested(
+        uint256 indexed requestId,
+        address indexed owner,
+        address indexed sender,
+        uint256 usdc,
+        uint256 maxUsdcPerShare,
+        uint64 epoch
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| sender | `address` |  |
+| usdc | `uint256` |  |
+| maxUsdcPerShare | `uint256` |  |
+| epoch | `uint64` |  |
+
+### RedeemRequested
+
+```solidity
+event RedeemRequested(
+        uint256 indexed requestId,
+        address indexed owner,
+        address indexed sender,
+        uint256 shares,
+        uint256 minUsdcPerShare,
+        uint64 epoch
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| sender | `address` |  |
+| shares | `uint256` |  |
+| minUsdcPerShare | `uint256` |  |
+| epoch | `uint64` |  |
+
+### RequestCancelled
+
+The unfilled part went to the owner's credit (`withdrawCredit`).
+
+```solidity
+event RequestCancelled(uint256 indexed requestId, address indexed owner, uint256 unfilled);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| unfilled | `uint256` |  |
+
+### RequestExitedInKind
+
+The unfilled redemption shares left through the fund's `redeemInKind`, paid to the owner.
+
+```solidity
+event RequestExitedInKind(uint256 indexed requestId, address indexed owner, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| shares | `uint256` |  |
+
+### ExpiredWithdrawn
+
+The owner withdrew the escrow of an expired request.
+
+```solidity
+event ExpiredWithdrawn(uint256 indexed requestId, address indexed owner, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| amount | `uint256` |  |
+
+### SettleCallRoomBelowMinimum
+
+A settle call recorded nothing while the per-call basket cap (`FlowLevers.basketCallBps`) left a side
+less room than its minimum fill: a thin basket pool holds every request (review Q-F5). The rooms the
+call had, in USDC.
+
+```solidity
+event SettleCallRoomBelowMinimum(uint256 depositRoom, uint256 redeemRoom);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depositRoom | `uint256` |  |
+| redeemRoom | `uint256` |  |
+
+### Settled
+
+```solidity
+event Settled(
+        uint256 indexed settlementId,
+        address indexed settler,
+        uint256 depositBoundPrice,
+        uint256 redeemBoundPrice,
+        uint256 usdcIn,
+        uint256 sharesMinted,
+        uint256 sharesBurned,
+        uint256 usdcOut
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| settler | `address` |  |
+| depositBoundPrice | `uint256` |  |
+| redeemBoundPrice | `uint256` |  |
+| usdcIn | `uint256` |  |
+| sharesMinted | `uint256` |  |
+| sharesBurned | `uint256` |  |
+| usdcOut | `uint256` |  |
+
+### DepositFilled
+
+```solidity
+event DepositFilled(
+        uint256 indexed requestId,
+        uint256 indexed claimId,
+        uint256 indexed settlementId,
+        uint256 usdc,
+        uint256 shares,
+        uint64 unlockAt
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| claimId | `uint256` |  |
+| settlementId | `uint256` |  |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+| unlockAt | `uint64` |  |
+
+### RedeemFilled
+
+```solidity
+event RedeemFilled(
+        uint256 indexed requestId,
+        uint256 indexed claimId,
+        uint256 indexed settlementId,
+        uint256 shares,
+        uint256 usdc
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| claimId | `uint256` |  |
+| settlementId | `uint256` |  |
+| shares | `uint256` |  |
+| usdc | `uint256` |  |
+
+### RequestSkipped
+
+A pending request did not take part because its limit does not admit the bound price (E12, RB-14).
+
+```solidity
+event RequestSkipped(
+        uint256 indexed requestId, uint256 indexed settlementId, uint256 boundPrice, uint256 limit
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| settlementId | `uint256` |  |
+| boundPrice | `uint256` |  |
+| limit | `uint256` |  |
+
+### SharesDelivered
+
+Unlocked deposit shares went to their owner. `caller` may be anyone (E8).
+
+```solidity
+event SharesDelivered(
+        address indexed owner, address indexed caller, uint256 shares, uint256 usdc
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| caller | `address` |  |
+| shares | `uint256` |  |
+| usdc | `uint256` |  |
+
+### RedeemClaimed
+
+Settled redemption USDC went from the owner's claims to `receiver`.
+
+```solidity
+event RedeemClaimed(
+        address indexed owner, address indexed receiver, uint256 shares, uint256 usdc
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| usdc | `uint256` |  |
+
+### CreditAdded
+
+```solidity
+event CreditAdded(address indexed owner, uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+### CreditWithdrawn
+
+```solidity
+event CreditWithdrawn(address indexed owner, uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+### SettlementFrozen
+
+```solidity
+event SettlementFrozen(uint256 indexed settlementId, uint64 until);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| until | `uint64` |  |
+
+### SettlementReleased
+
+```solidity
+event SettlementReleased(uint256 indexed settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### SettlementReturnAllowed
+
+```solidity
+event SettlementReturnAllowed(uint256 indexed settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### ReturnTaken
+
+A depositor took its frozen slice back in kind after `allowReturn`.
+
+```solidity
+event ReturnTaken(uint256 indexed claimId, address indexed owner, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimId | `uint256` |  |
+| owner | `address` |  |
+| shares | `uint256` |  |
+
+### QueuePaused
+
+```solidity
+event QueuePaused(address indexed account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+### QueueUnpaused
+
+```solidity
+event QueueUnpaused(address indexed account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+### FlowParamsSet
+
+```solidity
+event FlowParamsSet(FlowParams params);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| params | `FlowParams` |  |
+
+### SideFailed
+
+One side of settlement `settlementId` did not trade: its call into the fund, or a check after it
+(8 to 11), failed. That side changed no state and stays pending (coordinator ruling 1, RB-15).
+
+```solidity
+event SideFailed(uint256 indexed settlementId, RequestKind kind, bytes reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| kind | `RequestKind` |  |
+| reason | `bytes` |  |
+
+### Swept
+
+USDC and shares above the queue's obligations (gifts and rounding dust) went to the fund
+(`sweep`, step 3 finish plan §3.1 item 7).
+
+```solidity
+event Swept(address indexed caller, uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+### FlowLeversSet
+
+ADMIN_ROLE set the attack-finding levers (`FlowLevers`).
+
+```solidity
+event FlowLeversSet(FlowLevers levers);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| levers | `FlowLevers` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### ZeroAmount
+
+```solidity
+error ZeroAmount();
+```
+
+### BelowMinRequest
+
+A request below `minRequestUsdc` (a redemption valued at `lastGoodNav`), not a whole balance (E11).
+
+```solidity
+error BelowMinRequest(uint256 valueUsdc, uint256 minRequestUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| valueUsdc | `uint256` |  |
+| minRequestUsdc | `uint256` |  |
+
+### AbovePerDepositCap
+
+A deposit request above the fund's per-deposit cap (E11).
+
+```solidity
+error AbovePerDepositCap(uint256 usdc, uint256 cap);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| cap | `uint256` |  |
+
+### NotRequestOwner
+
+```solidity
+error NotRequestOwner(uint256 requestId, address caller);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| caller | `address` |  |
+
+### UnknownRequest
+
+```solidity
+error UnknownRequest(uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+### WrongRequestKind
+
+```solidity
+error WrongRequestKind(uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+### RequestNotPending
+
+The request has nothing left in escrow, or is expired where a live one is needed.
+
+```solidity
+error RequestNotPending(uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+### RequestNotExpired
+
+```solidity
+error RequestNotExpired(uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+### UnknownClaim
+
+```solidity
+error UnknownClaim(uint256 claimId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimId | `uint256` |  |
+
+### ClaimLocked
+
+```solidity
+error ClaimLocked(uint256 claimId, uint64 unlockAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimId | `uint256` |  |
+| unlockAt | `uint64` |  |
+
+### ClaimFrozen
+
+```solidity
+error ClaimFrozen(uint256 claimId, uint64 frozenUntil);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimId | `uint256` |  |
+| frozenUntil | `uint64` |  |
+
+### NotEnoughClaimable
+
+`deposit` / `mint` / `redeem`: less is claimable than asked.
+
+```solidity
+error NotEnoughClaimable(uint256 asked, uint256 claimable);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asked | `uint256` |  |
+| claimable | `uint256` |  |
+
+### NothingToWithdraw
+
+```solidity
+error NothingToWithdraw(address owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+### QueueIsPaused
+
+A request or a settlement while paused (cancel, in-kind exit and withdrawals stay open).
+
+```solidity
+error QueueIsPaused();
+```
+
+### SettleBlocked
+
+`settle` failed check `check` of §5.9.3 for asset `index` (IDLE_INDEX when not asset-specific).
+A failed check reverts the whole call and changes no state (RB-12, RB-15).
+
+```solidity
+error SettleBlocked(SettleCheck check, uint256 index, uint256 detail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+### FlowParamOutOfBounds
+
+A FlowParams field is outside its hard bound. `field` is its position in the struct (0-based).
+
+```solidity
+error FlowParamOutOfBounds(uint256 field);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| field | `uint256` |  |
+
+### UnknownSettlement
+
+```solidity
+error UnknownSettlement(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### SettlementNotFrozen
+
+```solidity
+error SettlementNotFrozen(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### SettlementAlreadyFrozen
+
+```solidity
+error SettlementAlreadyFrozen(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### FreezeOutsideHold
+
+`freezeSettlement` after every claim of the settlement unlocked (only shares in their hold freeze).
+
+```solidity
+error FreezeOutsideHold(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### ReturnNotAllowed
+
+```solidity
+error ReturnNotAllowed(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### PreviewNotSupported
+
+ERC-7540: previews revert for asynchronous flows. Use `quoteDeposit` / `quoteRedeem` (E21).
+
+```solidity
+error PreviewNotSupported();
+```
+
+### RedeemOnly
+
+`withdraw` is not offered (§5.9.6); use `redeem`.
+
+```solidity
+error RedeemOnly();
+```
+
+### OnlySelf
+
+A queue entry point that only the queue itself may call (the per-side self-calls of `settle`).
+
+```solidity
+error OnlySelf();
+```
+
+### FundResultMismatch
+
+The fund returned or moved something other than what it was asked (defensive; a fund defect).
+
+```solidity
+error FundResultMismatch(uint256 expected, uint256 actual);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expected | `uint256` |  |
+| actual | `uint256` |  |
+
+### SettleSideOutOfGas
+
+`settle` has too little gas left to give side `kind` its whole fixed gas budget
+(`FlowSettleLib.sideGas`). The whole `settle` reverts, so the gas a caller sends cannot choose which side
+settles (RB-20). Call again with more gas. (Until `fix-queue`, 2026-11-12, it fired after a failed side
+that left less than a third of the gas; that also reverted the other side when a venue burned its gas.)
+
+```solidity
+error SettleSideOutOfGas(RequestKind kind);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `RequestKind` |  |
+
+### FlowLeverOutOfBounds
+
+A FlowLevers field is outside its hard bound. `field` is its position in the struct (0-based).
+
+```solidity
+error FlowLeverOutOfBounds(uint256 field);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| field | `uint256` |  |
+

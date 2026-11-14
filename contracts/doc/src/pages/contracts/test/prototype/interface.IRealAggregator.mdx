@@ -1,0 +1,40 @@
+---
+title: "IRealAggregator"
+description: "The two reads the real-feed tests make on a Chainlink proxy beside FeedLib's."
+---
+
+# IRealAggregator
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+The two reads the real-feed tests make on a Chainlink proxy beside FeedLib's.
+
+## Functions
+
+<a id="latestrounddata"></a>
+
+### latestRoundData
+
+```solidity
+function latestRoundData()
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| roundId | `uint80` |  |
+| answer | `int256` |  |
+| startedAt | `uint256` |  |
+| updatedAt | `uint256` |  |
+| answeredInRound | `uint80` |  |
+

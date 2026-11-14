@@ -16,6 +16,7 @@
 //     and the accepted differences are written into the file.
 // A wrong baseline either blocks the run (fail closed) or is refused here. A hand-set marker is verified against the embedded records on every load
 // (verifyReconstruction, offline) and the plan on 8453 re-verifies the records against the build and the chain (verifyReconstructionOnChain).
+import { linkedSystemsCreate2Libraries } from "./libs-build.ts";
 import { isAddress, type Address } from "viem";
 import { TWIN_CHAIN_ID } from "./chains.ts";
 import { LIBS_STAGE } from "./core-wiring.ts";
@@ -150,7 +151,7 @@ export async function verifyReconstructionOnChain(r: Reconstruction, o: { table:
   }
   const c2Entries = r.adopted.filter((a) => a.stage !== LIBS_STAGE);
   if (c2Entries.length > 0) {
-    const built = buildCreate2Libraries(o.table.create2Libraries ?? [], o.out.c2Out);
+    const built = buildCreate2Libraries(linkedSystemsCreate2Libraries(o.table), o.out.c2Out); // Deploy 4: the fund system's libraries are its stages' own
     const wanted = [...new Map(c2Entries.map((a) => {
       const b = built.get(a.artifact);
       if (!b) return libsFail(`${a.library} (${a.artifact}) is not a create2 library of the stage table`, { library: a.library });

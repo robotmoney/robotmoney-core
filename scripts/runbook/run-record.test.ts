@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { VAULT_MANIFESTS, journalHashesOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf } from "./run-record.ts";
+import { FUND_MANIFEST, VAULT_MANIFESTS, journalHashesOf, vaultsOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf } from "./run-record.ts";
 
 const SHA = "84952e18";
 /** The steps the test run's release runs on the target: the one step its journal holds, plus the report and sign-off steps the report excludes. */
@@ -253,4 +253,13 @@ test("senderTxOf reads the foundry 1.8 envelope and the bare transaction, and no
   expect(senderTxOf(JSON.stringify({ success: true, data: {} }))).toBeUndefined();
   expect(senderTxOf("not json")).toBeUndefined();
   expect(senderTxOf("")).toBeUndefined();
+});
+
+test("Deploy 4: --vaults accepts the fund manifest by name, never by default, and still refuses an unknown or repeated name", () => {
+  expect(vaultsOf(undefined)).toEqual(VAULT_MANIFESTS);
+  expect(vaultsOf(undefined)).not.toContain(FUND_MANIFEST);
+  expect(vaultsOf("fund")).toEqual(["fund"]);
+  expect(() => vaultsOf("fund,fund")).toThrow(/twice/);
+  expect(() => vaultsOf("funds")).toThrow(/--vaults names/);
+  expect(() => vaultsOf("")).toThrow(/--vaults names/);
 });

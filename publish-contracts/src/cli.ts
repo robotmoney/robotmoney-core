@@ -3,6 +3,7 @@
 // bun src/cli.ts [publish|verify|govern] --chain 8453 --rpc URL --sheet FILE --signer SPEC --environment NAME --core-sha SHA [--stage S] [--row R] [--resume] [--dry-run]
 // The positional verbs are the consumer contract of core's Twin harness (see README.md, "Core harness contract").
 // A rehearsal and production differ only in these arguments. It spawns forge, cast, a read-only git status and core's config-check (bun). Logs are JSON on stderr.
+import { scopeTable } from "./stage-table.ts";
 import { createInterface } from "node:readline";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -144,6 +145,8 @@ export const USAGE = `publish contracts
   --migration NAME   govern --row upgrade-proxy only (issue 1910): a typed migration run in the same upgradeToAndCall. The only name is receipt-submitter-roles, valid for --proxy receipt: the tool
                      builds migrateToSubmitterRoles(releaser) from DIR/out's ABI with the RouterGovernance address of the governance manifest. There is no raw data option on 8453.
   --upgrade-build D  govern --row upgrade-proxy and deploy-implementation: a core checkout at the commit the new implementation was built from, after forge build. Default: the DEPLOY_SHA checkout.
+  --contract NAME    deploy-implementation --system fund only (Deploy 4): the proxy's reviewed second implementation (rebalancer: RebalancerV2, a test-only child adding upgradeMarker()).
+                     Default: the proxy's own contract. Its pinned layout snapshot must extend the deployed one, besides every check of the verb.
   --vault KEY        redeploy-vault only: the vault to redeploy. PROTO is the only one.
   --prior-out DIR    verify, after a redeploy: the forge out/ directory of a git checkout built at the ORIGINAL deployment sha (its HEAD must be that sha). Every contract the redeploy did not replace
                      (core, libraries, adapters, the other vaults, the retired one) runs the code of that build, so its code hash is compared with it; the replacing vault is compared with the
@@ -156,10 +159,14 @@ export const USAGE = `publish contracts
   --submitter ADDR   govern --row register-submitter and the record-receipt verb: the consensus receipt SUBMITTER Safe, a SafeL2 1.4.1 multisig (threshold 2 or more, no module, no guard). It may be the governing Safe.
                      record-receipt: required on every chain; --signer is the gas payer and --owner-signer names the submitter Safe's owners (enough to reach its threshold).
   --payload FILE     govern with --row apply-receipt (required), or record-receipt (required, checked before any signer is built): the receipt payload file as served by the canonical route. Its receipt digest (domain line + bytes) is the anchored payloadDigest.
-  --system S         vaults (default) | gateway (issue 1892): the independent system to deploy and verify. gateway runs the stages gateway and gateway-handover against the vaults system's
+  --system S         vaults (default) | gateway (issue 1892) | fund (Deploy 4, the one-vault prototype as a rehearsal): the independent system to deploy and verify. gateway runs the stages gateway and gateway-handover against the vaults system's
                      manifests, with its own small sheet (GATEWAY_ADMIN_ADDRESS and GATEWAY_UPGRADE_TIMELOCK, no default, no AGENT_ name, no Safe), its own --evidence directory and its own
                      verifier. Only publish and verify run in it (docs/operations/contract-release-runbooks.md 4.13).
-  --stage S          plan | deploy | all | a comma list of stage names (default: everything through verify)
+                     fund runs publish, verify and record-receipt: record-receipt records on the fund system's own register (fund-receipt.json consensus_receipt) and takes a schema 1.1
+                     payload (the per-asset assets list); every other check is the vaults path's.
+                     fund also runs deploy-implementation --proxy NAME [--contract NAME]: the proxy from the fund stage manifest after a passed fund verify, every check of the vaults
+                     path; the upgrade itself is the fund Safe's call on the fund-system timelock (publish-contracts/src/safe/cli.ts).
+  --stage S         plan | deploy | all | a comma list of stage names (default: everything through verify)
                      The stage names come from core's scripts/deploy/stage-table.json at the DEPLOY_SHA, plus safe, verify and govern.
   --resume           continue a run: adopt the existing Safe, skip finished stages; prove-control also adopts a proof that landed on chain before the run died (nothing is sent again)
   --dry-run          the preflight: run every check and simulate EVERY deployer stage in order on a blank local anvil it starts itself
@@ -276,6 +283,8 @@ export interface Parsed {
   proxy?: string;
   implementation?: string;
   upgradeBuild?: string;
+  /** Deploy 4: deploy-implementation --system fund --contract NAME, a fund proxy's reviewed second implementation. */
+  contract?: string;
   migration?: string;
 }
 
@@ -289,7 +298,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" }, system: { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, migration: { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, contract: { type: "string" }, migration: { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -310,6 +319,12 @@ export function parseCli(argv: string[]): Parsed {
   const system = (v.system as string | undefined) ?? "vaults";
   if (!(SYSTEM_NAMES as readonly string[]).includes(system)) throw new PublishError("USAGE", `--system must be ${SYSTEM_NAMES.join(" or ")}, got '${system}'\n${USAGE}`);
   if (system === "gateway" && verb !== undefined && verb !== "publish" && verb !== "verify") throw new PublishError("USAGE", `the ${verb} verb belongs to the vaults system: the gateway system runs publish and verify only (--system gateway)\n${USAGE}`);
+  // Deploy 4: the fund system runs publish, verify and record-receipt (its submitter Safe records on the fund's own register, fund-receipt.json, with every check of the vaults path).
+  // Its governed calls go through the Safe tool on its own timelock; govern, pause-all and the vault verbs are the vaults system's. deploy-implementation deploys the new
+  // implementation of a fund proxy (the upgrade itself is the fund Safe's call on its timelock).
+  if (system === "fund" && verb !== undefined && verb !== "publish" && verb !== "verify" && verb !== "record-receipt" && verb !== DEPLOY_IMPL_VERB) throw new PublishError("USAGE", `the ${verb} verb belongs to the vaults system: the fund system runs publish, verify, record-receipt and deploy-implementation only (--system fund); its governed calls go through publish-contracts/src/safe/cli.ts on the fund-system timelock\n${USAGE}`);
+  if (v.contract !== undefined && !(system === "fund" && verb === DEPLOY_IMPL_VERB)) throw new PublishError("USAGE", `--contract goes with deploy-implementation --system fund only (a fund proxy's reviewed second implementation)\n${USAGE}`);
+  if (system === "fund" && stage !== undefined && stage.split(",").includes("govern")) throw new PublishError("USAGE", `the fund system has no govern stage (--system fund)\n${USAGE}`);
   if (row !== undefined && row === "") throw new PublishError("USAGE", `--row needs a number or a name\n${USAGE}`);
   if (row !== undefined) {
     const stageNames = verb === undefined ? stage : undefined;
@@ -423,6 +438,7 @@ export function parseCli(argv: string[]): Parsed {
     checkSources: !!v["check-sources"], coreSha: assertSha(sha!), stage, verb, row, resume: !!v.resume || verb === "verify" || verb === "govern", dryRun: !!v["dry-run"], coreDir: v["core-dir"] as string | undefined, evidence: v.evidence as string | undefined,
     countsDir: v["counts-dir"] as string | undefined, countsRequireOriginDev: !!v["counts-require-origin-dev"], measure: !!v.measure, ownerSigners: (v["owner-signer"] as string[] | undefined) ?? [], emergencySigner: v["emergency-signer"] as string | undefined, compareSheet: v["compare-sheet"] as string | undefined,
     maxWait: v["max-wait"] ? Number(v["max-wait"]) : undefined, noWarp: !!v["no-warp"], call, receiptId: verb === "record-receipt" ? receiptIdRaw : receiptId, payload, submitter, payloadDigest, payloadUri, adminArgs, vault: vaultArg, priorOut, logs, proxy, implementation, migration, upgradeBuild: upgradeBuild === undefined ? undefined : resolve(upgradeBuild),
+    ...(v.contract !== undefined ? { contract: v.contract as string } : {}),
   };
 }
 
@@ -585,23 +601,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     if (rowRefusal !== undefined) throw new PublishError("USAGE", rowRefusal);
     // The single-vault redeploy is refused on 8453 in production HERE, before any signer or passphrase exists (issue 1796).
     if (a.verb === REDEPLOY_VERB) { const why = redeployRefusal(rpcChainId, sheet.kind); if (why !== undefined) throw new PublishError("USAGE", why); }
-    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1, review-security-031):
-    // the proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role.
-    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
-    if (shortfall !== undefined) throw shortfall;
-    log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
 
     const coreDir = a.coreDir ? resolve(cwd, a.coreDir) : defaultCoreDir(cwd);
-    const manifestOut = env[MANIFEST_DIR_ENV] ? resolve(cwd, env[MANIFEST_DIR_ENV]!) : undefined;
-    if (manifestOut) log.log("info", "run.manifest_dir", { dir: manifestOut, source: MANIFEST_DIR_ENV });
-    const head = readGitHead(coreDir);
-    if (head !== a.coreSha) throw new PublishError("USAGE", `the core checkout ${coreDir} is at ${head ?? "an unknown commit"}, not the DEPLOY_SHA ${a.coreSha}`);
-    // DEPLOY_SHA: HEAD must equal it and the tree must be clean (a modified file would run code the sha does not name)
-    // read-only `git -C DIR status --porcelain` through the injectable runner: the one allowed spawn besides forge and cast
-    const dirty = await dirtyTreeLines(run, coreDir, rpcChainId, castEnv);
-    if (dirty.length > 0) throw new PublishError("USAGE", `the core checkout ${coreDir} has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. A deploy runs the DEPLOY_SHA exactly; commit, stash or clean first.`, { dirty: dirty.slice(0, 20) });
-    // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
-    assertExitFeeBound(coreDir, sheet.vaults);
     // the stage table is core's, at the DEPLOY_SHA: no script, env, artifact or manifest name is kept in this repo.
     // Issue 1833: the per-vault rules this CLI loaded from its own checkout must be that table's, or the CLI runs from another sha. Checked before any verb runs.
     // Issue 1851: except the emergency pause-all, which reads no per-vault rule: a mismatch there is one warning naming both tables, never a refusal.
@@ -618,6 +619,23 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     }
     stageState = peekStageState(); // issue 1892: the stage list is process-wide; the run puts back what it found (a test process runs many mains)
     useStageTable(stageTable, a.system);
+    // Too few owner signers for a run that reaches prove-control on 8453 is refused HERE, before any signer, forge call or stage 1 (qa-plan B1, review-security-031):
+    // the proof needs every owner, and finding that out at stage 11 left stages 1-10 broadcast with the deployer holding every role. It reads the stage list of the
+    // run's system, so it runs right after the table is in use: before it (Deploy 4, 2026-11-13) a fresh CLI process crashed on 8453 with an empty stage list.
+    const shortfall = ownerSignerShortfall({ chainId: rpcChainId, verb: a.verb, stage: a.stage, dryRun: a.dryRun, specs: a.ownerSigners, sheet, claimOf: (spec) => claimedOwnerOf(spec, cwd) });
+    if (shortfall !== undefined) throw shortfall;
+    log.log("info", "run.checks_ok", { deployment_kind: sheet.kind, chain_id: rpcChainId, environment: a.environment, core_sha: a.coreSha, stage: a.stage ?? "default", dry_run: a.dryRun, resume: a.resume });
+    // The checkout checks read only, as the table load above does: the owner check and the table come first, so a refusal names its own cause.
+    const manifestOut = env[MANIFEST_DIR_ENV] ? resolve(cwd, env[MANIFEST_DIR_ENV]!) : undefined;
+    if (manifestOut) log.log("info", "run.manifest_dir", { dir: manifestOut, source: MANIFEST_DIR_ENV });
+    const head = readGitHead(coreDir);
+    if (head !== a.coreSha) throw new PublishError("USAGE", `the core checkout ${coreDir} is at ${head ?? "an unknown commit"}, not the DEPLOY_SHA ${a.coreSha}`);
+    // DEPLOY_SHA: HEAD must equal it and the tree must be clean (a modified file would run code the sha does not name)
+    // read-only `git -C DIR status --porcelain` through the injectable runner: the one allowed spawn besides forge and cast
+    const dirty = await dirtyTreeLines(run, coreDir, rpcChainId, castEnv);
+    if (dirty.length > 0) throw new PublishError("USAGE", `the core checkout ${coreDir} has uncommitted changes (${dirty.length}): ${dirty.slice(0, 5).join("; ")}. A deploy runs the DEPLOY_SHA exactly; commit, stash or clean first.`, { dirty: dirty.slice(0, 20) });
+    // exitFeeBps is bounded by the vault maximum defined in the core contracts at the DEPLOY_SHA
+    assertExitFeeBound(coreDir, sheet.vaults);
     const evidenceDir = resolve(cwd, a.evidence ?? join("evidence", `publish-${rpcChainId}-${a.coreSha.slice(0, 12)}`));
     const buildCtx = (frozen: RunContext["frozen"], measure: boolean, lazySigner = false): RunContext => {
       if (a.signer!.startsWith("address:") && !a.dryRun) throw new PublishError("USAGE", "an address: signer cannot sign: it is accepted with --dry-run only");
@@ -674,7 +692,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       let payloadBytes: Uint8Array | undefined;
       if (a.payload !== undefined) { try { payloadBytes = new Uint8Array(readFileSync(a.payload)); } catch (e) { throw new PublishError("USAGE", `--payload ${a.payload} is not readable: ${(e as Error).message}`); } }
       const request = { receiptId: a.receiptId, payloadDigest: a.payloadDigest, payloadUri: a.payloadUri, payload: payloadBytes, submitter: a.submitter };
-      assertRecordInputs(request); // issue 1754, 1888: the digest and the id are checked against the bytes BEFORE the signer exists
+      assertRecordInputs(request, a.system); // issue 1754, 1888: the digest and the id are checked against the bytes BEFORE the signer exists
       const ctx = buildCtx(undefined, false, true);
       const rec = await (deps.recordReceipt ?? recordReceipt)(ctx, { sender: () => ctx.signer.safeSigner(), owners: () => ownerSigners(ctx) }, request, deps.recordApi);
       console.log(JSON.stringify({ event: "record_receipt", ...rec }));
@@ -741,14 +759,15 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
       const ub = await assertUpgradeBuildGate({ dir: resolve(a.upgradeBuild), kind: sheet.kind, env, chainId: rpcChainId, dirty: (d) => dirtyTreeLines(run, d, rpcChainId, castEnv), readHead: readGitHead,
         releaseTag: deps.releaseTag, releaseTags: deps.releaseTags, remoteTag: deps.remoteTag, checkShaGreen: deps.checkShaGreen, onBranch: deps.rcOnReleaseBranch,
         // review-security-003: the artifacts the verb deploys and compares with must be built from that tree. An unknown --proxy names none here; the verb refuses it with USAGE.
-        artifacts: proxySpecs(getStageTable()).filter((x) => x.name === a.proxy).map((x) => x.contract), trackedFiles: deps.trackedFiles, forgeConfig: deps.forgeConfig });
+        // Deploy 4: a fund proxy is named in the fund system's scope, and the artifact is the --contract the verb deploys (default the proxy's own).
+        artifacts: proxySpecs(scopeTable(getStageTable(), a.system === "fund" ? "fund" : "legacy")).filter((x) => x.name === a.proxy).map((x) => a.contract ?? x.contract), trackedFiles: deps.trackedFiles, forgeConfig: deps.forgeConfig });
       log.log("info", "upgrade_build.release_gate", { ok: true, upgrade_build: resolve(a.upgradeBuild), sha: ub.sha, tag: ub.tag });
     }
     // deploy-implementation (issue 1861): the release gate above ran on 8453 as for govern. No counts, no stages: one CREATE from the deployer and its implementation_deploys entry.
     if (a.verb === DEPLOY_IMPL_VERB) {
       const ctx = buildCtx(undefined, false);
-      const res = await (deps.deployImplementation ?? runDeployImplementation)(ctx, { proxy: a.proxy!, upgradeBuild: a.upgradeBuild });
-      console.log(JSON.stringify({ event: "deploy_implementation", reused: res.reused, proxy: res.entry.proxy_name, implementation: res.entry.implementation, code_hash: res.entry.code_hash, deploy_tx: res.entry.deploy_tx, next: res.next }));
+      const res = await (deps.deployImplementation ?? runDeployImplementation)(ctx, { proxy: a.proxy!, upgradeBuild: a.upgradeBuild, ...(a.system === "fund" ? { system: "fund" as const, ...(a.contract !== undefined ? { contract: a.contract } : {}) } : {}) });
+      console.log(JSON.stringify({ event: "deploy_implementation", reused: res.reused, proxy: res.entry.proxy_name, ...(res.entry.system === "fund" ? { contract: res.entry.contract } : {}), implementation: res.entry.implementation, code_hash: res.entry.code_hash, deploy_tx: res.entry.deploy_tx, next: res.next }));
       log.log("info", "run.done", { ran: [DEPLOY_IMPL_VERB], skipped: [] });
       return 0;
     }
@@ -802,7 +821,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
             // A part-way govern run (GOVERN_PENDING, issue 1667) is not a failed verify: nothing was checked, so nothing is paused. Neither is a verify refused before
             // the verifier ran because it would compare a contract with the wrong build (QA plan v1 E1, redeploy-vault.ts verifyBuildRefusal).
             // Neither is a verify whose only failures are reads the RPC refused (RPC_REFUSED, issue 1851): an RPC without the data is not an incident.
-            if (a.system !== "gateway" && !isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
+            if (a.system === "vaults" && !isPublishError(e, "GOVERN_PENDING") && !isPublishError(e, "RPC_REFUSED") && !(isPublishError(e, "USAGE") && e.details.refused_before_verify === true)) postflight = "verify";
             throw e;
           }
         },
@@ -810,7 +829,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
           await runGovern(c, row, m, { ownerSigners: await ownerSigners(c), sender: await c.signer.safeSigner(), maxWaitSeconds: a.maxWait, ...(a.noWarp ? { warp: false as const } : {}), row: a.row, receiptId: a.receiptId, payload: a.payload, submitter: a.submitter, proxy: a.proxy, implementation: a.implementation, migration: a.migration, upgradeBuild: a.upgradeBuild, ...(a.adminArgs && a.row === UNWIND_GUARD_ROW ? { unwindGuard: a.adminArgs } : a.adminArgs && a.row === RETIRE_ROW ? { retire: a.adminArgs } : a.adminArgs ? { selfAdmin: { owner: a.adminArgs.owner, oldOwner: a.adminArgs["old-owner"], newOwner: a.adminArgs["new-owner"], threshold: a.adminArgs.threshold, role: a.adminArgs.role, account: a.adminArgs.account } } : {}), call: a.call as GovernOpts["call"], ...(deps.govern ?? {}) });
         },
       });
-      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system !== "gateway") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause
+      try { await finalNonceCheck(ctx, result.manifest, result.ran); } catch (e) { if (a.system === "vaults") postflight = "postflight"; throw e; } // issue 1892: the gateway run owns no vault to pause
     } catch (e) {
       if (postflight && !a.dryRun) throw await pauseOnFailure(ctx, postflight, e, emergencySigner, deps.pauseAll);
       throw e;
@@ -826,7 +845,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // report is the deployment's, filed under the original sha (coreHead names the checkout it was read from).
     const isoPath = join(ctx.evidenceDir, `isomorphism-${rpcChainId}.json`);
     if (shaRun || (toolRun && existsSync(isoPath))) log.log("info", "run.isomorphism_kept", { original_sha: (shaRun ?? toolRun)!.originalSha, note: "a run at a redeploy or tooling sha does not rewrite the deployment's isomorphism report" });
-    else if (!a.dryRun && a.system !== "gateway" && existsSync(ctx.evidenceDir)) { // issue 1892: the isomorphism report is the vaults deployment's
+    else if (!a.dryRun && a.system === "vaults" && existsSync(ctx.evidenceDir)) { // issue 1892: the isomorphism report is the vaults deployment's
       const cmp = a.compareSheet ? { path: a.compareSheet, sheet: parseSheet(readFileSync(resolve(cwd, a.compareSheet), "utf8"), sheetOpts) } : undefined;
       const report = await buildIsomorphismReport(ctx, { compareTo: cmp });
       writeReport(isoPath, toolRun ? { ...report, coreSha: toolRun.originalSha } : report);

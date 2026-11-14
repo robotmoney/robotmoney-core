@@ -1,0 +1,283 @@
+---
+title: "FlowLibsTest"
+description: "FeedLib (E16, check 2) and TwapSlicesLib (E6, check 3) against mocks. No fork and no fixture: the mocks are etched at the real Base feed addresses, which the replay fixture does not hold yet."
+---
+
+# FlowLibsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+**Inherits:** Test
+
+**Title:** FlowLibsTest
+
+FeedLib (E16, check 2) and TwapSlicesLib (E6, check 3) against mocks. No fork and no fixture: the mocks
+are etched at the real Base feed addresses, which the replay fixture does not hold yet.
+
+## Constants
+
+### ETH_USD
+
+```solidity
+address internal constant ETH_USD = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+```
+
+### USDC_USD
+
+```solidity
+address internal constant USDC_USD = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+```
+
+### SEQUENCER
+
+```solidity
+address internal constant SEQUENCER = 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433;
+```
+
+### MAX_AGE
+
+```solidity
+uint32 internal constant MAX_AGE = 1 hours;
+```
+
+### T0
+
+```solidity
+uint256 internal constant T0 = 1_760_000_000;
+```
+
+## State Variables
+
+### h
+
+```solidity
+FlowLibsHarness internal h;
+```
+
+### eth
+
+```solidity
+QueueMockAggregator internal eth;
+```
+
+### usdc
+
+```solidity
+QueueMockAggregator internal usdc;
+```
+
+### seq
+
+```solidity
+QueueMockAggregator internal seq;
+```
+
+### pool
+
+```solidity
+QueueMockObservablePool internal pool;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="_etchaggregator-address"></a>
+
+### _etchAggregator
+
+```solidity
+function _etchAggregator(address at) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| at | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="test_read_ok_atfeedaddress"></a>
+
+### test_read_ok_atFeedAddress
+
+```solidity
+function test_read_ok_atFeedAddress() public;
+```
+
+<a id="test_read_scalesdecimalsto8"></a>
+
+### test_read_scalesDecimalsTo8
+
+```solidity
+function test_read_scalesDecimalsTo8() public;
+```
+
+<a id="test_read_answerthatscalestozero_isnonpositive"></a>
+
+### test_read_answerThatScalesToZero_isNonPositive
+
+```solidity
+function test_read_answerThatScalesToZero_isNonPositive() public;
+```
+
+<a id="test_read_staleboundary"></a>
+
+### test_read_staleBoundary
+
+```solidity
+function test_read_staleBoundary() public;
+```
+
+<a id="test_read_nonpositive"></a>
+
+### test_read_nonPositive
+
+```solidity
+function test_read_nonPositive() public;
+```
+
+<a id="test_read_roundincomplete"></a>
+
+### test_read_roundIncomplete
+
+```solidity
+function test_read_roundIncomplete() public;
+```
+
+<a id="test_read_failures_neverrevert"></a>
+
+### test_read_failures_neverRevert
+
+```solidity
+function test_read_failures_neverRevert() public;
+```
+
+<a id="test_sequencer_uppastgrace"></a>
+
+### test_sequencer_upPastGrace
+
+```solidity
+function test_sequencer_upPastGrace() public;
+```
+
+<a id="test_sequencer_insidegrace"></a>
+
+### test_sequencer_insideGrace
+
+```solidity
+function test_sequencer_insideGrace() public;
+```
+
+<a id="test_sequencer_down"></a>
+
+### test_sequencer_down
+
+```solidity
+function test_sequencer_down() public;
+```
+
+<a id="test_sequencer_failures"></a>
+
+### test_sequencer_failures
+
+```solidity
+function test_sequencer_failures() public;
+```
+
+<a id="test_usdcpeg_bandedges"></a>
+
+### test_usdcPeg_bandEdges
+
+```solidity
+function test_usdcPeg_bandEdges() public;
+```
+
+<a id="test_usdcpeg_stalefeed"></a>
+
+### test_usdcPeg_staleFeed
+
+```solidity
+function test_usdcPeg_staleFeed() public;
+```
+
+<a id="_flat-uint256-int24"></a>
+
+### _flat
+
+```solidity
+function _flat(uint256 n, int24 tick) internal pure returns (int24[] memory t);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+| tick | `int24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24[]` |  |
+
+<a id="test_bandticks_isthelargesttickinsidetheband"></a>
+
+### test_bandTicks_isTheLargestTickInsideTheBand
+
+```solidity
+function test_bandTicks_isTheLargestTickInsideTheBand() public view;
+```
+
+<a id="test_median_flat"></a>
+
+### test_median_flat
+
+```solidity
+function test_median_flat() public;
+```
+
+<a id="test_median_ignoresashortpush_andcountsit"></a>
+
+### test_median_ignoresAShortPush_andCountsIt
+
+```solidity
+function test_median_ignoresAShortPush_andCountsIt() public;
+```
+
+<a id="test_median_evencount_islowermedian"></a>
+
+### test_median_evenCount_isLowerMedian
+
+```solidity
+function test_median_evenCount_isLowerMedian() public;
+```
+
+<a id="test_median_odddelta_roundstowardnegativeinfinity"></a>
+
+### test_median_oddDelta_roundsTowardNegativeInfinity
+
+```solidity
+function test_median_oddDelta_roundsTowardNegativeInfinity() public;
+```
+
+<a id="test_median_failuresreturnnotok"></a>
+
+### test_median_failuresReturnNotOk
+
+```solidity
+function test_median_failuresReturnNotOk() public;
+```
+

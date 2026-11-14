@@ -1,0 +1,479 @@
+---
+title: "AuctionStepExecutor"
+description: "Phase 3c fallback for G4. It is the basket assets' `IBasketSwapAdapter`. It forwards TWAP reads to the pool adapter, so NAV and ORA-4 are unchanged. Inside `fill()` it prices each basket leg as a Dutch auction against the TWAP and settles with the filler. Elsewhere it passes swaps through. It holds no funds between calls. See the model note at the top of this file."
+---
+
+# AuctionStepExecutor
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/AuctionStepExecutor.sol)
+
+**Inherits:** [IBasketSwapAdapter](/contracts/interfaces/interface.IBasketSwapAdapter), ReentrancyGuard
+
+**Title:** AuctionStepExecutor
+
+Phase 3c fallback for G4. It is the basket assets' `IBasketSwapAdapter`. It forwards TWAP reads
+to the pool adapter, so NAV and ORA-4 are unchanged. Inside `fill()` it prices each basket leg as a
+Dutch auction against the TWAP and settles with the filler. Elsewhere it passes swaps through.
+It holds no funds between calls. See the model note at the top of this file.
+
+## Constants
+
+### INNER
+
+The pool adapter: TWAP quotes and pass-through swaps.
+
+```solidity
+IBasketSwapAdapter public immutable INNER;
+```
+
+### FUND
+
+The only caller whose swaps can be auctioned, and the only recipient of an auction leg.
+
+```solidity
+address public immutable FUND;
+```
+
+### USDC
+
+```solidity
+address public immutable USDC;
+```
+
+### DEPLOYER
+
+May bind the Rebalancer once.
+
+```solidity
+address public immutable DEPLOYER;
+```
+
+### DURATION
+
+Seconds from the open until the owed amount reaches the floor.
+
+```solidity
+uint32 public immutable DURATION;
+```
+
+### START_PREMIUM_BPS
+
+Owed amount at the open, in bps above the leg's TWAP quote.
+
+```solidity
+uint16 public immutable START_PREMIUM_BPS;
+```
+
+## State Variables
+
+### rebalancer
+
+```solidity
+IRebalancer public rebalancer;
+```
+
+### openedAt
+
+Start of the live auction. 0 when none is live.
+
+```solidity
+uint64 public openedAt;
+```
+
+### _filler
+
+<i>
+
+Set only for the length of `fill()`. Zero means every swap passes through.
+
+</i>
+
+```solidity
+address private _filler;
+```
+
+### _elapsed
+
+```solidity
+uint256 private _elapsed;
+```
+
+## Functions
+
+<a id="constructor-address-address-address-uint32-uint16"></a>
+
+### constructor
+
+```solidity
+constructor(
+        address inner,
+        address fund,
+        address usdc,
+        uint32 duration,
+        uint16 startPremiumBps
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| inner | `address` |  |
+| fund | `address` |  |
+| usdc | `address` |  |
+| duration | `uint32` |  |
+| startPremiumBps | `uint16` |  |
+
+<a id="bindrebalancer-address"></a>
+
+### bindRebalancer
+
+Bind the Rebalancer whose `step()` a fill runs. Once, by the deployer. The Rebalancer's admin
+(the timelock) must also grant this contract KEEPER_ROLE.
+
+```solidity
+function bindRebalancer(address rebalancer_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rebalancer_ | `address` |  |
+
+<a id="open"></a>
+
+### open
+
+Start the clock for the next step. Anyone. Takes no input (RB-2). Reverts unless the
+Rebalancer would trade now (so the cooldown and ORA-4 hold first, RB-5), or while one is live.
+
+```solidity
+function open() external nonReentrant;
+```
+
+<a id="fill"></a>
+
+### fill
+
+Fill the live auction: run one `Rebalancer.step()` with the caller as the solver of every basket
+leg. Takes no input (RB-2). Reverts unless the step executed, so a fill never records a skip or
+a backoff. Returns the seconds since the open.
+
+```solidity
+function fill() external nonReentrant returns (uint256 elapsed);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| elapsed | `uint256` |  |
+
+<a id="owedat-uint256-uint256-uint256"></a>
+
+### owedAt
+
+What the fund is owed for a leg with TWAP quote `q` and floor `floor`, `elapsed` seconds after
+the open. Starts at q × (1 + premium), falls linearly, and is never below `floor`.
+
+```solidity
+function owedAt(uint256 q, uint256 floor, uint256 elapsed) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| q | `uint256` |  |
+| floor | `uint256` |  |
+| elapsed | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
+
+### swap
+
+Execute a single-hop swap.
+
+<i>
+
+A leg of a live fill when the fund calls: TWAP-priced Dutch auction, settled with the filler.
+Any other call passes through to `INNER` with the same arguments.
+
+</i>
+
+```solidity
+function swap(
+        address tokenIn,
+        address tokenOut,
+        uint24 fee,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient,
+        uint256 deadline
+    ) external returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` | Address of the token to sell. |
+| tokenOut | `address` | Address of the token to buy. |
+| fee | `uint24` | Venue-specific fee parameter (fee tier for Uniswap V3,<br/>ignored for Aerodrome which derives fee from pool config). |
+| amountIn | `uint256` | Exact amount of `tokenIn` to sell. |
+| minAmountOut | `uint256` | Minimum amount of `tokenOut` required; reverts if not met. |
+| recipient | `address` | Recipient of `tokenOut`. |
+| deadline | `uint256` | Unix timestamp after which the swap must revert. Chosen<br/>by the caller — adapters must not substitute<br/>`block.timestamp` (audit 2026-06-09, L-5). Callers that<br/>execute synchronously within their own transaction (e.g.<br/>BasketVault) may pass `block.timestamp`. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` | Actual amount of `tokenOut` received. |
+
+<a id="twapprice-address-address-address-uint256-uint32"></a>
+
+### twapPrice
+
+Compute a TWAP-based price quote: how many `quoteToken` for `baseAmount`
+of `baseToken`, reading the oracle from `pool` over `window` seconds.
+
+```solidity
+function twapPrice(
+        address pool,
+        address baseToken,
+        address quoteToken,
+        uint256 baseAmount,
+        uint32 window
+    ) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` | Venue-specific pool address pairing `baseToken` with `quoteToken`. |
+| baseToken | `address` | Token whose amount is the input to the quote. |
+| quoteToken | `address` | Token whose amount is the output of the quote. |
+| baseAmount | `uint256` | Amount of `baseToken` to price. |
+| window | `uint32` | TWAP lookback window in seconds. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | Estimated amount of `quoteToken` for `baseAmount` of `baseToken`. |
+
+<a id="_twapquote-address-address-uint256"></a>
+
+### _twapQuote
+
+<i>
+
+The fund's own TWAP quote for the leg: the active basket asset holding the non-USDC token, its pool
+and window, through `INNER` (the same read as `FundValuationLib`).
+
+</i>
+
+```solidity
+function _twapQuote(address tokenIn, address tokenOut, uint256 amountIn)
+        internal
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Events
+
+### AuctionOpened
+
+```solidity
+event AuctionOpened(uint64 openedAt, uint256 expiresAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| openedAt | `uint64` |  |
+| expiresAt | `uint256` |  |
+
+### AuctionFilled
+
+```solidity
+event AuctionFilled(address indexed filler, uint256 elapsed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| filler | `address` |  |
+| elapsed | `uint256` |  |
+
+### AuctionLeg
+
+```solidity
+event AuctionLeg(
+        address indexed tokenIn,
+        address indexed tokenOut,
+        uint256 amountIn,
+        uint256 twapQuote,
+        uint256 floor,
+        uint256 owed,
+        uint256 elapsed,
+        address filler
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| twapQuote | `uint256` |  |
+| floor | `uint256` |  |
+| owed | `uint256` |  |
+| elapsed | `uint256` |  |
+| filler | `address` |  |
+
+## Errors
+
+### ZeroAddress
+
+```solidity
+error ZeroAddress();
+```
+
+### InvalidParam
+
+```solidity
+error InvalidParam();
+```
+
+### NotDeployer
+
+```solidity
+error NotDeployer();
+```
+
+### AlreadyBound
+
+```solidity
+error AlreadyBound();
+```
+
+### NotReady
+
+```solidity
+error NotReady(SkipReason reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reason | `SkipReason` |  |
+
+### AuctionLive
+
+```solidity
+error AuctionLive(uint256 expiresAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expiresAt | `uint256` |  |
+
+### NoAuction
+
+```solidity
+error NoAuction();
+```
+
+### AuctionExpired
+
+```solidity
+error AuctionExpired(uint256 expiredAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expiredAt | `uint256` |  |
+
+### FillNotExecuted
+
+```solidity
+error FillNotExecuted(SkipReason reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reason | `SkipReason` |  |
+
+### NotFundRecipient
+
+```solidity
+error NotFundRecipient(address recipient);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recipient | `address` |  |
+
+### NotABasketAsset
+
+```solidity
+error NotABasketAsset(address token);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+### Underpaid
+
+```solidity
+error Underpaid(address token, uint256 owed, uint256 received);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| owed | `uint256` |  |
+| received | `uint256` |  |
+

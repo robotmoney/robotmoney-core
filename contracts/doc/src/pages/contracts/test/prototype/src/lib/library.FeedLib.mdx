@@ -1,0 +1,219 @@
+---
+title: "FeedLib"
+description: "Chainlink reads for the outside-feed layer (layer 2 of proposal §5.9.1). Used by the FlowQueue (check 2, check 4, check 6, the bound prices and the quotes) and by the fund's NAV views (E19)."
+---
+
+# FeedLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FeedLib.sol)
+
+**Title:** FeedLib
+
+Chainlink reads for the outside-feed layer (layer 2 of proposal §5.9.1). Used by the FlowQueue (check 2,
+check 4, check 6, the bound prices and the quotes) and by the fund's NAV views (E19).
+
+Every read is a raw `staticcall` with a length check, so a feed address with no code, a reverting feed
+or one that returns short data gives `ReadFailed` instead of reverting the caller. A failed read never
+yields a price: the price is 0 unless the status is Ok.
+
+The functions are `internal` (inlined). The fund may want them `public` (linked) for size; that changes
+no call site (INTERFACES.md §5).
+
+## Constants
+
+### PRICE_DECIMALS
+
+<i>
+
+Every price this library returns is USD with 8 decimals, whatever the feed's own `decimals()`.
+
+</i>
+
+```solidity
+uint8 internal constant PRICE_DECIMALS = 8;
+```
+
+### ONE_USD
+
+<i>
+
+1.00000000 in 8 decimals: the USDC peg.
+
+</i>
+
+```solidity
+uint256 internal constant ONE_USD = 1e8;
+```
+
+### MAX_FEED_DECIMALS
+
+<i>
+
+`decimals()` above this is treated as malformed (`ReadFailed`): no Chainlink feed uses more than 18.
+
+</i>
+
+```solidity
+uint8 private constant MAX_FEED_DECIMALS = 36;
+```
+
+## Functions
+
+<a id="read-address-uint32"></a>
+
+### read
+
+Read `feed` (an `IChainlinkAggregator`). `status` is Ok only if the call succeeded, `answer > 0`,
+the round is complete (`updatedAt != 0`, `answeredInRound >= roundId`) and
+`block.timestamp - updatedAt &lt;= maxAge`. Never reverts: a reverting or code-less feed returns
+`ReadFailed`, and address(0) returns `NoFeed`. An `updatedAt` in the future is `ReadFailed`.
+
+```solidity
+function read(address feed, uint32 maxAge)
+        internal
+        view
+        returns (FeedStatus status, uint256 price8);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+| maxAge | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| status | `FeedStatus` | Why the read is not usable, or Ok. |
+| price8 | `uint256` | The answer scaled to 8 decimals, rounded DOWN (0 unless Ok). An answer that scales to 0 is<br/>`NonPositive`. |
+
+<a id="sequencerup-address-uint32"></a>
+
+### sequencerUp
+
+The Base L2 sequencer uptime feed (answer 0 = up, anything else = down; `startedAt` = when that
+status began). `ok` only if it reports up and has been up for at least `grace` seconds. Never reverts.
+`startedAt == 0` (no valid round) is `RoundIncomplete`; a `startedAt` in the future counts as inside
+the grace period.
+
+```solidity
+function sequencerUp(address feed, uint32 grace)
+        internal
+        view
+        returns (bool ok, FeedStatus status);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+| grace | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |     True when the sequencer is up and has been for `grace`. |
+| status | `FeedStatus` | Ok, SequencerDown, SequencerGrace, RoundIncomplete, ReadFailed or NoFeed. |
+
+<a id="usdcpeg-address-uint32-uint16"></a>
+
+### usdcPeg
+
+The USDC / USD feed: `ok` when `read` is Ok and the price is within `bandBps` of 1.00000000
+(`|price − 1e8| × 10 000 ≤ bandBps × 1e8`, the edge counts as inside). Never reverts.
+
+```solidity
+function usdcPeg(address feed, uint32 maxAge, uint16 bandBps)
+        internal
+        view
+        returns (bool ok, FeedStatus status, uint256 price8);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+| maxAge | `uint32` |  |
+| bandBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |     True when USDC is inside the band. |
+| status | `FeedStatus` | Ok, OffPeg, or the `read` failure. |
+| price8 | `uint256` | USDC in USD with 8 decimals, for converting a USD feed price into USDC (0 unless read Ok;<br/>returned also when OffPeg, so a caller can report it). |
+
+<a id="_latest-address"></a>
+
+### _latest
+
+<i>
+
+`latestRoundData()` by staticcall. `ok` is false for a code-less address, a revert or short data.
+
+</i>
+
+```solidity
+function _latest(address feed)
+        private
+        view
+        returns (
+            bool ok,
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| roundId | `uint80` |  |
+| answer | `int256` |  |
+| startedAt | `uint256` |  |
+| updatedAt | `uint256` |  |
+| answeredInRound | `uint80` |  |
+
+<a id="_decimals-address"></a>
+
+### _decimals
+
+<i>
+
+`decimals()` by staticcall; `ok` false on a revert, short data or a value above MAX_FEED_DECIMALS.
+
+</i>
+
+```solidity
+function _decimals(address feed) private view returns (bool ok, uint8 dec);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| dec | `uint8` |  |
+

@@ -1,0 +1,115 @@
+---
+title: "FlowRateAdaptersPinTest"
+description: "The lending adapter test copies (E15, check 5, plan §8.3 \"the venue's own exchange rate, scaled by 1e18; a gift to the adapter does not move it\") on the real Base venues at the fixture pin. Replay fixture and its coverage check, as every prototype test. One test per venue; each checks, in order: 1. the rate reads at the pin and sits above 1e18 (interest accrued since the venue opened) and below 2e18; 2. a USDC gift to the adapter leaves it exactly where it was; 3. one day of the venue's own accrual raises it, by less than the default check 5 bound (10 bps per day), so normal interest never blocks a settlement."
+---
+
+# FlowRateAdaptersPinTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowLibs.t.sol)
+
+**Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
+
+**Title:** FlowRateAdaptersPinTest
+
+The lending adapter test copies (E15, check 5, plan §8.3 "the venue's own exchange rate, scaled by 1e18;
+a gift to the adapter does not move it") on the real Base venues at the fixture pin. Replay fixture and
+its coverage check, as every prototype test. One test per venue; each checks, in order:
+1. the rate reads at the pin and sits above 1e18 (interest accrued since the venue opened) and below 2e18;
+2. a USDC gift to the adapter leaves it exactly where it was;
+3. one day of the venue's own accrual raises it, by less than the default check 5 bound (10 bps per day),
+so normal interest never blocks a settlement.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### AAVE_POOL
+
+```solidity
+address internal constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+```
+
+### AAVE_A_USDC
+
+```solidity
+address internal constant AAVE_A_USDC = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+```
+
+### COMET
+
+```solidity
+address internal constant COMET = 0xb125E6687d4313864e53df431d5425969c15Eb2F;
+```
+
+### MOONWELL
+
+```solidity
+address internal constant MOONWELL = 0xc1256Ae5FF1cf2719D4937adb3bbCCab2E00A2Ca;
+```
+
+### DEFAULT_MAX_GROWTH_BPS
+
+<i>
+
+Proposal §5.9.5 default of `maxLendRateGrowthBps` (10 bps per day).
+
+</i>
+
+```solidity
+uint256 internal constant DEFAULT_MAX_GROWTH_BPS = 10;
+```
+
+## Functions
+
+<a id="test_pin_rateperunit_aavev3"></a>
+
+### test_pin_ratePerUnit_aaveV3
+
+```solidity
+function test_pin_ratePerUnit_aaveV3() public fixtureCovered;
+```
+
+<a id="test_pin_rateperunit_compoundv3"></a>
+
+### test_pin_ratePerUnit_compoundV3
+
+<i>
+
+Comet serves `totalsBasic()` from its extension delegate. The replay fixture recorded on 2026-11-11 has
+no code for that account (a delegatecall to it returns empty data, so the read reverts). Skipped only
+while that is so; the recorder's fork has the code, so the re-record (requests.md, verify) captures it
+and the test then runs in replay.
+
+</i>
+
+```solidity
+function test_pin_ratePerUnit_compoundV3() public fixtureCovered;
+```
+
+<a id="test_pin_rateperunit_moonwellmorpho"></a>
+
+### test_pin_ratePerUnit_moonwellMorpho
+
+```solidity
+function test_pin_ratePerUnit_moonwellMorpho() public fixtureCovered;
+```
+
+<a id="_checkvenue-ilendingrateadapter-string"></a>
+
+### _checkVenue
+
+```solidity
+function _checkVenue(ILendingRateAdapter adapter, string memory name) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `ILendingRateAdapter` |  |
+| name | `string` |  |
+

@@ -1,0 +1,274 @@
+---
+title: "CoreTimelockHandover"
+description: "What every timelock handover stage shares: the vaults system's `DeployTimelock` and the fund system's `DeployFundTimelock` (Deploy 4). The delay floor keyed to chain id 8453 and to DEPLOYMENT_KIND, the full check of the Safe that becomes the only proposer and canceller, the CREATE2 deployment of the `ProposerFloorTimelock` at the address every proxy already names (`UpgradeAuthority.predictTimelock`) with its role and delay checks, and the check that a proxy names that timelock. One copy, so the two systems' handovers cannot drift."
+---
+
+# CoreTimelockHandover
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/CoreTimelockHandover.sol)
+
+**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
+
+**Title:** CoreTimelockHandover
+
+What every timelock handover stage shares: the vaults system's `DeployTimelock` and the fund system's
+`DeployFundTimelock` (Deploy 4). The delay floor keyed to chain id 8453 and to DEPLOYMENT_KIND, the full check of
+the Safe that becomes the only proposer and canceller, the CREATE2 deployment of the `ProposerFloorTimelock`
+at the address every proxy already names (`UpgradeAuthority.predictTimelock`) with its role and delay checks,
+and the check that a proxy names that timelock. One copy, so the two systems' handovers cannot drift.
+
+## Constants
+
+### MIN_PRODUCTION_DELAY
+
+<i>
+
+security-model.md §4: production timelock delay floor, 48 hours. Enforced
+by a require on chain id 8453 only. The timelock itself is stock OpenZeppelin.
+
+</i>
+
+```solidity
+uint256 public constant MIN_PRODUCTION_DELAY = 172_800;
+```
+
+### MIN_REHEARSAL_DELAY
+
+<i>
+
+Issue 1727 (owner decision 2026-10-10): the delay floor of a rehearsal, an explicit mode selected by the env var DEPLOYMENT_KIND=rehearsal (the publish-contracts
+sheet line of the same name). A rehearsal delay is 900 s up to 172799 s, on every chain, so the delay on chain always agrees with the kind. The default (variable
+absent or "production") keeps the 8453 floor above unchanged. The kind is also recorded in timelock.json.
+
+</i>
+
+```solidity
+uint256 public constant MIN_REHEARSAL_DELAY = 900;
+```
+
+### EXECUTOR_POLICY
+
+<i>
+
+Recorded in timelock.json as `executorPolicy` / `cancellerPolicy`.
+`open`: EXECUTOR_ROLE is held by address(0). `safe-only`: only the Safe
+(threshold >= 2) holds PROPOSER_ROLE and CANCELLER_ROLE.
+
+</i>
+
+```solidity
+string public constant EXECUTOR_POLICY = "open";
+```
+
+### CANCELLER_POLICY
+
+```solidity
+string public constant CANCELLER_POLICY = "safe-only";
+```
+
+### SAFE_L2_SINGLETON
+
+<i>
+
+Safe 1.4.1 canonical deployments (identical on Base and on the Twin chain,
+whose state is a Base snapshot).
+
+</i>
+
+```solidity
+address public constant SAFE_L2_SINGLETON = 0x29fcB43b46531BcA003ddC8FCB67FFE91900C762;
+```
+
+### SAFE_FALLBACK_HANDLER
+
+```solidity
+address public constant SAFE_FALLBACK_HANDLER = 0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99;
+```
+
+### SAFE_PROXY_1_4_1_CODEHASH
+
+<i>
+
+Runtime codehash of the SafeProxy 1.4.1 the canonical factory deploys
+(read from a live Base Safe proxy). A stub, a mock or any other proxy differs.
+
+</i>
+
+```solidity
+bytes32 public constant SAFE_PROXY_1_4_1_CODEHASH =
+        0xd7d408ebcd99b2b70be43e20253d6d92a8ea8fab29bd3be7f55b10032331fb4c;
+```
+
+### SAFE_GUARD_SLOT
+
+<i>
+
+Safe storage slots: keccak256("guard_manager.guard.address") and
+keccak256("fallback_manager.handler.address").
+
+</i>
+
+```solidity
+bytes32 public constant SAFE_GUARD_SLOT =
+        0x4a204f620c8c5ccdca3fd54d003badd85ba500436a431f0cbda4f558c93c34c8;
+```
+
+### SAFE_FALLBACK_HANDLER_SLOT
+
+```solidity
+bytes32 public constant SAFE_FALLBACK_HANDLER_SLOT =
+        0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5;
+```
+
+## Functions
+
+<a id="_readrehearsal-string"></a>
+
+### _readRehearsal
+
+<i>
+
+DEPLOYMENT_KIND (issue 1727): absent or "production" is production, "rehearsal" is the explicit rehearsal mode, anything else reverts.
+
+</i>
+
+```solidity
+function _readRehearsal(string memory prefix) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| prefix | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_readaddresslist-string"></a>
+
+### _readAddressList
+
+<i>
+
+A required comma-separated address list from env var `name`.
+
+</i>
+
+```solidity
+function _readAddressList(string memory name) internal view returns (address[] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| name | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="_requiredelayfloor-uint256-bool"></a>
+
+### _requireDelayFloor
+
+<i>
+
+The delay floor, keyed to the chain id (security-model.md §4). A require, never a
+different code path: 8453 refuses anything under 48 hours, every other chain
+(the Twin chain 918453, anvil) accepts any non-zero delay. The contract is
+stock OpenZeppelin and carries no floor of its own.
+
+</i>
+
+```solidity
+function _requireDelayFloor(uint256 minDelay, bool rehearsal) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| minDelay | `uint256` |  |
+| rehearsal | `bool` |  |
+
+<a id="_requirerealsafe-address-address-uint256"></a>
+
+### _requireRealSafe
+
+<i>
+
+The full Safe check. The address must be a SafeProxy 1.4.1 (code and
+codehash) that delegates to the canonical SafeL2 singleton (slot 0), with
+exactly the expected owners and threshold, no modules, no guard and the
+canonical CompatibilityFallbackHandler. A stub, a mock or an EOA fails.
+
+</i>
+
+```solidity
+function _requireRealSafe(address safe, address[] memory owners, uint256 threshold)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| owners | `address[]` |  |
+| threshold | `uint256` |  |
+
+<a id="_deploytimelockatprediction-address-uint256"></a>
+
+### _deployTimelockAtPrediction
+
+<i>
+
+Deploy the core timelock at `predictTimelock(safe, minDelay)` through the CREATE2
+factory. CREATE2 binds the init code, so code already at that address can only be
+this same timelock (anyone may have deployed it first): it is reused, and its roles
+and delay are checked either way.
+
+</i>
+
+```solidity
+function _deployTimelockAtPrediction(address safe, uint256 minDelay)
+        internal
+        returns (TimelockController timelock);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+| minDelay | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `TimelockController` |  |
+
+<a id="_requirenamestimelock-address-address"></a>
+
+### _requireNamesTimelock
+
+```solidity
+function _requireNamesTimelock(address proxy, address timelock) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+| timelock | `address` |  |
+

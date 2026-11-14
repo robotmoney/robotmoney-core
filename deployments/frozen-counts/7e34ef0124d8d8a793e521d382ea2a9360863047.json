@@ -1,0 +1,18 @@
+{
+  "deploySha": "7e34ef0124d8d8a793e521d382ea2a9360863047",
+  "measured": {
+    "chainId": 918453,
+    "at": "2026-11-13T16:15:31.640Z"
+  },
+  "counts": {
+    "safe": 1,
+    "fund-libs": 14,
+    "fund-receipt": 2,
+    "fund": 18,
+    "rebalancer": 7,
+    "fund-governance": 2,
+    "queue": 2,
+    "fund-wiring": 3,
+    "fund-timelock": 15
+  }
+}

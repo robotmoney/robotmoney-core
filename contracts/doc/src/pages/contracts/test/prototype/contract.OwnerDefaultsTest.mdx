@@ -1,0 +1,93 @@
+---
+title: "OwnerDefaultsTest"
+description: "The owner's decided defaults of 2026-11-12 are what a freshly deployed fund runs with, not an opt-in: - the queue starts with the 5 bps per-call basket cap and stricter-of-both leg prices (`initialize`); - the working flow parameters carry `refBandBps` 90; - the rebalancer caps each basket leg at 5 bps of its pool's time-weighted USDC depth over one settlement window, beside the governed `maxStepUsdc`, and the cap cannot be switched off."
+---
+
+# OwnerDefaultsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/OwnerDefaults.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+**Title:** OwnerDefaultsTest
+
+The owner's decided defaults of 2026-11-12 are what a freshly deployed fund runs with, not an opt-in:
+- the queue starts with the 5 bps per-call basket cap and stricter-of-both leg prices (`initialize`);
+- the working flow parameters carry `refBandBps` 90;
+- the rebalancer caps each basket leg at 5 bps of its pool's time-weighted USDC depth over one
+settlement window, beside the governed `maxStepUsdc`, and the cap cannot be switched off.
+
+## Functions
+
+<a id="test_defaults_queuestartswiththefivebpscallcap"></a>
+
+### test_defaults_queueStartsWithTheFiveBpsCallCap
+
+```solidity
+function test_defaults_queueStartsWithTheFiveBpsCallCap() public fixtureCovered;
+```
+
+<a id="test_defaults_refbandis90"></a>
+
+### test_defaults_refBandIs90
+
+```solidity
+function test_defaults_refBandIs90() public fixtureCovered;
+```
+
+<a id="test_defaults_rebalancerstartswiththefivebpsdepthcap"></a>
+
+### test_defaults_rebalancerStartsWithTheFiveBpsDepthCap
+
+```solidity
+function test_defaults_rebalancerStartsWithTheFiveBpsDepthCap() public fixtureCovered;
+```
+
+<a id="test_defaults_assetstepcapisthesmallerofmaxstepanddepth"></a>
+
+### test_defaults_assetStepCapIsTheSmallerOfMaxStepAndDepth
+
+A basket asset's cap is the smaller of its `maxStepUsdc` and 5 bps of its pool's USDC depth over one
+settlement window; a lending asset keeps its `maxStepUsdc`.
+
+```solidity
+function test_defaults_assetStepCapIsTheSmallerOfMaxStepAndDepth() public fixtureCovered;
+```
+
+<a id="test_defaults_stepdepthsetterbounds"></a>
+
+### test_defaults_stepDepthSetterBounds
+
+The setter refuses 0 (the cap cannot be switched off) and anything above `MAX_STEP_DEPTH_BPS`, and
+only ADMIN (the timelock) may call it.
+
+```solidity
+function test_defaults_stepDepthSetterBounds() public fixtureCovered;
+```
+
+<a id="test_defaults_everystepstaysinsidethedepthcap"></a>
+
+### test_defaults_everyStepStaysInsideTheDepthCap
+
+Every executed step of an investing plan stays inside the depth cap of each basket leg it trades.
+
+```solidity
+function test_defaults_everyStepStaysInsideTheDepthCap() public fixtureCovered;
+```
+
+<a id="_assertcap-uint256-address-uint32"></a>
+
+### _assertCap
+
+```solidity
+function _assertCap(uint256 index, address pool, uint32 w) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| pool | `address` |  |
+| w | `uint32` |  |
+

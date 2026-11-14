@@ -1,0 +1,120 @@
+---
+title: "DeployFlowQueue"
+description: "The `queue` stage (Deploy 4): `FlowQueue` behind its ERC-1967 proxy, after the fund and its assets (its initializer checks `legBandBps` above the fund's largest pool fee). Initialized with the deployer as ADMIN_ROLE until the handover, EMERGENCY_ADDRESS as EMERGENCY_ROLE, KEEPER_ADDRESS as KEEPER_ROLE (settle is keeper first), the USDC / USD feed and the sequencer uptime feed, every flow parameter from the sheet (FLOW_*), and the predicted fund-system timelock as its only upgrade authority. The wiring stage binds the fund's FLOW_ROLE to it."
+---
+
+# DeployFlowQueue
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFlowQueue.s.sol)
+
+**Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
+
+**Title:** DeployFlowQueue
+
+The `queue` stage (Deploy 4): `FlowQueue` behind its ERC-1967 proxy, after the fund and its assets (its
+initializer checks `legBandBps` above the fund's largest pool fee). Initialized with the deployer as ADMIN_ROLE
+until the handover, EMERGENCY_ADDRESS as EMERGENCY_ROLE, KEEPER_ADDRESS as KEEPER_ROLE (settle is keeper
+first), the USDC / USD feed and the sequencer uptime feed, every flow parameter from the sheet (FLOW_*), and the
+predicted fund-system timelock as its only upgrade authority. The wiring stage binds the fund's FLOW_ROLE to it.
+
+Required env vars (no defaults): ADMIN_ADDRESS, FUND_ADDRESS, EMERGENCY_ADDRESS, KEEPER_ADDRESS, the eighteen
+FLOW_* names below, SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "queue.json";
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_readinit"></a>
+
+### _readInit
+
+```solidity
+function _readInit() internal view returns (FlowQueueInit memory p);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `FlowQueueInit` |  |
+
+<a id="_readflowparams"></a>
+
+### _readFlowParams
+
+<i>
+
+Every field from the sheet. The queue's initializer holds the hard bounds (FlowTypes.sol) and refuses a value
+outside them; the casts here only refuse a value that does not fit the field.
+
+</i>
+
+```solidity
+function _readFlowParams() internal view returns (FlowParams memory f);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `FlowParams` |  |
+
+<a id="_writedeploymentjson-deployed-flowqueueinit"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(Deployed memory d, FlowQueueInit memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| p | `FlowQueueInit` |  |
+
+## Structs
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address queue;
+        address queueImplementation;
+        UpgradeConfig upgrade;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| queue | `address` |  |
+| queueImplementation | `address` |  |
+| upgrade | `UpgradeConfig` |  |
+

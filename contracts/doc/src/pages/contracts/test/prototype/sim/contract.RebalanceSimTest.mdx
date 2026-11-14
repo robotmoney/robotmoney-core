@@ -1,0 +1,2790 @@
+---
+title: "RebalanceSimTest"
+description: "One-vault experiment, plan Step 3: the rebalance simulation behind gates G4 (cost) and G5 (convergence)."
+---
+
+# RebalanceSimTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/RebalanceSim.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness), [IAuctionFiller](/contracts/test/prototype/baseline/src/interface.IAuctionFiller)
+
+One-vault experiment, plan Step 3: the rebalance simulation behind gates G4 (cost) and G5 (convergence).
+
+Each test is one (scenario, fund size, seed). It opens receipt plans through the real receipt and
+timelock path and runs the keeper every `stepInterval` until the plan concludes, on the recorded Base
+fixture (no RPC in replay). Between keeper calls a seeded market runs: pool noise sized from the pool's
+own depth, a zero-drift reference walk with the pool's own 30-minute TWAP volatility, an arbitrageur
+that pulls each pool toward the reference, and small deposits and redeems.
+
+Determinism: every draw is keccak256(seed, slot, stream, asset) with seed = keccak256("rm-sim-v1",
+scenario, fundUsdc, k). No vm.randomUint, no fuzz input, nothing reads gasleft. A record run and a
+replay run make identical calls. No market price is hard-coded: P0, sigma and pool depth come from
+the pools at the pin.
+
+The tests assert only what always holds (terminal plan state, the RB-4 step cap, costSpent equals the
+measured costs, skips change nothing, steps mint and burn nothing). G4 and G5 are scored from the JSON
+each test writes to out/prototype/&lt;run>/sim-&lt;scenario>-&lt;fund>M-s&lt;k>.json (contracts/test/prototype/
+sim/score-sim.ts &lt;run dir>). A gate miss is a measured result, not a red test.
+
+The suite is opt-in (PROTO_SIM=1): each test runs minutes and writes a file, so the unit suite skips
+it. Record and replay the fixture with PROTO_SIM=1 set, or the sim's state is not in the fixture.
+
+Parameter sets. PROTO_SIM_RUN=default (or unset) runs the harness constants unchanged (the §5.6
+suggested starts): this is the scored run. PROTO_SIM_RUN=tuned first sets the tuned values through the
+timelock (the Safe's only path), then runs the same scenarios and seeds into out/prototype/tuned/.
+Each tuned value is an env var PROTO_SIM_TUNED_&lt;NAME> that falls back to the harness default, so the
+tuned set is declared on the command line and written into every JSON (see `_applyTuned`).
+PROTO_SIM_RUN=auction (phase 3c) keeps every default parameter and puts `AuctionStepExecutor` in front of
+the pool adapter. Each basket leg of a step is then a Dutch auction against its TWAP, filled by one
+modelled solver (`_auctionDecide`, `onAuctionLeg`). The model note at the top of
+baseline/src/AuctionStepExecutor.sol states every solver, fill price and latency assumption.
+
+LP model (phase 3c, G5 fallback). PROTO_SIM_LP=static (or unset) holds every recorded LP position fixed:
+this is the scored run. PROTO_SIM_LP=recenter is a sensitivity switch on top of any PROTO_SIM_RUN. It
+writes to out/prototype/&lt;run>-lprecenter/ and never changes the scored run. Its assumptions:
+- Trigger. At each slot start (before the keeper) the sim reads each basket pool's active liquidity. A
+pool with less than 1/100 of its pin liquidity is "outside", the same test as LEFT-PIN-LP-RANGE.
+- Lag. Liquidity returns only after the pool has been seen outside for LP_RECENTER_LAG_SEC (6 h, so 12
+to 13 slots). Until then the pool trades on whatever thin liquidity the pin left there.
+- Depth. One modelled LP then mints a single position of LP_RECENTER_DEPTH_BPS (50%) of the pin's
+active liquidity L. So near its centre the pool has half the pin's depth, never more.
+- Range. The position spans LP_RECENTER_HALF_WIDTH_TICKS (500 ticks, about 5% of price) each side of the
+pool's spot tick at the mint, rounded outward to the tick spacing. It is centred on the pool's own
+price, not on the reference: an LP manager sees the pool, not the fair value. So off-hours deSPXA
+impact the fund left in the price stays in the centre.
+- Move, not add. If the pool leaves that position too, the LP waits the lag again, then burns it and
+mints a new one at the new price. When the pin's own liquidity is active again (pool liquidity net of
+the modelled position >= 1/100 of the pin's), the modelled position is burned at once. It stands
+for pin LPs that moved, so it is never counted twice.
+- Funding. The sim mints the tokens the position needs, as the arbitrageur does. No price is set.
+Every number above is an assumption, not a measurement. The pin holds no history of how Base LPs on
+these pools respond to a 10% gap, so the result is a sensitivity, never the G5 verdict.
+
+## Constants
+
+### SCN_SEQ
+
+```solidity
+uint256 internal constant SCN_SEQ = 0;
+```
+
+### SCN_EXT
+
+```solidity
+uint256 internal constant SCN_EXT = 1;
+```
+
+### SCN_EXT_PROBE
+
+```solidity
+uint256 internal constant SCN_EXT_PROBE = 2;
+```
+
+### SCN_JUMP_DOWN
+
+```solidity
+uint256 internal constant SCN_JUMP_DOWN = 3;
+```
+
+### SCN_JUMP_UP
+
+```solidity
+uint256 internal constant SCN_JUMP_UP = 4;
+```
+
+### LOOP_SLACK_SLOTS
+
+<i>
+
+Path slots per plan (7 d / 30 min) and the loop bound: path + overrun + slack, so Expired is reached.
+
+</i>
+
+```solidity
+uint256 internal constant LOOP_SLACK_SLOTS = 4;
+```
+
+### JUMP_SLOT
+
+<i>
+
+JUMP scenarios: the deSPXA reference jumps at this plan slot (84 h in: f = 0.5 of a 7-day path).
+
+</i>
+
+```solidity
+uint256 internal constant JUMP_SLOT = 168;
+```
+
+### JUMP_DOWN_USD_MILLITICKS
+
+<i>
+
+±1000 bps of the USD price in milli-ticks: ln(0.9)/ln(1.0001) and ln(1.1)/ln(1.0001).
+
+</i>
+
+```solidity
+int256 internal constant JUMP_DOWN_USD_MILLITICKS = -1_053_658;
+```
+
+### JUMP_UP_USD_MILLITICKS
+
+```solidity
+int256 internal constant JUMP_UP_USD_MILLITICKS = 953_149;
+```
+
+### FALLBACK_SIGMA_MILLITICKS
+
+<i>
+
+Sigma fallback when the observation ring holds fewer than 4 intervals: 2 × the 5 bps pool fee.
+
+</i>
+
+```solidity
+uint256 internal constant FALLBACK_SIGMA_MILLITICKS = 10_000;
+```
+
+### ARB_BUDGET_USDC
+
+<i>
+
+The arbitrageur's generous input. The router stops at the price limit, so the pool sizes the arb.
+
+</i>
+
+```solidity
+uint256 internal constant ARB_BUDGET_USDC = 100_000_000e6;
+```
+
+### FLOW_ONE_IN
+
+<i>
+
+Flows: one every ~6 h (1 in 12 slots), size 10..50 hundredths of a percent of NAV.
+
+</i>
+
+```solidity
+uint256 internal constant FLOW_ONE_IN = 12;
+```
+
+### FLOW_MIN_BPS
+
+```solidity
+uint256 internal constant FLOW_MIN_BPS = 10;
+```
+
+### FLOW_SPAN_BPS
+
+```solidity
+uint256 internal constant FLOW_SPAN_BPS = 41;
+```
+
+### CHECKPOINT_EVERY
+
+```solidity
+uint256 internal constant CHECKPOINT_EVERY = 1;
+```
+
+### N_BASKET
+
+```solidity
+uint256 internal constant N_BASKET = 3;
+```
+
+### MAX_FAIL_PROBES
+
+<i>
+
+Failed steps per plan replayed to name their revert (diagnostic, deterministic).
+
+</i>
+
+```solidity
+uint256 internal constant MAX_FAIL_PROBES = 3;
+```
+
+### SIGMA_DIFF_SCALE_E4
+
+<i>
+
+sqrt(3/2) x 1e4. The stdev of differences of consecutive 30-minute MEAN ticks is sqrt(2/3) of the
+30-minute log-return stdev of a random walk, so the measured value is scaled back up (review R4).
+
+</i>
+
+```solidity
+uint256 internal constant SIGMA_DIFF_SCALE_E4 = 12_247;
+```
+
+### US_OPEN_SEC
+
+<i>
+
+deSPXA (review R1). Its fair price is the S&P 500, which trades Mon-Fri 14:30-21:00 UTC (EST; the pin
+is 2026-11-10, after the DST change; holidays ignored). In those hours the arbitrageur mints and
+redeems with the issuer, so its inventory is unlimited. Outside them the reference is frozen at the
+close and the arbitrageur holds no deSPXA except what it bought back from the pool since the close:
+it can always buy deSPXA that sits under the reference, but it can sell into a pool pushed over the
+reference only from that inventory. The fund's own off-hours buying therefore stays in the price.
+The walk's per-slot sigma is the measured one scaled to open-hours slots (the lookback's vol happened
+in its open intervals). wETH and cbBTC keep the 24/7 unlimited arbitrageur (CEX arbitrage).
+
+</i>
+
+```solidity
+uint256 internal constant US_OPEN_SEC = 52_200;
+```
+
+### US_CLOSE_SEC
+
+```solidity
+uint256 internal constant US_CLOSE_SEC = 75_600;
+```
+
+### OUT_OF_RANGE_L_DIV
+
+<i>
+
+A pool counts as out of its pin LP range when its active liquidity is under 1/100 of the pin's.
+
+</i>
+
+```solidity
+uint256 internal constant OUT_OF_RANGE_L_DIV = 100;
+```
+
+### LP_RECENTER_LAG_SEC
+
+```solidity
+uint256 internal constant LP_RECENTER_LAG_SEC = 6 hours;
+```
+
+### LP_RECENTER_DEPTH_BPS
+
+```solidity
+uint256 internal constant LP_RECENTER_DEPTH_BPS = 5_000;
+```
+
+### LP_RECENTER_HALF_WIDTH_TICKS
+
+```solidity
+int24 internal constant LP_RECENTER_HALF_WIDTH_TICKS = 500;
+```
+
+### AUCTION_DURATION
+
+<i>
+
+Seconds from the open to the floor, and the owed premium over TWAP at the open.
+
+</i>
+
+```solidity
+uint32 internal constant AUCTION_DURATION = 300;
+```
+
+### AUCTION_START_PREMIUM_BPS
+
+```solidity
+uint16 internal constant AUCTION_START_PREMIUM_BPS = 50;
+```
+
+### BLOCK_SEC
+
+<i>
+
+Base block time. The solver fills on this grid, one block after its price is met.
+
+</i>
+
+```solidity
+uint256 internal constant BLOCK_SEC = 2;
+```
+
+### FILL_LATENCY_SEC
+
+```solidity
+uint256 internal constant FILL_LATENCY_SEC = 2;
+```
+
+### AUCTION_REQUOTES
+
+<i>
+
+The solver re-quotes at its fill block at most this many times. Past that the auction lapses.
+
+</i>
+
+```solidity
+uint256 internal constant AUCTION_REQUOTES = 4;
+```
+
+### SOLVER_MARGIN_BPS
+
+<i>
+
+The solver keeps this margin of each leg's output, plus this much gas per leg.
+
+</i>
+
+```solidity
+uint256 internal constant SOLVER_MARGIN_BPS = 5;
+```
+
+### SOLVER_GAS_USDC
+
+```solidity
+uint256 internal constant SOLVER_GAS_USDC = 250_000;
+```
+
+### EXT_MAJOR_BPS
+
+<i>
+
+External venue cost below the reference: wETH and cbBTC at any hour (CEX), deSPXA in US hours only.
+
+</i>
+
+```solidity
+uint256 internal constant EXT_MAJOR_BPS = 15;
+```
+
+### EXT_DESPXA_BPS
+
+```solidity
+uint256 internal constant EXT_DESPXA_BPS = 25;
+```
+
+### VENUE_POOL
+
+```solidity
+uint8 internal constant VENUE_POOL = 1;
+```
+
+### VENUE_EXTERNAL
+
+```solidity
+uint8 internal constant VENUE_EXTERNAL = 2;
+```
+
+### MODE_KEEPER
+
+<i>
+
+How the keeper call of one slot runs in the auction run.
+
+</i>
+
+```solidity
+uint8 internal constant MODE_KEEPER = 0;
+```
+
+### MODE_FILL
+
+```solidity
+uint8 internal constant MODE_FILL = 1;
+```
+
+### MODE_LAPSE
+
+```solidity
+uint8 internal constant MODE_LAPSE = 2;
+```
+
+### TUNED_PLAN_DURATION
+
+<i>
+
+The ONE tuned set (§13: tuned once, chosen from the default run's data before the tuned run):
+planDuration 7 d -> 21 d. In the default run the G4 cost above the arrival cost is the fund's own
+deSPXA buying left in the pool while the S&P is closed (reference cost minus arrival cost). That
+premium scales with the buying rate, so with 1/duration. Scaling each scored plan's premium by 7/D
+projects, over the plans that stay in the pin LP range: D = 14 d median 10.0 / max 32.4 bps,
+D = 21 d median 8.4 / max 23.5 bps. 21 d is the shortest whole-week duration under 30 with margin.
+minStepUsdc 100 -> 33 USDC. 1M d05 moves ~$37k one-sided: $110 of path per slot at 7 d (14% of
+calls skipped BelowMinStep) and $37 at 21 d, so a 100 floor would skip most calls. 100 x 7/21 keeps
+the default's step cadence. It is a gas filter, so it changes no safety bound.
+Everything else stays at its §5.6 start (no default-run number argues for a change: costSpent peaks at
+29% of the budget, StepCostExceeded fires only past the deSPXA LP range edge, the 2k deSPXA cap never
+binds at 21 d outside the unscored EXT-PROBE). Every value can still be overridden by its env var
+PROTO_SIM_TUNED_&lt;NAME>. The Rebalancer and governance enforce their own §5.6 bounds, so a tuned value
+cannot weaken a safety floor. Set through the timelock (the Safe's only path, as in production).
+
+</i>
+
+```solidity
+uint64 internal constant TUNED_PLAN_DURATION = 21 days;
+```
+
+### TUNED_MIN_STEP_USDC
+
+```solidity
+uint128 internal constant TUNED_MIN_STEP_USDC = 33e6;
+```
+
+## State Variables
+
+### seed
+
+```solidity
+uint256 internal seed;
+```
+
+### scenario
+
+```solidity
+uint256 internal scenario;
+```
+
+### fundSize
+
+```solidity
+uint256 internal fundSize;
+```
+
+### seedK
+
+```solidity
+uint256 internal seedK;
+```
+
+### scnName
+
+```solidity
+string internal scnName;
+```
+
+### slotIndex
+
+```solidity
+uint256 internal slotIndex;
+```
+
+### pinBlock
+
+```solidity
+uint256 internal pinBlock;
+```
+
+### pinTimestamp
+
+```solidity
+uint256 internal pinTimestamp;
+```
+
+### depNonce
+
+```solidity
+uint256 internal depNonce;
+```
+
+### planIndex
+
+```solidity
+uint256 internal planIndex;
+```
+
+### planLabel
+
+```solidity
+string internal planLabel;
+```
+
+### runName
+
+<i>
+
+"default" or "tuned" (PROTO_SIM_RUN); names the output directory.
+
+</i>
+
+```solidity
+string internal runName;
+```
+
+### maxPlanSlots
+
+<i>
+
+path + overrun slots + slack: the loop bound, so Expired is always reached.
+
+</i>
+
+```solidity
+uint256 internal maxPlanSlots;
+```
+
+### pools
+
+```solidity
+address[3] internal pools;
+```
+
+### tokens
+
+```solidity
+address[3] internal tokens;
+```
+
+### usdc0
+
+```solidity
+bool[3] internal usdc0;
+```
+
+### refMilli
+
+```solidity
+int256[3] internal refMilli;
+```
+
+### p0Tick
+
+```solidity
+int256[3] internal p0Tick;
+```
+
+### p0Usdc
+
+```solidity
+uint256[3] internal p0Usdc;
+```
+
+### sigmaMilli
+
+```solidity
+uint256[3] internal sigmaMilli;
+```
+
+### sigmaIntervals
+
+```solidity
+uint256[3] internal sigmaIntervals;
+```
+
+### depthAtPin
+
+```solidity
+uint256[3] internal depthAtPin;
+```
+
+### pinL
+
+```solidity
+uint256[3] internal pinL;
+```
+
+### arbDespxaInv
+
+<i>
+
+deSPXA the arbitrageur bought from the pool since the last US close (its only off-hours inventory).
+
+</i>
+
+```solidity
+uint256 internal arbDespxaInv;
+```
+
+### finalW
+
+<i>
+
+Asset weights (bps) and idle at the moment the plan concluded (the end state G5 scores).
+
+</i>
+
+```solidity
+uint256[] internal finalW;
+```
+
+### finalIdle
+
+```solidity
+uint256 internal finalIdle;
+```
+
+### genesisDepositors
+
+```solidity
+address[] internal genesisDepositors;
+```
+
+### acc
+
+```solidity
+Acc internal acc;
+```
+
+### lastPost
+
+```solidity
+Snap internal lastPost;
+```
+
+### planJson
+
+```solidity
+string[] internal planJson;
+```
+
+### auctionRun
+
+<i>
+
+Auction run: the executor, and the venue the solver chose per basket token for the coming fill.
+
+</i>
+
+```solidity
+bool internal auctionRun;
+```
+
+### failProbe
+
+<i>
+
+PROTO_SIM_PROBE=1: name the revert of the first failed steps per plan (`stepFailProbes`).
+
+</i>
+
+```solidity
+bool internal failProbe;
+```
+
+### previewOn
+
+<i>
+
+Call `previewStep` before each keeper step: for the auction run and the probe, or with
+PROTO_SIM_CHECK=1 to assert that it predicts what `step()` then does. A scored run reads the notional
+from the `RebalanceStep` event instead, since a preview runs the Rebalancer's whole decision again.
+
+</i>
+
+```solidity
+bool internal previewOn;
+```
+
+### kNav
+
+<i>
+
+The pre-step `portfolioValues` of the current keeper call, reused by `_observeMarket` (same state).
+
+</i>
+
+```solidity
+uint256 internal kNav;
+```
+
+### kValues
+
+```solidity
+uint256[] internal kValues;
+```
+
+### auctionExec
+
+```solidity
+AuctionStepExecutor internal auctionExec;
+```
+
+### solverVenue
+
+```solidity
+mapping(address token => uint8 venue) internal solverVenue;
+```
+
+### auctionFailSelector
+
+```solidity
+uint256 internal auctionFailSelector;
+```
+
+### assets45
+
+<i>
+
+PROTO_SIM_ASSETS=4.5: the deficit-first arm of the step 3d comparison (proposal §10 step 3d: "the change in
+G4 cost from ending deficit-first deposits. Both arms of that comparison run on the §4.5 asset list"). The
+same frozen fund and model, with the rules of step 3e for the rerun: every receipt's deSPXA weight is
+spread over its other assets in proportion (`_rule45`, the rule TimedFlowSim uses), so deSPXA stays at 0
+(listed, never bought), and the JUMP scenarios move wETH instead of deSPXA. Output in
+out/prototype/&lt;run>-sync45/. Unset (the scored step 3 run) changes nothing.
+
+</i>
+
+```solidity
+bool internal assets45;
+```
+
+### lpRecenter
+
+<i>
+
+LP re-centre run: the switch, and the one modelled position per basket pool (lpL 0 = none).
+
+</i>
+
+```solidity
+bool internal lpRecenter;
+```
+
+### lpLower
+
+```solidity
+int24[3] internal lpLower;
+```
+
+### lpUpper
+
+```solidity
+int24[3] internal lpUpper;
+```
+
+### lpL
+
+```solidity
+uint128[3] internal lpL;
+```
+
+### lpOutsideSince
+
+<i>
+
+First slot start the pool was seen outside, 0 while it is not.
+
+</i>
+
+```solidity
+uint256[3] internal lpOutsideSince;
+```
+
+## Functions
+
+<a id="test_sim_seq_1m_s0"></a>
+
+### test_sim_SEQ_1M_s0
+
+```solidity
+function test_sim_SEQ_1M_s0() public fixtureCovered;
+```
+
+<a id="test_sim_seq_1m_s1"></a>
+
+### test_sim_SEQ_1M_s1
+
+```solidity
+function test_sim_SEQ_1M_s1() public fixtureCovered;
+```
+
+<a id="test_sim_seq_1m_s2"></a>
+
+### test_sim_SEQ_1M_s2
+
+```solidity
+function test_sim_SEQ_1M_s2() public fixtureCovered;
+```
+
+<a id="test_sim_seq_5m_s0"></a>
+
+### test_sim_SEQ_5M_s0
+
+```solidity
+function test_sim_SEQ_5M_s0() public fixtureCovered;
+```
+
+<a id="test_sim_seq_5m_s1"></a>
+
+### test_sim_SEQ_5M_s1
+
+```solidity
+function test_sim_SEQ_5M_s1() public fixtureCovered;
+```
+
+<a id="test_sim_seq_5m_s2"></a>
+
+### test_sim_SEQ_5M_s2
+
+```solidity
+function test_sim_SEQ_5M_s2() public fixtureCovered;
+```
+
+<a id="test_sim_ext_1m_s0"></a>
+
+### test_sim_EXT_1M_s0
+
+```solidity
+function test_sim_EXT_1M_s0() public fixtureCovered;
+```
+
+<a id="test_sim_ext_1m_s1"></a>
+
+### test_sim_EXT_1M_s1
+
+```solidity
+function test_sim_EXT_1M_s1() public fixtureCovered;
+```
+
+<a id="test_sim_ext_1m_s2"></a>
+
+### test_sim_EXT_1M_s2
+
+```solidity
+function test_sim_EXT_1M_s2() public fixtureCovered;
+```
+
+<a id="test_sim_ext_probe_5m_s0"></a>
+
+### test_sim_EXT_PROBE_5M_s0
+
+```solidity
+function test_sim_EXT_PROBE_5M_s0() public fixtureCovered;
+```
+
+<a id="test_sim_jump_down_1m_s0"></a>
+
+### test_sim_JUMP_DOWN_1M_s0
+
+```solidity
+function test_sim_JUMP_DOWN_1M_s0() public fixtureCovered;
+```
+
+<a id="test_sim_jump_down_1m_s1"></a>
+
+### test_sim_JUMP_DOWN_1M_s1
+
+```solidity
+function test_sim_JUMP_DOWN_1M_s1() public fixtureCovered;
+```
+
+<a id="test_sim_jump_down_1m_s2"></a>
+
+### test_sim_JUMP_DOWN_1M_s2
+
+```solidity
+function test_sim_JUMP_DOWN_1M_s2() public fixtureCovered;
+```
+
+<a id="test_sim_jump_up_1m_s0"></a>
+
+### test_sim_JUMP_UP_1M_s0
+
+```solidity
+function test_sim_JUMP_UP_1M_s0() public fixtureCovered;
+```
+
+<a id="test_sim_jump_up_1m_s1"></a>
+
+### test_sim_JUMP_UP_1M_s1
+
+```solidity
+function test_sim_JUMP_UP_1M_s1() public fixtureCovered;
+```
+
+<a id="test_sim_jump_up_1m_s2"></a>
+
+### test_sim_JUMP_UP_1M_s2
+
+```solidity
+function test_sim_JUMP_UP_1M_s2() public fixtureCovered;
+```
+
+<a id="_fixturecheckbydefault"></a>
+
+### _fixtureCheckByDefault
+
+<i>
+
+The sim skips the per-slot fixture coverage check unless PROTO_FIXTURE_CHECK=1. The recorder's replay
+passes set it, so every fixture is checked against the full sim once. See BaseFixture.
+
+</i>
+
+```solidity
+function _fixtureCheckByDefault() internal pure override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_run-uint256-uint256-uint256"></a>
+
+### _run
+
+```solidity
+function _run(uint256 scn, uint256 fundM, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+| fundM | `uint256` |  |
+| k | `uint256` |  |
+
+<a id="_sequence-uint256"></a>
+
+### _sequence
+
+<i>
+
+Per-asset receipt vectors [aave, comet, moonwell, wETH, cbBTC, deSPXA], exactly the `asset_bps` of
+contracts/test/prototype/fixtures/receipt/sim-asset-vectors.json: the targets the sleeve design
+produced, so G4 and G5 are comparable with the §14 baseline. `_vec` checks each one against the
+bucket totals it came from.
+
+</i>
+
+```solidity
+function _sequence(uint256 scn)
+        internal
+        pure
+        returns (uint16[6][] memory v, string[] memory l);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[6][]` |  |
+| l | `string[]` |  |
+
+<a id="_vec-uint16-6-uint16-uint16-uint16"></a>
+
+### _vec
+
+<i>
+
+Returns `v` after checking it equals the fixed bucket split of (stable, protocol, rwa) (`bucketVec`).
+
+</i>
+
+```solidity
+function _vec(uint16[6] memory v, uint16 stable, uint16 protocol, uint16 rwa)
+        internal
+        pure
+        returns (uint16[6] memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[6]` |  |
+| stable | `uint16` |  |
+| protocol | `uint16` |  |
+| rwa | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16[6]` |  |
+
+<a id="_rule45-uint16-6"></a>
+
+### _rule45
+
+Proposal §10 step 3e (PROTO_SIM_ASSETS=4.5 only): deSPXA's weight spread over the other five assets in
+proportion to their weights in the same receipt, floored, the remaining whole bps to the largest
+remainders (ties to the lower index); deSPXA 0. The same rule as `TimedFlowSim._rule3e`, in this
+contract's order [aave, comet, moonwell, wETH, cbBTC, deSPXA].
+
+```solidity
+function _rule45(uint16[6] memory v) internal pure returns (uint16[6] memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[6]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `uint16[6]` |  |
+
+<a id="_scnname-uint256"></a>
+
+### _scnName
+
+```solidity
+function _scnName(uint256 scn) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_selectparams"></a>
+
+### _selectParams
+
+<i>
+
+PROTO_SIM_RUN picks the parameter set. "default" changes nothing. "tuned" applies `_applyTuned`.
+
+</i>
+
+```solidity
+function _selectParams() internal;
+```
+
+<a id="_applytuned"></a>
+
+### _applyTuned
+
+```solidity
+function _applyTuned() internal;
+```
+
+<a id="_isauctionenv"></a>
+
+### _isAuctionEnv
+
+```solidity
+function _isAuctionEnv() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_basketadapter-address"></a>
+
+### _basketAdapter
+
+<i>
+
+Auction run only: the executor sits in front of the pool adapter for every basket asset. Other runs
+keep the pool adapter, so their setup and every address they touch are unchanged.
+
+</i>
+
+```solidity
+function _basketAdapter(address poolAdapter) internal override returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| poolAdapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_beforehandover"></a>
+
+### _beforeHandover
+
+<i>
+
+Auction run only: bind the Rebalancer and grant the executor KEEPER_ROLE as the deployer admin, before
+the timelock handover. No timelock call, so the run's clock matches the default run's.
+
+</i>
+
+```solidity
+function _beforeHandover() internal override;
+```
+
+<a id="_initsim-uint256-uint256-uint256"></a>
+
+### _initSim
+
+```solidity
+function _initSim(uint256 scn, uint256 size, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scn | `uint256` |  |
+| size | `uint256` |  |
+| k | `uint256` |  |
+
+<a id="_sigma-isimpool-bool"></a>
+
+### _sigma
+
+<i>
+
+Stdev of 30-minute mean-tick changes (one tick = 1 bp of price, so this is the log-return stdev in
+bps) over the longest lookback the observation ring holds: a deterministic ladder 48, 24, 12, 8, 4.
+
+</i>
+
+```solidity
+function _sigma(ISimPool p, bool equityHours)
+        internal
+        view
+        returns (uint256 sigma, uint256 intervals);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ISimPool` |  |
+| equityHours | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sigma | `uint256` |  |
+| intervals | `uint256` |  |
+
+<a id="_meantick-isimpool-uint32"></a>
+
+### _meanTick
+
+```solidity
+function _meanTick(ISimPool p, uint32 window) internal view returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ISimPool` |  |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_genesis"></a>
+
+### _genesis
+
+<i>
+
+Genesis: a receipt-less 100%-stable (or d05) target at NAV 0, then the fund's money in 1M (5M: five
+deposits at the per-deposit cap; 1M: four 250k deposits). Deposits route straight to target.
+
+</i>
+
+```solidity
+function _genesis() internal;
+```
+
+<a id="_runplan-uint16-6-string"></a>
+
+### _runPlan
+
+```solidity
+function _runPlan(uint16[6] memory vec, string memory label) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vec | `uint16[6]` |  |
+| label | `string` |  |
+
+<a id="simopen-uint16-6-string"></a>
+
+### simOpen
+
+Self-call: open the plan through the receipt and timelock path and reset the accumulators.
+
+```solidity
+function simOpen(uint16[6] calldata vec, string calldata label) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vec | `uint16[6]` |  |
+| label | `string` |  |
+
+<a id="simslot-bool"></a>
+
+### simSlot
+
+Self-call: one slot of `stepInterval`. Keeper at t, noise at t+600, arb at t+1200, flows at t+1500.
+
+```solidity
+function simSlot(bool withKeeper) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| withKeeper | `bool` |  |
+
+<a id="_at-uint256"></a>
+
+### _at
+
+```solidity
+function _at(uint256 t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+<a id="_keeper"></a>
+
+### _keeper
+
+```solidity
+function _keeper() internal;
+```
+
+<a id="_observemarket"></a>
+
+### _observeMarket
+
+<i>
+
+Per keeper call, before the step: LP-range and deSPXA-share logs, and whether an asset the
+Rebalancer masks out (ORA-4 or backoff) still sits at least minStepUsdc off its path. Such an asset is
+blocked even when step() reports NothingToTrade or BelowMinStep for the remaining legs.
+
+</i>
+
+```solidity
+function _observeMarket() internal returns (bool maskedOff);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maskedOff | `bool` |  |
+
+<a id="_concluded"></a>
+
+### _concluded
+
+```solidity
+function _concluded() internal;
+```
+
+<a id="_booked-snap-snap-uint160-3-uint256-uint256"></a>
+
+### _booked
+
+<i>
+
+Book one executed step: (a) signed TWAP cost, (b) the fund's floored cost, (c) arrival-price
+execution cost at the pre-step pool spot, (d) basis = a − c.
+
+</i>
+
+```solidity
+function _booked(
+        Snap memory pre,
+        Snap memory post,
+        uint160[3] memory spot,
+        uint256 notional,
+        uint256 spentBefore
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pre | `Snap` |  |
+| post | `Snap` |  |
+| spot | `uint160[3]` |  |
+| notional | `uint256` |  |
+| spentBefore | `uint256` |  |
+
+<a id="_refvaluedelta-snap-snap"></a>
+
+### _refValueDelta
+
+<i>
+
+Δ(idle + lending + Σ q × reference price): the value change at the model's fair price.
+
+</i>
+
+```solidity
+function _refValueDelta(Snap memory a, Snap memory b) internal view returns (int256 dv);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Snap` |  |
+| b | `Snap` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dv | `int256` |  |
+
+<a id="_navref-snap"></a>
+
+### _navRef
+
+<i>
+
+NAV at the reference: idle + lending + Σ q × reference price.
+
+</i>
+
+```solidity
+function _navRef(Snap memory s) internal view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_refsqrt-uint256"></a>
+
+### _refSqrt
+
+```solidity
+function _refSqrt(uint256 b) internal view returns (uint160);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+
+<a id="_usmarketopen-uint256"></a>
+
+### _usMarketOpen
+
+<i>
+
+US equity hours (Mon-Fri, US_OPEN_SEC..US_CLOSE_SEC UTC). Day 0 of the epoch was a Thursday.
+
+</i>
+
+```solidity
+function _usMarketOpen(uint256 t) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_probefailure-uint256"></a>
+
+### _probeFailure
+
+<i>
+
+Diagnostic: go back to the state before the failed step, rebuild the Rebalancer's order the way
+`Rebalancer._buildOrder` does, call `fund.executeStep` as the Rebalancer, keep the revert data, then
+return to the post-failure state. The run continues from exactly the state the real call left.
+
+</i>
+
+```solidity
+function _probeFailure(uint256 before) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| before | `uint256` |  |
+
+<a id="_legdev-uint256"></a>
+
+### _legDev
+
+<i>
+
+"dev&lt;bps>/tick&lt;spot>/ref&lt;ref>;" of a basket leg at the probe (spot-vs-TWAP deviation and the walk).
+
+</i>
+
+```solidity
+function _legDev(uint256 i) internal view returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_order-uint256-uint256-uint256"></a>
+
+### _order
+
+```solidity
+function _order(uint256 sell, uint256 buy, uint256 notional)
+        internal
+        view
+        returns (StepOrder memory o);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sell | `uint256` |  |
+| buy | `uint256` |  |
+| notional | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `StepOrder` |  |
+
+<a id="_stepnotional-vmsafe-log"></a>
+
+### _stepNotional
+
+<i>
+
+The notional of the step `logs` hold (the Rebalancer's `RebalanceStep` event).
+
+</i>
+
+```solidity
+function _stepNotional(VmSafe.Log[] memory logs) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `VmSafe.Log[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_failselector-vmsafe-log"></a>
+
+### _failSelector
+
+```solidity
+function _failSelector(VmSafe.Log[] memory logs) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `VmSafe.Log[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_attribute-snap"></a>
+
+### _attribute
+
+<i>
+
+Between two events holdings change only by price and lending interest. priceMove = Σ q·ΔTWAP,
+interest = Δ lending, residual = ΔNAV − priceMove − interest (should be 0).
+
+</i>
+
+```solidity
+function _attribute(Snap memory b) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Snap` |  |
+
+<a id="_auctiondecide"></a>
+
+### _auctionDecide
+
+<i>
+
+At the slot's keeper time. When the Rebalancer would trade a basket leg, the keeper opens the auction
+and the solver picks its fill time from its reservation per leg (`_solverPlan`). Then this warps to
+that time (MODE_FILL), or the auction lapses unfilled (MODE_LAPSE, booked as a blocked StepFailed
+attempt). Steps with no basket leg, and skips, go to the keeper's plain `step()` (MODE_KEEPER).
+
+</i>
+
+```solidity
+function _auctionDecide() internal returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="_solverrequote-uint256-uint256"></a>
+
+### _solverRequote
+
+<i>
+
+The solver re-quotes at its fill block (the TWAP, the path notional and the floor move with time). It
+sends the fill only when the owed amount there is still within its reservation. Otherwise it waits for
+the new fill block and re-quotes again, at most `AUCTION_REQUOTES` times. Warps to the fill block.
+True when the fill goes out (or the Rebalancer no longer trades, which `_keeper` then books as a skip).
+
+</i>
+
+```solidity
+function _solverRequote(uint256 opened, uint256 e) internal returns (bool, string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `uint256` |  |
+| e | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `string` |  |
+
+<a id="_solverplan-uint256-uint256-uint256-bool-bool"></a>
+
+### _solverPlan
+
+<i>
+
+The solver's fill delay for this step: per basket leg, the first block where the owed amount is at or
+below its reservation, the later of the two legs, plus one block of latency. False when a leg's
+reservation is below its TWAP floor (nobody fills). Leg sizes follow `FundFlowsLib` exactly: a basket
+sell gives the TWAP token amount for the notional (capped by the balance) and the buy leg spends
+min(USDC received, notional).
+
+</i>
+
+```solidity
+function _solverPlan(uint256 sell, uint256 buy, uint256 notional, bool sellB, bool buyB)
+        internal
+        returns (bool ok, uint256 e, string memory why);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sell | `uint256` |  |
+| buy | `uint256` |  |
+| notional | `uint256` |  |
+| sellB | `bool` |  |
+| buyB | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| e | `uint256` |  |
+| why | `string` |  |
+
+<a id="_buylegplan-uint256-uint256-uint256"></a>
+
+### _buyLegPlan
+
+<i>
+
+The basket buy leg's fill delay for spending `usdcIn` with floor `floor`.
+
+</i>
+
+```solidity
+function _buyLegPlan(uint256 buy, uint256 usdcIn, uint256 floor)
+        internal
+        returns (bool, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| buy | `uint256` |  |
+| usdcIn | `uint256` |  |
+| floor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_selllegplan-uint256-uint256-uint256"></a>
+
+### _sellLegPlan
+
+<i>
+
+The basket sell leg's fill delay, and the USDC the buy leg then spends: min(owed at that delay, notional).
+
+</i>
+
+```solidity
+function _sellLegPlan(uint256 sell, uint256 notional, uint256 floor)
+        internal
+        returns (bool ok, uint256 e, uint256 usdcIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sell | `uint256` |  |
+| notional | `uint256` |  |
+| floor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| e | `uint256` |  |
+| usdcIn | `uint256` |  |
+
+<a id="_filldelay-uint256-uint256-uint256"></a>
+
+### _fillDelay
+
+<i>
+
+First block offset where `owedAt(q, floor, e) &lt;= m`. False when m is below the floor.
+
+</i>
+
+```solidity
+function _fillDelay(uint256 q, uint256 floor, uint256 m) internal view returns (bool, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| q | `uint256` |  |
+| floor | `uint256` |  |
+| m | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_reservation-uint256-bool-uint256"></a>
+
+### _reservation
+
+<i>
+
+The most the solver will pay for one leg: its best venue's output, less its margin and gas. Records
+the venue for the fill. `fundSells`: the solver receives the token and pays USDC.
+
+</i>
+
+```solidity
+function _reservation(uint256 b, bool fundSells, uint256 amountIn)
+        internal
+        returns (uint256 m);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| fundSells | `bool` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| m | `uint256` |  |
+
+<a id="_poolquote-address-address-uint256"></a>
+
+### _poolQuote
+
+<i>
+
+The pool's output for `amountIn` now, by running the swap and reverting it.
+
+</i>
+
+```solidity
+function _poolQuote(address tIn, address tOut, uint256 amountIn)
+        internal
+        returns (uint256 out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tIn | `address` |  |
+| tOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `uint256` |  |
+
+<a id="_poolswap-address-address-uint256"></a>
+
+### _poolSwap
+
+<i>
+
+The solver's own exact-in swap on the same fee-500 pool through SwapRouter02, to itself. A swap the
+pool cannot take yields 0.
+
+</i>
+
+```solidity
+function _poolSwap(address tIn, address tOut, uint256 amountIn) internal returns (uint256 out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tIn | `address` |  |
+| tOut | `address` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `uint256` |  |
+
+<a id="_extout-uint256-bool-uint256"></a>
+
+### _extOut
+
+<i>
+
+The external venue's output at the reference walk less its cost. deSPXA has none outside US hours.
+
+</i>
+
+```solidity
+function _extOut(uint256 b, bool fundSells, uint256 amountIn) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| fundSells | `bool` |  |
+| amountIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_tokenforusdcat-uint256-uint160-bool"></a>
+
+### _tokenForUsdcAt
+
+<i>
+
+Token units for `usdc` at sqrt price `sqrtP` (the inverse of `SimLib.spotUsdc`).
+
+</i>
+
+```solidity
+function _tokenForUsdcAt(uint256 usdc, uint160 sqrtP, bool usdcIsToken0)
+        internal
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| sqrtP | `uint160` |  |
+| usdcIsToken0 | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_auctionfill"></a>
+
+### _auctionFill
+
+<i>
+
+The solver's fill. A revert (the step did not execute, for example the RB-4 cost cap) changes nothing
+and is booked as a blocked StepFailed attempt.
+
+</i>
+
+```solidity
+function _auctionFill() internal returns (bool, SkipReason);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+| &lt;none&gt; | `SkipReason` |  |
+
+<a id="_auctionnote-string"></a>
+
+### _auctionNote
+
+```solidity
+function _auctionNote(string memory row) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| row | `string` |  |
+
+<a id="onauctionleg-address-address-uint256-uint256-uint256-uint256"></a>
+
+### onAuctionLeg
+
+<i>
+
+The solver settles one leg: it already holds the fund's `amountIn`. It sources `tokenOut` at the venue
+it chose (pool swap, or the external venue minted at the reference less its cost) and approves the
+owed amount. It re-quoted at this block, so a shortfall is rare. It can come only from the order of
+two basket legs. The solver then pays the gap from its own pocket. That is counted in
+`solverShortLegs` and never charged to the fund.
+
+</i>
+
+```solidity
+function onAuctionLeg(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 owed,
+        uint256,
+        uint256
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| owed | `uint256` |  |
+| _ | `uint256` |  |
+| _ | `uint256` |  |
+
+<a id="_credit-address-uint256"></a>
+
+### _credit
+
+```solidity
+function _credit(address token, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_isbasket-uint256"></a>
+
+### _isBasket
+
+```solidity
+function _isBasket(uint256 i) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_basketof-address"></a>
+
+### _basketOf
+
+```solidity
+function _basketOf(address token) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_noise"></a>
+
+### _noise
+
+<i>
+
+1 or 2 seeded swaps per pool, each a buy or sell that moves the pool's price by u × 10 bps. In range
+that is a swap of u × D, D = the USDC notional that moves the spot 10 bps (from the pool's liquidity,
+`SimLib.depth10Bps`, recorded at the pin). It is run as a price-limited swap, so a pool walked to the
+edge of its liquidity is never pushed to an extreme price by noise (static LP ranges, no re-centering).
+
+</i>
+
+```solidity
+function _noise() internal;
+```
+
+<a id="_arb"></a>
+
+### _arb
+
+<i>
+
+Advance each reference one walk step (ref *= exp(sigma·z), in ticks), then close a seeded fraction
+a ∈ [0.5, 1) of each pool's gap to it (1.0 on the jump slot) with a price-limited swap.
+
+</i>
+
+```solidity
+function _arb() internal;
+```
+
+<a id="_isjump"></a>
+
+### _isJump
+
+```solidity
+function _isJump() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_swaptolimit-uint256-bool-uint160"></a>
+
+### _swapToLimit
+
+<i>
+
+`up`: pool price (token1 per token0) rises, so token1 goes in.
+
+</i>
+
+```solidity
+function _swapToLimit(uint256 b, bool up, uint160 limit) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| up | `bool` |  |
+| limit | `uint160` |  |
+
+<a id="_swaptolimitcapped-uint256-bool-uint160-uint256"></a>
+
+### _swapToLimitCapped
+
+<i>
+
+`capIn` > 0 caps the input (a finite inventory); 0 means the generous budget. Returns the input spent
+and the output received.
+
+</i>
+
+```solidity
+function _swapToLimitCapped(uint256 b, bool up, uint160 limit, uint256 capIn)
+        internal
+        returns (uint256 spent, uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| up | `bool` |  |
+| limit | `uint160` |  |
+| capIn | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+| got | `uint256` |  |
+
+<a id="_lprespond"></a>
+
+### _lpRespond
+
+<i>
+
+Slot start, before the keeper. See the LP model in the contract note for every assumption.
+
+</i>
+
+```solidity
+function _lpRespond() internal;
+```
+
+<a id="_ownactivel-uint256"></a>
+
+### _ownActiveL
+
+<i>
+
+The modelled position's liquidity if the pool's spot tick is inside it, else 0. No call without one.
+
+</i>
+
+```solidity
+function _ownActiveL(uint256 b) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_lpmint-uint256"></a>
+
+### _lpMint
+
+```solidity
+function _lpMint(uint256 b) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+<a id="_lpburn-uint256"></a>
+
+### _lpBurn
+
+```solidity
+function _lpBurn(uint256 b) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+<a id="_floorto-int24-int24"></a>
+
+### _floorTo
+
+<i>
+
+Round `t` down to a multiple of `sp` (toward minus infinity).
+
+</i>
+
+```solidity
+function _floorTo(int24 t, int24 sp) internal pure returns (int24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `int24` |  |
+| sp | `int24` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+
+<a id="uniswapv3mintcallback-uint256-uint256-bytes"></a>
+
+### uniswapV3MintCallback
+
+Uniswap V3 mint callback: the modelled LP pays the pool what the position needs.
+
+```solidity
+function uniswapV3MintCallback(uint256 owed0, uint256 owed1, bytes calldata data) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owed0 | `uint256` |  |
+| owed1 | `uint256` |  |
+| data | `bytes` |  |
+
+<a id="_lppay-address-uint256"></a>
+
+### _lpPay
+
+```solidity
+function _lpPay(address token, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_flow"></a>
+
+### _flow
+
+<i>
+
+With p = 1/12 a deposit or redeem (p = 0.5 each) of 0.10%..0.50% of NAV, measured in its own block.
+
+</i>
+
+```solidity
+function _flow() internal;
+```
+
+<a id="_flowdeposit-uint256"></a>
+
+### _flowDeposit
+
+```solidity
+function _flowDeposit(uint256 amt) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_flowredeem-uint256-uint256"></a>
+
+### _flowRedeem
+
+```solidity
+function _flowRedeem(uint256 amt, uint256 sl) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amt | `uint256` |  |
+| sl | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_flowfail-string-bytes"></a>
+
+### _flowFail
+
+```solidity
+function _flowFail(string memory kind, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `string` |  |
+| err | `bytes` |  |
+
+<a id="_snapkeeper"></a>
+
+### _snapKeeper
+
+<i>
+
+`_snap` that also keeps the full valuation for `_observeMarket`.
+
+</i>
+
+```solidity
+function _snapKeeper() internal returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_snap"></a>
+
+### _snap
+
+```solidity
+function _snap() internal view returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_fill-snap-uint256"></a>
+
+### _fill
+
+```solidity
+function _fill(Snap memory s, uint256[] memory values) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+| values | `uint256[]` |  |
+
+<a id="_spots"></a>
+
+### _spots
+
+```solidity
+function _spots() internal view returns (uint160[3] memory sp);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sp | `uint160[3]` |  |
+
+<a id="simclose"></a>
+
+### simClose
+
+Self-call: check the always-true end state, then serialize the plan row.
+
+```solidity
+function simClose() external;
+```
+
+<a id="_jsonidentity-string-plan"></a>
+
+### _jsonIdentity
+
+```solidity
+function _jsonIdentity(string memory o, Plan memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+| p | `Plan` |  |
+
+<a id="_jsoncost-string-plan"></a>
+
+### _jsonCost
+
+```solidity
+function _jsonCost(string memory o, Plan memory p) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+| p | `Plan` |  |
+
+<a id="_jsonsteps-string"></a>
+
+### _jsonSteps
+
+```solidity
+function _jsonSteps(string memory o) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+
+<a id="_jsonmodel-string"></a>
+
+### _jsonModel
+
+```solidity
+function _jsonModel(string memory o) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+
+<a id="_jsonend-string-plan"></a>
+
+### _jsonEnd
+
+```solidity
+function _jsonEnd(string memory o, Plan memory p) internal returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `string` |  |
+| p | `Plan` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_offtolerance-uint256-uint16-uint256"></a>
+
+### _offTolerance
+
+```solidity
+function _offTolerance(uint256[] memory w, uint16[] memory endBps, uint256 tol)
+        internal
+        pure
+        returns (uint256[] memory idx, uint256[] memory gap, bool liquid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `uint256[]` |  |
+| endBps | `uint16[]` |  |
+| tol | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idx | `uint256[]` |  |
+| gap | `uint256[]` |  |
+| liquid | `bool` |  |
+
+<a id="_statusname-planstatus"></a>
+
+### _statusName
+
+```solidity
+function _statusName(PlanStatus s) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `PlanStatus` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_arr4-uint256-4"></a>
+
+### _arr4
+
+```solidity
+function _arr4(uint256[4] memory a) internal pure returns (uint256[] memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256[4]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[]` |  |
+
+<a id="_arr16-uint16"></a>
+
+### _arr16
+
+```solidity
+function _arr16(uint16[] memory a) internal pure returns (uint256[] memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint16[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[]` |  |
+
+<a id="_writejson-uint256"></a>
+
+### _writeJson
+
+```solidity
+function _writeJson(uint256 fundM) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fundM | `uint256` |  |
+
+<a id="_paramsjson"></a>
+
+### _paramsJson
+
+<i>
+
+The parameters the run actually used, read back from the contracts (not from the constants).
+
+</i>
+
+```solidity
+function _paramsJson() internal returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_arr3-uint256-3"></a>
+
+### _arr3
+
+```solidity
+function _arr3(uint256[3] storage a) internal view returns (uint256[] memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256[3]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[]` |  |
+
+## Structs
+
+### Snap
+
+<i>
+
+Pre/post snapshot of the fund, all in one block.
+
+</i>
+
+```solidity
+struct Snap {
+        uint256 nav;
+        uint256 idle;
+        uint256 supply;
+        uint256[3] lend;
+        uint256[3] q;
+        uint256[3] val;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+| idle | `uint256` |  |
+| supply | `uint256` |  |
+| lend | `uint256[3]` |  |
+| q | `uint256[3]` |  |
+| val | `uint256[3]` |  |
+
+### Acc
+
+<i>
+
+Per-plan accumulators (storage: the slot loop runs in self-calls that free their memory).
+
+</i>
+
+```solidity
+struct Acc {
+        uint256 planId;
+        uint256 slots;
+        uint256 calls;
+        uint256 executed;
+        uint256[8] byReason;
+        uint256 traded;
+        uint256 fundCost;
+        int256 signedCost;
+        int256 execCost;
+        int256 basisCost;
+        uint256 maxStepFundBps;
+        int256 maxStepExecBps;
+        int256 priceMove;
+        int256 interest;
+        uint256 unexplainedDrop;
+        uint256 residualAbs;
+        uint256 deposits;
+        uint256 redeems;
+        uint256 flowsBlocked;
+        uint256 flowLoss;
+        int256 dilution;
+        uint256 concludedAt;
+        uint256 jumpAt;
+        uint256 lastFailSelector;
+        uint256 failProbes;
+        string failReasons;
+        string flowFailReason;
+        /// @dev Actual TWAP weight per receipt bucket [agent, stable, protocol, rwa] at open (test-side labels).
+        uint256[4] startSleeve;
+        /// @dev Bucket totals of the plan's per-asset target (the audit sums; the fund stores no sleeve).
+        uint256[4] endSleeve;
+        uint256 startNav;
+        /// @dev Execution cost against the reference walk (the model's fair price), not the pre-step spot.
+        int256 execCostRef;
+        /// @dev Flow dilution with holdings valued at the reference, not at TWAP (review flowloss-tautological).
+        uint256 flowLossRef;
+        /// @dev NothingToTrade / BelowMinStep calls while a masked asset (ORA-4 or backoff) sat off path.
+        uint256 maskedCalls;
+        /// @dev Keeper calls with each basket pool's active liquidity < 1% of the pin's (left the pin LP range).
+        uint256[3] outOfRangeCalls;
+        /// @dev Slots whose deSPXA arbitrage was skipped (outside US hours).
+        uint256 despxaArbClosedSlots;
+        /// @dev Peak fund deSPXA holdings, bps of the pool's deSPXA reserve and of deSPXA totalSupply.
+        uint256 maxDespxaPoolShareBps;
+        uint256 maxDespxaSupplyShareBps;
+        /// @dev Auction run only (written to JSON only in that run).
+        uint256 auctionOpens;
+        uint256 auctionFills;
+        uint256 auctionLapses;
+        uint256 auctionFillReverts;
+        uint256 auctionDelaySumSec;
+        uint256 poolLegs;
+        uint256 externalLegs;
+        uint256 solverShortLegs;
+        int256 solverPnlRef;
+        /// @dev LP re-centre run only (written to JSON only in that run), per basket pool.
+        uint256[3] lpRecenters;
+        uint256[3] lpWithdrawals;
+        /// @dev Keeper calls with the pool's total active liquidity, modelled position included, < 1% of the pin's.
+        uint256[3] lpThinCalls;
+        /// @dev Keeper calls with the modelled position in range.
+        uint256[3] lpModelCalls;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| slots | `uint256` |  |
+| calls | `uint256` |  |
+| executed | `uint256` |  |
+| byReason | `uint256[8]` |  |
+| traded | `uint256` |  |
+| fundCost | `uint256` |  |
+| signedCost | `int256` |  |
+| execCost | `int256` |  |
+| basisCost | `int256` |  |
+| maxStepFundBps | `uint256` |  |
+| maxStepExecBps | `int256` |  |
+| priceMove | `int256` |  |
+| interest | `int256` |  |
+| unexplainedDrop | `uint256` |  |
+| residualAbs | `uint256` |  |
+| deposits | `uint256` |  |
+| redeems | `uint256` |  |
+| flowsBlocked | `uint256` |  |
+| flowLoss | `uint256` |  |
+| dilution | `int256` |  |
+| concludedAt | `uint256` |  |
+| jumpAt | `uint256` |  |
+| lastFailSelector | `uint256` |  |
+| failProbes | `uint256` |  |
+| failReasons | `string` |  |
+| flowFailReason | `string` |  |
+| startSleeve | `uint256[4]` |  |
+| endSleeve | `uint256[4]` |  |
+| startNav | `uint256` |  |
+| execCostRef | `int256` |  |
+| flowLossRef | `uint256` |  |
+| maskedCalls | `uint256` |  |
+| outOfRangeCalls | `uint256[3]` |  |
+| despxaArbClosedSlots | `uint256` |  |
+| maxDespxaPoolShareBps | `uint256` |  |
+| maxDespxaSupplyShareBps | `uint256` |  |
+| auctionOpens | `uint256` |  |
+| auctionFills | `uint256` |  |
+| auctionLapses | `uint256` |  |
+| auctionFillReverts | `uint256` |  |
+| auctionDelaySumSec | `uint256` |  |
+| poolLegs | `uint256` |  |
+| externalLegs | `uint256` |  |
+| solverShortLegs | `uint256` |  |
+| solverPnlRef | `int256` |  |
+| lpRecenters | `uint256[3]` |  |
+| lpWithdrawals | `uint256[3]` |  |
+| lpThinCalls | `uint256[3]` |  |
+| lpModelCalls | `uint256[3]` |  |
+

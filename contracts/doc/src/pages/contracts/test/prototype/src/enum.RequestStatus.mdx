@@ -1,0 +1,32 @@
+---
+title: "RequestStatus"
+description: "Life of a request (§5.9.2). A request may fill in parts (each fill is a claim, E8). `Pending` covers a partly filled request. `Expired` is reported by views once `maxRoll` epochs passed with an unfilled part; the escrow then waits for `withdrawExpired`. `Closed` means nothing is left in escrow for it: filled completely, cancelled, exited in kind, or its expired escrow withdrawn."
+---
+
+# RequestStatus
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+Life of a request (§5.9.2). A request may fill in parts (each fill is a claim, E8). `Pending` covers a
+partly filled request. `Expired` is reported by views once `maxRoll` epochs passed with an unfilled part;
+the escrow then waits for `withdrawExpired`. `Closed` means nothing is left in escrow for it: filled
+completely, cancelled, exited in kind, or its expired escrow withdrawn.
+
+```solidity
+enum RequestStatus {
+    None,
+    Pending,
+    Expired,
+    Closed
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| None |  |
+| Pending |  |
+| Expired |  |
+| Closed |  |
+

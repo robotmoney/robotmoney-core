@@ -16,10 +16,12 @@
 // AFTER it requires the Safe's ExecutionSuccess and the receipt contract's ReceiptRecorded log, then reads the receipt back and compares id, digest, uri and submitter.
 import { createPublicClient, encodeFunctionData, getAddress, http, keccak256, parseAbi, parseAbiItem, parseEventLogs, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
-import { supportedReceiptPayload } from "./receipt-digest.ts";
+import { FUND_RECEIPT_SCHEMA_VERSION, SUPPORTED_RECEIPT_SCHEMA_VERSION, supportedReceiptPayload } from "./receipt-digest.ts";
 import { RECEIPT_SUBMITTER_ROLE } from "./verify/constants.ts";
 import { loadRunManifest, readManifestField, saveRunManifest, confirmStage, type RunContext } from "./runner.ts";
-import { manifestRef, receiptRef } from "./stages.ts";
+import { ACTIVE_SYSTEM, handoverStage, manifestRef, receiptRef } from "./stages.ts";
+import { MANIFEST_ENV } from "./core-wiring.ts";
+import type { SystemName } from "./stage-table.ts";
 import { checkSignaturesOnChain, connectSafe, executeTx, proposeTx, signTx, type Logger, type Signer } from "./safe/index.ts";
 import { assertSubmitterSafe, chainFromClient, forbiddenSubmitters, submitterSafeEvidence, type SubmitterChain, type SubmitterSafeEvidence } from "./submitter-safe.ts";
 
@@ -132,12 +134,14 @@ const lc = (x: string) => x.toLowerCase();
 /**
  * Issue 1888: the payload bytes are MANDATORY. The digest and the receipt id are recomputed from them (receipt-digest.ts supportedReceiptPayload) and a --receipt-id or
  * --payload-digest that differs is refused naming both. Pure: no chain, no signer. Throws USAGE (nothing sent).
+ * Deploy 4: `system` picks the one schema_version the payload must carry: 1.0 for the vaults system (unchanged), 1.1 (the per-asset `assets` list) for the fund system.
+ * Every other check is the same for both.
  */
-export function assertRecordInputs(i: { receiptId?: string; payloadDigest?: string; payloadUri?: string; payload?: Uint8Array }): RecordInputs {
+export function assertRecordInputs(i: { receiptId?: string; payloadDigest?: string; payloadUri?: string; payload?: Uint8Array }, system: SystemName = "vaults"): RecordInputs {
   if (!i.receiptId || !B32.test(i.receiptId)) throw new PublishError("USAGE", "--receipt-id must be a 0x-prefixed bytes32 (the receipt_id that `rmpc receipt verify` prints)");
   if (!i.payloadDigest || !B32.test(i.payloadDigest)) throw new PublishError("USAGE", "--payload-digest must be a 0x-prefixed bytes32 (the payload_digest that `rmpc receipt verify` prints)");
   if (!i.payloadUri || !/^https?:\/\/\S+$/.test(i.payloadUri)) throw new PublishError("USAGE", "--payload-uri must be the public http(s) route that serves the exact payload bytes");
-  const p = supportedReceiptPayload(i.payload);
+  const p = supportedReceiptPayload(i.payload, recordSchemaVersion(system));
   if (p.digest.toLowerCase() !== i.payloadDigest.toLowerCase()) {
     throw new PublishError("USAGE", `--payload-digest ${i.payloadDigest} is not the receipt digest of the payload bytes ${p.digest}: the digest is keccak256("robotmoney:consensus-receipt:v1\\n" + the canonical receipt bytes), not a plain keccak256 of the file (plain keccak256 of these bytes is ${keccak256(i.payload!)})`, { digest: i.payloadDigest, computed: p.digest });
   }
@@ -145,12 +149,33 @@ export function assertRecordInputs(i: { receiptId?: string; payloadDigest?: stri
   return { receiptId: i.receiptId.toLowerCase() as Hex, payloadDigest: i.payloadDigest.toLowerCase() as Hex, payloadUri: i.payloadUri };
 }
 
-/** The addresses the verb talks to, from the stage manifests of the run. */
-export const loadRecordAddrs = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): { receipt: Address; safe: Address; timelock: Address } => ({
-  safe: readManifestField(ctx, manifestRef("safe", "safe")) as Address,
-  timelock: readManifestField(ctx, manifestRef("timelock", "timelock")) as Address,
-  receipt: readManifestField(ctx, receiptRef()) as Address,
-});
+/** Deploy 4: the receipt schema_version the system's record-receipt accepts. The gateway system records no receipt (parseCli refuses the verb there). */
+export function recordSchemaVersion(system: SystemName): string {
+  if (system === "fund") return FUND_RECEIPT_SCHEMA_VERSION;
+  if (system === "vaults") return SUPPORTED_RECEIPT_SCHEMA_VERSION;
+  throw new PublishError("USAGE", `the ${system} system records no consensus receipt: record-receipt runs for the vaults and fund systems only. Nothing sent.`);
+}
+
+/** Deploy 4: `file:field` of the fund system's receipt register (fund-receipt.json consensus_receipt), the same source the fund stages read FUND_RECEIPT_ADDRESS from. */
+export const fundReceiptRef = (): string => manifestRef(MANIFEST_ENV.FUND_RECEIPT_ADDRESS!.stage, MANIFEST_ENV.FUND_RECEIPT_ADDRESS!.field);
+
+/**
+ * The addresses the verb talks to, from the stage manifests of the run's ACTIVE system (stages.ts ACTIVE_SYSTEM). The vaults system: safe.json, timelock.json and its receipt
+ * stage (receiptRef). Deploy 4, the fund system: its own Safe (safe.json), its own timelock (the handover stage, fund-timelock.json) and its own register (fund-receipt.json),
+ * never the vaults system's.
+ */
+export const loadRecordAddrs = (ctx: Pick<RunContext, "coreDir" | "chainId" | "manifestOut">): { receipt: Address; safe: Address; timelock: Address } => {
+  if (ACTIVE_SYSTEM === "fund") return {
+    safe: readManifestField(ctx, manifestRef("safe", "safe")) as Address,
+    timelock: readManifestField(ctx, manifestRef(handoverStage(), "timelock")) as Address,
+    receipt: readManifestField(ctx, fundReceiptRef()) as Address,
+  };
+  return {
+    safe: readManifestField(ctx, manifestRef("safe", "safe")) as Address,
+    timelock: readManifestField(ctx, manifestRef("timelock", "timelock")) as Address,
+    receipt: readManifestField(ctx, receiptRef()) as Address,
+  };
+};
 
 /** What the verb is asked to record. `payload` and `submitter` are mandatory: a missing one is refused before anything is read or built. */
 export interface RecordRequest { receiptId?: string; payloadDigest?: string; payloadUri?: string; payload?: Uint8Array; submitter?: string }
@@ -162,7 +187,7 @@ export interface RecordSigners { sender(): Promise<Signer>; owners(): Promise<Si
 
 export async function recordReceipt(ctx: RunContext, signers: RecordSigners, req: RecordRequest, api: RecordApi = realRecordApi(ctx.rpc, ctx.chainId, ctx.log)): Promise<RecordedReceipt> {
   // 1. Pure input checks: the payload bytes, the digest and the id. No chain read, no signer.
-  const i = assertRecordInputs(req);
+  const i = assertRecordInputs(req, ACTIVE_SYSTEM);
   if (req.submitter === undefined || !/^0x[0-9a-fA-F]{40}$/.test(req.submitter) || /^0x0{40}$/.test(req.submitter)) {
     throw new PublishError("USAGE", "record-receipt needs --submitter <the submitter Safe> (a SafeL2 1.4.1 multisig) and the --owner-signer of its owners: the consensus receipt submitter is a Safe on every chain, never a single key. --signer is the gas payer. Nothing sent.");
   }

@@ -1,0 +1,810 @@
+---
+title: "EndToEndTest"
+description: "One-vault experiment, step 3d: the whole life of the fund on the timed flows, on real Base venues."
+---
+
+# EndToEndTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/EndToEnd.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+One-vault experiment, step 3d: the whole life of the fund on the timed flows, on real Base venues.
+
+`test_happyPath_*` is scaffold plan §1 item 3: seed, deposit request, settle, hold, delivery, redemption
+request, settle, claim. It checks each step against the design (the escrow, the bound price and RB-14,
+the hold, delivery by anyone to the owner only, the ledger's queued shares, the claim, the queue's books).
+
+`test_endToEnd_planLifecycle` keeps the step 3c lifecycle on the new flows: deposits through the queue,
+receipts (refused ones, the good one, stale and replayed ones), keeper steps until Converged with the
+RB-4 and RB-7 checks after every step, then redemptions through the queue and in kind after convergence
+and while a plan is Paused (RB-6). Step 3c's deficit-first deposit stage is gone (D11: a pro-rata deposit
+does not change weights); it lives on in `baseline/EndToEnd.t.sol`.
+
+No market price, amount out or block number is hard-coded: every check is a relationship.
+
+## Constants
+
+### PPS_UNIT
+
+<i>
+
+Raw share amount used to read NAV per share (shares carry a 10^18 virtual offset).
+
+</i>
+
+```solidity
+uint256 internal constant PPS_UNIT = 1e30;
+```
+
+### MAX_CALLS
+
+<i>
+
+Upper bound on keeper calls: a 7-day path at one call per interval, plus a day of overrun.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_CALLS = 400;
+```
+
+### LIMIT_MARGIN_BPS
+
+<i>
+
+The user's margin over the quote when setting a limit (E21: a client sets the limit from the quote).
+
+</i>
+
+```solidity
+uint256 internal constant LIMIT_MARGIN_BPS = 50;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### carol
+
+```solidity
+address internal carol = makeAddr("carol");
+```
+
+### _e2eSalt
+
+```solidity
+uint256 private _e2eSalt;
+```
+
+### _idOld
+
+```solidity
+bytes32 private _idOld;
+```
+
+### _dOld
+
+```solidity
+bytes32 private _dOld;
+```
+
+### _older
+
+```solidity
+uint16[5] private _older;
+```
+
+### _executed
+
+```solidity
+uint256 private _executed;
+```
+
+### _calls
+
+```solidity
+uint256 private _calls;
+```
+
+### _totalCost
+
+```solidity
+uint256 private _totalCost;
+```
+
+### _skips
+
+```solidity
+mapping(SkipReason => uint256) private _skips;
+```
+
+### _hpDepositId
+
+```solidity
+uint256 private _hpDepositId;
+```
+
+### _hpDepositLimit
+
+```solidity
+uint256 private _hpDepositLimit;
+```
+
+### _hpShares
+
+```solidity
+uint256 private _hpShares;
+```
+
+### _hpCredit
+
+```solidity
+uint256 private _hpCredit;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_happypath_seeddepositsettleholddeliverredeemsettleclaim"></a>
+
+### test_happyPath_seedDepositSettleHoldDeliverRedeemSettleClaim
+
+```solidity
+function test_happyPath_seedDepositSettleHoldDeliverRedeemSettleClaim() public fixtureCovered;
+```
+
+<a id="_hpseedandinvest"></a>
+
+### _hpSeedAndInvest
+
+<i>
+
+E14: the setUp seed is the fund's own, at the share scale. Then a 1-day plan spreads it over every
+listed asset, so the flows below buy and sell every asset.
+
+</i>
+
+```solidity
+function _hpSeedAndInvest() private;
+```
+
+<a id="_hpdepositrequest-uint256"></a>
+
+### _hpDepositRequest
+
+<i>
+
+§5.9.2 steps 1 and 2: the quote, then the request with a limit from it. The USDC sits in the queue.
+
+</i>
+
+```solidity
+function _hpDepositRequest(uint256 usdc) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+<a id="_hpdepositsettle"></a>
+
+### _hpDepositSettle
+
+<i>
+
+§5.9.2 step 4 and §5.9.3: after the window, the keeper settles. One claim for alice with its unlock
+time; its price is inside alice's limit and at or below the bound plus its own rounding allowance (RB-14).
+The unused USDC is alice's credit (E22). Check 10 from outside: no held amount per share fell.
+
+</i>
+
+```solidity
+function _hpDepositSettle() private;
+```
+
+<a id="_hpholdanddelivery"></a>
+
+### _hpHoldAndDelivery
+
+<i>
+
+§5.9.2 step 6: no delivery during the hold; after it, anyone triggers delivery and the shares go only to
+the owner (E8, RB-11). Alice pulls her credit (E22).
+
+</i>
+
+```solidity
+function _hpHoldAndDelivery() private;
+```
+
+<a id="_hpredeemandclaim-uint256"></a>
+
+### _hpRedeemAndClaim
+
+<i>
+
+§5.9.2 steps 1 to 4 for a redemption, then the claim. The fund sells the pro-rata slice (E4), the exit
+fee goes to the fee recipient, alice's USDC is claimable at once and paid to her. The round trip loses at
+most the swap costs and the fee, and creates nothing.
+
+</i>
+
+```solidity
+function _hpRedeemAndClaim(uint256 deposited) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deposited | `uint256` |  |
+
+<a id="_hpredeemsettle-uint256"></a>
+
+### _hpRedeemSettle
+
+<i>
+
+The redemption request from the quote, then its settlement. Returns alice's limit.
+
+</i>
+
+```solidity
+function _hpRedeemSettle(uint256 shares) private returns (uint256 minLimit);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| minLimit | `uint256` |  |
+
+<a id="test_seam_queueexitsgothroughthefund"></a>
+
+### test_seam_queueExitsGoThroughTheFund
+
+<i>
+
+Cancel (escrow to a share credit, still counted for the ledger until withdrawn), the in-kind exit of
+escrowed shares (`redeemInKind(shares, owner, queue)`: the queue burns its own shares, the owner receives
+every leg, nothing is keyed to the queue), and a freeze during the hold followed by the Safe's return in
+kind (only the depositor can take it). The queue's books match its balances after each.
+
+</i>
+
+```solidity
+function test_seam_queueExitsGoThroughTheFund() public fixtureCovered;
+```
+
+<a id="_seamcancel-uint256"></a>
+
+### _seamCancel
+
+```solidity
+function _seamCancel(uint256 shares) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_seamexitinkind-uint256"></a>
+
+### _seamExitInKind
+
+```solidity
+function _seamExitInKind(uint256 q) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| q | `uint256` |  |
+
+<a id="_seamfreezeandreturn"></a>
+
+### _seamFreezeAndReturn
+
+```solidity
+function _seamFreezeAndReturn() private;
+```
+
+<a id="test_endtoend_planlifecycle"></a>
+
+### test_endToEnd_planLifecycle
+
+```solidity
+function test_endToEnd_planLifecycle() public fixtureCovered;
+```
+
+<a id="_stage1settargetanddeposits-uint16-5"></a>
+
+### _stage1SetTargetAndDeposits
+
+```solidity
+function _stage1SetTargetAndDeposits(uint16[5] memory initial) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| initial | `uint16[5]` |  |
+
+<a id="_stage2receipts-uint16-5"></a>
+
+### _stage2Receipts
+
+```solidity
+function _stage2Receipts(uint16[5] memory proposed)
+        private
+        returns (uint256 planId, bytes32 good);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proposed | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| good | `bytes32` |  |
+
+<a id="_applygood-bytes32-bytes32-uint16-5"></a>
+
+### _applyGood
+
+<i>
+
+Apply the good receipt. Plan 1 is concluded by now; the release happens in the same call.
+
+</i>
+
+```solidity
+function _applyGood(bytes32 good, bytes32 dGood, uint16[5] memory proposed)
+        private
+        returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| good | `bytes32` |  |
+| dGood | `bytes32` |  |
+| proposed | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="_refusestaleandreplay-bytes32-bytes32-uint16-5"></a>
+
+### _refuseStaleAndReplay
+
+<i>
+
+Stale: an older receipt is refused once a newer one applied, even with a valid vector. Replay: the
+applied receipt cannot be applied twice.
+
+</i>
+
+```solidity
+function _refuseStaleAndReplay(bytes32 good, bytes32 dGood, uint16[5] memory proposed) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| good | `bytes32` |  |
+| dGood | `bytes32` |  |
+| proposed | `uint16[5]` |  |
+
+<a id="_applyexpectrevert-bytes32-bytes32-uint16-5-bytes"></a>
+
+### _applyExpectRevert
+
+<i>
+
+Schedule `applyReceipt` on the timelock, wait the delay, and expect the execution to revert with
+`revertData` (the timelock bubbles the target's revert).
+
+</i>
+
+```solidity
+function _applyExpectRevert(
+        bytes32 id,
+        bytes32 digest,
+        uint16[5] memory bps,
+        bytes memory revertData
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `bytes32` |  |
+| digest | `bytes32` |  |
+| bps | `uint16[5]` |  |
+| revertData | `bytes` |  |
+
+<a id="_stage3stepuntilconverged-uint256-bytes32-uint16-5"></a>
+
+### _stage3StepUntilConverged
+
+```solidity
+function _stage3StepUntilConverged(uint256 planId, bytes32 receiptId, uint16[5] memory proposed)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| receiptId | `bytes32` |  |
+| proposed | `uint16[5]` |  |
+
+<a id="_onecheckedstep"></a>
+
+### _oneCheckedStep
+
+<i>
+
+One keeper `step()` with the per-step assertions: previewStep agrees with step, NAV moves by the
+measured cost only, cost &lt;= cap (RB-4), costSpent &lt;= budget, legs stay on their side of
+`pathTarget(now)` (RB-7). A skip changes nothing.
+
+</i>
+
+```solidity
+function _oneCheckedStep() private;
+```
+
+<a id="_assertstepcost-snap-snap-uint256"></a>
+
+### _assertStepCost
+
+<i>
+
+RB-4 (step 3e, proposal §5.10): NAV falls by at most maxStepCostBps of notional at the TWAP and at the
+feeds, and the plan books exactly the cost at the feeds: the fall of idle plus the two legs at the feed
+prices (every other asset is unchanged, RB-19), recomputed here from the held amounts (`feedLegs`).
+Returns the cap.
+
+</i>
+
+```solidity
+function _assertStepCost(Snap memory b, Snap memory a, uint256 notional)
+        private
+        returns (uint256 maxCost);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Snap` |  |
+| a | `Snap` |  |
+| notional | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxCost | `uint256` |  |
+
+<a id="_snap"></a>
+
+### _snap
+
+```solidity
+function _snap() private view returns (Snap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+
+<a id="_valueof-snap-uint256"></a>
+
+### _valueOf
+
+```solidity
+function _valueOf(Snap memory s, uint256 index) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `Snap` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_legsatfeedsnow-uint256-uint256"></a>
+
+### _legsAtFeedsNow
+
+<i>
+
+Idle USDC plus the legs `sell` and `buy` (IDLE_INDEX adds nothing) at the feed prices now, computed here
+the way proposal §5.10 defines the step's cost basis: a lending asset counts one to one; a basket asset at
+its Chainlink feed in USDC per whole token (`feed × 1e6 / USDC feed`, rounded down), times its held amount.
+
+</i>
+
+```solidity
+function _legsAtFeedsNow(uint256 sell, uint256 buy) private view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sell | `uint256` |  |
+| buy | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_atfeed-uint256-uint256"></a>
+
+### _atFeed
+
+```solidity
+function _atFeed(uint256 i, uint256 amount) private view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_lastcostbooked"></a>
+
+### _lastCostBooked
+
+<i>
+
+The `feedCost` and `twapCost` of the last `StepCostBooked` the fund emitted in the recorded logs.
+
+</i>
+
+```solidity
+function _lastCostBooked() private returns (uint256 feedCost, uint256 twapCost);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feedCost | `uint256` |  |
+| twapCost | `uint256` |  |
+
+<a id="_stage4redemptions-uint16-5"></a>
+
+### _stage4Redemptions
+
+```solidity
+function _stage4Redemptions(uint16[5] memory initial) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| initial | `uint16[5]` |  |
+
+<a id="_checkedredeem-address-uint256"></a>
+
+### _checkedRedeem
+
+<i>
+
+A redemption through the queue pays at least the quote's worst amount, at most the fee-net TWAP value
+of the shares at the request (plus interest over the wait), burns exactly `shares`, charges the exit fee,
+and never lowers the remaining holders' NAV per share.
+
+</i>
+
+```solidity
+function _checkedRedeem(address who, uint256 shares) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_checkedredeeminkind-address-address-uint256"></a>
+
+### _checkedRedeemInKind
+
+<i>
+
+`redeemInKind` pays the pro-rata USDC (idle plus lending) and each basket token, net of the exit fee,
+with no swap: the TWAP value received is the fee-net share of NAV (to rounding), and stayers keep
+their NAV per share. Lending above the period's in-kind allowance becomes a position claim (E9, E20);
+its value counts too.
+
+</i>
+
+```solidity
+function _checkedRedeemInKind(address owner, address receiver, uint256 shares) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+
+<a id="_claimvalue-address"></a>
+
+### _claimValue
+
+<i>
+
+USDC value today of every lending position claim `who` holds (E9).
+
+</i>
+
+```solidity
+function _claimValue(address who) private view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_assertpersharenotlower-uint256-uint256-uint256-string"></a>
+
+### _assertPerShareNotLower
+
+<i>
+
+Check 10 restated from outside: every held amount per share is at least what it was.
+
+</i>
+
+```solidity
+function _assertPerShareNotLower(
+        uint256 idle0,
+        uint256[] memory held0,
+        uint256 supply0,
+        string memory label
+    ) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle0 | `uint256` |  |
+| held0 | `uint256[]` |  |
+| supply0 | `uint256` |  |
+| label | `string` |  |
+
+<a id="_assertbooks-string"></a>
+
+### _assertBooks
+
+<i>
+
+The queue's books (eng plan §4.3): with no gift, its USDC and share balances equal the sums.
+
+</i>
+
+```solidity
+function _assertBooks(string memory label) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+
+## Structs
+
+### Snap
+
+<i>
+
+State captured right before one `step()` (same block as the step).
+
+</i>
+
+```solidity
+struct Snap {
+        uint256 nav;
+        uint256 idle;
+        uint256[] values;
+        uint256 pps;
+        uint256 costSpent;
+        uint32 stepCount;
+        /// @dev Idle plus the step's two legs at the feeds (step 3e's cost basis), set around a step.
+        uint256 feedLegs;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+| idle | `uint256` |  |
+| values | `uint256[]` |  |
+| pps | `uint256` |  |
+| costSpent | `uint256` |  |
+| stepCount | `uint32` |  |
+| feedLegs | `uint256` |  |
+

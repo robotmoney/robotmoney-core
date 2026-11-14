@@ -1,0 +1,106 @@
+---
+title: "CustodyTest"
+description: "One-vault experiment (plan Step 2, G3; step 3d flows): the two custody invariants the other suites leave open. INV-3: fee recipient, fee parameters, quarantine and the flow parameters change only through the timelock. INV-2: donations accrue pro rata to holders (the seed's own shares included), and share inflation by a first depositor does not pay (the seed, E14, makes the fund never empty)."
+---
+
+# CustodyTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Custody.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+One-vault experiment (plan Step 2, G3; step 3d flows): the two custody invariants the other suites leave
+open. INV-3: fee recipient, fee parameters, quarantine and the flow parameters change only through the
+timelock. INV-2: donations accrue pro rata to holders (the seed's own shares included), and share
+inflation by a first depositor does not pay (the seed, E14, makes the fund never empty).
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="_expectallrefused-address-bytes"></a>
+
+### _expectAllRefused
+
+```solidity
+function _expectAllRefused(address target, bytes memory data) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+<a id="test_inv3_feeandquarantineonlyviatimelock"></a>
+
+### test_INV3_feeAndQuarantineOnlyViaTimelock
+
+```solidity
+function test_INV3_feeAndQuarantineOnlyViaTimelock() public fixtureCovered;
+```
+
+<a id="test_inv3_flowparamsonlyviatimelock"></a>
+
+### test_INV3_flowParamsOnlyViaTimelock
+
+<i>
+
+§5.9.5: the flow parameters, the queue's unpause and its upgrade are the timelock's alone.
+
+</i>
+
+```solidity
+function test_INV3_flowParamsOnlyViaTimelock() public fixtureCovered;
+```
+
+<a id="test_inv2_donationaccruesprorata"></a>
+
+### test_INV2_donationAccruesProRata
+
+<i>
+
+A USDC donation raises every holder's claim pro rata, the seed's included. The donor gets nothing back.
+
+</i>
+
+```solidity
+function test_INV2_donationAccruesProRata() public fixtureCovered;
+```
+
+<a id="test_inv2_firstdepositorinflationdoesnotpay"></a>
+
+### test_INV2_firstDepositorInflationDoesNotPay
+
+<i>
+
+Classic first-depositor attack: mint a small position, donate to inflate the price, let the victim's
+deposit round down. With the seed (E14) the fund is never empty, the 18-decimal offset still applies,
+and the victim buys at the price of the settlement (its bound, E12), so the victim's loss is negligible
+and the attack is a loss.
+
+</i>
+
+```solidity
+function test_INV2_firstDepositorInflationDoesNotPay() public fixtureCovered;
+```
+

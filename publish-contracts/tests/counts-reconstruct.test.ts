@@ -1,5 +1,6 @@
 // Reconstructed baseline frozen counts (issue 1733): a new sha gets a NON-adopted frozen file rebuilt from an adopted Twin measuring run, checked against the
 // stage table, the build and the chain, and marked `measured.reconstructed`. Every refusal below has a mutation check in the PR description.
+import { linkedSystemsCreate2Libraries } from "../src/libs-build.ts";
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -33,7 +34,7 @@ const REF = Object.fromEntries(Object.entries(JSON.parse(readFileSync(REF_PATH, 
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
 const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const TICK_RUNTIME = `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` as Hex; // PUSH20 <address(this)> at bytes 1 to 20
-const C2 = buildCreate2Libraries(table.create2Libraries!, OUT);
+const C2 = buildCreate2Libraries(linkedSystemsCreate2Libraries(table), OUT); // Deploy 4: the vaults baseline, without the fund system's libraries
 const THREE = [...C2.values()];
 // Issue 1808: the create2 libraries a Twin run adopts, by the first stage that lists them (vault: GovernedUpgrade and RobotMoneyVaultOps,
 // gateway: GatewayWindows, proto: the four basket libraries). The first three of BASKET are the first release's three.

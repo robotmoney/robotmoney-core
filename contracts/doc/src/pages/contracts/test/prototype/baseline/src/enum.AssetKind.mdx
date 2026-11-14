@@ -1,0 +1,27 @@
+---
+title: "AssetKind"
+description: "How a fund asset is held and valued (§4.2). Lending: an `IStrategyAdapter`; valued 1:1 by `adapter.totalAssets()`. Basket: a token held by the fund; valued at TWAP through its `IBasketSwapAdapter`."
+---
+
+# AssetKind
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/FundTypes.sol)
+
+How a fund asset is held and valued (§4.2).
+Lending: an `IStrategyAdapter`; valued 1:1 by `adapter.totalAssets()`.
+Basket:  a token held by the fund; valued at TWAP through its `IBasketSwapAdapter`.
+
+```solidity
+enum AssetKind {
+    Lending,
+    Basket
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Lending |  |
+| Basket |  |
+

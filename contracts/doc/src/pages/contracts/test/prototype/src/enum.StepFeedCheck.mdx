@@ -1,0 +1,48 @@
+---
+title: "StepFeedCheck"
+description: "Which feed check of a rebalance step failed (step 3e, proposal §5.10: checks 2 and 4 of §5.9.3 run on every step, inside the fund's `executeStep` and before it in `Rebalancer.step()`). `StepFeedLib.check`."
+---
+
+# StepFeedCheck
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+Which feed check of a rebalance step failed (step 3e, proposal §5.10: checks 2 and 4 of §5.9.3 run on
+every step, inside the fund's `executeStep` and before it in `Rebalancer.step()`). `StepFeedLib.check`.
+
+```solidity
+enum StepFeedCheck {
+    /// @dev Every check passed.
+    Ok,
+    /// @dev No FlowQueue is bound to the fund: the sequencer feed, the USDC feed and `refBandBps` live in its
+    ///      `FlowParams` and `feeds()` (proposal §5.9.5), so the step fails closed.
+    NoQueue,
+    /// @dev Check 2: the sequencer is down, or up for less than `sequencerGrace`. `detail` = the `FeedStatus`.
+    Sequencer,
+    /// @dev Check 2: an active basket asset's feed is not fresh and positive. `index` = the asset, `detail` = the
+    ///      `FeedStatus`.
+    Feed,
+    /// @dev Check 2: the USDC / USD feed is unhealthy (`detail` = the `FeedStatus`) or outside `usdcPegBandBps`
+    ///      (`detail` = its 8-decimal price).
+    UsdcPeg,
+    /// @dev Check 4 could not read an active basket asset's TWAP (the adapter reverted or priced a whole token at
+    ///      0). `index` = the asset.
+    TwapRead,
+    /// @dev Check 4: an active basket asset's TWAP over its `twapWindow` sits more than `refBandBps` from its feed.
+    ///      `index` = the asset, `detail` = the deviation in bps (rounded up).
+    TwapVsFeed
+}
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Ok |  |
+| NoQueue |  |
+| Sequencer |  |
+| Feed |  |
+| UsdcPeg |  |
+| TwapRead |  |
+| TwapVsFeed |  |
+

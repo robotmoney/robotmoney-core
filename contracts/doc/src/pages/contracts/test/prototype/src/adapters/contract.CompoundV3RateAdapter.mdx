@@ -1,0 +1,68 @@
+---
+title: "CompoundV3RateAdapter"
+description: "Test copy of the production `CompoundV3Adapter` (step 3d, E15): every production function is inherited unchanged; `ratePerUnit()` is added."
+---
+
+# CompoundV3RateAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/CompoundV3RateAdapter.sol)
+
+**Inherits:** [CompoundV3Adapter](/contracts/adapters/contract.CompoundV3Adapter), [ILendingRateAdapter](/contracts/test/prototype/src/interfaces/interface.ILendingRateAdapter)
+
+**Title:** CompoundV3RateAdapter
+
+Test copy of the production `CompoundV3Adapter` (step 3d, E15): every production function is inherited
+unchanged; `ratePerUnit()` is added.
+
+## Functions
+
+<a id="constructor-address-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address comet_, address usdc_, address vault_)
+        CompoundV3Adapter(comet_, usdc_, vault_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| comet_ | `address` |  |
+| usdc_ | `address` |  |
+| vault_ | `address` |  |
+
+<a id="rateperunit"></a>
+
+### ratePerUnit
+
+<i>
+
+`totalSupply() × 1e18 / totalSupplyBase`, rounded DOWN: Comet's base supply index accrued to now (Comet
+exposes the accrued index only through `totalSupply`). A gift of USDC or cUSDCv3 to this adapter does not
+move it; a supply or withdrawal by anyone moves it only by Comet's own principal rounding (one unit in
+`totalSupplyBase`). Reverts `NoSupplyBase` on an empty market rather than returning a made-up rate.
+
+</i>
+
+```solidity
+function ratePerUnit() external view returns (uint256 rate1e18);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rate1e18 | `uint256` |  |
+
+## Errors
+
+### NoSupplyBase
+
+Comet has no supplied principal, so it has no rate.
+
+```solidity
+error NoSupplyBase();
+```
+

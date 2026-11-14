@@ -1,0 +1,91 @@
+---
+title: "HarnessSmokeTest"
+description: "One-vault experiment (plan Step 2.1, step 3d wiring): proves `PrototypeHarness` deploys the full prototype on the Base fixture and that its helpers work. Not a behaviour suite."
+---
+
+# HarnessSmokeTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/HarnessSmoke.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+One-vault experiment (plan Step 2.1, step 3d wiring): proves `PrototypeHarness` deploys the full prototype
+on the Base fixture and that its helpers work. Not a behaviour suite.
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_deployanddeposit"></a>
+
+### test_deployAndDeposit
+
+<i>
+
+Wiring (RB-1, RB-8, E1), the asset list and feeds (E15, E16), the seed (E14), then one deposit through
+the queue with no plan: the seed is idle, so the pro-rata deposit stays idle and NAV is seed + cost.
+
+</i>
+
+```solidity
+function test_deployAndDeposit() public fixtureCovered;
+```
+
+<a id="test_receiptplandepositstep"></a>
+
+### test_receiptPlanDepositStep
+
+<i>
+
+Receipt to plan through the timelock, three keeper steps on the seed, a pro-rata deposit through the
+queue, then the price helper.
+
+</i>
+
+```solidity
+function test_receiptPlanDepositStep() public fixtureCovered;
+```
+
+<a id="test_feedhelpers"></a>
+
+### test_feedHelpers
+
+<i>
+
+E19 and the feed helpers: after a warp past the ETH feed's maximum age the fund's NAV views revert and
+`lastGoodNav` still answers; `refreshFeeds` makes them read again; `setFeedPrice` moves one feed.
+
+</i>
+
+```solidity
+function test_feedHelpers() public fixtureCovered;
+```
+
+<a id="test_compoundlistedwhenthefixturecoversit"></a>
+
+### test_compoundListedWhenTheFixtureCoversIt
+
+<i>
+
+Compound V3 is listed only when the fixture holds Comet's extension delegate (see the harness note).
+
+</i>
+
+```solidity
+function test_compoundListedWhenTheFixtureCoversIt() public fixtureCovered;
+```
+

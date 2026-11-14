@@ -34,7 +34,7 @@ function busy(w: World): World {
 function upgradeableWorld(): World {
   const w = buildWorld(918453);
   w.sheet.upgradeMode = "upgradeable";
-  for (const s of w.opts.table.stages.filter((x) => x.proxies)) {
+  for (const s of w.opts.table.stages.filter((x) => x.proxies && x.system !== "fund")) { // Deploy 4: the fund system has its own world (tests/fund-system.test.ts)
     const p = join(w.manifestDir, stageManifestFile(w.opts.table, s.name));
     writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), upgrade_mode: "upgradeable" }));
   }

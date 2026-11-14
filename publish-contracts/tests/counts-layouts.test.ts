@@ -3,6 +3,7 @@
 // A reconstructed baseline is named by the DEPLOY sha X (deployments/frozen-counts/X.json). It can never be inside the checkout at X: the file holds X, and X is the hash of a tree that
 // would hold the file (L3). The release flow therefore tags X, merges the file as a data-only commit AFTER the tag, and the operator runs the code from a clean checkout at X while the
 // counts come from a clean checkout of a descendant commit Y (L2). Layout L1 (the file untracked inside the checkout at X) is a dirty tree and is refused.
+import { linkedSystemsCreate2Libraries } from "../src/libs-build.ts";
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -32,7 +33,7 @@ const table = getStageTable();
 const tickArt = JSON.parse(readFileSync(join(OUT, "TickMath.sol", "TickMath.json"), "utf8"));
 const TICK = predictedLibraryAddress(tickArt.bytecode.object);
 const TICK_RUNTIME = `0x73${TICK.slice(2).toLowerCase()}${tickArt.deployedBytecode.object.slice(44)}` as Hex;
-const C2 = buildCreate2Libraries(table.create2Libraries!, OUT);
+const C2 = buildCreate2Libraries(linkedSystemsCreate2Libraries(table), OUT); // Deploy 4: the vaults fixture build, without the fund system's libraries
 const THREE = [...C2.values()];
 // Issue 1808: each create2 library is adopted by the first stage that lists it (vault, proto; the gateway system adopts its own).
 const ADOPTING = ["vault", "proto"].map((stage) => ({ stage, libs: adoptableOf(table, stage).map((l) => C2.get(l.artifact)!) }));

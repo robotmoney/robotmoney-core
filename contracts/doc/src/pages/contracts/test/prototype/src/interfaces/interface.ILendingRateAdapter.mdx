@@ -1,0 +1,35 @@
+---
+title: "ILendingRateAdapter"
+description: "The lending adapter test copies of step 3d (E15, check 5): the production `IStrategyAdapter` plus the venue's OWN exchange rate per unit, scaled by 1e18 (Aave: the reserve's normalized income; Compound V3: the supply index; a Morpho / ERC-4626 vault: `convertToAssets(1 share)` scaled). It is a property of the venue, not of the fund's position: a gift to the adapter, a deposit or a rebalance step does not move it."
+---
+
+# ILendingRateAdapter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/interfaces/IFlowAdapters.sol)
+
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
+
+**Title:** ILendingRateAdapter
+
+The lending adapter test copies of step 3d (E15, check 5): the production `IStrategyAdapter` plus the
+venue's OWN exchange rate per unit, scaled by 1e18 (Aave: the reserve's normalized income; Compound V3:
+the supply index; a Morpho / ERC-4626 vault: `convertToAssets(1 share)` scaled). It is a property of
+the venue, not of the fund's position: a gift to the adapter, a deposit or a rebalance step does not
+move it.
+
+## Functions
+
+<a id="rateperunit"></a>
+
+### ratePerUnit
+
+```solidity
+function ratePerUnit() external view returns (uint256 rate1e18);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rate1e18 | `uint256` |  |
+

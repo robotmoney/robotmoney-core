@@ -1,0 +1,621 @@
+---
+title: "FundFlowsLib"
+description: "Every value-moving path of `RobotMoneyFund` except the share mint/burn and the final payouts, as an externally linked library (DELEGATECALL: `address(this)` is the fund, approvals and balances are the fund's). Every swap goes through `BasketSwaps.swap` with the asset's allowlisted `IBasketSwapAdapter` and pays the fund itself. Every USDC that leaves the fund here goes to an allowlisted Lending adapter, a Basket swap adapter, or the fund's `ExclusionLedger` (RB-3, INV-1). Recipients: the in-kind `receiver` (the holder's own choice, or the request owner the queue names), and `caller` of the FLOW_ROLE functions (the FlowQueue: refunds of unused USDC and sale proceeds)."
+---
+
+# FundFlowsLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundFlowsLib.sol)
+
+**Title:** FundFlowsLib
+
+Every value-moving path of `RobotMoneyFund` except the share mint/burn and the final payouts, as an
+externally linked library (DELEGATECALL: `address(this)` is the fund, approvals and balances are
+the fund's). Every swap goes through `BasketSwaps.swap` with the asset's allowlisted
+`IBasketSwapAdapter` and pays the fund itself. Every USDC that leaves the fund here goes to an
+allowlisted Lending adapter, a Basket swap adapter, or the fund's `ExclusionLedger` (RB-3, INV-1).
+Recipients: the in-kind `receiver` (the holder's own choice, or the request owner the queue names), and
+`caller` of the FLOW_ROLE functions (the FlowQueue: refunds of unused USDC and sale proceeds).
+
+## Constants
+
+### SEED_SHARES_PER_USDC
+
+<i>
+
+Share units minted per USDC unit by `seed`: the fund's existing scale (`_decimalsOffset() == 18`), so the
+first share costs par (`PRICE_SCALE / 1e18`).
+
+</i>
+
+```solidity
+uint256 internal constant SEED_SHARES_PER_USDC = 1e18;
+```
+
+## Functions
+
+<a id="seed-fundstate-address-uint256-uint256"></a>
+
+### seed
+
+Body of `IRobotMoneyFund.seed` (E14). The fund checks ADMIN_ROLE, holds `nonReentrant` and mints the
+returned shares to itself. Once, only at zero supply (`AlreadySeeded`), at least `minSeedUsdc`
+(`SeedBelowMinimum`). Pulls `usdc` from `caller`; it stays idle until the first plan moves it.
+
+```solidity
+function seed(FundState storage s, address caller, uint256 usdc, uint256 supply)
+        public
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| caller | `address` |  |
+| usdc | `uint256` |  |
+| supply | `uint256` | The fund's `totalSupply()` now. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | `usdc × 10^18`. |
+
+<a id="mintinkind-fundstate-address-uint256-uint256-uint256-uint256"></a>
+
+### mintInKind
+
+Body of `IRobotMoneyFund.mintInKind` (E3, proposal §5.9.3 step 9) up to the mint. The fund checks
+FLOW_ROLE, holds `nonReentrant`, then mints exactly `sharesOut` to `caller`.
+1. Gates (defence in depth, the queue's check 1 already skips deposits then): `NotSeeded` at zero
+supply, `DepositsArePaused`, `FundIsShutdown`, `DepositsClosedDuringExclusion`; `InvalidParam`
+for `sharesOut == 0`; `LegLimitsLength`.
+2. Check 7: snapshot idle and every counted asset's held amount (`FundValuationLib.heldAmounts`).
+3. Pull `maxUsdc` from `caller`. For idle and each counted asset `want = ceil(held × sharesOut /
+supply)`: idle keeps it; Lending supplies `want + LENDING_ROUNDING_UNITS` (a venue that keeps less
+reverts `LendingSupplyRefused`); Basket buys exactly `want` tokens with `swapExactOut`, spending at
+most `maxUsdcPerLeg[i]` (check 9; the venue reverts above it, and `FlowLegLimit` if the adapter
+reports more).
+4. `spent` = idle part + lending supplies + the swap inputs the adapters report. `MintInKindOverMax`
+above `maxUsdc`; else `maxUsdc − spent` goes back to `caller`, so the caller's USDC falls by
+exactly `spent` (never by a balance difference).
+5. Check 10 with `supplyAfter = supply + sharesOut`. The mint that follows moves no asset, so the
+comparison holds after it too. An adapter that under-delivers tokens or keeps unreported USDC
+fails here.
+
+```solidity
+function mintInKind(
+        FundState storage s,
+        address caller,
+        uint256 sharesOut,
+        uint256 maxUsdc,
+        uint256[] memory maxUsdcPerLeg,
+        uint256 supply
+    ) public returns (uint256 spent);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| caller | `address` |  |
+| sharesOut | `uint256` |  |
+| maxUsdc | `uint256` |  |
+| maxUsdcPerLeg | `uint256[]` |  |
+| supply | `uint256` | The fund's `totalSupply()` before the mint. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+
+<a id="sellforflow-fundstate-address-uint256-uint256-uint256"></a>
+
+### sellForFlow
+
+Body of `IRobotMoneyFund.sellForFlow` (E4, proposal §5.9.3 step 8) after the burn. The fund checks
+FLOW_ROLE, holds `nonReentrant` and has already burned `shares` of `caller` (burn before any external
+call). Never gated by plan state, pause or shutdown (RB-6).
+1. `LegLimitsLength`. Check 7 snapshot (the burn moved no asset).
+2. Realize `shares / supplyBefore` of every counted holding, each rounded DOWN: the idle part; each
+Lending position withdraws its part less `LENDING_ROUNDING_UNITS` (nothing when that is ≤ 0),
+measured by the fund's USDC delta; each Basket token sells its part through the production
+exact-input `swap` with `minUsdcPerLeg[i]` as the floor (check 8, `FlowLegLimit` if the delta is
+below it). A venue that cannot pay reverts the call, so the queue leaves redemptions pending.
+3. `exitFeeBps` of the realized gross (rounded down) to `feeRecipient`, the rest to `caller`.
+4. Check 10 with `supplyAfter = supplyBefore − shares`. Emits `SoldForFlow`.
+
+```solidity
+function sellForFlow(
+        FundState storage s,
+        address caller,
+        uint256 shares,
+        uint256[] memory minUsdcPerLeg,
+        uint256 supplyBefore
+    ) public returns (uint256 net);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| caller | `address` |  |
+| shares | `uint256` |  |
+| minUsdcPerLeg | `uint256[]` |  |
+| supplyBefore | `uint256` | The fund's `totalSupply()` before the burn. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| net | `uint256` | USDC paid to `caller`. |
+
+<a id="_supplyleg-fundstate-uint256-uint256"></a>
+
+### _supplyLeg
+
+<i>
+
+`mintInKind` lending leg (own frame for stack depth): supply `ask` to lending asset `i` for the holders
+(`FundPositionLib.supply` mints their units); a venue that keeps less reverts `LendingSupplyRefused`.
+
+</i>
+
+```solidity
+function _supplyLeg(FundState storage s, uint256 i, uint256 ask) private returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| ask | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_buyexact-assetconfig-address-uint256-uint256-uint256"></a>
+
+### _buyExact
+
+<i>
+
+Buy exactly `amountOut` of Basket asset `a` with at most `limit` USDC through the asset's exact-output
+adapter (`IExactOutSwapAdapter`, the step 3d test copies). Approve `limit`, swap with recipient = the
+fund, clear the approval. Returns the input the adapter reports; the tokens are checked by check 10.
+
+</i>
+
+```solidity
+function _buyExact(
+        AssetConfig storage a,
+        address usdc,
+        uint256 i,
+        uint256 amountOut,
+        uint256 limit
+    ) private returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| usdc | `address` |  |
+| i | `uint256` |  |
+| amountOut | `uint256` |  |
+| limit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+
+<a id="sweepforeign-fundstate-address-address"></a>
+
+### sweepForeign
+
+Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2). Reverts
+`ProtectedToken` for USDC, the share token, every asset token (active or not) and every Lending
+adapter address. Emits `ForeignTokenSwept`.
+
+```solidity
+function sweepForeign(FundState storage s, address token, address caller) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| token | `address` |  |
+| caller | `address` |  |
+
+<a id="payinkind-fundstate-address-address-uint256-uint256"></a>
+
+### payInKind
+
+Oracle-free, swap-free payout of `shares / supplyBefore` (§4.4 `redeemInKind`): the pro-rata
+idle USDC plus the USDC withdrawn pro rata from each counted Lending adapter as one USDC leg,
+then each active Basket token's pro-rata balance. Each leg pays `exitFeeBps` to
+`feeRecipient` and the rest to `receiver` (the caller's own ERC-4626 receiver, INV-1).
+
+<i>
+
+Port of `BasketAssetConfigGuard.payInKind` plus the `RobotMoneyVault` lending pull. No TWAP read,
+no swap, never gated by plan state, pause or shutdown (RB-6).
+
+</i>
+
+Venue freeze (§5.8 row 7: "`redeemInKind` remains open"). One frozen venue must not lock every
+holder of the one vault in. So a leg that cannot pay out does not revert the exit:
+- Lending: `withdraw(want)` runs under try/catch; whatever did not arrive (a revert, a paused
+reserve, 100% utilization, a short fill) is DEFERRED, not forfeited.
+- Basket: each transfer (to the receiver, then the fee) is attempted; one that fails is DEFERRED.
+A deferred amount stays where it is (tokens in the fund, USDC in the adapter) but leaves the
+holders' books: `deferredTotal[i]` is subtracted by `heldBalance`, so NAV and every later pro-rata
+leg exclude it, and the stayers neither gain nor lose by the freeze. The owed account later pulls it
+with `claimDeferred`. The fee share is deferred to `feeRecipient` the same way, so the split is
+exactly what an unfrozen exit would have paid. A Lending claim is a fixed USDC amount: interest on
+it, and any later venue loss, stay with the holders (prototype simplification).
+The idle USDC leg uses a plain transfer: USDC failing for the fund itself stops every path.
+
+Step 3d (fund-core, proposal §5.9.4, RB-13): the legs are taken from one check 7 snapshot, each Lending
+leg asks for `LENDING_ROUNDING_UNITS` less than its exact part (nothing when that part is ≤ the margin),
+and check 10 is asserted at the end with `supplyAfter = supplyBefore − shares`.
+
+Step 3d (fund-extras: E9, E20, E23, RB-21). The step 3c lending deferral above (a fixed USDC claim) is
+gone for lending legs: `FundPositionLib.inKindLending` pays the lending part in USDC up to the period's
+in-kind allowance and turns the rest, and any part a venue cannot pay, into a claim on a share of the
+position. E23: `receiver == address(0)` reverts `ZeroAddress`; the snapshot reads each lending venue's
+value under try/catch, and a venue whose read reverts becomes a claim on the exiter's units of it with no
+read at all (check 10 then skips that asset: its held amount cannot be read, and its units move exactly);
+every claim and every basket deferral is keyed to `owner`, or to `receiver` when `owner` is the bound
+FlowQueue (escrowed shares: `receiver` is the request's owner, E9).
+
+```solidity
+function payInKind(
+        FundState storage s,
+        address receiver,
+        address owner,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+<a id="_inkindsnapshot-fundstate"></a>
+
+### _inKindSnapshot
+
+<i>
+
+Check 7 snapshot of the in-kind exit, tolerant of a lending venue whose value read reverts (E23): idle
+USDC; per COUNTED asset the holders' held amount (`held`); per counted lending asset its position value
+(`pos`), or `FundPositionLib.UNREADABLE` with `held` 0 when `totalAssets()` reverted.
+
+</i>
+
+```solidity
+function _inKindSnapshot(FundState storage s)
+        private
+        view
+        returns (uint256 idle, uint256[] memory held, uint256[] memory pos);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle | `uint256` |  |
+| held | `uint256[]` |  |
+| pos | `uint256[]` |  |
+
+<a id="_inkindbasket-fundstate-uint256-address-address-uint256-uint256"></a>
+
+### _inKindBasket
+
+<i>
+
+`payInKind` Basket legs (own frame for stack depth): each counted token's part, net of the fee; a
+transfer that fails is deferred to `claimant` (E23: keyed to the owner, who can pull it to any address).
+
+</i>
+
+```solidity
+function _inKindBasket(
+        FundState storage s,
+        uint256[] memory held0,
+        address receiver,
+        address claimant,
+        uint256 shares,
+        uint256 supplyBefore
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| held0 | `uint256[]` |  |
+| receiver | `address` |  |
+| claimant | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+<a id="claimdeferred-fundstate-uint256-address-address"></a>
+
+### claimDeferred
+
+Pay `account` everything it is owed from asset `index` (`IRobotMoneyFund.claimDeferred`), to
+`to` (the account's own choice, as an ERC-4626 receiver). Basket: transfer the tokens. Lending:
+`withdraw` exactly the owed USDC from the adapter (`DeferredShortfall` when it delivers less, so
+the claim stays whole) and transfer it. Works whatever the asset's status (inactive, excluded):
+the claim was fixed at exit time. Reverts `NothingDeferred` when nothing is owed.
+
+```solidity
+function claimDeferred(FundState storage s, uint256 index, address account, address to)
+        public
+        returns (uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| account | `address` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="_defersplit-fundstate-uint256-uint256-address"></a>
+
+### _deferSplit
+
+<i>
+
+Defer `amount` of asset `i` owed to an in-kind exit: the `exitFeeBps` share to `feeRecipient`, the rest
+to `claimant` (the split an unfrozen leg would have paid). Step 3d: Basket legs only; a lending leg that
+cannot pay becomes a position claim (`FundPositionLib`).
+
+</i>
+
+```solidity
+function _deferSplit(FundState storage s, uint256 i, uint256 amount, address claimant) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+| claimant | `address` |  |
+
+<a id="_defer-fundstate-uint256-address-uint256"></a>
+
+### _defer
+
+```solidity
+function _defer(FundState storage s, uint256 i, address account, uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| account | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_trytransfer-address-address-uint256"></a>
+
+### _tryTransfer
+
+<i>
+
+`IERC20.transfer` that reports failure instead of reverting (SafeERC20 semantics: a call that
+reverts, returns false, or targets no code is a failure; empty return data is success).
+
+</i>
+
+```solidity
+function _tryTransfer(address token, address to, uint256 amount) private returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="executestep-fundstate-steporder"></a>
+
+### executeStep
+
+Body of `IRobotMoneyFund.executeStep` (§5.3 steps 5-8; step 3e: proposal §5.10, RB-4 and RB-19 from step
+3e). Since step 3e the step lives in the linked `FundStepLib` (size, §6.1: the step 3e checks would have
+left this library 483 bytes under EIP-170). This forwarder keeps the fund's call site unchanged; the
+nested DELEGATECALL still runs as the fund. See `FundStepLib.executeStep`.
+
+```solidity
+function executeStep(FundState storage s, StepOrder memory o)
+        public
+        returns (StepResult memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `StepResult` |  |
+
+<a id="emergencyunwind-fundstate"></a>
+
+### emergencyUnwind
+
+Move every holding to idle USDC. Lending: drain the holders' part of each active adapter, tolerant
+of a failing adapter (`RobotMoneyVaultOps._emergencyPull`), leaving the position claims' part in
+the venue and burning the holders' units (`FundPositionLib.drain`, E9); an adapter under an open
+exclusion record is drained INTO its record, never into idle (exclusion is not confiscation, core
+1820). Basket:
+sell each active balance with floor = TWAP × (1 − maxSlippageBps) (`BasketSwaps.unwindAll`); a
+zero floor is dust and is skipped; a leg whose TWAP read fails is skipped and stays held (there
+is no configured-floor override here, see the fund's NatSpec). A swap below its floor reverts
+the whole unwind, as on BasketVault. Returns the USDC that reached idle.
+
+```solidity
+function emergencyUnwind(FundState storage s) public returns (uint256 recovered);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recovered | `uint256` |  |
+
+<a id="_swap-assetconfig-address-address-uint256-uint256"></a>
+
+### _swap
+
+<i>
+
+Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund,
+clear approval). Returns `tokenOut` received by balance delta.
+
+</i>
+
+```solidity
+function _swap(
+        AssetConfig memory a,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| minOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="_payleg-address-address-uint256-uint256-address"></a>
+
+### _payLeg
+
+<i>
+
+Pay one in-kind leg: `exitFeeBps` of it to `feeTo`, the rest to `receiver`.
+
+</i>
+
+```solidity
+function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps, address feeTo)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| receiver | `address` |  |
+| amount | `uint256` |  |
+| feeBps | `uint256` |  |
+| feeTo | `address` |  |
+
+<a id="_haircut-uint256-uint256"></a>
+
+### _haircut
+
+<i>
+
+`value × (1 − bps)`, floored (BasketVault._applySlippage).
+
+</i>
+
+```solidity
+function _haircut(uint256 value, uint256 bps) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` |  |
+| bps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

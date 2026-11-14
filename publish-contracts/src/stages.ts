@@ -56,11 +56,25 @@ export function buildStages(table: StageTable, system: SystemName | "all-forge" 
     // is an open decision (architecture 10) and the vaults system's Safe and timelock are not its inputs.
     return [...forge.filter((r) => table.stages.find((s) => s.name === r.name)?.system === "gateway"), VERIFY_ROW];
   }
-  const own = table.systems ? forge.filter((r) => table.stages.find((s) => s.name === r.name)?.system === "vaults") : forge;
-  const handover = own.findIndex((r) => r.name === "timelock");
+  // Deploy 4: the fund system is shaped like the vaults system (its own Safe, a control proof, its own timelock handover last, verify and govern), with its own stages.
+  const sys = system === "fund" ? "fund" : "vaults";
+  const own = table.systems ? forge.filter((r) => table.stages.find((s) => s.name === r.name)?.system === sys) : forge;
+  const handover = own.findIndex((r) => r.name === handoverStageOf(table, sys));
   const ordered = handover < 0 ? [...own, PROVE_ROW] : [...own.slice(0, handover), PROVE_ROW, ...own.slice(handover)];
-  return [SAFE_ROW, ...ordered, VERIFY_ROW, GOVERN_ROW];
+  // Deploy 4: the fund system has no govern stage. govern.ts governs the vaults system (its unpause rows, the router receipt); the fund's governed calls go through the Safe
+  // tool (safe/cli.ts) on its own timelock, row by row in the runbook.
+  return sys === "fund" ? [SAFE_ROW, ...ordered, VERIFY_ROW] : [SAFE_ROW, ...ordered, VERIFY_ROW, GOVERN_ROW];
 }
+
+/**
+ * The stage that hands the system to its timelock: the vaults system's `timelock` (the table's upgradeAuthority stage), or a system's own `upgradeAuthorityStage` (Deploy 4:
+ * the fund system's `fund-timelock`). The control proof runs right before it.
+ */
+export function handoverStageOf(t: Pick<StageTable, "systems" | "upgradeAuthority">, system: SystemName): string {
+  return t.systems?.[system]?.upgradeAuthorityStage ?? (system === "vaults" ? (t.upgradeAuthority?.stage ?? "timelock") : "timelock");
+}
+/** The handover stage of the loaded table and the active system. */
+export const handoverStage = (): string => handoverStageOf(getStageTable(), ACTIVE_SYSTEM);
 
 /** Every forge row of the table whatever the system, for manifest references across systems (the gateway system reads the vaults system's manifests). */
 const allForgeRows = (t: StageTable): StageRow[] => buildStages(t, "all-forge").filter((r) => r.kind === "forge");
@@ -81,6 +95,7 @@ export let ACTIVE_SYSTEM: SystemName = "vaults";
 
 export function useStageTable(t: StageTable, system: SystemName = "vaults"): void {
   if (system === "gateway" && !t.systems?.gateway) throw new PublishError("INPUT_MISSING", "the core stage table declares no gateway system: use a core DEPLOY_SHA from after the system split (issue 1892)");
+  if (system === "fund" && !t.systems?.fund) throw new PublishError("INPUT_MISSING", "the core stage table declares no fund system: use a core DEPLOY_SHA that carries the one-vault deploy stages (Deploy 4)");
   const unknown = t.vaults.find((v) => !isVaultKey(v.key) && !isRetiredVaultKey(v.key));
   if (unknown) throw new PublishError("INPUT_MISSING", `the core stage table names vault ${unknown.key}, which is neither a vault of this line nor a retired one`);
   table = t;

@@ -1,0 +1,206 @@
+{
+  "description": "Per-asset targets the sleeve design produced for every receipt the rebalance sim uses (contracts/test/prototype/sim/RebalanceSim.t.sol, _sequence and _genesis). The phase 3b sim port submits asset_bps in place of each sleeve vector, so G4 and G5 must reproduce the §14 baseline exactly. Derived and checked by: bun scripts/prototype/check-receipt-assets.ts --sim-vectors.",
+  "rounding": "This is PlanMath.assetTargets at the baseline commit. For each sleeve with a nonzero weight, each active asset of the sleeve in fund index order gets floor(sleeve_bps x intra_bps / 10000). The sleeve's floor remainder goes to its last active asset, the highest fund index: morpho-usdc for the stable sleeve and cbbtc for the protocol sleeve. So each sleeve's assets sum to its weight exactly, and the vector sums to 10000. Idle USDC has no target. The lending cap (6000 bps) refuses a target above it. It never clamps. No vector here reaches it.",
+  "fund_index_order": [
+    "aave-v3-usdc",
+    "compound-v3-usdc",
+    "morpho-usdc",
+    "weth",
+    "cbbtc",
+    "despxa"
+  ],
+  "sleeve_order": [
+    "agent_tokens",
+    "conservative_defi_yield",
+    "protocol_tokens",
+    "real_world_assets"
+  ],
+  "sleeve_design": {
+    "source": "contracts/test/prototype/PrototypeHarness.sol _addAssets and _lending. The sim never calls setIntraBps.",
+    "assets": [
+      {
+        "asset": "aave-v3-usdc",
+        "fund_index": 0,
+        "sleeve": 1,
+        "intra_bps": 4000,
+        "cap_bps": 6000
+      },
+      {
+        "asset": "compound-v3-usdc",
+        "fund_index": 1,
+        "sleeve": 1,
+        "intra_bps": 3000,
+        "cap_bps": 6000
+      },
+      {
+        "asset": "morpho-usdc",
+        "fund_index": 2,
+        "sleeve": 1,
+        "intra_bps": 3000,
+        "cap_bps": 6000
+      },
+      {
+        "asset": "weth",
+        "fund_index": 3,
+        "sleeve": 2,
+        "intra_bps": 5000,
+        "cap_bps": null
+      },
+      {
+        "asset": "cbbtc",
+        "fund_index": 4,
+        "sleeve": 2,
+        "intra_bps": 5000,
+        "cap_bps": null
+      },
+      {
+        "asset": "despxa",
+        "fund_index": 5,
+        "sleeve": 3,
+        "intra_bps": 10000,
+        "cap_bps": null
+      }
+    ]
+  },
+  "receipts": {
+    "R1p": {
+      "note": "deploy-2 receipt 0xdcf4.. with its 575 agent bps folded into stable (ADR-0017)",
+      "sleeve_bps": [
+        0,
+        9125,
+        525,
+        350
+      ],
+      "asset_bps": [
+        3650,
+        2737,
+        2738,
+        262,
+        263,
+        350
+      ]
+    },
+    "d05": {
+      "note": "anchored receipt d05. Also the JUMP genesis target (setTarget, no receipt).",
+      "sleeve_bps": [
+        0,
+        9500,
+        500,
+        0
+      ],
+      "asset_bps": [
+        3800,
+        2850,
+        2850,
+        250,
+        250,
+        0
+      ]
+    },
+    "d07": {
+      "note": "anchored receipt d07",
+      "sleeve_bps": [
+        0,
+        8000,
+        1000,
+        1000
+      ],
+      "asset_bps": [
+        3200,
+        2400,
+        2400,
+        500,
+        500,
+        1000
+      ]
+    },
+    "d08": {
+      "note": "anchored receipt d08",
+      "sleeve_bps": [
+        0,
+        7000,
+        1500,
+        1500
+      ],
+      "asset_bps": [
+        2800,
+        2100,
+        2100,
+        750,
+        750,
+        1500
+      ]
+    },
+    "X": {
+      "note": "EXT leg 1: all stable to all basket",
+      "sleeve_bps": [
+        0,
+        0,
+        5000,
+        5000
+      ],
+      "asset_bps": [
+        0,
+        0,
+        0,
+        2500,
+        2500,
+        5000
+      ]
+    },
+    "G": {
+      "note": "EXT leg 2: back to all stable. Also the SEQ and EXT genesis target (setTarget, no receipt).",
+      "sleeve_bps": [
+        0,
+        10000,
+        0,
+        0
+      ],
+      "asset_bps": [
+        4000,
+        3000,
+        3000,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "scenarios": {
+    "SEQ": {
+      "genesis": "G",
+      "plans": [
+        "R1p",
+        "d05",
+        "d07",
+        "d08"
+      ]
+    },
+    "EXT": {
+      "genesis": "G",
+      "plans": [
+        "X",
+        "G"
+      ]
+    },
+    "EXT_PROBE": {
+      "genesis": "G",
+      "plans": [
+        "X",
+        "G"
+      ]
+    },
+    "JUMP_DOWN": {
+      "genesis": "d05",
+      "plans": [
+        "d07"
+      ]
+    },
+    "JUMP_UP": {
+      "genesis": "d05",
+      "plans": [
+        "d07"
+      ]
+    }
+  }
+}

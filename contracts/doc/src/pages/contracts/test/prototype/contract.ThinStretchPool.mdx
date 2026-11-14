@@ -1,0 +1,115 @@
+---
+title: "ThinStretchPool"
+description: "A pool whose in-range liquidity is `L` except for one stretch `[thinFrom, thinTo)` (seconds before now) at liquidity 1, the way Uniswap V3 accumulates `secondsPerLiquidity` (`dt × 2^128 / max(1, L)`). Constant tick 0."
+---
+
+# ThinStretchPool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/ReviewFixes.t.sol)
+
+A pool whose in-range liquidity is `L` except for one stretch `[thinFrom, thinTo)` (seconds before now) at
+liquidity 1, the way Uniswap V3 accumulates `secondsPerLiquidity` (`dt × 2^128 / max(1, L)`). Constant
+tick 0.
+
+## Constants
+
+### token0
+
+```solidity
+address public immutable token0;
+```
+
+### token1
+
+```solidity
+address public immutable token1;
+```
+
+### L
+
+```solidity
+uint256 public immutable L;
+```
+
+### thinFrom
+
+```solidity
+uint32 public immutable thinFrom;
+```
+
+### thinTo
+
+```solidity
+uint32 public immutable thinTo;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint256-uint32-uint32"></a>
+
+### constructor
+
+```solidity
+constructor(address t0, address t1, uint256 l, uint32 from, uint32 to);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t0 | `address` |  |
+| t1 | `address` |  |
+| l | `uint256` |  |
+| from | `uint32` |  |
+| to | `uint32` |  |
+
+<a id="_spl-uint32"></a>
+
+### _spl
+
+<i>
+
+Cumulative at `a` seconds ago, counted from a reference point 1 day ago.
+
+</i>
+
+```solidity
+function _spl(uint32 a) private view returns (uint160);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+
+<a id="observe-uint32"></a>
+
+### observe
+
+```solidity
+function observe(uint32[] calldata ago)
+        external
+        view
+        returns (int56[] memory tc, uint160[] memory spl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ago | `uint32[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tc | `int56[]` |  |
+| spl | `uint160[]` |  |
+

@@ -1,0 +1,355 @@
+---
+title: "AttacksBaselineTest"
+description: "Eng plan §4.1 and §5 work package 2: the attacks that apply to the frozen step 3c fund, played on the baseline harness (six assets with deSPXA at 0 weight, deficit-first deposits minted on the realized TWAP NAV delta, synchronous pro-rata redemption). Same valuation and the same no-arbitrage market as `AttacksTimedTest`. The baseline is the \"before\" of proposal §5.9.1: \"`redeem` is safe ... `deposit` is the exposure ... a TWAP that lags or is pushed gives the depositor too many shares.\" Each test asserts the sign the design doc predicts for the baseline, so a measured result that contradicts the doc turns red."
+---
+
+# AttacksBaselineTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness), [AttackBook](/contracts/test/prototype/abstract.AttackBook)
+
+**Title:** AttacksBaselineTest
+
+Eng plan §4.1 and §5 work package 2: the attacks that apply to the frozen step 3c fund, played on the
+baseline harness (six assets with deSPXA at 0 weight, deficit-first deposits minted on the realized TWAP
+NAV delta, synchronous pro-rata redemption). Same valuation and the same no-arbitrage market as
+`AttacksTimedTest`. The baseline is the "before" of proposal §5.9.1: "`redeem` is safe ... `deposit` is
+the exposure ... a TWAP that lags or is pushed gives the depositor too many shares." Each test asserts the
+sign the design doc predicts for the baseline, so a measured result that contradicts the doc turns red.
+
+## Constants
+
+### ALICE_USDC
+
+```solidity
+uint256 internal constant ALICE_USDC = 1_000_000e6;
+```
+
+### FLASH_USDC
+
+```solidity
+uint256 internal constant FLASH_USDC = 30_000_000e6;
+```
+
+## State Variables
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### refWeth
+
+```solidity
+uint256 internal refWeth;
+```
+
+### refCbbtc
+
+```solidity
+uint256 internal refCbbtc;
+```
+
+### navRef0
+
+```solidity
+uint256 internal navRef0;
+```
+
+### supply0
+
+```solidity
+uint256 internal supply0;
+```
+
+### v0
+
+```solidity
+uint256 internal v0;
+```
+
+### borrowed
+
+```solidity
+uint256 internal borrowed;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_a1_baseline_makinareplay_onetransaction"></a>
+
+### test_A1_baseline_makinaReplay_oneTransaction
+
+<i>
+
+One transaction: borrow, push wETH 150 bps (inside the 200 bps ORA-4 band), deposit 100,000 USDC (at
+target the deposit buys every asset pro rata; a larger one fails the step-3c swap floor of TWAP − 200 bps
+on its own wETH leg), redeem every share, sell back. The deposit mints on the TWAP, which one block does
+not move. Expected on the baseline: no gain (proposal §5.9.1).
+
+</i>
+
+```solidity
+function test_A1_baseline_makinaReplay_oneTransaction() public fixtureCovered;
+```
+
+<a id="test_a3_baseline_deflatedepositexit_profitswithoutarbitrage"></a>
+
+### test_A3_baseline_deflateDepositExit_profitsWithoutArbitrage
+
+<i>
+
+The fund's plan has left wETH over its path target, so deficit-first routing sends a deposit to the
+lending venues (`_worldDeficitToLending`). The attacker deflates wETH 500 bps and holds it one TWAP window
+(no arbitrage: free), deposits the per-deposit cap at the deflated TWAP NAV, buys the wETH back, waits one
+window for the TWAP to recover and redeems. Expected on the baseline: the depositor gets too many shares
+(§5.9.1), a positive net without arbitrage, paid by the holders.
+
+</i>
+
+```solidity
+function test_A3_baseline_deflateDepositExit_profitsWithoutArbitrage() public fixtureCovered;
+```
+
+<a id="test_a4_baseline_gifttolendingadapter_isagifttoholders"></a>
+
+### test_A4_baseline_giftToLendingAdapter_isAGiftToHolders
+
+<i>
+
+A holder gifts USDC to the Aave adapter (supply on its behalf) and redeems: the gift is shared by every
+holder, so the gifter gets back only its own share of it. Expected: a loss for the gifter.
+
+</i>
+
+```solidity
+function test_A4_baseline_giftToLendingAdapter_isAGiftToHolders() public fixtureCovered;
+```
+
+<a id="test_a5_baseline_roundtrip_oneblockandconsecutiveblocks"></a>
+
+### test_A5_baseline_roundTrip_oneBlockAndConsecutiveBlocks
+
+<i>
+
+Deposit and redeem in one block, then in consecutive blocks. Nothing moves the TWAP between them, so
+the round trip pays the routing cost and the exit fee. Expected: a loss.
+
+</i>
+
+```solidity
+function test_A5_baseline_roundTrip_oneBlockAndConsecutiveBlocks() public fixtureCovered;
+```
+
+<a id="test_a6_baseline_twaplagafterrealmove_profits"></a>
+
+### test_A6_baseline_twapLagAfterRealMove_profits
+
+<i>
+
+The fund's plan has left wETH over its path target, so deficit-first routing sends deposits to the
+lending venues. A real move (an outside trader) lifts wETH 190 bps; the attacker deposits 200,000 USDC at
+once, at the lagging TWAP NAV, waits one TWAP window and redeems. The hedge (a short of the shares' wETH
+exposure) has no P&L because the price does not move again. Expected on the baseline: profitable
+(§5.9.1, "a TWAP lags every real move").
+
+</i>
+
+```solidity
+function test_A6_baseline_twapLagAfterRealMove_profits() public fixtureCovered;
+```
+
+<a id="_worldb"></a>
+
+### _worldB
+
+<i>
+
+Alice deposits 1M (idle: no plan yet), then a 1-day plan to (65, 35, 0) invests it.
+
+</i>
+
+```solidity
+function _worldB() internal;
+```
+
+<a id="_worlddeficittolending"></a>
+
+### _worldDeficitToLending
+
+<i>
+
+`_worldB`, then a 1-day plan to all-stable, at its end time with no step taken: wETH and cbBTC sit over
+their path target and the lending venues under it, so deficit-first routing sends a deposit to lending.
+
+</i>
+
+```solidity
+function _worldDeficitToLending() internal;
+```
+
+<a id="_beginb"></a>
+
+### _beginB
+
+```solidity
+function _beginB() internal;
+```
+
+<a id="_endb-string"></a>
+
+### _endB
+
+```solidity
+function _endB(string memory id) internal returns (AttackPnl memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `AttackPnl` |  |
+
+<a id="_navrefb"></a>
+
+### _navRefB
+
+<i>
+
+The baseline's NAV at the reference prices: idle, every counted lending venue, wETH and cbBTC net of
+deferred claims.
+
+</i>
+
+```solidity
+function _navRefB() internal view returns (uint256 nav);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+
+<a id="_valueofb-address"></a>
+
+### _valueOfB
+
+```solidity
+function _valueOfB(address who) internal view returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_depositb-address-uint256"></a>
+
+### _depositB
+
+<i>
+
+`who` deposits `usdc` it already holds into the baseline fund. Returns the shares minted.
+
+</i>
+
+```solidity
+function _depositB(address who, uint256 usdc) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="stepuntildoneb-uint256"></a>
+
+### stepUntilDoneB
+
+<i>
+
+The baseline harness's keeper loop with a fixture checkpoint every 16 calls (unmetered), so the state
+diff of a whole plan never has to be decoded at once.
+
+</i>
+
+```solidity
+function stepUntilDoneB(uint256 maxSteps) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxSteps | `uint256` |  |
+
+<a id="_stepchunk-uint256"></a>
+
+### _stepChunk
+
+```solidity
+function _stepChunk(uint256 n)
+        internal
+        returns (uint256 executed, uint256 calls, PlanStatusB status);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| executed | `uint256` |  |
+| calls | `uint256` |  |
+| status | `PlanStatusB` |  |
+
+<a id="coveragecheckpointb"></a>
+
+### coverageCheckpointB
+
+```solidity
+function coverageCheckpointB() internal;
+```
+

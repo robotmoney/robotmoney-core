@@ -1,5 +1,6 @@
 // Adoption of the CREATE2 libraries forge deploys by itself inside the basket stages (issue 1721): BasketAssetConfigGuard, TwapTickMath and BasketViews
 // (BasketViews links TwapTickMath). When they already sit on chain forge leaves their creations out, so the stage plans fewer transactions than its frozen count.
+import { linkedSystemsCreate2Libraries } from "../src/libs-build.ts";
 import { describe, expect, test } from "bun:test";
 import { cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,7 +13,7 @@ import { COUNTS, SHA } from "./fixtures.ts";
 import { SCRIPT, world, type World } from "./harness.ts";
 
 const OUT = join(import.meta.dir, "fixtures", "build-out");
-const BUILT = buildCreate2Libraries(getStageTable().create2Libraries!, OUT);
+const BUILT = buildCreate2Libraries(linkedSystemsCreate2Libraries(getStageTable()), OUT); // Deploy 4: the vaults fixture build, without the fund system's libraries
 const GUARD = BUILT.get("BasketAssetConfigGuard")!, TWAP = BUILT.get("TwapTickMath")!, VIEWS = BUILT.get("BasketViews")!, SWAPS = BUILT.get("BasketSwaps")!;
 // The libraries the first basket stage creates or adopts (issue 1808 adds BasketSwaps; GovernedUpgrade, also linked by the baskets, is created by
 // the vault stage first, and RobotMoneyVaultOps and GatewayWindows by the vault and gateway stages).
@@ -44,8 +45,9 @@ function proWorld(o: { have?: typeof THREE; plan?: typeof THREE; code?: Record<s
 describe("the create2 libraries of the table and their addresses", () => {
   test("the table lists the basket libraries and the proxy libraries (issue 1808), and every stage that deploys a proxied contract lists some", () => {
     const t = getStageTable();
-    expect(t.create2Libraries!.map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows"]);
-    expect(t.stages.filter((s) => s.create2Libraries?.length).map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "hard", "gateway"]);
+    // Deploy 4: the vaults and gateway systems' libraries; the fund system's are listed by its own stages (scripts/deploy/stage-table.test.ts)
+    expect(linkedSystemsCreate2Libraries(t).map((l) => l.artifact)).toEqual(["BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows"]);
+    expect(t.stages.filter((s) => s.create2Libraries?.length && s.system !== "fund").map((s) => s.name)).toEqual(["vault", "registry", "router", "receipt", "governance", "proto", "rwa", "hard", "gateway"]);
   });
   test("each basket stage lists exactly the libraries its built vault links (linkReferences of the built artifacts), so a mislisted library cannot hide a dropped creation", () => {
     const t = getStageTable();
@@ -66,7 +68,7 @@ describe("the create2 libraries of the table and their addresses", () => {
   });
   test("BasketViews links TwapTickMath: its runtime code carries TwapTickMath's address, and changing that address changes its own address", () => {
     expect(VIEWS.runtime.toLowerCase()).toContain(TWAP.address.slice(2).toLowerCase());
-    const art = getStageTable().create2Libraries!;
+    const art = linkedSystemsCreate2Libraries(getStageTable());
     const moved = buildCreate2Libraries(art, OUT);
     expect(moved.get("BasketViews")!.address).toBe(VIEWS.address);
     expect(VIEWS.runtimeHash).toBe(keccak256(VIEWS.runtime));
