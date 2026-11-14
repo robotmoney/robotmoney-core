@@ -189,6 +189,21 @@ export async function tagForKind(i: Pick<ReleaseGateInput, "sha" | "coreDir" | "
   throw new PublishError("RELEASE_TAG_KIND", `the sheet says DEPLOYMENT_KIND ${i.kind} and needs an annotated ${want} tag at ${i.sha}, but the tag(s) there are: ${have}. A rehearsal tag never satisfies a production deployment and a production tag never satisfies a rehearsal.`, { sha: i.sha, kind: i.kind, tags: found });
 }
 
+/**
+ * D4-14 (owner, 2026-11-14): a rehearsal may waive the green-CI check, and only that check, by naming the recorded owner decision in CI_GATE_WAIVER
+ * (an id like D4-14). The tag, the canonical remote tag, the release branch and the counts are still enforced. A production sheet refuses the waiver
+ * (FLOOR): production always needs green CI. Returns the decision id when the check is waived, undefined when it runs.
+ */
+export const CI_GATE_WAIVER_ENV = "CI_GATE_WAIVER";
+export function ciGateWaiver(env: Record<string, string | undefined>, kind: DeploymentKind, sha: string): string | undefined {
+  const w = (env[CI_GATE_WAIVER_ENV] ?? "").trim();
+  if (w === "") return undefined;
+  if (!/^D\d+-\d+$/.test(w)) throw new PublishError("USAGE", `${CI_GATE_WAIVER_ENV}=${w} is not an owner decision id (like D4-14)`, { sha });
+  if (kind !== "rehearsal") throw new PublishError("FLOOR", `${CI_GATE_WAIVER_ENV}=${w} is refused on a ${kind} sheet: only a rehearsal may waive the green-CI check`, { sha, decision: w });
+  process.stderr.write(JSON.stringify({ ts: new Date().toISOString(), level: "warn", event: "ci.gate_waived", component: "release-gate", sha, decision: w, note: "the green-CI check is waived by an owner decision on a rehearsal; every other release-gate check ran" }) + "\n");
+  return w;
+}
+
 /** Returns the release tag name. Throws RELEASE_SHA_UNTAGGED, RELEASE_TAG_KIND, COUNTS_MISSING, COUNTS_UNTRACKED or CI_NOT_GREEN. */
 export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
   const tag = await tagForKind(i);
@@ -203,8 +218,9 @@ export async function assertReleaseGate(i: ReleaseGateInput): Promise<string> {
     await i.verifyReconstructed(frozen); // throws LIBS_ADOPTION when a record differs from the build or the chain
     await assertBaselineCommitted({ countsDir: i.countsDir, sha: i.sha, frozen, frozenDirCommitted: i.frozenDirCommitted, anchorCommitted: i.anchorCommitted });
   }
+  if (ciGateWaiver(i.env, i.kind, i.sha) !== undefined) return tag;
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
-  if (!token) throw new PublishError("CI_NOT_GREEN", `cannot check that CI is green at ${i.sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453.`, { sha: i.sha });
+  if (!token) throw new PublishError("CI_NOT_GREEN", `cannot check that CI is green at ${i.sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453 without an owner waiver (D4-14).`, { sha: i.sha });
   const env: Record<string, string> = { GITHUB_TOKEN: token };
   // GITHUB_REPOSITORY is not forwarded: the repository is CORE_REPO, named on the command line (security round 1).
   for (const k of ["PATH", "HOME"]) if (i.env[k]) env[k] = i.env[k]!;
@@ -342,8 +358,9 @@ export async function assertUpgradeBuildGate(i: UpgradeBuildGateInput): Promise<
   const m = RC_TAG_PATTERN.exec(tag!)!;
   const branch = `releases-${m[1]}.${m[2]}.x`;
   if (!(await (i.onBranch ?? defaultOnBranch)(i.dir, sha, branch))) refuse("USAGE", `the rc ${tag} at ${sha} is not on origin/${branch} (fetch it, or the tag is on a QA branch or on dev)`, { sha, tag, branch });
+  if (ciGateWaiver(i.env, i.kind, sha!) !== undefined) return { sha: sha!, tag: tag! };
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
-  if (!token) refuse("CI_NOT_GREEN", `cannot check that CI is green at ${sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453`, { sha });
+  if (!token) refuse("CI_NOT_GREEN", `cannot check that CI is green at ${sha}: GITHUB_TOKEN is not set. The check is never skipped on 8453 without an owner waiver (D4-14)`, { sha });
   const env: Record<string, string> = { GITHUB_TOKEN: token! };
   for (const k of ["PATH", "HOME"]) if (i.env[k]) env[k] = i.env[k]!;
   const r = await (i.checkShaGreen ?? spawnCheckShaGreen)({ coreDir: i.dir, sha, repo: CORE_REPO, env });

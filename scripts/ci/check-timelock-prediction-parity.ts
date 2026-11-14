@@ -24,7 +24,8 @@ const arg = (name: string, dflt: string): string => {
   return i >= 0 ? resolve(process.argv[i + 1]!) : join(repo, dflt);
 };
 
-interface Vector { safe: string; minDelay: string; address: string; initCodeHash: string }
+/** `executor`: "open" (the vaults system, the default when absent) or "safe" (the fund system's FundTimelockPolicy, decision D4-10). */
+interface Vector { safe: string; minDelay: string; address: string; initCodeHash: string; executor?: "open" | "safe" }
 
 export function checkParity(vectorsPath: string, outDir: string, tablePath: string): string[] {
   if (!existsSync(vectorsPath)) return [`no vector file ${vectorsPath}: run forge test --match-contract UpgradeAuthorityPrediction first`];
@@ -35,9 +36,10 @@ export function checkParity(vectorsPath: string, outDir: string, tablePath: stri
   if (!u) return [`${tablePath} has no upgradeAuthority`];
   const problems: string[] = [];
   for (const v of vectors) {
-    const ts = predictCoreTimelock(u, outDir, v.safe as `0x${string}`, BigInt(v.minDelay));
+    if (v.executor !== undefined && v.executor !== "open" && v.executor !== "safe") { problems.push(`Safe ${v.safe}, delay ${v.minDelay}: executor '${String(v.executor)}' is not open or safe`); continue; }
+    const ts = predictCoreTimelock(u, outDir, v.safe as `0x${string}`, BigInt(v.minDelay), v.executor ?? "open");
     if (ts.address.toLowerCase() !== v.address.toLowerCase() || ts.initCodeHash.toLowerCase() !== v.initCodeHash.toLowerCase()) {
-      problems.push(`Safe ${v.safe}, delay ${v.minDelay}: Solidity ${v.address} (init code hash ${v.initCodeHash}), TypeScript ${ts.address} (init code hash ${ts.initCodeHash})`);
+      problems.push(`Safe ${v.safe}, delay ${v.minDelay}, executor ${v.executor ?? "open"}: Solidity ${v.address} (init code hash ${v.initCodeHash}), TypeScript ${ts.address} (init code hash ${ts.initCodeHash})`);
     }
   }
   return problems;

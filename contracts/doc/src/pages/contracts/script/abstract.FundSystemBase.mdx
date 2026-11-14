@@ -7,7 +7,7 @@ description: "What every stage of the `fund` system shares (scripts/deploy/stage
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/FundSystemBase.sol)
 
-**Inherits:** [UpgradeAuthority](/contracts/script/abstract.UpgradeAuthority)
+**Inherits:** [FundTimelockPolicy](/contracts/script/abstract.FundTimelockPolicy)
 
 **Title:** FundSystemBase
 
@@ -16,7 +16,8 @@ addresses the one-vault prototype is wired to, the env readers and the manifest 
 exactly the harness's (`PrototypeHarness.sol`), so the stages deploy the system the prototype suites test.
 
 The fund system is independent of the vaults system: its own Safe, receipt register, proxies and timelock
-(the same `ProposerFloorTimelock` CREATE2 scheme, `UpgradeAuthority`, predicted from its own Safe). It reads
+(the same `ProposerFloorTimelock` CREATE2 scheme, `UpgradeAuthority`, predicted from its own Safe, with the Safe as its
+only executor: `FundTimelockPolicy`, decision D4-10). It reads
 no vaults-system manifest.
 
 ## Constants

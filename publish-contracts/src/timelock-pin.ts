@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { encodeAbiParameters, getAddress, getCreate2Address, keccak256, toBytes, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import type { AdoptedLibrary } from "./libs-adopt.ts";
-import type { UpgradeAuthority } from "./stage-table.ts";
+import type { TimelockExecutor, UpgradeAuthority } from "./stage-table.ts";
 
 /** What the first proxy stage records (`StageRecord.timelockPrediction`) and the timelock stage recomputes. */
 export interface TimelockPrediction { address: Address; initCodeHash: Hex; safe: Address; minDelay: string }
@@ -30,16 +30,20 @@ function timelockArtifact(outDir: string, contract: string): { creation: Hex; ru
   return { creation: creation as Hex, runtime: runtime as Hex };
 }
 
-/** `UpgradeAuthority.timelockInitCode(safe, minDelay)`: creation code ++ abi.encode(minDelay, [safe], [address(0)], address(0)). */
-export function timelockInitCode(creation: Hex, safe: Address, minDelay: bigint): Hex {
-  const args = encodeAbiParameters([{ type: "uint256" }, { type: "address[]" }, { type: "address[]" }, { type: "address" }], [minDelay, [getAddress(safe.toLowerCase())], [ZERO], ZERO]);
+/**
+ * `UpgradeAuthority.timelockInitCode(safe, minDelay)`: creation code ++ abi.encode(minDelay, [safe], [executor], address(0)). The executor is address(0) for an open
+ * executor (ADR-0004, the vaults system) and the Safe for a Safe-only one (the fund system, decision D4-10: `FundTimelockPolicy._timelockExecutor`).
+ */
+export function timelockInitCode(creation: Hex, safe: Address, minDelay: bigint, executor: TimelockExecutor = "open"): Hex {
+  const s = getAddress(safe.toLowerCase());
+  const args = encodeAbiParameters([{ type: "uint256" }, { type: "address[]" }, { type: "address[]" }, { type: "address" }], [minDelay, [s], [executor === "safe" ? s : ZERO], ZERO]);
   return `${creation}${args.slice(2)}` as Hex;
 }
 
-/** `UpgradeAuthority.predictTimelock(safe, minDelay)` from the build in `outDir`, and the keccak256 of the timelock's runtime code. */
-export function predictCoreTimelock(u: Pick<UpgradeAuthority, "contract" | "factory" | "salt">, outDir: string, safe: Address, minDelay: bigint): TimelockPrediction & { runtimeHash: Hex } {
+/** `UpgradeAuthority.predictTimelock(safe, minDelay)` (with the system's executor policy) from the build in `outDir`, and the keccak256 of the timelock's runtime code. */
+export function predictCoreTimelock(u: Pick<UpgradeAuthority, "contract" | "factory" | "salt">, outDir: string, safe: Address, minDelay: bigint, executor: TimelockExecutor = "open"): TimelockPrediction & { runtimeHash: Hex } {
   const art = timelockArtifact(outDir, u.contract);
-  const initCodeHash = keccak256(timelockInitCode(art.creation, safe, minDelay));
+  const initCodeHash = keccak256(timelockInitCode(art.creation, safe, minDelay, executor));
   const address = getCreate2Address({ from: u.factory as Address, salt: keccak256(toBytes(u.salt)), bytecodeHash: initCodeHash });
   return { address, initCodeHash, safe, minDelay: minDelay.toString(), runtimeHash: keccak256(art.runtime) };
 }

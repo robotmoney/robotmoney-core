@@ -11,11 +11,14 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 
 import {Roles} from "../test/prototype/src/FundTypes.sol";
 import {CoreTimelockHandover} from "./CoreTimelockHandover.sol";
+import {FundTimelockPolicy} from "./FundTimelockPolicy.sol";
+import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 
 /// @title DeployFundTimelock
 /// @notice The fund system's handover, its LAST stage (Deploy 4). `DeployTimelock.s.sol` cannot be used: it hands over the
 ///         vaults system (vaults, registry, router, RouterGovernance). This stage deploys the same `ProposerFloorTimelock`
-///         (Safe = only proposer and canceller, executor = anyone, no admin) at the CREATE2 address every fund-system
+///         (Safe = only proposer, canceller AND executor, no admin: decision D4-10, `FundTimelockPolicy`; the vaults system's
+///         executor stays open, ADR-0004) at the CREATE2 address every fund-system
 ///         proxy already names, with the same Safe check and delay floor (`CoreTimelockHandover`), asserts each of the
 ///         five proxies names it, and only then moves the roles:
 ///         - fund, rebalancer, queue: ADMIN_ROLE to the timelock, the deployer's copy renounced;
@@ -28,11 +31,21 @@ import {CoreTimelockHandover} from "./CoreTimelockHandover.sol";
 ///         Required env vars (no defaults): FUND_ADDRESS, REBALANCER_ADDRESS, FUND_GOVERNANCE_ADDRESS, QUEUE_ADDRESS,
 ///         FUND_RECEIPT_ADDRESS, RECEIPT_ADMIN_ADDRESS, SAFE_ADDRESS, SAFE_OWNERS, SAFE_THRESHOLD, EMERGENCY_ADDRESS,
 ///         KEEPER_ADDRESS, TIMELOCK_MIN_DELAY, DEPLOYMENT_OUT. DEPLOYMENT_KIND selects the rehearsal delay floor.
-contract DeployFundTimelock is CoreTimelockHandover {
+contract DeployFundTimelock is CoreTimelockHandover, FundTimelockPolicy {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "fund-timelock.json";
 
     bytes32 internal constant DEFAULT_ADMIN = 0x00;
+
+    /// @dev The fund system's executor policy (decision D4-10): the Safe.
+    function _timelockExecutor(address safe)
+        internal
+        pure
+        override(UpgradeAuthority, FundTimelockPolicy)
+        returns (address)
+    {
+        return FundTimelockPolicy._timelockExecutor(safe);
+    }
 
     struct Deployed {
         address timelock;
@@ -129,6 +142,15 @@ contract DeployFundTimelock is CoreTimelockHandover {
     function _check(Deployed memory d) internal view {
         TimelockController tl = TimelockController(payable(d.timelock));
         require(tl.getMinDelay() == d.minDelay, "timelock minDelay");
+        // Decision D4-10: the Safe alone executes; nobody else, and not address(0) (an open executor).
+        require(
+            tl.hasRole(tl.EXECUTOR_ROLE(), d.safe), "fund timelock EXECUTOR_ROLE is not the Safe"
+        );
+        require(!tl.hasRole(tl.EXECUTOR_ROLE(), address(0)), "fund timelock executor is open");
+        require(
+            !tl.hasRole(tl.EXECUTOR_ROLE(), msg.sender),
+            "deployer holds the fund timelock EXECUTOR_ROLE"
+        );
         address[4] memory admins = [d.fund, d.rebalancer, d.governance, d.queue];
         for (uint256 i = 0; i < admins.length; i++) {
             IAccessControl c = IAccessControl(admins[i]);
@@ -207,7 +229,7 @@ contract DeployFundTimelock is CoreTimelockHandover {
         vm.serializeUint(obj, "chain_id", block.chainid);
         vm.serializeUint(obj, "min_delay", d.minDelay);
         vm.serializeString(obj, "deployment_kind", d.rehearsal ? "rehearsal" : "production");
-        vm.serializeString(obj, "executorPolicy", EXECUTOR_POLICY);
+        vm.serializeString(obj, "executorPolicy", FUND_EXECUTOR_POLICY);
         vm.serializeString(obj, "cancellerPolicy", CANCELLER_POLICY);
         vm.serializeAddress(obj, "timelock", d.timelock);
         vm.serializeAddress(obj, "safe", d.safe);

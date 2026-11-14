@@ -66,13 +66,24 @@ export const SCALARS = new Set([
   // per command and needs the threshold of 2), the keeper's and the emergency key's keystores for cast (keeper first settle and step, the emergency pause drill), and the fund
   // target vector the Safe applies with a receipt (cast array syntax, "[0x..,0x..]" and "[2000,..]"): no tool derives it from a receipt payload yet (the release's notes).
   "ownerSigner2", "keeperKeystore", "emergencyKeystore", "fundTargetAssets", "fundTargetBps",
+  // The fund-upgrade flow (releases/v0.8.0-onevault-upgrade.yaml): the LIVE Deploy 4 record the run copies and never edits, its manifests, its run manifest's evidence directory and
+  // its run sheet. {manifestDir} and {evidenceDir} are the run's own copies (on 8453 also {v050ManifestDir} and {v050EvidenceDir}, run.ts configProblems).
+  "liveManifestDir", "liveEvidenceDir", "liveSheet",
 ]);
 /**
  * The flows a step belongs to (README "Flows"): a new deployment, or a governed upgrade of the live deployment, both of the vaults system; or `fund`, the fund system's
  * own deploy and QA (Deploy 4, the one-vault prototype, publish-contracts --system fund). A step with no `flow` is of the new flow.
  */
-export const FLOW_NAMES = ["new", "upgrade", "fund"] as const;
+export const FLOW_NAMES = ["new", "upgrade", "fund", "fund-upgrade"] as const;
 export type FlowName = (typeof FLOW_NAMES)[number];
+/**
+ * The fund system's flows: `fund` deploys a new fund system (Deploy 4, v0.8.0-onevault), `fund-upgrade` upgrades the LIVE one in place (the Deploy 4 in-place upgrade to
+ * v0.8.0-onevault). Both read the fund sheet and the fund system's manifests, and every rule of the fund flow (keeper gas, Safe-only executes, the hold wait) holds for both.
+ */
+export const FUND_FLOWS: readonly string[] = ["fund", "fund-upgrade"];
+export const isFundFlow = (f: string): boolean => FUND_FLOWS.includes(f);
+/** A step of a fund flow (fund or fund-upgrade). */
+export const inFundFlow = (s: Pick<RunbookStep, "flow">): boolean => flowsOf(s).some(isFundFlow);
 /** A whole-element placeholder that expands to several argv elements (empty on the Twin chain where noted). */
 export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // issue 1892: the gateway system run (docs/runbooks/contract-qa/gateway.yaml): its own sheet, its own evidence directory, --system gateway
@@ -95,6 +106,10 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // runner's config adds the run's passphrase file, as it does for {cast}.
   keepercast: ["--keystore", "{keeperKeystore}"],
   emergencycast: ["--keystore", "{emergencyKeystore}"],
+  // The fund-upgrade flow: the CLI arguments against the LIVE Deploy 4 deployment, as {v050common} names the live Deploy 3 one. --core-dir is the checkout of the sha Deploy 4 was
+  // deployed from (7c23569f8, release/v0.7.0-onevault-rc.5-rehearsal), made and built by the flow ({runDir}/v070): its out/ is the live code the upgrade tools compare with, and
+  // the release gate on 8453 runs at that sha (its tag, its green CI, its committed frozen counts). The new build is the --upgrade-build checkout ({runDir}/v080, the run's sha).
+  d4common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v070", "--core-sha", "7c23569f85e96232fc75bbba32ebbd469da31966", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
 };
 export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "hard-assets-vault", "gateway-handover", "timelock", "safe"];
 /**
@@ -308,6 +323,13 @@ export function loadModel(root: string = ROOT): CliModel {
   tools.set("scripts/runbook/receipt-payload.ts", { flags: new Set(["out", "weights", "session-id"]) });
   // Deploy 4: the fund system's schema 1.1 payload builder (its flags are its own FLAGS table) and the prototype's receipt checker (the flags of its usage header).
   tools.set("scripts/runbook/fund-receipt-payload.ts", { flags: new Set([...(/const FLAGS = new Set\(\[([^\]]*)\]/.exec(read(root, "scripts/runbook/fund-receipt-payload.ts"))?.[1] ?? "").matchAll(/"([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!)) });
+  // Deploy 4 hardening (owner 2026-11-13): the owner key liveness record reads the prove-control transaction (the flags of its usage line).
+  tools.set("publish-contracts/src/ci/owner-liveness.ts", { flags: flagsIn((/^\/\/ Usage: (.*)$/m.exec(read(root, "publish-contracts/src/ci/owner-liveness.ts"))?.[1]) ?? "") });
+  // The fund-upgrade flow: the record of an in-place fund upgrade (its verbs and flags are its own RECORD_VERBS and RECORD_FLAGS tables).
+  { const rec = read(root, "publish-contracts/src/fund-upgrade-record.ts"); const list = (name: string) => new Set([...(new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(rec)?.[1] ?? "").matchAll(/"([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!));
+    tools.set("publish-contracts/src/fund-upgrade-record.ts", { verbs: list("RECORD_VERBS"), flags: list("RECORD_FLAGS") }); }
+  { const fc = read(root, "publish-contracts/src/ci/fund-claims.ts"); const list = (name: string) => new Set([...(new RegExp(`export const ${name} = \\[([^\\]]*)\\]`).exec(fc)?.[1] ?? "").matchAll(/"([a-z][a-z0-9-]*)"/g)].map((m) => m[1]!));
+    tools.set("publish-contracts/src/ci/fund-claims.ts", { verbs: list("VERBS"), flags: list("FLAGS") }); }
   tools.set("scripts/prototype/check-receipt-assets.ts", { flags: flagsIn(read(root, "scripts/prototype/check-receipt-assets.ts").split(/^import /m)[0]!) });
 
   const rs = read(root, "clients/rust-payment-client/src/cli.rs");
@@ -338,7 +360,7 @@ export function expandArgv(argv: string[]): string[] {
 /** Words of a `bash -c` string, quotes and shell punctuation removed. */
 export const wordsOf = (script: string): string[] => script.replace(/["'`]/g, " ").split(/[\s;|&()<>]+/).filter(Boolean);
 
-const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts", "scripts/runbook/receipt-payload.ts", "scripts/runbook/fund-receipt-payload.ts", "scripts/prototype/check-receipt-assets.ts"];
+const KNOWN_TOOLS = ["publish-contracts/src/cli.ts", "scripts/stage/core-stack.ts", "target/debug/rmpc", "publish-contracts/src/safe/cli.ts", "publish-contracts/src/rehearsal/cli.ts", "scripts/devnet/twin-fork.ts", "publish-contracts/src/evidence-check.ts", "scripts/ci/check-sha-green.ts", "publish-contracts/src/ci/merge-sheet.ts", "publish-contracts/src/ci/scan-rehearsal-secrets.ts", "scripts/stage/dapp-served-check.ts", "scripts/release/preflight-guards.sh", "scripts/runbook/validate-contract-qa.ts", "scripts/runbook/qa-assert.ts", "scripts/runbook/run-record.ts", "scripts/runbook/receipt-payload.ts", "scripts/runbook/fund-receipt-payload.ts", "scripts/prototype/check-receipt-assets.ts", "publish-contracts/src/ci/owner-liveness.ts", "publish-contracts/src/fund-upgrade-record.ts", "publish-contracts/src/ci/fund-claims.ts"];
 
 /** The invocations of known tools in one command: the tool and the words after it. A `bash -c` script is searched word by word. */
 export function invocations(argv: string[]): { tool: string; args: string[] }[] {
@@ -365,7 +387,7 @@ const looksLikeRepoPath = (s: string): boolean => /^(scripts|publish-contracts|d
  * fund system's manifests (Deploy 4). A step of both kinds of flow may name only what both have, so a fund name never reaches a vaults step, nor a vaults name a fund step.
  */
 function knownToFlows(s: Pick<RunbookStep, "flow">, name: string, vaults: Set<string>, fund: Set<string>): boolean {
-  return flowsOf(s).every((f) => (f === "fund" ? fund : vaults).has(name));
+  return flowsOf(s).every((f) => (isFundFlow(f) ? fund : vaults).has(name));
 }
 
 /** PURE. Why the commands of these steps do not match the real CLIs, the placeholder grammar and the repository. */
@@ -535,7 +557,7 @@ export function parseRelease(text: string, release: string): ReleaseRunbook {
     const ok = isObject(doc.flows) && Object.entries(doc.flows).every(([t, l]) => (TARGET_NAMES as readonly string[]).includes(t) && Array.isArray(l) && l.length > 0 && l.every((f) => (FLOW_NAMES as readonly string[]).includes(f as string)));
     if (!ok) errors.push(`${where}: flows maps a target (${TARGET_NAMES.join(", ")}) to a non-empty list of ${FLOW_NAMES.join(" | ")}`);
   }
-  const runsFund = isObject(doc.flows) && Object.values(doc.flows).some((l) => Array.isArray(l) && l.includes("fund"));
+  const runsFund = isObject(doc.flows) && Object.values(doc.flows).some((l) => Array.isArray(l) && l.some((f) => isFundFlow(String(f))));
   const vaultNames: readonly string[] = runsFund ? [...RELEASE_VAULT_MANIFESTS, ...FUND_VAULT_MANIFESTS] : RELEASE_VAULT_MANIFESTS;
   if (doc.vaults !== undefined && !(Array.isArray(doc.vaults) && doc.vaults.length > 0 && new Set(doc.vaults).size === doc.vaults.length && doc.vaults.every((v) => vaultNames.includes(v as string)))) {
     const fundNote = !runsFund && Array.isArray(doc.vaults) && doc.vaults.some((v) => (FUND_VAULT_MANIFESTS as readonly string[]).includes(v as string)) ? `; ${FUND_VAULT_MANIFESTS.join(", ")} only for a release whose flows run the fund flow` : "";
@@ -815,6 +837,77 @@ export function rebalanceRoundProblems(steps: RunbookStep[], where: string): str
   return out;
 }
 
+/** A command sends from the keeper's key: it names the {keepercast} list placeholder (cast-send.sh with the keeper's keystore). */
+const sendsAsKeeper = (s: Pick<RunbookStep, "cmds">): boolean => s.cmds.some((c) => c.includes("{keepercast}"));
+/**
+ * A command HARD-asserts the keeper's ETH balance: it reads `cast balance` of {sheet:KEEPER_ADDRESS} and checks it with `qa-assert.ts ge` in the same command, with no
+ * `||` fallback that would turn a short balance into a warning (P0.72's advisory loop is not a gate).
+ */
+const assertsKeeperGas = (s: Pick<RunbookStep, "cmds">): boolean => s.cmds.some((c) => {
+  const j = c.join(" ");
+  return /cast balance\s+"?\{sheet:KEEPER_ADDRESS\}/.test(j) && /scripts\/runbook\/qa-assert\.ts ge\b/.test(j) && !j.includes("||");
+});
+
+/**
+ * PURE (Deploy 4 hardening, owner 2026-11-13). The live 8453 run found the keeper key at 0 ETH: P0.72 only warned. On every target where a step sends from the keeper's
+ * key ({keepercast}), an earlier step on that target must fund or check the keeper's balance and refuse below it (`assertsKeeperGas`: P3.63 sends the keeper gas then asserts
+ * at least 0.0009 ETH; the Twin's P0.71 sets and asserts it). The gate must not be skippable by gateAbsent, or a rerun would pass it without reading the balance.
+ */
+export function keeperGasProblems(r: Pick<ReleaseRunbook, "release" | "flows" | "steps">): string[] {
+  const out: string[] = [];
+  for (const target of TARGET_NAMES) {
+    const run = applicableSteps(r, target);
+    const first = run.findIndex(sendsAsKeeper);
+    if (first < 0) continue;
+    const gate = run.slice(0, first).find((s) => assertsKeeperGas(s) && gateAbsentPaths(s).length === 0);
+    if (!gate) out.push(`releases/${r.release}.yaml: ${run[first]!.id} sends from the keeper's key ({keepercast}) on ${target}, but no earlier step on ${target} funds or checks the keeper's ETH and refuses below it (cast balance {sheet:KEEPER_ADDRESS} with qa-assert.ts ge, no || fallback, no gateAbsent): a keeper at 0 ETH would fail mid-run (Deploy 4, 2026-11-13)`);
+  }
+  return out;
+}
+
+/**
+ * PURE (decision D4-11, owner 2026-11-13). A fund-flow step that claims deposit shares from the queue (`deposit(uint256,address)` on {m:queue.queue}) after a settle waits
+ * at least the sheet's FLOW_MIN_HOLD: its notBefore hours, in seconds, must be at or above the hold, so the claim does not run inside the hold and fail. A later claim
+ * step is covered by an earlier claim step that waited (P6.67 and P6.68 claim the same settlement after P6.62 waited).
+ */
+export function holdWaitProblems(r: Pick<ReleaseRunbook, "release" | "steps">, fundSheet: Record<string, string> | undefined): string[] {
+  const hold = Number(fundSheet?.FLOW_MIN_HOLD ?? NaN);
+  const out: string[] = [];
+  let waited = false;
+  for (const s of r.steps) {
+    if (!inFundFlow(s)) continue;
+    if (!s.cmds.some((c) => c.join(" ").includes("{m:queue.queue}") && c.includes("deposit(uint256,address)"))) continue;
+    if (!Number.isFinite(hold)) { out.push(`releases/${r.release}.yaml: ${s.id} claims deposit shares but the fund sheet ${FUND_SHEET} has no FLOW_MIN_HOLD`); continue; }
+    const nb = s.notBefore;
+    const ok = nb !== undefined && nb.hours !== "timelockDelay" && nb.hours * 3600 >= hold;
+    if (ok) waited = true;
+    if (!ok && (nb !== undefined || !waited)) out.push(`releases/${r.release}.yaml: ${s.id} claims deposit shares ${nb === undefined ? "with no notBefore" : `${nb.hours === "timelockDelay" ? "after the timelock delay" : `${nb.hours} h`} after ${nb.afterStep}`}, under the sheet's FLOW_MIN_HOLD of ${hold} s: the claim would run inside the hold`);
+  }
+  return out;
+}
+
+/**
+ * PURE (decision D4-10, owner 2026-11-13). The fund timelock's only executor is its Safe. So no fund-flow step calls the timelock's execute or executeBatch itself
+ * (cast send, cast-send.sh or the timelock's calldata), and every step that proposes an execute through the Safe tool (safe/cli.ts propose --action execute|executeBatch
+ * --timelock {m:fund-timelock.timelock}) also signs that bundle with two owners ({ownerSigner}, {ownerSigner2}) and executes it, as the propose path for a schedule does.
+ */
+export function fundExecuteProblems(r: Pick<ReleaseRunbook, "release" | "steps">): string[] {
+  const out: string[] = [];
+  for (const s of r.steps) {
+    if (!inFundFlow(s)) continue;
+    const joined = s.cmds.map((c) => expandArgv(c).join(" "));
+    for (const j of joined) if (/(cast-send\.sh|cast send)[^;&|]*\{m:fund-timelock\.timelock\}[^;&|]*execute(Batch)?\(/.test(j)) out.push(`releases/${r.release}.yaml: ${s.id} calls the fund timelock's execute directly; the Safe is its only executor (decision D4-10): propose --action execute through publish-contracts/src/safe/cli.ts`);
+    const bundles = joined.filter((j) => /safe\/cli\.ts propose\b/.test(j) && /--timelock \{m:fund-timelock\.timelock\}/.test(j) && /--action (execute|executeBatch)\b/.test(j)).map((j) => /--out (\S+)/.exec(j)?.[1] ?? "");
+    for (const b of bundles) {
+      const signs = joined.filter((j) => /safe\/cli\.ts sign\b/.test(j) && j.includes(`--bundle ${b}`));
+      const signers = new Set(signs.map((j) => /--signer (\S+)/.exec(j)?.[1]));
+      if (!signers.has("{ownerSigner}") || !signers.has("{ownerSigner2}")) out.push(`releases/${r.release}.yaml: ${s.id} proposes a fund timelock execute (${b}) without the two owner signatures ({ownerSigner} and {ownerSigner2}): the Safe is the only executor (decision D4-10)`);
+      if (!joined.some((j) => /safe\/cli\.ts execute\b/.test(j) && j.includes(`--bundle ${b}`))) out.push(`releases/${r.release}.yaml: ${s.id} proposes a fund timelock execute (${b}) but never executes the Safe transaction`);
+    }
+  }
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -856,6 +949,8 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps), ...stateSelfReadProblems(r.steps));
       problems.push(...rebalanceRoundProblems(r.steps, `releases/${f}`));
+      problems.push(...keeperGasProblems(r), ...fundExecuteProblems(r));
+      problems.push(...holdWaitProblems(r, existsSync(join(root, FUND_SHEET)) ? parseSheetText(readFileSync(join(root, FUND_SHEET), "utf8")) : undefined));
     } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   }
   if (releases.size === 0) problems.push(`${QA_DIR}/releases/ holds no release runbook`);

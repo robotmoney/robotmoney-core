@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactUrls } from "./run-record.ts";
-import { LIST_PLACEHOLDERS, ROOT, SCALARS, TARGET_NAMES, applicableSteps, gateAbsentPaths, parseSheetText, runnableProblems, validateAll, type ReleaseRunbook, type RunbookStep } from "./validate-contract-qa.ts";
+import { LIST_PLACEHOLDERS, ROOT, SCALARS, TARGET_NAMES, applicableSteps, isFundFlow, gateAbsentPaths, parseSheetText, runnableProblems, validateAll, type ReleaseRunbook, type RunbookStep } from "./validate-contract-qa.ts";
 
 export interface RunConfig { scalars: Record<string, string>; lists?: Record<string, string[]> }
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
@@ -103,13 +103,13 @@ export function readyAt(resultMtimeMs: number, hours: number | "timelockDelay", 
 const sleep = (s: number): void => { spawnSync("sleep", [String(s)], { stdio: "inherit" }); };
 
 /**
- * PURE. Whether a notBefore wait runs as a Twin clock warp: only on the twin target, for a wait given in hours (the fund flow's 24 h hold, P6.62), and for a
- * fund-flow timelock wait (its governed executes go through publish-contracts/src/safe/cli.ts, which simulates against the head block; an idle anvil mines
+ * PURE. Whether a notBefore wait runs as a Twin clock warp: only on the twin target, for a wait given in hours (the fund flow's 1 h hold, P6.62), and for a
+ * fund-flow (fund or fund-upgrade) timelock wait (its governed executes go through publish-contracts/src/safe/cli.ts, which simulates against the head block; an idle anvil mines
  * none, so after a wall sleep the head still carries the schedule's time and the timelock refuses; the vaults flows' govern warps by itself). Every wait on
  * rehearsal and production stays a wall sleep: nothing may move that chain's clock.
  */
 export const twinClockWait = (target: string | undefined, hours: number | "timelockDelay", flow?: string | string[]): boolean =>
-  target === "twin" && (typeof hours === "number" ? hours > 0 : [flow ?? []].flat().includes("fund"));
+  target === "twin" && (typeof hours === "number" ? hours > 0 : [flow ?? []].flat().some(isFundFlow));
 
 /** Runs one command of a step: stdin on this terminal, stdout and stderr shown and appended to the journal. Returns its exit code. */
 function runCommand(argv: string[], env: Record<string, string>, out: string, err: string, maxMinutes?: number): number {

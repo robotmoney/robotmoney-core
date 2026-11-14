@@ -15,7 +15,8 @@ import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 ///         - The upgrade authority. The timelock stage deploys the `TimelockController` LAST,
 ///           after every proxy. The proxies still name it from their first block: its address
 ///           is the CREATE2 address of the exact timelock the timelock stage deploys
-///           (proposer and canceller = the Safe, executor = anyone, no admin, `minDelay`),
+///           (proposer and canceller = the Safe, executor = anyone, or the Safe for the fund
+///           system: `_timelockExecutor`; no admin, `minDelay`),
 ///           through the canonical CREATE2 factory with `TIMELOCK_SALT`. CREATE2 binds the
 ///           init code, so nothing but that Safe-controlled timelock can ever have code at the
 ///           address: there is no interim deployer, EOA or placeholder upgrade authority. The
@@ -52,15 +53,24 @@ abstract contract UpgradeAuthority is ExpectedChainGuard {
 
     /// @notice The init code of the core timelock for `safe` and `minDelay`: a `ProposerFloorTimelock`
     ///         (an OZ `TimelockController` that cannot drop its last proposer; issue 1645 question 1).
+    ///         Its one executor is `_timelockExecutor(safe)`: `address(0)` (open, ADR-0004) unless a system overrides it.
     function timelockInitCode(address safe, uint256 minDelay) public pure returns (bytes memory) {
         address[] memory proposers = new address[](1);
         proposers[0] = safe;
         address[] memory executors = new address[](1);
-        executors[0] = address(0);
+        executors[0] = _timelockExecutor(safe);
         return abi.encodePacked(
             type(ProposerFloorTimelock).creationCode,
             abi.encode(minDelay, proposers, executors, address(0))
         );
+    }
+
+    /// @dev The one EXECUTOR_ROLE holder of the timelock this system's proxies name. The vaults system keeps ADR-0004's open
+    ///      executor (`address(0)`: anyone executes a ready operation). The fund system (Deploy 4) overrides it to the Safe
+    ///      (`FundTimelockPolicy`, owner decision D4-10 of 2026-11-13). It is part of the init code, so it moves the
+    ///      predicted CREATE2 address: every stage of one system must agree on it.
+    function _timelockExecutor(address) internal pure virtual returns (address) {
+        return address(0);
     }
 
     /// @notice The address the timelock stage deploys the core timelock at.

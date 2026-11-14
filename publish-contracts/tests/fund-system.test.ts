@@ -7,7 +7,8 @@ import { parseCli } from "../src/cli.ts";
 import { requiredSheetNames, resolveEnv } from "../src/core-wiring.ts";
 import { FUND_ONLY_NAMES, SHEET_SPEC, parseSheet } from "../src/sheet.ts";
 import { buildStages, handoverStageOf, peekStageState, restoreStageState, useStageTable, STAGE_NAMES, DEPLOYER_STAGES, proofNoncesBefore } from "../src/stages.ts";
-import { loadStageTable, parseStageTable, scopeTable } from "../src/stage-table.ts";
+import { loadStageTable, parseStageTable, scopeTable, timelockExecutorOf } from "../src/stage-table.ts";
+import { predictCoreTimelock } from "../src/timelock-pin.ts";
 import { FUND_PROXY_NAMES, proxySpecs } from "../src/verify/upgradeability.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -65,6 +66,24 @@ describe("the fund system's stage rows (Deploy 4)", () => {
     foreign.systems.fund.upgradeAuthorityStage = "timelock";
     expect(() => parseStageTable(foreign)).toThrow("names upgradeAuthorityStage timelock, which is not one of its stages");
   });
+  test("decision D4-10: the fund system's timelock executor is the Safe, the vaults system's stays open, and the prediction differs", () => {
+    const raw = JSON.parse(readFileSync(join(ROOT, "scripts", "deploy", "stage-table.json"), "utf8"));
+    const t = parseStageTable(raw);
+    expect(timelockExecutorOf(t, "fund")).toBe("safe");
+    expect(timelockExecutorOf(t, "vaults")).toBe("open");
+    expect(timelockExecutorOf(t, undefined)).toBe("open");
+    const bad = JSON.parse(JSON.stringify(raw));
+    bad.systems.fund.timelockExecutor = "anyone";
+    expect(() => parseStageTable(bad)).toThrow("system fund timelockExecutor must be open or safe");
+    const noOwn = JSON.parse(JSON.stringify(raw));
+    noOwn.systems.vaults.timelockExecutor = "safe";
+    expect(() => parseStageTable(noOwn)).toThrow("system vaults sets timelockExecutor safe but deploys no timelock of its own");
+    const OUT = join(ROOT, "publish-contracts", "tests", "fixtures", "build-out");
+    const SAFE = "0x00000000000000000000000000000000000050fe";
+    const open = predictCoreTimelock(t.upgradeAuthority!, OUT, SAFE, 900n), safe = predictCoreTimelock(t.upgradeAuthority!, OUT, SAFE, 900n, "safe");
+    expect(safe.address).not.toBe(open.address);
+    expect(predictCoreTimelock(t.upgradeAuthority!, OUT, SAFE, 900n, "open").address).toBe(open.address);
+  });
 });
 
 describe("the fund sheet (Deploy 4)", () => {
@@ -95,7 +114,7 @@ describe("the fund sheet (Deploy 4)", () => {
       ["FUND_MAX_SLIPPAGE_BPS", "5", "must be above the 5 bps pool fee"],
       ["FUND_NAV_DEVIATION_BPS", "2001", "must be above the 5 bps pool fee and at most 2000"],
       ["FUND_EXIT_FEE_BPS", "101", "above the fund's ceiling"],
-      ["FLOW_MIN_HOLD", "3600", "FLOW_MIN_HOLD 3600 is outside the contract's bounds"],
+      ["FLOW_MIN_HOLD", "3599", "FLOW_MIN_HOLD 3599 is outside the contract's bounds"],
       ["FLOW_REF_BAND_BPS", "2001", "FLOW_REF_BAND_BPS 2001 is outside"],
       ["FLOW_SETTLE_WINDOW", "21600", "FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH"],
       ["FLOW_QUORUM", "13", "FLOW_QUORUM exceeds FLOW_SLICES"],

@@ -1363,7 +1363,8 @@ contract FlowQueueTest is FlowQueueBase {
     /// @notice Check 1: a shut-down fund leaves deposits unprocessed; redemptions settle alone.
     function test_check1_aShutDownFund_redemptionsSettleAlone() public fixtureCovered {
         _twoSidedSetup(bucketVec(6_500, 3_500));
-        vm.prank(emergency);
+        // ADMIN_ROLE (the timelock) since the owner's 2026-11-13 split; the emergency key only pauses.
+        vm.prank(address(timelock));
         fund.shutdown();
         vm.recordLogs();
         uint256 sid = _keeperSettle();
@@ -1838,7 +1839,8 @@ contract FlowQueueTest is FlowQueueBase {
     ///         new freeze is impossible once the hold is over, so a depositor waits at most `minHold + maxFreeze`.
     function test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall() public fixtureCovered {
         (uint256 sid, uint256 claimId) = _heldDeposit();
-        vm.warp(block.timestamp + 10 hours);
+        // Mid-hold (half of minHold: 30 min at the 1 h default of decision D4-11; it was 10 h of the 24 h hold).
+        vm.warp(block.timestamp + queue.flowParams().minHold / 2);
         uint256 frozenAt = block.timestamp;
         vm.prank(emergency);
         queue.freezeSettlement(sid);

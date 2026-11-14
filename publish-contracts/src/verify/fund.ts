@@ -1,6 +1,6 @@
 // Deploy 4 (owner exception 2026-11-12): the fund system's verifier. It reads the chain and the fund system's manifests and checks every postcondition of the fund run on its own:
 // each proxy's code against the build (masked: links and immutables), its upgrade authority and release mode, the timelock (delay, Safe as only proposer and canceller,
-// executor open), the Safe (owners and threshold), the role handover (the timelock administers every contract, the deployer holds nothing, the emergency key and the keeper
+// executor the Safe alone, decision D4-10), the Safe (owners and threshold), the role handover (the timelock administers every contract, the deployer holds nothing, the emergency key and the keeper
 // hold their roles), the one-time bindings (plan roles, FLOW_ROLE, the receipt releaser), the fund's configuration and the queue's flow parameters against the sheet, and the
 // deployer nonce at the end of the deploy. It reads nothing of the vaults or gateway systems.
 import { existsSync, readFileSync } from "node:fs";
@@ -11,6 +11,7 @@ import { ADMIN_ROLE, Z32, ZERO } from "./constants.ts";
 import { isAddress, lc } from "./manifests.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
+import { FUND_PROXY_NAMES } from "./upgradeability.ts";
 import { keccak256, toHex } from "viem";
 import type { Address, ChainReader, Hex, VerifyOptions, VerifyReport } from "./types.ts";
 
@@ -33,6 +34,16 @@ export const FLOW_PARAM_FIELDS: readonly [string, string][] = [
 const FLOW_PARAMS_SIG = `function flowParams() view returns ((uint32 epochLength, uint32 settleWindow, uint32 minHold, uint32 keeperGrace, uint16 maxEpochFlowBps, uint128 epochFlowFloorUsdc, uint16 maxSharePriceMoveBps, uint16 maxRoll, uint128 minRequestUsdc, uint32 maxFreeze, uint8 slices, uint8 quorum, uint16 dispersionBps, uint16 refBandBps, uint16 legBandBps, uint32 sequencerGrace, uint16 usdcPegBandBps, uint16 maxLendRateGrowthBps))`;
 /** The fund's asset count: three lending venues and two basket tokens (proposal 4.5, DeployFund.s.sol N_ASSETS). */
 export const FUND_ASSET_COUNT = 5;
+
+/**
+ * The build (forge out/) a fund-system proxy's implementation is compared with: the deploy's build, or, for a proxy a governed upgrade moved to another build, that build
+ * (opts.proxyBuildDirs, read from the run manifest's `proxy_upgrades` by verify-stage.ts proxyBuildDirsOf, keyed by the proxy's verifier name, FUND_PROXY_NAMES). The code is
+ * still compared exactly (links, immutables and the metadata trailer masked): only the build it is compared with follows the recorded upgrade (Deploy 4 in-place upgrade).
+ */
+export function fundProxyBuildDir(stage: string, opts: Pick<VerifyOptions, "artifactsDir" | "proxyBuildDirs">): string {
+  const name = FUND_PROXY_NAMES[stage];
+  return (name !== undefined ? opts.proxyBuildDirs?.[name] : undefined) ?? opts.artifactsDir;
+}
 
 export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyReport> {
   const c = new Collector();
@@ -70,9 +81,10 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   for (const s of table.stages) for (const p of s.proxies ?? []) {
     const m = files[manifestBase(s.manifest)];
     const at = A(m[p.field]);
-    const label = `${s.name} ${p.contract}`;
+    const built = fundProxyBuildDir(s.name, opts);
+    const label = `${s.name} ${p.contract}${built === opts.artifactsDir ? "" : ` (upgraded: the build of ${built})`}`;
     await c.run(`${label}: runtime code equals build artifact (masked)`, async () => {
-      const r = await compareDeployedCode(chain, at, loadArtifact(opts.artifactsDir, p.contract), proxyArtifact);
+      const r = await compareDeployedCode(chain, at, loadArtifact(built, p.contract), proxyArtifact);
       return { ok: r.ok, detail: r.detail };
     });
     await c.runEq(`${label}: upgradeTimelock() is the fund-system timelock`, async () => lc((await chain.read(at, "function upgradeTimelock() view returns (address)")) as string), lc(addr.timelock));
@@ -86,7 +98,11 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   await c.runEq("timelock: getMinDelay() equals the sheet", async () => Number(await chain.read(addr.timelock, "function getMinDelay() view returns (uint256)")), sheet.timelockDelay);
   await c.runEq("timelock: PROPOSER_ROLE held by the Safe", () => hasRole(chain, addr.timelock, FUND_ROLES.PROPOSER, addr.safe), true);
   await c.runEq("timelock: CANCELLER_ROLE held by the Safe", () => hasRole(chain, addr.timelock, FUND_ROLES.CANCELLER, addr.safe), true);
-  await c.runEq("timelock: EXECUTOR_ROLE open (held by address 0)", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, ZERO), true);
+  // Owner decision D4-10 (2026-11-13): the fund timelock's only executor is the Safe; the vaults system keeps ADR-0004's open executor.
+  c.eq("fund-timelock: manifest executorPolicy is safe-only", tm.executorPolicy, "safe-only");
+  await c.runEq("timelock: EXECUTOR_ROLE held by the Safe", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, addr.safe), true);
+  await c.runEq("timelock: EXECUTOR_ROLE not open (not held by address 0)", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, ZERO), false);
+  await c.runEq("timelock: EXECUTOR_ROLE not held by the deployer", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, D), false);
   await c.runEq("timelock: PROPOSER_ROLE not held by the deployer", () => hasRole(chain, addr.timelock, FUND_ROLES.PROPOSER, D), false);
   await c.runEq("timelock: DEFAULT_ADMIN not held by the deployer", () => hasRole(chain, addr.timelock, Z32, D), false);
   await c.runEq("safe: threshold equals the sheet", async () => Number(await chain.read(addr.safe, "function getThreshold() view returns (uint256)")), sheet.safeThreshold);

@@ -6,7 +6,7 @@ pragma solidity ^0.8.24;
 
 import {stdJson} from "forge-std/StdJson.sol";
 
-import {UpgradeAuthority} from "./UpgradeAuthority.sol";
+import {FundTimelockPolicy} from "./FundTimelockPolicy.sol";
 
 /// @title FundSystemBase
 /// @notice What every stage of the `fund` system shares (scripts/deploy/stage-table.json, system `fund`): the real Base
@@ -14,9 +14,10 @@ import {UpgradeAuthority} from "./UpgradeAuthority.sol";
 ///         exactly the harness's (`PrototypeHarness.sol`), so the stages deploy the system the prototype suites test.
 ///
 ///         The fund system is independent of the vaults system: its own Safe, receipt register, proxies and timelock
-///         (the same `ProposerFloorTimelock` CREATE2 scheme, `UpgradeAuthority`, predicted from its own Safe). It reads
+///         (the same `ProposerFloorTimelock` CREATE2 scheme, `UpgradeAuthority`, predicted from its own Safe, with the Safe as its
+///         only executor: `FundTimelockPolicy`, decision D4-10). It reads
 ///         no vaults-system manifest.
-abstract contract FundSystemBase is UpgradeAuthority {
+abstract contract FundSystemBase is FundTimelockPolicy {
     using stdJson for string;
 
     // ─── Real Base addresses (PrototypeHarness.sol; third-party-addresses.json for the venues) ─────────

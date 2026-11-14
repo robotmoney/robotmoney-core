@@ -27,8 +27,10 @@ uint32 constant MIN_EPOCH_LENGTH = 1 hours;
 uint32 constant MAX_EPOCH_LENGTH = 7 days;
 uint32 constant MIN_SETTLE_WINDOW = 10 minutes;
 uint32 constant MAX_SETTLE_WINDOW = 1 days;
-// Coordinator ruling 8 (2026-11-11) and proposal §5.9.5: `minHold` in [1 day, 7 days], `maxFreeze` at most 14 days.
-uint32 constant MIN_HOLD = 1 days;
+// Coordinator ruling 8 (2026-11-11) and proposal §5.9.5: `minHold` in [1 hour, 7 days], `maxFreeze` at most 14 days.
+// Owner, 2026-11-13 (decision D4-11): the floor moved from 1 day to 1 hour, and 1 hour is the working default: the price
+// manipulations the hold guards against cannot be sustained for an hour on assets with large pools.
+uint32 constant MIN_HOLD = 1 hours;
 uint32 constant MAX_HOLD = 7 days;
 uint32 constant MIN_FLOW_KEEPER_GRACE = 1 hours;
 uint32 constant MAX_FLOW_KEEPER_GRACE = 7 days;

@@ -15,6 +15,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
@@ -50,7 +51,8 @@ import {
     DEFAULT_IN_KIND_BPS,
     DEFAULT_IN_KIND_FLOOR_USDC,
     DEFAULT_IN_KIND_PERIOD,
-    MAX_FEED_AGE
+    MAX_FEED_AGE,
+    Roles
 } from "./src/FundTypes.sol";
 
 /// @notice A Chainlink aggregator whose answer the test sets, etched at a real feed address.
@@ -183,7 +185,7 @@ contract FundExtrasTest is BaseFixture {
         params = FlowParams({
             epochLength: 6 hours,
             settleWindow: 1 hours,
-            minHold: 24 hours,
+            minHold: 1 hours,
             keeperGrace: 6 hours,
             maxEpochFlowBps: 500,
             epochFlowFloorUsdc: 250_000e6,
@@ -790,7 +792,17 @@ contract FundExtrasTest is BaseFixture {
         _aliceClaims();
         (, uint256 value) = fund.positionClaimOf(IDX_AAVE, alice);
         (, uint256 feeValue) = fund.positionClaimOf(IDX_AAVE, feeRecipient);
+        // ADMIN_ROLE (this contract is the fund's admin here) since the owner's 2026-11-13 split; the emergency key only
+        // pauses, and it is refused the unwind.
         vm.prank(emergency);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                emergency,
+                Roles.ADMIN_ROLE
+            )
+        );
+        fund.emergencyUnwind();
         fund.emergencyUnwind();
         (, uint256[] memory held) = fund.heldBalances();
         assertLe(

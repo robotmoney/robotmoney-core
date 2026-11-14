@@ -652,6 +652,26 @@ function _valueExcept(uint256 skip) internal view returns (uint256 sum);
 | ---- | ---- | ----------- |
 | sum | `uint256` |  |
 
+<a id="test_emergencypowers_hotkeypausesonly_timelockshutsdownandunwinds"></a>
+
+### test_emergencyPowers_hotKeyPausesOnly_timelockShutsDownAndUnwinds
+
+<i>
+
+Owner 2026-11-13 (external review of Deploy 4): the emergency hot key keeps only the pause-class levers
+(fund `pauseDeposits`, `pauseRebalance`; queue `pauseQueue`, `freezeSettlement`). `shutdown` and
+`emergencyUnwind` end deposits or sell every holding, so they are ADMIN_ROLE's: the Safe through the
+timelock and its delay. The emergency key, the keeper and a stranger are refused both; the timelock runs
+both, and the role layout reads back.
+
+</i>
+
+```solidity
+function test_emergencyPowers_hotKeyPausesOnly_timelockShutsDownAndUnwinds()
+        public
+        fixtureCovered;
+```
+
 <a id="_unauthorized-address-bytes32"></a>
 
 ### _unauthorized

@@ -521,7 +521,7 @@ abstract contract PrototypeHarness is BaseFixture {
         return FlowParams({
             epochLength: 6 hours,
             settleWindow: 1 hours,
-            minHold: 24 hours,
+            minHold: 1 hours,
             keeperGrace: 6 hours,
             maxEpochFlowBps: 500,
             epochFlowFloorUsdc: 250_000e6,
