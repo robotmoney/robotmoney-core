@@ -64,7 +64,9 @@ notes: |
   for this rehearsal (owner instruction 2026-11-14), so no step starts or stops it (README Hosts). The Twin signs with the live keystores (the deployer, the keeper, the
   emergency key and Safe owners A and B), with a passphrase file, which only chain 918453 accepts; the config adds it to {signer}, {ownerSigner}, {ownerSigner2} and the
   cast lists. P0.86 and P0.88 set the Twin chain id in the run's copies (manifests and sheet); nothing else differs from an 8453 run. The Twin rows P6.90, P6.92,
-  P6.95 and P6.97 are the feed step of decision D4-9; P9.84 reads the held claims claimable.
+  P6.95 and P6.97 are the feed step of decision D4-9; P9.84 reads the held claims claimable. The Twin config gives the cast lists Base's fee level
+  (--priority-gas-price 1000000 --gas-price 20000000): anvil suggests a 1 gwei priority fee, and at that price the keeper's live 0.00095 ETH caps the settle's gas
+  estimate under the 2.1 M gas it uses, so the estimate reverts; on 8453 cast reads the chain's own fees (about 0.005 gwei). No balance is written on the fork.
 
   Counts. The upgrade adds no deployer stage: deploy-implementation is one CREATE outside the stage table, recorded in the run manifest's implementation_deploys, and
   the gate's frozen counts are the live sha's. No counts file is added.
@@ -382,11 +384,11 @@ steps:
     added: "v0.8.0-onevault-upgrade"
   - id: "P0.86-upg-twin-chain-ids"
     standing: ["9"]
-    description: "On the Twin only: the run's manifest copies name the Twin chain (918453) the fork answers with, as every fund tool checks (the contracts on the fork are the live ones; only the chain id differs). The live record is not touched"
+    description: "On the Twin only: the run's manifest copies and its run manifest copy name the Twin chain (918453) the fork answers with, as every fund tool checks (the contracts on the fork are the live ones; only the chain id differs). The live record is not touched"
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", "for f in {manifestDir}/*.json; do jq 'if has(\"chain_id\") then .chain_id = 918453 else . end' \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"; done && jq -e '.chain_id == 918453' {manifestDir}/fund.json > /dev/null"]
+      - ["bash", "-c", "for f in {manifestDir}/*.json; do jq 'if has(\"chain_id\") then .chain_id = 918453 else . end' \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"; done && jq '.chainId = 918453' {evidenceDir}/publish-run.json > {evidenceDir}/publish-run.json.tmp && mv {evidenceDir}/publish-run.json.tmp {evidenceDir}/publish-run.json && jq -e '.chain_id == 918453' {manifestDir}/fund.json > /dev/null && jq -e '.chainId == 918453' {evidenceDir}/publish-run.json > /dev/null"]
     expectExit: 0
     receipts: []
     irreversible: false
