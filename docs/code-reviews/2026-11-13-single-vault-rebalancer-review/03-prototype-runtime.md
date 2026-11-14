@@ -2,8 +2,7 @@
 
 This first pass traced these attack candidates through the prototype contracts
 and libraries. The evidence below records what the code does; it is not a claim
-that the tests or simulations were rerun. No actionable runtime defect was
-confirmed.
+that the tests or simulations were rerun. The first-pass traces below remain bounded observations; the expanded pass identifies RUN-01.
 
 ## Settlement bounds and cross-request value
 
@@ -87,19 +86,22 @@ those obligations to the fund (`FlowClaimLib.sol:347-371`). These checks
 blocked a claim-redirection path in the code trace. I did not execute an
 exclusion-ledger recovery scenario.
 
-## Disclosed setup caveat, not a confirmed finding
+## RUN-01 — P2: asset admission can invalidate the queue's swap band
 
-`FlowQueue.sol:305-310` checks `legBandBps` against the current maximum pool
-fee when parameters are set. `FundAdminLib.addAsset` / `_checkBasket`
-(`FundAdminLib.sol:87-104, 170-206`) do not repeat the queue-band check; the
-queue source itself labels this a scaffold gap. If an added basket pool's fee
-exceeds the current band, swaps against that asset can fail their per-leg
-limits once the asset is held. Governance can raise the band after admission
-and before assigning or operating the new target. This pass did not establish
-an irreversible failure or an exploit path, so it is not indexed as a finding;
-the deployment sequence must keep the band above fees of newly targeted
-assets.
+**Requirement:** proposal §5.9.5 requires `legBandBps` above the pool fee. `FlowQueue.sol:305-310` enforces this when queue parameters are set, but explicitly notes that later asset admission does not recheck it. `FundAdminLib.sol:87-104,197-206` admits an asset after checking the fee against only the fund's slippage and NAV-deviation bounds.
 
-The proposal's documented G4 and G8 failures, G5 not-pass result, and G9 pass
-remain experiment outcomes rather than newly reproduced findings. This first
-pass did not reproduce them.
+**Reachable configuration:** start with queue band 100 bps and existing pools below it. Between plans, admit a healthy, liquid new basket asset with a 100 bps fee while fund slippage and NAV guards are 200 bps. These fund bounds exceed the new fee and do not cause admission to reject. A new target can be opened through `FundAdminLib.openPlan:383-401`; its checks are vector validity and pool-share limits, not queue band compatibility. Rebalancing uses its own swap limits (`FundStepLib.sol:216-232`). The review did not execute this full admission-to-rebalance scenario on a fork.
+
+Once the asset is held, proportional deposits must purchase it. With feed, TWAP and spot aligned, a purchase with a reference cost of 1,000,000 USDC base units requires at least ceil(1,000,000 / 0.99) = **1,010,102** units before price impact. `FlowCheckLib.sol:288-293` allows only **1,010,000** units at a 100 bps band. The exact-output purchase therefore cannot fill at that aligned market, even before price impact. The proportional purchase path is `FundFlowsLib.sol:103-135,199-214`. The failed deposit self-call leaves deposits pending. Redemption sale bounds can also be too tight at positive impact, but this report's quantified proof establishes the deposit case only.
+
+This is a governed configuration defect, not a theft path or a failure demonstrated for the five deployed default assets. Cancellation and in-kind exits remain available. Governance can raise the queue band before assigning/funding the target; the missing guard permits omission of that required sequencing and a resulting outage. The first pass incorrectly used recoverability as a reason to discard it.
+
+**Validation:** static call-path inspection plus executed Bun integer arithmetic returned `requiredAtZeroImpact=1010102, allowed=1010000, canExecute=false`. No Solidity transaction or fork reproduction was run. The source comment already discloses the gap; disclosure does not enforce the invariant.
+
+**Remedy:** enforce compatibility on asset admission when a queue is bound, and before enabling a target that would fund the asset. Retain the queue parameter check. A regression should admit a valid pool at or above the current queue band and prove rejection or an atomic parameter adjustment before funding it.
+
+## Additional recovery review
+
+The expanded pass read `FundExclusionLedger`, queued-share checkpoints, `FundPositionLib` unit mint/burn and claim arithmetic, unreadable-lending in-kind exits, restore/drain reservation of existing claims, and `FlowEpochs` anchored epoch transitions. It found no additional confirmed defect in those traces. It did not execute exclusion/recovery or repeated-loss scenarios, so those observations are not an economic safety proof.
+
+Current published outcomes are G4 step 3e Pass, G5 not pass, G8 Fail and G9 Pass. Historical G4 step 3 failure remains in the evidence log; it does not describe the current scored design.

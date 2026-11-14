@@ -27,7 +27,7 @@ measure attack outcomes, cost, wait time, and block rates ([`one-vault-timed-flo
 The product decision is still open: ADR-0010 remains Rejected pending the
 experiment, and the proposal says production stays on the existing design
 until its gates decide otherwise ([`ADR-0010`](../../adr/ADR-0010-unified-vault-architecture.md#L1-L3), [proposal](../../technical/one-vault-rebalancer-proposal.md#L3-L9)).
-The proposal currently reports G1 Pass, G4 Fail, G5 not pass, G6 not run, G8
+The proposal currently reports G1 Pass, G4 Pass (step 3e; historical step 3 failed), G5 not pass, G6 not run, G8
 Fail and G9 Pass; these are published experiment outcomes, not findings of
 this static review ([proposal §13](../../technical/one-vault-rebalancer-proposal.md#L1184-L1201), [gate results](../../technical/one-vault-rebalancer-proposal.md#L1231-L1243)).
 
@@ -60,7 +60,7 @@ this static review ([proposal §13](../../technical/one-vault-rebalancer-proposa
 
 ## Review posture
 
-This is a first-pass adversarial static review. Findings are limited to
+This is an expanded adversarial review with static runtime traces and focused executable verifier, receipt and scorer checks. Findings are limited to
 actionable implementation or verification defects, with path and line evidence
 and a concrete trigger and consequence. Documented experimental limitations
 and unmet product decisions are recorded as scope or coverage limits, not
