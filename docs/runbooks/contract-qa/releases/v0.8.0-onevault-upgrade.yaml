@@ -1027,7 +1027,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{signer}"]
-      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "flowParams $n"; test "$(cast to-dec 0x${n:2:64})" = 3600 && test "$(cast to-dec 0x${n:66:64})" = 720 && test "$(cast to-dec 0x${n:130:64})" = "{sheet:FLOW_MIN_HOLD}" && sed -i -e "s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=3600/" -e "s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=720/" {sheet} && grep -E "^FLOW_(EPOCH_LENGTH|SETTLE_WINDOW)=" {sheet}']
+      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "flowParams $n"; test "$(cast to-dec 0x${n:2:64})" = 3600 && test "$(cast to-dec 0x${n:66:64})" = 720 && test "$(cast to-dec 0x${n:130:64})" = "{sheet:FLOW_MIN_HOLD}" && { test -f {runDir}/sheet-at-go.env || cp {sheet} {runDir}/sheet-at-go.env; } && sed -i -e "s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=3600/" -e "s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=720/" {sheet} && grep -E "^FLOW_(EPOCH_LENGTH|SETTLE_WINDOW)=" {sheet}']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1931,13 +1931,26 @@ steps:
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     added: "v0.8.0-onevault-upgrade"
+  - id: "P10.79-upg-go-sheet"
+    standing: ["4.10"]
+    description: "The sheet the go was recorded with ({runDir}/sheet-at-go.env), for the sign-off's basis: P3.86 (D4-15) rewrote FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW in the run sheet after the go. P3.86 keeps a copy before it edits; when it is missing (a run whose P3.86 passed before the copy existed), it is the run sheet with those two lines set back to the committed sheet's values. Either way its sha256 must equal the go record's sheetSha256, so any other difference stops here"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bash", "-c", 'g={runDir}/sheet-at-go.env; if [ ! -f "$g" ]; then e=$(sed -n "s/^FLOW_EPOCH_LENGTH=//p" deployments/base-8453-rehearsal/deploy-4.env); w=$(sed -n "s/^FLOW_SETTLE_WINDOW=//p" deployments/base-8453-rehearsal/deploy-4.env); sed -e "s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=$e/" -e "s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=$w/" {sheet} > "$g"; fi; want=$(jq -r .sheetSha256 {runDir}/go/publish.json); got=$(sha256sum "$g" | cut -d" " -f1); echo "go sheet $got, go record $want"; test "$got" = "$want"']
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.8.0-onevault-upgrade"
   - id: "P10.82-upg-signoff"
     standing: ["4.4"]
     description: "The sign-off is written by the run, and only when the report lists no issue and matches the go"
     host: "control"
     phase: 10
     cmds:
-      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{coreSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{sheet}", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.82-upg-signoff"]
+      - ["bun", "scripts/runbook/run-record.ts", "signoff", "--run-dir", "{runDir}", "--evidence-dir", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--sha", "{gateSha}", "--target", "{target}", "--chain-id", "{chainId}", "--sheet", "{runDir}/sheet-at-go.env", "--tag", "{releaseTag}", "--release", "{release}", "--step", "P10.82-upg-signoff"]
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/go", "pattern": "signoff.json", "required": true}
