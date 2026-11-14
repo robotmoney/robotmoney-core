@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { effectiveCounts } from "./counts.ts";
 import { adoptedTxs, manifestDir, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
+import { proxyBuildDirsOf } from "./verify-stage.ts";
 import { DEPLOYER_STAGES, getStageTable, handoverStage, type StageRow } from "./stages.ts";
 import { RPC_REFUSED_DETAIL, type VerifyOptions, type VerifyReport, type VerifySheet } from "./verify/index.ts";
 
@@ -33,6 +34,8 @@ export async function runFundVerifyStage(ctx: RunContext, row: StageRow, manifes
   const report = await deps.verifyDeployment({
     system: "fund", chain: deps.chain, manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildFundVerifySheet(ctx), fromBlock: BigInt(manifest.firstBlock),
     frozenCounts: effectiveCounts(frozenFile, adoptedTxs(manifest)), artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
+    // An in-place upgrade (the fund-upgrade flow): a proxy the run manifest records as upgraded (proxy_upgrades, fund-upgrade-record.ts) is compared with its upgrade's build.
+    ...proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")),
     deployerStartNonce: manifest.deployerStartNonce, ...(handover?.status === "done" && handover.endNonce !== undefined ? { deployerNonceAtDeployEnd: handover.endNonce } : {}),
   });
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "verify.check", { label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });
