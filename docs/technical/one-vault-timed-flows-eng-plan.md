@@ -374,8 +374,10 @@ Status: plan, 2026-11-13, reconciled 2026-11-14 with the hardening release
 release's code: the emergency key holds only pauses, `shutdown` and
 `emergencyUnwind` are `ADMIN_ROLE`'s, the timelock's only executor is its
 Safe, and the hold is 1 hour. It implements proposal §5.11, D16 to
-D26 and RB-23 to RB-32, on the step 3e contracts. Rows E34 to E42 come
-from the adversarial review of the same day (proposal §19). The rule above all rows
+D26 and RB-23 to RB-34, on the step 3e contracts. Rows E34 to E42 come
+from the adversarial review of the same day (proposal §19). Rows E43 to
+E48 come from the code review of 0.7.0 (`docs/code-reviews/0.7.0/`,
+proposal §5.11.9 and §20). Step 3f is the design of `v0.9.0-onevault`. The rule above all rows
 changes with it: quantity sets every share minted or burned, no price moves
 value to or from holders, and one price, the fund's NAV per share at the
 TWAP, moves value between the matched users of one settlement. The NAV
@@ -403,6 +405,12 @@ method does not change. The outside feeds stay guards.
 | E40 | Redemption requests keep their place | A redemption request does not expire. After `maxRoll` epochs its owner may withdraw the unfilled shares. A deposit request expires as before. A locked deposit can be cancelled while deposits are stopped. | D25. |
 | E41 | Terms fixed at the request | `Request` stores the exit fee, the hold and the expiry time. Settlement and claims read them from the request. | D26, RB-31. |
 | E42 | Steps and settlement windows; the sale of a delisted asset | `step` reverts between the close of an epoch with locked requests and that epoch's first successful settlement. A delisted asset is sold by keeper-only steps for that asset alone, with its own price bound and cost budget, outside the checks of other assets. Its checks leave the settlement. | RB-30, proposal §4.5 rule 5. The bound and the budget are open. |
+| E43 | Admission checks the swap band (amends E15) | `addAsset` for a basket asset, `setTargetAndOpenPlan` for a target that funds one, and `setFlowParams` when `legBandBps` falls all require the pool fee below the queue's `legBandBps`. The fund reads the band from the bound queue. | RUN-01, RB-33. Step 3f has no cancel after the cutoff and no in-kind exit to go around a deposit side that cannot fill. |
+| E44 | Honest lending adapters | Each lending adapter's withdrawal reverts or returns the amount paid. The fund books the measured USDC delta. Each adapter exposes what the venue can pay now, and that view may only understate. | Review chapter 10, RB-34. E36 and E37 rest on it. |
+| E45 | Scorer: every setting compared | `score-sim.ts` compares the whole parameter tree of every run file, with the recursive canonical form it already has, not only top-level keys. The step 3f parameters join the tree. | SIM-01. |
+| E46 | Scorer: incomplete evidence refused | A missing or non-finite required cost or denominator fails the run. The scored sample must equal the planned set. A zero-turnover plan is excluded only by a stated rule that the output reports. | SIM-02. |
+| E47 | Verifier scope | `publish-contracts/src/verify/fund.ts` reads back the fee recipient, every field of every asset and the step 3f parameters. It walks the link references and attests every linked library against the release artifacts. It proves exclusive membership: the Safe as the timelock's only proposer, canceller and executor, the timelock as the only `ADMIN_ROLE`, one keeper, one emergency key. It reads the Safe's modules, guard and fallback handler. | DEP-01, DEP-02, DEP-03. The step 3f design rests on those roles being exclusive. |
+| E48 | Sim scenarios | The timed sim adds a sequencer outage, a USDC depeg past the band, a stopped keeper, a pause and a freeze. Each reports request waits and what a holder can do. | The review's stated limit on G9. Step 3f has no exit from a running fund. |
 | E33 | The realized-price check (amends E7, check 11) | The net side's realized price must be inside its per-swap limits. There are no user limits to check. | D17. |
 
 ### 8.2 Contract changes
@@ -429,6 +437,8 @@ method does not change. The outside feeds stay guards.
   trigger (E38). `redeemInKind` gated on it (E29). The position claim in
   the pro-rata sale (E37). Add
   the depth check (E32). `mintInKind` and `sellForFlow` are unchanged.
+- **`publish-contracts` and `sim/score-sim.ts`.** The verifier scope (E47)
+  and the two scorer fixes (E45, E46). Neither is prototype contract code.
 - **Sizes.** The queue loses the limit logic and gains the match. The fund
   gains two checks. Both are measured against G1 before anything else.
 
@@ -471,13 +481,33 @@ method does not change. The outside feeds stay guards.
   - The changed RB-6, RB-10, RB-12, RB-15 and RB-16: a blocked settlement matches
     nothing. A failed net side leaves the match and changes nothing else.
 - **`FundCore.t.sol`:** asset rule 4 refuses a target on a pool under the
-  depth floor and allows a target of 0.
+  depth floor and allows a target of 0. Asset rule 6 (RB-33, A35): a pool
+  whose fee is at or above `legBandBps` is refused at admission and at
+  funding, and a fall of `legBandBps` under an active pool's fee is
+  refused.
+- **`Adapters.t.sol`:** RB-34 and A34. A mock adapter that pays short
+  without reverting must not close an exclusion as fully drained, must not
+  let a position claim be booked as paid, and must not pass the venue test
+  before a match.
+- **Scorer tests:** one nested parameter changed in a file that is not the
+  first must fail the run (E45). One deleted cost field must fail the run,
+  for the arrival cost and for the reference cost (E46). Each test fails on
+  the scorer before its fix.
+- **Verifier tests** (`publish-contracts/tests`): a negative fixture for a
+  wrong fee recipient, one wrong field of one asset, an altered leaf
+  library, an altered nested library, an extra proposer, an extra
+  `ADMIN_ROLE` holder, a second keeper and an unexpected Safe module
+  (E47). Each must fail verification.
+- **Traces to redo by review** (proposal §20.3): value between requests
+  under the match, queued-share ownership through a match and through a
+  wind-down, and what a holder can do in a stuck queue.
 - **Sim (`sim/TimedFlowSim.t.sol`):** the matched share of the volume, the
   gain of A10 and A2 against the step 3d fund on the same seeds, the longest
   wait in the blocked scenarios, and the G9 outputs of §4.4 again.
 
 ### 8.4 Work packages, in order
 
+0. The scorer fixes (E45, E46), before anything is measured.
 1. Sizes first: a throwaway build with the limit logic removed and the gates
    added, measured against G1.
 2. The queue without limits, with the cutoff and the terms views (E25, E26,
@@ -490,9 +520,11 @@ method does not change. The outside feeds stay guards.
    the position claim in a net redemption (E34 to E37).
 4b. No step in a settlement window, and the sale path of a delisted asset
    (E42).
-5. Asset rule 4 (E32).
+5. Asset rules 4 and 6, and the adapter requirement (E32, E43, E44).
+5a. The verifier scope (E47).
 6. The step 3f attack tests, then the rerun of A1 to A19.
-7. The sim rerun. Score G3, G8 and G9 and write them into proposal §14.
+7. The sim rerun with the added scenarios (E48). Score G3, G5, G8 and G9
+   with the fixed scorer and write them into proposal §14.
 
 ### 8.5 Risks
 

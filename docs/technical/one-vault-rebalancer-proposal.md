@@ -11,7 +11,8 @@
   targets replace on-chain sleeves 2026-11-10; hardened timed flows and the
   asset rule 2026-11-11; netted, forward-priced flows decided 2026-11-13 and
   not built, §5.11 and §18; revised after an adversarial review the same
-  day, §19)
+  day, §19; requirements from the code review of 0.7.0 added 2026-11-14,
+  §20. Step 3f is the design of the next version, `v0.9.0-onevault`)
 - **Author:** lucky-tensor (drafted with Claude)
 - **Decider:** Product owner
 - **Would supersede, if the experiment invalidates the rejection:** the Portfolio Router (`docs/architecture.md`
@@ -331,6 +332,26 @@ carries more weight, so it is tightened in two ways.
    settlement of the other assets. If its feed is dead there is no price
    to bound a sale, and only the Safe's emergency unwind sells it. The
    bound and the budget have no defaults yet.
+
+6. **Its pool fee fits the queue's swap band** (code review 0.7.0, RUN-01).
+   A basket asset is admitted only if its pool fee is below the queue's
+   `legBandBps`. The same check runs before a target funds the asset, and
+   when `legBandBps` falls. Today the queue checks this only when its own
+   parameters are set, so an asset admitted later can carry a fee the band
+   cannot pay. A purchase at a 100 bps fee needs 1,010,102 units for
+   1,000,000 of value, and a 100 bps band allows 1,010,000. Every net
+   deposit would then fail. From step 3f a depositor in that state can
+   neither cancel after the cutoff nor leave in kind, so the check is
+   required, not optional.
+
+A lending asset has one more requirement from step 3f (code review 0.7.0,
+chapter 10). Its adapter must be honest about what it pays:
+
+- A withdrawal either reverts or returns the amount actually paid. The fund
+  books the USDC it actually received, never the amount it asked for.
+- The adapter exposes what the venue can pay out now. That view may
+  understate. It must never overstate. The match (D21) and the position
+  claim of a net redemption (D23) both rest on it.
 
 The fund checks rule 4 where it checks rule 3. `minPoolDepthUsdc` has no
 default yet. Step 3f sets it from the cost of holding a pool's TWAP outside
@@ -903,7 +924,8 @@ and not tested.** Until step 3f is built, §5.9 describes the flows as they are,
 the prototype, the Deploy 4 rehearsal, the hardening release
 `v0.8.0-onevault` and every result in §14 rest on §5.9. Step 3f is not part
 of `v0.8.0-onevault`. It builds on that release's roles and its 1 hour hold
-(§5.11.8).
+(§5.11.8). Step 3f is the design of the next version, `v0.9.0-onevault`.
+§5.11.9 lists what that version takes from the code review of 0.7.0.
 This section is the design that step 3f builds. Every size, bound and cost in
 it is an estimate.
 
@@ -1218,6 +1240,61 @@ design. The step 3f attack tests (A21, A23 to A28, A30 to A33) run at the
 **The run under the caps** (§19.2) does not change: it is set by the flow
 cap, not by the hold.
 
+#### 5.11.9 What `v0.9.0-onevault` takes from the code review of 0.7.0
+
+An adversarial code review of the 0.7.0 source is in
+`docs/code-reviews/0.7.0/`. It records six findings, all P2, and no theft
+path. §20 is the record. These are the requirements it puts on step 3f.
+
+**In the design**
+
+- **Admission checks the swap band** (RUN-01): §4.5 rule 6, RB-33.
+- **Adapters report honestly** (chapter 10): §4.5, RB-34.
+
+**In the evidence.** No step 3f gate is scored until both are fixed.
+
+- **The scorer compares every setting** (SIM-01). Every run file must match
+  on the whole parameter tree, nested flow parameters included. Today only
+  top-level keys are compared across files.
+- **The scorer refuses incomplete evidence** (SIM-02). A missing or
+  non-finite cost field fails the run. The scored sample must equal the
+  planned set. Today a missing cost can turn a failed G4 into a pass while
+  the run is still marked complete.
+
+**In the deployment verifier.** Step 3f rests on "only the Safe winds down"
+and "only the keeper settles". The verifier must prove both, not assume
+them.
+
+- **The whole fund configuration is read back** (DEP-01): the fee
+  recipient, every field of every asset, and the step 3f parameters
+  (`maxPause`, `minPoolDepthUsdc`, the bound and budget of a delisting
+  sale).
+- **Linked library code is attested** (DEP-02). The match lives in a linked
+  library, so a matching implementation proves little by itself.
+- **Roles are exclusive** (DEP-03). The Safe is the only proposer,
+  canceller and executor of the timelock. The timelock is the only
+  `ADMIN_ROLE` holder. The keeper is the only `KEEPER_ROLE` holder. The
+  emergency key is the only `EMERGENCY_ROLE` holder. Presence of the right
+  holder is not enough.
+- **The Safe's own configuration is read back** (DEP-03): its modules, its
+  guard and its fallback handler.
+
+**In the review and test scope**
+
+- **The value-transfer trace is redone.** The review found no path where
+  one request's fill moves value to another. That rested on per-request
+  limits, which step 3f removes, and step 3f moves value between matched
+  users on purpose.
+- **Loss-recovery accounting covers two new share movements**: shares that
+  pass from owner to owner inside the queue in a match, and escrow released
+  at a wind-down. Each needs the paired ledger checkpoints the review
+  traced for the existing movements (RB-22).
+- **The sim adds the unmeasured scenarios.** The G9 pass assumes a
+  sequencer that is always up, a fixed USDC feed and a keeper that never
+  stops. A step 3f holder has no exit in exactly those cases.
+- **Adversarial adapter tests** (A34): an adapter that pays short without
+  reverting, in recovery and in the position claim of a net redemption.
+
 ## 6. Contract changes
 
 | Contract | Today | Proposed |
@@ -1322,7 +1399,7 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
   The queue reports each change of an owner's queued shares to the ledger
   before the change happens.
 
-**From step 3f (§5.11, decided 2026-11-13, not built).** RB-23 to RB-32 are
+**From step 3f (§5.11, decided 2026-11-13, not built).** RB-23 to RB-34 are
 new. RB-14 ends: there are no limits. Seven invariants change their wording:
 
 - **RB-10 (3f).** No shares leave the queue and no USDC is paid before the
@@ -1372,6 +1449,10 @@ new. RB-14 ends: there are no limits. Seven invariants change their wording:
   made. A redemption request never loses its place in the order.
 - **RB-32.** A pause of the queue ends by itself after `maxPause` and
   cannot be set again for the same length of time.
+- **RB-33.** No basket asset is active, and no target funds one, while its
+  pool fee is at or above the queue's `legBandBps` (§4.5 rule 6).
+- **RB-34.** The fund books what a lending adapter actually paid. An
+  adapter's view of what its venue can pay now never overstates.
 - **RB-6 (3f).** Rebalancing state never blocks a redemption request or its
   settlement.
 
@@ -1651,10 +1732,21 @@ whose release yaml stays its record) to `v0.8.0-onevault`
        `emergencyUnwind` (as in `v0.8.0-onevault`).
      - A33, a parameter change by the timelock while requests are locked:
        their fee, hold and expiry must not move.
+     - A34, an adapter that pays short without reverting: in recovery, in
+       the position claim of a net redemption, and in the venue test before
+       a match (code review 0.7.0, chapter 10).
+     - A35, an asset whose pool fee is at or above `legBandBps`: admission
+       and funding must be refused (code review 0.7.0, RUN-01).
    - **Rerun A1 to A19** on the step 3f fund. A13 ends with the limits. A9
      and A14 use the in-kind exit only in a wind-down.
-   - **Tests for RB-23 to RB-32** and for the changed RB-6, RB-10, RB-12,
-     RB-15, RB-16, RB-18 and RB-20. G3 is scored again.
+   - **Tests for RB-23 to RB-34** and for the changed RB-6, RB-10, RB-12,
+     RB-15, RB-16, RB-18 and RB-20.
+   - **The scorer is fixed first** (SIM-01, SIM-02, §5.11.9), each fix with
+     a test that fails on the scorer before it. No step 3f result is scored
+     by the old scorer.
+   - **Scenarios the sim did not measure**: a sequencer outage, a USDC
+     depeg past the band, a keeper that stops, a pause and a freeze. Each
+     reports how long requests wait and what a holder can do. G3 is scored again.
    - **Rerun the timed sim.** Report the matched share of the flow volume,
      the gain of A10 and A2 against the step 3d fund on the same seeds, the
      loss of a matched user against the sim's true price, and how long a
@@ -1779,8 +1871,8 @@ thresholds below are proposals the owner can change until step 3f runs.
   or redeemer fills outside their limit" becomes: every net fill is inside
   its per-swap limits, and no matched user gets a price further than
   `refBandBps` from the sim's true value of a share at the settlement block.
-  The attack list is A1 to A12, A14 to A21 and A23 to A33. The invariants
-  are RB-10 to RB-13, RB-15 to RB-18 and RB-20 to RB-32. With no exit
+  The attack list is A1 to A12, A14 to A21, A23 to A28 and A30 to A35. The
+  invariants are RB-10 to RB-13, RB-15 to RB-18 and RB-20 to RB-34. With no exit
   from a running fund, a blocked day costs holders more than before, so
   the owner should set the floor on the cost of blocking again before step
   3f runs.
@@ -1788,7 +1880,12 @@ thresholds below are proposals the owner can change until step 3f runs.
   95th percentile wait is the customer's whole protection, so the sim also
   reports the longest wait in the blocked scenarios. That number has no
   threshold yet.
-- **G3** is scored again over RB-1 to RB-32, without RB-14.
+- **G3** is scored again over RB-1 to RB-34, without RB-14.
+- **G9** also reports the outage, depeg, stopped-keeper, pause and freeze
+  scenarios (§5.11.9). They have no threshold yet. The owner sets one
+  before step 3f runs, or records that they are reported only.
+- **Every gate** of the step 3f run is scored by the fixed scorer (SIM-01,
+  SIM-02).
 - **G5** is affected after all: a plan cannot step inside a settlement
   window (RB-30). It is scored again on the step 3f run.
 - **G1** holds the fund and the queue to the same limit after the change.
@@ -2743,3 +2840,65 @@ recorded here and not acted on.
   measurements.
 - Whether a lending venue's available liquidity can be read reliably
   inside `settle`, for each of the three venues, is not checked.
+
+## 20. The code review of 0.7.0, and what `v0.9.0-onevault` takes from it
+
+Status: record, 2026-11-14. The review is in `docs/code-reviews/0.7.0/`.
+It read source revision `176770892`, which is the 0.7.0 code before the
+hardening release `v0.8.0-onevault`. It is a static review with focused
+executed probes of the verifier and the scorer. It ran no Solidity test and
+no simulation. §5.11.9 holds the requirements. This section is the record.
+
+### 20.1 The six findings
+
+All are P2. None is a theft path or a production compromise.
+
+| ID | Finding | In `v0.9.0-onevault` |
+| --- | --- | --- |
+| RUN-01 | An asset can be admitted with a pool fee at or above the queue's swap band. Net deposits then fail. | Required: §4.5 rule 6, RB-33, A35. The review counted on cancel and in-kind exit as the way out. Step 3f removes both, so the finding weighs more. |
+| DEP-01 | The fund verifier does not read back the fee recipient or any per-asset field. | Required, and extended to the step 3f parameters (§5.11.9). |
+| DEP-02 | The fund verifier masks library links and never checks the linked code. | Required. The match will live in a linked library. |
+| DEP-03 | The verifier proves the Safe holds a role, not that nobody else does. It does not read the Safe's modules, guard or fallback. | Required, and extended to `ADMIN_ROLE`, `KEEPER_ROLE` and `EMERGENCY_ROLE` (§5.11.9). `v0.8.0-onevault` already checks that the timelock's executor is the Safe and is not open (D4-10). |
+| SIM-01 | The scorer drops most nested flow parameters when it checks that all files used the same settings. | Required before any step 3f run. |
+| SIM-02 | A missing cost field can turn a failed G4 into a pass while the run is marked complete. | Required before any step 3f run. |
+
+The review states that neither scorer defect shows the published results
+in §14 to be wrong. It shows that the scorer would not have caught mixed or
+incomplete files.
+
+### 20.2 Candidate from the recovery trace
+
+An adapter that returns a short withdrawal without reverting could leave
+value behind when an exclusion is closed (review chapter 10). The reviewed
+Aave and Compound adapters reject a short payment, so the review did not
+confirm it. Step 3f leans harder on adapters (D21, D23), so it becomes a
+requirement on every lending adapter (§4.5, RB-34) and a test (A34).
+
+### 20.3 Conclusions of the review that step 3f voids
+
+The review traced several attacks and found the code's guards held. Three
+of those results rest on something step 3f removes or adds. Each must be
+traced again on the step 3f code.
+
+| Review conclusion | Why it no longer carries |
+| --- | --- |
+| No request's fill moves value to another request. | It rested on each request's own price limit. Step 3f has no limits and matches users at one price. |
+| Queued shares keep their owner through every movement, so the exclusion ledger pays the right holders. | Step 3f adds two movements: owner to owner inside the queue in a match, and the release of escrow at a wind-down. |
+| A stuck or misconfigured queue still leaves cancel and in-kind exit open. | Step 3f closes cancel at the cutoff and has no in-kind exit from a running fund. |
+
+### 20.4 Limits the review states, which step 3f must not inherit
+
+- The G9 pass is conditional on the sim's model: a sequencer that is
+  always up, a fixed USDC feed, a keeper that never stops, no freeze, and
+  an arbitrageur with unlimited inventory. Step 3f adds the first four as
+  scenarios (§10). The arbitrage model stays a stated assumption.
+- The contract does not check that an applied target vector was derived
+  from the receipt's payload. The review treats that as the documented
+  off-chain boundary (§4.1). The reviewers of §19 raised the same point,
+  and that no basket asset has a weight cap. It stays open for the owner.
+
+### 20.5 Unverified
+
+- The review's findings were read, not reproduced, for this section.
+- Whether `v0.8.0-onevault` closed any part of DEP-01 or DEP-03 beyond the
+  executor check was judged from a search of the verifier, not from a run.
