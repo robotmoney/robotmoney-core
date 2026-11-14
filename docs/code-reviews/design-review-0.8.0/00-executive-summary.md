@@ -7,6 +7,8 @@
 
 ---
 
+> **Update, 2026-11-14.** The design has been revised against this review. `docs/technical/one-vault-rebalancer-proposal.md` §22 maps each root cause below to the change that answers it. One fix in this review was corrected on the way: see the erratum in `06` §2.
+
 ## 1. Verdict
 
 **The core of step 3f is sound. Implementation of `v0.9.0-onevault` should wait for four spec edits and two owner decisions.**
@@ -25,7 +27,7 @@ What must change before building:
 | Root | Problem | Fix |
 | --- | --- | --- |
 | R1 | The only fast protection for locked depositors, the emergency key's `pauseDeposits`, can be switched off by its cooldown. A scheduled wind-down or adapter revoke is public for 48 hours. | No cooldown on `pauseDeposits`. Pair every scheduled wind-down and adapter revoke with it. |
-| R2 | The match is booked lazily, but the loss-recovery ledger needs every change of ownership as it happens. A redeemer who left can collect the recovery on shares they sold. | The queue's per-owner view resolves every match from per-side accumulators. Keep the existing rule that no match runs while an exclusion is open. |
+| R2 | The match is booked lazily, but the loss-recovery ledger needs every change of ownership as it happens. A redeemer who left can collect the recovery on shares they sold. | Per-side match indexes. Ownership changes at the booking. The ledger stores the indexes when an exclusion opens and reads each owner's position at them. (Corrected by the erratum in `06` §2.) |
 | R3 | The match fraction divides by totals that were capped. With more queued than the cap, the queue books more shares than are escrowed. | Divide by the uncapped locked totals. |
 | R4 | Claims on a delisted asset's slice, and the rebalancer's handling of lending claims, are one sentence each. | Specify claim units, exclusion from NAV and caps, the split of sale proceeds, and the rules for `step()`. |
 
@@ -50,7 +52,7 @@ Pass 2 counted 10 High findings. They are four problems. The pause cooldown appe
 | Root | Severity | Findings | One-line fix |
 | --- | --- | --- | --- |
 | R1 | High | FLOW-03, OPS-02, SAFE-02, P3-01 | No cooldown on `pauseDeposits`; pair every wind-down and adapter revoke with it |
-| R2 | High | FLOW-02 | Queue view resolves matches from per-side accumulators; no match while an exclusion is open |
+| R2 | High | FLOW-02 | Per-side match indexes; the ledger reads positions at the indexes stored when an exclusion opens |
 | R3 | High | FLOW-01 | Divide by the uncapped locked totals |
 | R4 | High | SAFE-08 (with ARCH-03 and ARCH-05 parts) | Specify D30 claim units, NAV exclusion, proceeds split and `step()` rules |
 | R5 | Medium | SAFE-01, FLOW-05, P3-02 | The first call of a round requires no step in the prior `settleWindow`; steps are free otherwise |
@@ -117,7 +119,7 @@ Pass 2 ratings are kept for the record. The Pass 3 rating governs. "Not re-check
 ### Before implementation: spec edits
 
 1. **R3.** Fix the denominators of step 8b. Add a conservation invariant for the match.
-2. **R2.** Specify per-side running accumulators for the match. Make `queuedSharesOf` resolve every booked match. State in RB-22 that a match changes ownership at booking and that no match runs while an exclusion is open.
+2. **R2.** Specify per-side match indexes. Make `queuedSharesOf` resolve every booked match. State in RB-22 that a match changes ownership at booking, and that the ledger stores the indexes when an exclusion opens and reads positions at them.
 3. **R1.** Remove the cooldown from `pauseDeposits` (or the alternative in decision 1). Extend the D29 pairing rule to every scheduled adapter revoke.
 4. **R4.** Specify D30 claim units, their exclusion from `heldBalance`, NAV, the caps and the proportion check, the split of each sale's proceeds, and what `step()` does with venues that carry lending claims. Fix eng plan §8.2, which says `sellForFlow` is unchanged.
 5. **R5.** Replace RB-30 with the inverted rule. Then let a round stay open for retries (FLOW-05).

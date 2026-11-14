@@ -35,3 +35,5 @@ The 7 High IDs are four distinct problems (R1 to R4 in `00` §3). Each is a cont
 | 7 | [`05-cross-cutting-contradictions-and-gaps.md`](./05-cross-cutting-contradictions-and-gaps.md) | Pass 2 synthesis and failure chains. Superseded by `00` §3 and `06` §5. Kept as the record. |
 
 Chapters `01` to `05` keep their Pass 2 text. Each finding there carries a **Pass 3** note with its final rating.
+
+The design answered this review on 2026-11-14: `docs/technical/one-vault-rebalancer-proposal.md` §22. One Pass 3 fix was corrected while it was written into the design (erratum in `06` §2).

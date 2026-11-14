@@ -64,6 +64,8 @@ With both, an owner's balance cannot change through a match between the exclusio
 
 The same rule covers the escrow released at a wind-down, which the queue still holds and still attributes to its owner until withdrawn.
 
+> **Erratum (2026-11-14, found while writing the fix into the design).** The two conditions above are not enough. An exclusion's claims stay open after the exclusion itself ends. Matches then resume. An owner who has not been checkpointed since the exclusion opened can then be read at a balance that a later match changed. The ledger must read each owner's queued shares as they stood when the exclusion opened: it stores the queue's match indexes at that moment and reads positions at them. That is the index-aware ledger that Pass 2 recommended, and Pass 2 was right to ask for it. The design adopts it (`proposal.md` §5.11.4, D32, RB-22, §22.3).
+
 ### FLOW-03, OPS-02, SAFE-02 (part 2) — Merged into one root cause, R1 (High)
 
 All three are the same defect: the emergency key's `pauseDeposits` is the only fast protection for depositors who are locked after a cutoff, and the cooldown of RB-32 can switch it off.
@@ -183,7 +185,7 @@ Pass 2 counted 10 High findings. They describe four distinct problems. The pause
 | Root | Severity | Findings | One-line fix |
 | --- | --- | --- | --- |
 | R1. The only fast protection for locked depositors can be switched off | High | FLOW-03, OPS-02, SAFE-02, P3-01 | No cooldown on `pauseDeposits`; pair every wind-down and adapter revoke with it |
-| R2. Lazy match booking against the loss-recovery ledger | High | FLOW-02 | Queue view resolves matches from per-side accumulators; no match while an exclusion is open |
+| R2. Lazy match booking against the loss-recovery ledger | High | FLOW-02 | Per-side match indexes; the ledger stores them when an exclusion opens and reads positions at them (see the erratum in §2) |
 | R3. Match fraction uses capped totals | High | FLOW-01 | Divide by the uncapped locked totals |
 | R4. Delisted-slice and lending-claim accounting unspecified | High | SAFE-08 (ARCH-03, ARCH-05 parts) | Specify claim units, NAV exclusion, proceeds split and `step()` rules |
 | R5. Steps tied to queue liveness and round length | Medium | SAFE-01, FLOW-05, P3-02 | First call of a round requires no step in the prior `settleWindow`; steps free otherwise |
@@ -205,6 +207,8 @@ Pass 2 counted 10 High findings. They describe four distinct problems. The pause
 ---
 
 ## 7. Verdict
+
+> **Update, 2026-11-14.** The design has since been revised against this review. `one-vault-rebalancer-proposal.md` §22 maps each root cause to the change that answers it and lists the fixes it did not take. Nothing there is built or tested.
 
 The core of step 3f survives three reviews: the whole match booked once at the TWAP NAV, the pro-rata net trade, the cutoff, and the Safe-only wind-down. No finding shows it unsound.
 
