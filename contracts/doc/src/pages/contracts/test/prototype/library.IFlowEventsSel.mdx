@@ -1,0 +1,22 @@
+---
+title: "IFlowEventsSel"
+---
+
+# IFlowEventsSel
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Invariants.t.sol)
+
+<i>
+
+The queue's `BelowMinRequest` selector, named for the refusal filter of `_requestRedeem`.
+
+</i>
+
+## Constants
+
+### BELOW_MIN
+
+```solidity
+bytes4 internal constant BELOW_MIN = bytes4(keccak256("BelowMinRequest(uint256,uint256)"));
+```
+

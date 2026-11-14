@@ -38,6 +38,13 @@ export const MANIFEST_ENV: Record<string, { stage: string; field: string }> = {
   SAFE_ADDRESS: { stage: SAFE_STAGE, field: "safe" },
   /** The single-vault redeploy (issue 1796) hands the new vault to the live timelock. */
   TIMELOCK_ADDRESS: { stage: "timelock", field: "timelock" },
+  // Deploy 4: the fund system's own contracts, each from its own stage's manifest. Their names differ from the vaults system's (FUND_RECEIPT_ADDRESS is the fund system's
+  // register, never CONSENSUS_RECEIPT_ADDRESS), so one env name always means one contract.
+  FUND_ADDRESS: { stage: "fund", field: "fund" },
+  REBALANCER_ADDRESS: { stage: "rebalancer", field: "rebalancer" },
+  FUND_GOVERNANCE_ADDRESS: { stage: "fund-governance", field: "governance" },
+  QUEUE_ADDRESS: { stage: "queue", field: "queue" },
+  FUND_RECEIPT_ADDRESS: { stage: "fund-receipt", field: "consensus_receipt" },
 };
 export const VAULT_LIST_ENV = "VAULT_ADDRESSES";
 /**

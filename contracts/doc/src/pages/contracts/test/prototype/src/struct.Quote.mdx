@@ -1,0 +1,31 @@
+---
+title: "Quote"
+description: "`quoteDeposit` / `quoteRedeem` (E21): the worst case the protocol's own limits allow right now."
+---
+
+# Quote
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+`quoteDeposit` / `quoteRedeem` (E21): the worst case the protocol's own limits allow right now.
+
+```solidity
+struct Quote {
+    uint256 boundPrice;
+    uint256 worstAmount;
+    uint256 feeBps;
+    uint64 earliestSettle;
+    uint64 holdEnds;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| boundPrice | `uint256` | Deposit: the most USDC per share (rounded UP); Redeem: the least USDC per share after the<br/>exit fee (rounded DOWN). PRICE_SCALE units. |
+| worstAmount | `uint256` | Deposit: the fewest shares the USDC would buy at `boundPrice` (rounded DOWN). Redeem: the<br/>least USDC the shares would pay (rounded DOWN). |
+| feeBps | `uint256` | Deposit: 0 (the users of a settlement pay the purchase cost, there is no fee class).<br/>Redeem: the fund's `exitFeeBps`. |
+| earliestSettle | `uint64` | Earliest time a request made now can settle (its epoch's end plus `settleWindow`). |
+| holdEnds | `uint64` | Deposit: `earliestSettle + minHold`. Redeem: `earliestSettle` (USDC claimable at once). |
+

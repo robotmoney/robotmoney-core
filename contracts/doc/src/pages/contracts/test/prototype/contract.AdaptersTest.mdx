@@ -1,0 +1,298 @@
+---
+title: "AdaptersTest"
+description: "The Aerodrome exact-output adapter copy (`AerodromeExactOutSwapAdapter`) deployed and run against a real Aerodrome Slipstream pool at the pin: no harness, no mock, no fund. The Uniswap copy is exercised by every harness flow test; the Aerodrome copy had no test before this file (step 3 plan §3.3 item 5)."
+---
+
+# AdaptersTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Adapters.t.sol)
+
+**Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
+
+**Title:** AdaptersTest
+
+The Aerodrome exact-output adapter copy (`AerodromeExactOutSwapAdapter`) deployed and run against a real
+Aerodrome Slipstream pool at the pin: no harness, no mock, no fund. The Uniswap copy is exercised by every
+harness flow test; the Aerodrome copy had no test before this file (step 3 plan §3.3 item 5).
+
+The pool. No Aerodrome account was in the fixture recorded on 2026-11-12, so this file names one and asks
+`verify` to record it (requests.md, `hardening`): the Slipstream CL factory 0x5e7B…809A, its SwapRouter
+0xBE6D…18a5 (whose `factory()` is that factory at the pin) and the factory's wETH / USDC pool of tick
+spacing 100, 0xb2cc…DC59 (at block 55462550: liquidity 1.13e17, fee 150 pips). These three were read with
+`cast call --block 55462550` against the public node; `setUp` re-reads the pool from the factory.
+Until the re-record, replay stops in `setUp` with `FixtureAccountMiss` naming the first missing account;
+the recorder's fork run has them all.
+
+Every check is a relationship to the pool's own price before and after the swap; nothing hard-codes a
+market price or an amount out.
+
+## Constants
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### WETH
+
+```solidity
+address internal constant WETH = 0x4200000000000000000000000000000000000006;
+```
+
+### UNI_WETH_POOL
+
+<i>
+
+The Uniswap V3 wETH / USDC pool of the harness (in the fixture): a pool the Aerodrome factory did not make.
+
+</i>
+
+```solidity
+address internal constant UNI_WETH_POOL = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
+```
+
+### AERO_FACTORY
+
+```solidity
+address internal constant AERO_FACTORY = 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A;
+```
+
+### AERO_ROUTER
+
+```solidity
+address internal constant AERO_ROUTER = 0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5;
+```
+
+### AERO_WETH_USDC
+
+```solidity
+address internal constant AERO_WETH_USDC = 0xb2cc224c1c9feE385f8ad6a55b4d94E92359DC59;
+```
+
+### TICK_SPACING
+
+```solidity
+int24 internal constant TICK_SPACING = 100;
+```
+
+### FEE_ARG
+
+<i>
+
+The adapter's `fee` argument is the tick spacing (as the production `swap`).
+
+</i>
+
+```solidity
+uint24 internal constant FEE_ARG = 100;
+```
+
+### TWAP_WINDOW
+
+```solidity
+uint32 internal constant TWAP_WINDOW = 1_800;
+```
+
+## State Variables
+
+### adapter
+
+```solidity
+AerodromeExactOutSwapAdapter internal adapter;
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_requirerecorded-address"></a>
+
+### _requireRecorded
+
+<i>
+
+In replay, an account the fixture does not hold has no code: fail naming it (the fix is a re-record).
+
+</i>
+
+```solidity
+function _requireRecorded(address a) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+
+<a id="_fundusdc-address-uint256"></a>
+
+### _fundUsdc
+
+<i>
+
+Real FiatToken balance slot (mapping at slot 9), as the harness writes it.
+
+</i>
+
+```solidity
+function _fundUsdc(address to, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_usdcfor-uint256"></a>
+
+### _usdcFor
+
+<i>
+
+USDC units for `weth` wETH units at the pool's exact spot (sqrtPriceX96), rounded down. wETH is token0.
+
+</i>
+
+```solidity
+function _usdcFor(uint256 weth) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| weth | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_wethfor-uint256"></a>
+
+### _wethFor
+
+<i>
+
+wETH units for `usdc` USDC units at the pool's exact spot, rounded down.
+
+</i>
+
+```solidity
+function _wethFor(uint256 usdc) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_withfee-uint256"></a>
+
+### _withFee
+
+<i>
+
+`x / (1 − fee)`, rounded up: the input a swap whose net input is `x` pays with the pool's fee on top.
+
+</i>
+
+```solidity
+function _withFee(uint256 x) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_assertadapterholdsnothing"></a>
+
+### _assertAdapterHoldsNothing
+
+```solidity
+function _assertAdapterHoldsNothing() internal view;
+```
+
+<a id="test_aerodromeexactout_deliversexactlyamountout_returnstherest_resetstheallowance"></a>
+
+### test_aerodromeExactOut_deliversExactlyAmountOut_returnsTheRest_resetsTheAllowance
+
+A purchase of exactly 1 wETH with USDC, then a sale of wETH for exactly 1 000 USDC: the recipient
+gets exactly the amount out, the caller pays exactly `amountIn` (the unused input comes back in the same
+call), the cost lies between the pool's spot before the swap and its spot after it plus the pool fee,
+and the adapter keeps no balance and no allowance.
+
+```solidity
+function test_aerodromeExactOut_deliversExactlyAmountOut_returnsTheRest_resetsTheAllowance()
+        public
+        fixtureCovered;
+```
+
+<a id="test_aerodromeexactout_alimitunderthecostrevertsandmovesnothing"></a>
+
+### test_aerodromeExactOut_aLimitUnderTheCostRevertsAndMovesNothing
+
+A `maxAmountIn` under the cost (check 9's per-swap limit, set below the spot value) reverts the whole
+swap: nothing is pulled, nothing reaches the recipient, the pool does not move.
+
+```solidity
+function test_aerodromeExactOut_aLimitUnderTheCostRevertsAndMovesNothing()
+        public
+        fixtureCovered;
+```
+
+<a id="test_aerodromeexactout_refuseswhatitcannotroute"></a>
+
+### test_aerodromeExactOut_refusesWhatItCannotRoute
+
+What the adapter refuses before it touches the router: a tick spacing the factory has no pool for, a
+zero tick spacing, a zero token or recipient; a zero amount out pulls nothing; an expired deadline is
+refused by the router and moves nothing.
+
+```solidity
+function test_aerodromeExactOut_refusesWhatItCannotRoute() public fixtureCovered;
+```
+
+<a id="test_aerodromeexactout_inheritedtwappricereadsthepool"></a>
+
+### test_aerodromeExactOut_inheritedTwapPriceReadsThePool
+
+The inherited production `twapPrice` reads the Slipstream pool's mean tick (the same TickMath path the
+fund's TWAP uses), lands near the pool's spot, and refuses a pool the Aerodrome factory did not make.
+
+```solidity
+function test_aerodromeExactOut_inheritedTwapPriceReadsThePool() public fixtureCovered;
+```
+

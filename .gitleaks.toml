@@ -55,6 +55,11 @@ regexes = [
   # test can prove the scanner flags a secret assignment. It guards nothing. It is committed in
   # history, so it cannot be rewritten away. Delete this entry with those fixtures.
   '''abcdefghijk12345''',
+  # Cache-key version label of the one-vault fixture recorder: `SCRIPT_KEY_VERSION = "record-fixture-v1"`
+  # in scripts/prototype/record-fixture-lib.ts (commit edd5adf7 and its rebase). generic-api-key flags it
+  # only because the identifier contains "KEY"; it is a human-readable string bumped to invalidate recorded
+  # results, never a credential. Exact literal only. Delete this entry with the recorder.
+  '''record-fixture-v1''',
 ]
 
 # Path allowlist: known-safe files that intentionally contain placeholder or

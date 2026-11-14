@@ -1,0 +1,172 @@
+---
+title: "MockAggregator"
+description: "A Chainlink `AggregatorV3Interface` stand-in whose round the test sets. The harness places its runtime code at each real Base feed address with `vm.etch` (no constructor, no immutable, so the etched code works and no deployer nonce is used), then writes the round with `setRound`. `FeedLib` reads only `decimals()` and `latestRoundData()`; `description()` is here for probes."
+---
+
+# MockAggregator
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/mocks/MockAggregator.sol)
+
+**Title:** MockAggregator
+
+A Chainlink `AggregatorV3Interface` stand-in whose round the test sets. The harness places its runtime
+code at each real Base feed address with `vm.etch` (no constructor, no immutable, so the etched code works
+and no deployer nonce is used), then writes the round with `setRound`. `FeedLib` reads only `decimals()`
+and `latestRoundData()`; `description()` is here for probes.
+
+Every storage field is a full word and every read follows a `setRound`, so a write never needs a read
+first (no packed field), and on a recorded feed account the fixture coverage check sees writes first.
+
+## State Variables
+
+### _decimals
+
+```solidity
+uint256 internal _decimals;
+```
+
+### _answer
+
+```solidity
+int256 internal _answer;
+```
+
+### _startedAt
+
+```solidity
+uint256 internal _startedAt;
+```
+
+### _updatedAt
+
+```solidity
+uint256 internal _updatedAt;
+```
+
+### _roundId
+
+```solidity
+uint256 internal _roundId;
+```
+
+### _answeredInRound
+
+```solidity
+uint256 internal _answeredInRound;
+```
+
+## Functions
+
+<a id="setround-uint8-int256-uint256-uint256"></a>
+
+### setRound
+
+Set the latest round: a complete round (`answeredInRound == roundId == 1`).
+
+```solidity
+function setRound(uint8 decimals_, int256 answer_, uint256 startedAt_, uint256 updatedAt_)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| decimals_ | `uint8` | The feed's decimals (8 for a price feed, 0 for the sequencer feed). |
+| answer_ | `int256` | The answer in `decimals_` (sequencer feed: 0 = up, 1 = down). |
+| startedAt_ | `uint256` | Round start (sequencer feed: when the current status began). |
+| updatedAt_ | `uint256` | Round update time (the age `FeedLib.read` checks). |
+
+<a id="setincomplete"></a>
+
+### setIncomplete
+
+Make the round incomplete (`answeredInRound &lt; roundId`), for a round-completeness test.
+
+```solidity
+function setIncomplete() external;
+```
+
+<a id="decimals"></a>
+
+### decimals
+
+```solidity
+function decimals() external view returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="description"></a>
+
+### description
+
+```solidity
+function description() external pure returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="version"></a>
+
+### version
+
+```solidity
+function version() external pure returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="latestrounddata"></a>
+
+### latestRoundData
+
+```solidity
+function latestRoundData()
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        );
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| roundId | `uint80` |  |
+| answer | `int256` |  |
+| startedAt | `uint256` |  |
+| updatedAt | `uint256` |  |
+| answeredInRound | `uint80` |  |
+
+<a id="latestanswer"></a>
+
+### latestAnswer
+
+```solidity
+function latestAnswer() external view returns (int256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+

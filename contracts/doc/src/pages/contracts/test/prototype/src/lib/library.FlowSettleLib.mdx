@@ -1,0 +1,974 @@
+---
+title: "FlowSettleLib"
+description: "`settle` of the FlowQueue, linked (`public`) to keep the queue under G1."
+---
+
+# FlowSettleLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowSettleLib.sol)
+
+**Title:** FlowSettleLib
+
+`settle` of the FlowQueue, linked (`public`) to keep the queue under G1.
+
+Order (proposal §5.9.3): checks 1 to 7 (`FlowCheckLib.preTrade`, a failure reverts `SettleBlocked`);
+the walk over pending requests, deciding each request's fill from its own limit against the chain's bound
+price (E12, RB-14) and from the caps (E20); then the redemption side and the deposit side, each one call
+into the fund through a queue self-call with its own fixed gas budget; then the cursors and the record.
+A side that fails changes no state (RB-15) and its requests stay pending.
+
+The walk (step 3 finish plan §3.1 item 2, RB-20, ruling 3). Each side walks its own requests, oldest first
+(epoch, then position in it), from its cursor, at most `maxRequests` looks for the whole call (closed and
+skipped requests count), redemptions first. The cursor moves past a request only when the request is
+closed or expired, or the call had room for its side and the request's own limit refused it at its whole
+remaining size (its most favourable size, so no caller input can make a limit refuse). A request the call
+could not fill (no room left, or its limit admits the bound only at a larger fill than the room allows),
+and every fill of a side that then failed, keep the cursor at or before them. A side the call cannot fill
+at all (closed, unbounded, `maxUsdc` 0, a spent cap) is not walked: it moves no cursor and uses no budget.
+A walk that reaches the end of the range ends the pass; the next call starts a new pass at the oldest
+epoch. The keeper's calls keep their own cursor, which no other caller moves: a keeper pass starts at the
+oldest epoch and continues only through the keeper's own calls (ruling 3: a flood of refused requests is
+passed over by consecutive calls, not re-walked by each).
+
+Rounding: the fund rounds purchases UP and the mint DOWN; here each fill's shares are rounded DOWN and
+its USDC paid or refunded DOWN. What rounding leaves over stays on the queue's books (`dustUsdc`,
+`dustShares`), never with a flow user.
+
+## Constants
+
+### MAX_LOOK_PER_CALL
+
+<i>
+
+The most requests one call looks at, whatever `maxRequests` says: bounds memory and gas. It can only make
+a call do less; the next call continues at the cursor (RB-20).
+
+</i>
+
+```solidity
+uint256 internal constant MAX_LOOK_PER_CALL = 256;
+```
+
+### SIDE_GAS_BASE
+
+<i>
+
+Each side's call gets exactly `sideGas(assets, fills)` (item 4): a fixed function of the fund's asset count
+and the side's fills. No caller input sets it. Measured on the five-asset harness fund in replay, every
+fill a fresh owner (cold storage): a deposit side used 2.30M gas for 1 fill and 11.16M for 32 (about
+0.29M per fill); a redemption side 1.89M for 1 fill and 8.87M for 32 (about 0.23M per fill). The budget
+is 5.45M for one fill and 0.45M more per fill: 2.4x and 2.9x the one-fill sides, 1.57x the per-fill cost
+(fix-queue notes). A venue that needs more fails its side, the same for every caller.
+
+</i>
+
+```solidity
+uint256 internal constant SIDE_GAS_BASE = 2_000_000;
+```
+
+### SIDE_GAS_PER_ASSET
+
+```solidity
+uint256 internal constant SIDE_GAS_PER_ASSET = 600_000;
+```
+
+### SIDE_GAS_PER_FILL
+
+```solidity
+uint256 internal constant SIDE_GAS_PER_FILL = 450_000;
+```
+
+### SIDE_CALL_MARGIN
+
+<i>
+
+Gas between the budget check and the call opcode, with room to spare.
+
+</i>
+
+```solidity
+uint256 internal constant SIDE_CALL_MARGIN = 10_000;
+```
+
+### MAX_REASON_BYTES
+
+<i>
+
+The most revert data of a failed side copied into `SideFailed`: a venue's huge revert data costs the
+settle nothing more than this.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_REASON_BYTES = 1_024;
+```
+
+## Functions
+
+<a id="settle-flowstate-uint256-uint256-bool"></a>
+
+### settle
+
+The body of `FlowQueue.settle`. See the library note.
+
+```solidity
+function settle(FlowState storage s, uint256 maxRequests, uint256 maxUsdc, bool isKeeper)
+        public
+        returns (uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| maxRequests | `uint256` |  |
+| maxUsdc | `uint256` |  |
+| isKeeper | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` | The recorded settlement, or 0 when no side traded. |
+
+<a id="_rooms-flowstate-settlecontext-walk-uint256"></a>
+
+### _rooms
+
+<i>
+
+Each side's room in this call (E20, ruling 2): the period's cap less what the period already used (a
+cap counts per epoch of clock time, so a backlog of epochs cannot stack caps), the TVL cap for
+deposits, and `maxUsdc` for each side.
+
+</i>
+
+```solidity
+function _rooms(FlowState storage s, SettleContext memory c, Walk memory w, uint256 maxUsdc)
+        private
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="_basketcallroom-flowstate-settlecontext-walk-uint256-uint32"></a>
+
+### _basketCallRoom
+
+<i>
+
+The `FlowLevers.basketCallBps` lever (step 3 finish plan §3.2; off at 0, the default). A side's flow of
+value `v` buys or sells about `v × value_i / navFeed` of basket asset `i` (pro rata, E3, E4), so each side's
+room is cut to `min_i(cap_i × navFeed / value_i)`, where `cap_i` is `callBps` of the pool's time-weighted
+USDC depth over `window` and `value_i` the holding at its feed. A pool whose depth cannot be read gives
+no room (fail closed). The cap is a budget per block and side: a call in a block that already traded
+under the lever gets the cap less what that side already traded in the block, so the parts of a large
+flow land in different blocks, and a small call cannot take the whole block's room (review Q-F2).
+A side whose cap is below its minimum fill is flagged (`w.callRoomLow`), so the halt is visible.
+
+</i>
+
+```solidity
+function _basketCallRoom(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        uint256 callBps,
+        uint32 window
+    ) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| callBps | `uint256` |  |
+| window | `uint32` |  |
+
+<a id="_walkside-flowstate-settlecontext-walk-requestkind"></a>
+
+### _walkSide
+
+<i>
+
+Walk side `kind`'s requests from this caller class's cursor (see the library note). Epochs with no open
+request of the side are passed over without counting. Stops at the end of the range, when the budget is
+spent, or when the side has no room left (nothing behind could fill).
+
+</i>
+
+```solidity
+function _walkSide(FlowState storage s, SettleContext memory c, Walk memory w, RequestKind kind)
+        private
+        returns (SidePos memory pos);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pos | `SidePos` |  |
+
+<a id="_roomleft-walk-requestkind"></a>
+
+### _roomLeft
+
+```solidity
+function _roomLeft(Walk memory w, RequestKind kind) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_movecursor-flowstate-uint8-requestkind-sidepos-bool"></a>
+
+### _moveCursor
+
+<i>
+
+After the sides: the cursor of this caller class on side `kind`. A pass that reached the end starts again
+at the oldest epoch. Otherwise the cursor stays on the first fill of a side that failed, else on the first
+request held or filled in part, else where the walk stopped. A side not walked keeps its cursor.
+
+</i>
+
+```solidity
+function _moveCursor(
+        FlowState storage s,
+        uint8 cls,
+        RequestKind kind,
+        SidePos memory pos,
+        bool sideOk
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| cls | `uint8` |  |
+| kind | `RequestKind` |  |
+| pos | `SidePos` |  |
+| sideOk | `bool` |  |
+
+<a id="_rememberoldest-flowstate-settlecontext"></a>
+
+### _rememberOldest
+
+<i>
+
+Remember the oldest epoch in this call's range that still has an open request, so later ranges start
+there. Unchanged when none is open (the hint never passes an open, unexpired request).
+
+</i>
+
+```solidity
+function _rememberOldest(FlowState storage s, SettleContext memory c) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+
+<a id="_consider-flowstate-settlecontext-walk-requestkind-uint256"></a>
+
+### _consider
+
+<i>
+
+Decide one request (see `Outcome`).
+
+</i>
+
+```solidity
+function _consider(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        RequestKind kind,
+        uint256 id
+    ) private returns (Outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Outcome` |  |
+
+<a id="_considerdeposit-settlecontext-walk-uint256-uint256-uint256"></a>
+
+### _considerDeposit
+
+```solidity
+function _considerDeposit(
+        SettleContext memory c,
+        Walk memory w,
+        uint256 id,
+        uint256 remaining,
+        uint256 limit
+    ) private returns (Outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| id | `uint256` |  |
+| remaining | `uint256` |  |
+| limit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Outcome` |  |
+
+<a id="_considerredeem-settlecontext-walk-uint256-uint256-uint256"></a>
+
+### _considerRedeem
+
+<i>
+
+Redemptions count against the cap at their value at the feeds (rounded UP).
+
+</i>
+
+```solidity
+function _considerRedeem(
+        SettleContext memory c,
+        Walk memory w,
+        uint256 id,
+        uint256 remaining,
+        uint256 limit
+    ) private returns (Outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| id | `uint256` |  |
+| remaining | `uint256` |  |
+| limit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Outcome` |  |
+
+<a id="_partial-uint256-uint256-uint256"></a>
+
+### _partial
+
+<i>
+
+The fill of a request with `remaining` against `room`: all of it if it fits; else a part of at least
+`minFill` that leaves at least `minFill` behind (so no dust remainder is ever created, and every partial
+fill is large enough for the bound's rounding term); else 0 (it waits).
+
+</i>
+
+```solidity
+function _partial(uint256 remaining, uint256 room, uint256 minFill)
+        private
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| remaining | `uint256` |  |
+| room | `uint256` |  |
+| minFill | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sidegas-uint256-uint256"></a>
+
+### sideGas
+
+The gas one side's call gets: a fixed function of the fund's asset count and the side's fills.
+
+```solidity
+function sideGas(uint256 assets, uint256 fills) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| fills | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_runside-settlecontext-walk-requestkind"></a>
+
+### _runSide
+
+<i>
+
+Run side `kind` in its own self-call with exactly `sideGas` (step 3 finish plan §3.1 item 4).
+
+</i>
+
+Why a fixed budget. The scaffold forwarded all its gas and, when a side failed leaving `settle` less than
+a third of the gas it had at the call, reverted the whole `settle` (`SettleSideOutOfGas`, verify's fix of
+mechanism-tests 1): a caller must not choose a side by starving it. But a venue that burns all the gas
+it is given then always tripped that guard and blocked both sides, against ruling 1. Now the side gets
+a fixed budget, no more: a venue that burns it fails that side alone, and the other side settles. The
+caller's gas can only decide whether the budget is there: `settle` reverts whole with
+`SettleSideOutOfGas` unless it can hand the side its whole budget (`budget × 64/63` plus the call's
+overhead must be left), so starving a side is impossible. The revert data copied back is capped at
+`MAX_REASON_BYTES`, so a venue's huge revert data cannot burn `settle`'s own gas either.
+
+```solidity
+function _runSide(SettleContext memory c, Walk memory w, RequestKind kind)
+        private
+        returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_recordreferences-flowstate-settlecontext"></a>
+
+### _recordReferences
+
+<i>
+
+Step 12, the references of checks 5 and 6.
+Check 5 (item 5): each lending venue's rate read after this settlement's trades, as the scaffold did, so a
+second settlement in the same block compares like with like (with no time elapsed check 5 allows no
+growth, and the fund's own supply can move a venue's rate by a rounding unit). When that read fails, the
+rate check 5 read and accepted before the trades (fail closed: the scaffold skipped the venue and kept a
+stale or zero reference, after which any jump passed check 5).
+Check 6 (item 9): the exclusion mask and each lending venue's held amount per share.
+
+</i>
+
+```solidity
+function _recordReferences(FlowState storage s, SettleContext memory c) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+
+<a id="applyparams-flowstate-flowparams"></a>
+
+### applyParams
+
+Store new flow parameters (the queue checked their bounds). A new `epochLength` first re-anchors the
+epochs (`FlowEpochs`). Any change resets the walk: the oldest-epoch hint and every cursor, so no
+request is left behind a stale position (a larger `maxRoll` makes older requests live again).
+
+```solidity
+function applyParams(FlowState storage s, FlowParams memory p) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| p | `FlowParams` |  |
+
+<a id="_rebaseepochs-flowstate"></a>
+
+### _rebaseEpochs
+
+<i>
+
+Under the old parameters: store the end of every epoch that can still hold a live request, then anchor the
+epochs after the one in progress, so the new length applies from the end of the epoch in progress. An
+epoch more than `MAX_ROLL` behind holds only requests expired under every allowed `maxRoll`.
+
+</i>
+
+```solidity
+function _rebaseEpochs(FlowState storage s) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+<a id="redeemside-flowstate-uint256-fill-settlecontext"></a>
+
+### redeemSide
+
+One call into the fund for every redemption fill (E4): `sellForFlow` with a minimum per sale (check 8),
+then check 11 for the batch and for each fill against its own limit, then the claims (step 12).
+Runs inside the queue's self-call; any revert here undoes the whole side.
+
+```solidity
+function redeemSide(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        SettleContext memory c
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+
+<a id="_recordredeems-flowstate-uint256-fill-uint256-uint256"></a>
+
+### _recordRedeems
+
+<i>
+
+Step 12 for the redemption fills: USDC per fill DOWN, each fill checked against its own limit.
+
+</i>
+
+```solidity
+function _recordRedeems(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        uint256 x,
+        uint256 out
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| x | `uint256` |  |
+| out | `uint256` |  |
+
+<a id="depositside-flowstate-uint256-fill-settlecontext"></a>
+
+### depositSide
+
+One call into the fund for every deposit fill (E3): `mintInKind` of `floor(U × PS / bound)` shares with
+a maximum per purchase (check 9), then check 11 for the batch and for each fill, then the claims with
+their unlock time (E8) and the refund of unused USDC as credit (E22). The purchase is sized from the
+fund's holdings AFTER the redemption side, read fresh here.
+
+```solidity
+function depositSide(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        SettleContext memory c
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+
+<a id="_recorddeposits-flowstate-uint256-fill-uint256-uint256-uint256"></a>
+
+### _recordDeposits
+
+<i>
+
+Step 12 for the deposit fills: shares DOWN, refund DOWN, each fill checked against its own limit.
+
+</i>
+
+```solidity
+function _recordDeposits(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        uint256 u,
+        uint256 spent,
+        uint256 sharesOut
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| u | `uint256` |  |
+| spent | `uint256` |  |
+| sharesOut | `uint256` |  |
+
+<a id="_recorddeposit-flowstate-depositbatch-fill"></a>
+
+### _recordDeposit
+
+```solidity
+function _recordDeposit(FlowState storage s, DepositBatch memory b, Fill memory f)
+        private
+        returns (uint256 sharesK, uint256 refundK);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| b | `DepositBatch` |  |
+| f | `Fill` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesK | `uint256` |  |
+| refundK | `uint256` |  |
+
+<a id="_newclaim-flowstate-claim"></a>
+
+### _newClaim
+
+<i>
+
+Store claim `c` (fresh: nothing claimed) for its owner and request.
+
+</i>
+
+```solidity
+function _newClaim(FlowState storage s, Claim memory c) private returns (uint256 claimId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `Claim` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimId | `uint256` |  |
+
+<a id="_claim-uint256-address-requestkind-uint256-uint64"></a>
+
+### _claim
+
+```solidity
+function _claim(
+        uint256 requestId,
+        address owner,
+        RequestKind kind,
+        uint256 settlementId,
+        uint64 unlockAt
+    ) private pure returns (Claim memory c);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| kind | `RequestKind` |  |
+| settlementId | `uint256` |  |
+| unlockAt | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `Claim` |  |
+
+<a id="_close-flowstate-request"></a>
+
+### _close
+
+```solidity
+function _close(FlowState storage s, Request storage r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| r | `Request` |  |
+
+<a id="_shrink-fill-uint256"></a>
+
+### _shrink
+
+<i>
+
+Cut a memory array to its first `n` entries (n ≤ its length).
+
+</i>
+
+```solidity
+function _shrink(Fill[] memory a, uint256 n) private pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Fill[]` |  |
+| n | `uint256` |  |
+
+<a id="_expect-uint256-uint256"></a>
+
+### _expect
+
+```solidity
+function _expect(uint256 actual, uint256 expected) private pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| actual | `uint256` |  |
+| expected | `uint256` |  |
+
+## Structs
+
+### SidePos
+
+<i>
+
+Where one side's walk went. `stop`: the first request it filled or held; `hold`: the first it held or
+filled in part; `end`: where it stopped; `ended`: it reached the end of the range.
+
+</i>
+
+```solidity
+struct SidePos {
+        bool walked;
+        bool ended;
+        bool hasStop;
+        bool hasHold;
+        uint64 stopE;
+        uint256 stopI;
+        uint64 holdE;
+        uint256 holdI;
+        uint64 endE;
+        uint256 endI;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| walked | `bool` |  |
+| ended | `bool` |  |
+| hasStop | `bool` |  |
+| hasHold | `bool` |  |
+| stopE | `uint64` |  |
+| stopI | `uint256` |  |
+| holdE | `uint64` |  |
+| holdI | `uint256` |  |
+| endE | `uint64` |  |
+| endI | `uint256` |  |
+
+### Walk
+
+<i>
+
+The walk's state: the caps' room, each side's fills (`dep[0:nDep]`, `red[0:nRed]`), the budget left.
+
+</i>
+
+```solidity
+struct Walk {
+        uint256 period;
+        uint256 depRoom;
+        uint256 redRoom;
+        uint256 depTotal;
+        uint256 redValue;
+        uint256 nDep;
+        uint256 nRed;
+        uint256 settlementId;
+        uint64 cur;
+        uint16 maxRoll;
+        uint256 minRequestUsdc;
+        uint256 budget;
+        uint8 cls;
+        bool callRoomLow;
+        Fill[] dep;
+        Fill[] red;
+        SidePos depPos;
+        SidePos redPos;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| period | `uint256` |  |
+| depRoom | `uint256` |  |
+| redRoom | `uint256` |  |
+| depTotal | `uint256` |  |
+| redValue | `uint256` |  |
+| nDep | `uint256` |  |
+| nRed | `uint256` |  |
+| settlementId | `uint256` |  |
+| cur | `uint64` |  |
+| maxRoll | `uint16` |  |
+| minRequestUsdc | `uint256` |  |
+| budget | `uint256` |  |
+| cls | `uint8` |  |
+| callRoomLow | `bool` |  |
+| dep | `Fill[]` |  |
+| red | `Fill[]` |  |
+| depPos | `SidePos` |  |
+| redPos | `SidePos` |  |
+
+### DepositBatch
+
+<i>
+
+The batch numbers every deposit fill is split from.
+
+</i>
+
+```solidity
+struct DepositBatch {
+        uint256 settlementId;
+        uint256 u;
+        uint256 unused;
+        uint256 sharesOut;
+        uint64 unlockAt;
+        uint256 period;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| u | `uint256` |  |
+| unused | `uint256` |  |
+| sharesOut | `uint256` |  |
+| unlockAt | `uint64` |  |
+| period | `uint256` |  |
+
+## Enums
+
+### Outcome
+
+<i>
+
+What the walk did with one request: passed (closed, expired, or refused by its own limit), filled in
+full, filled in part, or held (it waits for room).
+
+</i>
+
+```solidity
+enum Outcome {
+        Pass,
+        Fill,
+        Partial,
+        Hold
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Pass |  |
+| Fill |  |
+| Partial |  |
+| Hold |  |
+

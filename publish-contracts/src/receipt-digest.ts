@@ -51,6 +51,12 @@ export function assertDigestMatchesBytes(bytes: Uint8Array, digest: string, what
 
 /** The only `schema_version` the digest and id derivation here supports (clients/rust-payment-client/src/consensus_receipt.rs SCHEMA_VERSION). */
 export const SUPPORTED_RECEIPT_SCHEMA_VERSION = "1.0";
+/**
+ * Deploy 4: the `schema_version` of a FUND system receipt (the one-vault prototype): schema 1.1 appends the per-asset `assets` list after `weights`
+ * (contracts/test/prototype/fixtures/receipt/consensus-receipt-1.1.schema.json, checked by scripts/prototype/check-receipt-assets.ts). Its canonical bytes, digest and id follow the
+ * same rule as 1.0 (the domain line, compact JSON, one newline). Only the fund system's record-receipt accepts it; the vaults system keeps 1.0 alone.
+ */
+export const FUND_RECEIPT_SCHEMA_VERSION = "1.1";
 
 export interface SupportedPayload { digest: Hex; receiptId: Hex; sessionId: string; subjectId: string }
 
@@ -59,7 +65,7 @@ export interface SupportedPayload { digest: Hex; receiptId: Hex; sessionId: stri
  * followed by exactly one newline, of the supported schema_version, with a non-empty session_id and subject_id. The protocol digest and the receipt id are recomputed from
  * the bytes. Throws USAGE (nothing sent, no signer built) for anything else. It does not verify analyst signatures: that is `rmpc receipt verify` on the same bytes.
  */
-export function supportedReceiptPayload(bytes: Uint8Array | undefined): SupportedPayload {
+export function supportedReceiptPayload(bytes: Uint8Array | undefined, schemaVersion: string = SUPPORTED_RECEIPT_SCHEMA_VERSION): SupportedPayload {
   if (bytes === undefined || bytes.length === 0) throw new PublishError("USAGE", "the receipt payload bytes are required (--payload FILE: the exact bytes the canonical route served, already verified with `rmpc receipt verify`). Nothing sent.");
   const body = startsWithDomain(bytes) ? bytes.subarray(DOMAIN_BYTES.length) : bytes;
   let text: string;
@@ -69,7 +75,7 @@ export function supportedReceiptPayload(bytes: Uint8Array | undefined): Supporte
   try { doc = JSON.parse(text); } catch { throw new PublishError("USAGE", "the receipt payload is not valid JSON: it is not a canonical consensus receipt. Nothing sent."); }
   const o = doc as Record<string, unknown>;
   if (typeof doc !== "object" || doc === null || Array.isArray(doc)) throw new PublishError("USAGE", "the receipt payload is not a JSON object. Nothing sent.");
-  if (o.schema_version !== SUPPORTED_RECEIPT_SCHEMA_VERSION) throw new PublishError("USAGE", `the receipt payload schema_version is ${JSON.stringify(o.schema_version)}: only ${JSON.stringify(SUPPORTED_RECEIPT_SCHEMA_VERSION)} is supported. Nothing sent.`, { schema_version: o.schema_version });
+  if (o.schema_version !== schemaVersion) throw new PublishError("USAGE", `the receipt payload schema_version is ${JSON.stringify(o.schema_version)}: only ${JSON.stringify(schemaVersion)} is supported. Nothing sent.`, { schema_version: o.schema_version });
   if (typeof o.session_id !== "string" || o.session_id === "" || typeof o.subject_id !== "string" || o.subject_id === "") throw new PublishError("USAGE", "the receipt payload has no session_id and subject_id: the receipt id cannot be derived. Nothing sent.");
   return { digest: receiptPayloadDigest(bytes), receiptId: deriveReceiptId(o.session_id, o.subject_id), sessionId: o.session_id, subjectId: o.subject_id };
 }

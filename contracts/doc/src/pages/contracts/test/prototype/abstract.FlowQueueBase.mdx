@@ -1,0 +1,747 @@
+---
+title: "FlowQueueBase"
+description: "Shared state and helpers of the mechanism tests. Everything runs on the harness deployment (real Base pools and venues from the replay fixture, mock aggregators at the real feed addresses, the FlowQueue with the §5.9.5 defaults, the fund seeded with `SEED_USDC`)."
+---
+
+# FlowQueueBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+Shared state and helpers of the mechanism tests. Everything runs on the harness deployment (real Base
+pools and venues from the replay fixture, mock aggregators at the real feed addresses, the FlowQueue with
+the §5.9.5 defaults, the fund seeded with `SEED_USDC`).
+
+House rules of this file:
+- Every test carries `fixtureCovered`. Until the fixture is re-recorded every test that moves USDC into the
+queue stops at `FixtureSlotMiss` on the queue's USDC balance slot (integrate's note): a provenance miss,
+not a logic failure. The recorder runs this file on the fork, so the re-record covers it. Nothing here
+is skipped for a fixture miss, because a skipped test would leave its slots out of the re-record.
+- No market price, amount out or block number is hard-coded: every check is a relationship.
+- A check is tripped with the mock aggregators, a pool trade by the test, a mocked venue call or a `Mech*`
+venue mock. None of them makes a check pass.
+
+## Constants
+
+### PUSH_CHUNK_USDC
+
+<i>
+
+Chunk of USDC per pool trade when a test pushes a pool to a target move.
+
+</i>
+
+```solidity
+uint256 internal constant PUSH_CHUNK_USDC = 200_000e6;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### carol
+
+```solidity
+address internal carol = makeAddr("carol");
+```
+
+### dave
+
+```solidity
+address internal dave = makeAddr("dave");
+```
+
+### erin
+
+```solidity
+address internal erin = makeAddr("erin");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+### _mechSalt
+
+```solidity
+uint256 private _mechSalt;
+```
+
+### _depId
+
+```solidity
+uint256 internal _depId;
+```
+
+### _redId
+
+```solidity
+uint256 internal _redId;
+```
+
+### _bobShares
+
+```solidity
+uint256 internal _bobShares;
+```
+
+## Functions
+
+<a id="_keepersettle"></a>
+
+### _keeperSettle
+
+`settle` as the keeper now, with the feeds as they are (a test that broke a feed must not refresh).
+
+```solidity
+function _keeperSettle() internal returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_settleoverblocks-uint256-string"></a>
+
+### _settleOverBlocks
+
+The keeper settles once per block (a block every 2 s, as on Base) until request `id` is filled: the
+per-call basket cap (`FlowLevers.basketCallBps`, 5 bps of each pool's depth by default since 2026-11-12)
+is a budget per block, so it splits a large flow over blocks. Every part keeps every amount per share.
+
+```solidity
+function _settleOverBlocks(uint256 id, string memory label) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| label | `string` |  |
+
+<a id="_settlenow"></a>
+
+### _settleNow
+
+Refresh the feeds, then `settle` as the keeper.
+
+```solidity
+function _settleNow() internal returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_trysettle-address-uint256-uint256"></a>
+
+### _trySettle
+
+A low-level `settle` by `caller`, so a test can read the revert data.
+
+```solidity
+function _trySettle(address caller, uint256 maxRequests, uint256 maxUsdc)
+        internal
+        returns (bool ok, bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| maxRequests | `uint256` |  |
+| maxUsdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| ret | `bytes` |  |
+
+<a id="_expectblocked-address-settlecheck-uint256"></a>
+
+### _expectBlocked
+
+`settle` by `caller` must revert `SettleBlocked(check, index, ·)`. Returns the detail.
+
+```solidity
+function _expectBlocked(address caller, SettleCheck check, uint256 index)
+        internal
+        returns (uint256 detail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| detail | `uint256` |  |
+
+<a id="_decodeblocked-bytes"></a>
+
+### _decodeBlocked
+
+Decode `SettleBlocked(check, index, detail)` revert data.
+
+```solidity
+function _decodeBlocked(bytes memory ret)
+        internal
+        pure
+        returns (SettleCheck check, uint256 index, uint256 detail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ret | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+
+<a id="_selector-bytes"></a>
+
+### _selector
+
+The first four bytes of `data` (0 when shorter).
+
+```solidity
+function _selector(bytes memory data) internal pure returns (bytes4 sel);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sel | `bytes4` |  |
+
+<a id="_args-bytes"></a>
+
+### _args
+
+`data` without its selector.
+
+```solidity
+function _args(bytes memory data) internal pure returns (bytes memory out);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `bytes` |  |
+
+<a id="_holder-address-uint256"></a>
+
+### _holder
+
+`user` deposits `usdc` through the whole timed path (request, settle, hold, delivery) and takes its
+credit, so it ends as a plain holder of the returned shares.
+
+```solidity
+function _holder(address user, uint256 usdc) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_invest"></a>
+
+### _invest
+
+The default invested fund: a 1-day plan to stable 65 % / protocol 35 %, so every flow trades every
+listed asset.
+
+```solidity
+function _invest() internal;
+```
+
+<a id="_assertinvested-string"></a>
+
+### _assertInvested
+
+The fund holds a non-zero amount of every active asset (`hardening`, 2026-11-12): a test whose
+subject is a trade of every asset asserts its own precondition, so a plan that stepped nothing (every
+step skipped) fails here instead of passing on an idle-only fund.
+
+```solidity
+function _assertInvested(string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+
+<a id="_twosidedsetup-uint16-5"></a>
+
+### _twoSidedSetup
+
+An invested fund (vector `v`), bob holding shares, then in one epoch alice's deposit request (any
+price) and bob's redemption request for half his shares (any price); warp to the end of that
+epoch's window and refresh the feeds.
+
+```solidity
+function _twoSidedSetup(uint16[5] memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+<a id="_pendingatwindow"></a>
+
+### _pendingAtWindow
+
+A pending deposit request of alice at the end of its window, feeds fresh.
+
+```solidity
+function _pendingAtWindow() internal returns (uint256 id);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="_queuesnap"></a>
+
+### _queueSnap
+
+```solidity
+function _queueSnap() internal view returns (QueueSnap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `QueueSnap` |  |
+
+<a id="_fundsnap"></a>
+
+### _fundSnap
+
+```solidity
+function _fundSnap() internal view returns (FundSnap memory s);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundSnap` |  |
+
+<a id="_assertqueuesame-queuesnap-queuesnap-string"></a>
+
+### _assertQueueSame
+
+```solidity
+function _assertQueueSame(QueueSnap memory a, QueueSnap memory b, string memory label)
+        internal
+        pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `QueueSnap` |  |
+| b | `QueueSnap` |  |
+| label | `string` |  |
+
+<a id="_assertfundsame-fundsnap-fundsnap-string"></a>
+
+### _assertFundSame
+
+```solidity
+function _assertFundSame(FundSnap memory a, FundSnap memory b, string memory label)
+        internal
+        pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `FundSnap` |  |
+| b | `FundSnap` |  |
+| label | `string` |  |
+
+<a id="_assertpersharenotlower-fundsnap-string"></a>
+
+### _assertPerShareNotLower
+
+Check 10 seen from outside: no held amount per share (idle and every asset) fell since `s`.
+
+```solidity
+function _assertPerShareNotLower(FundSnap memory s, string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundSnap` |  |
+| label | `string` |  |
+
+<a id="_assertbooks-string"></a>
+
+### _assertBooks
+
+The queue's books (eng plan §4.3): with no gift, its USDC and share balances equal the sums.
+
+```solidity
+function _assertBooks(string memory label) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+
+<a id="_assertclaimsinsidelimits-uint256"></a>
+
+### _assertClaimsInsideLimits
+
+RB-14 from the claims: every claim with id above `afterClaimId` is inside its request's limit.
+
+```solidity
+function _assertClaimsInsideLimits(uint256 afterClaimId) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| afterClaimId | `uint256` |  |
+
+<a id="_sidefailed-vm-log-requestkind"></a>
+
+### _sideFailed
+
+How many `SideFailed` logs of side `kind` are in `logs`, and the revert selector of the last one.
+
+```solidity
+function _sideFailed(Vm.Log[] memory logs, RequestKind kind)
+        internal
+        view
+        returns (uint256 n, bytes4 reason);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+| reason | `bytes4` |  |
+
+<a id="_sidefaileddata-vm-log-requestkind"></a>
+
+### _sideFailedData
+
+The revert data inside the last `SideFailed` log of side `kind`.
+
+```solidity
+function _sideFailedData(Vm.Log[] memory logs, RequestKind kind)
+        internal
+        view
+        returns (bytes memory why);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| why | `bytes` |  |
+
+<a id="_skipped-vm-log-uint256"></a>
+
+### _skipped
+
+Whether `logs` holds a `RequestSkipped` for `requestId`.
+
+```solidity
+function _skipped(Vm.Log[] memory logs, uint256 requestId) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_pushpool-address-address-uint256-bool"></a>
+
+### _pushPool
+
+Trade `pool` in chunks until `token`'s price moved at least `bps` up or down. Returns the move.
+
+```solidity
+function _pushPool(address pool, address token, uint256 bps, bool up)
+        internal
+        returns (uint256 movedBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| token | `address` |  |
+| bps | `uint256` |  |
+| up | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| movedBps | `uint256` |  |
+
+<a id="_etchswapmech"></a>
+
+### _etchSwapMech
+
+Place a `MechSwapAdapter` (honest mode) over the harness's exact-output swap adapter. The basket
+assets are counted whatever their adapter's code hash, so nothing else changes.
+
+```solidity
+function _etchSwapMech() internal returns (MechSwapAdapter m);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| m | `MechSwapAdapter` |  |
+
+<a id="_etchaavemech"></a>
+
+### _etchAaveMech
+
+Place a `MechAaveAdapter` (honest mode) over the harness's Aave rate adapter, after allowlisting its
+code hash through the timelock so Aave stays counted (ADP-2). Warps `TIMELOCK_DELAY`.
+
+```solidity
+function _etchAaveMech() internal returns (MechAaveAdapter m);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| m | `MechAaveAdapter` |  |
+
+<a id="_timelockexpectrevert-address-bytes-bytes"></a>
+
+### _timelockExpectRevert
+
+Schedule `data` on `target` in the timelock, warp the delay, and expect `execute` to revert `err`.
+
+```solidity
+function _timelockExpectRevert(address target, bytes memory data, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+| err | `bytes` |  |
+
+<a id="_buylimits-uint256"></a>
+
+### _buyLimits
+
+The per-leg limits and the USDC a FLOW_ROLE caller hands `mintInKind` for `n` new shares: each
+basket leg at twice its TWAP value plus one USDC, lending and idle at their exact parts plus the margin.
+
+```solidity
+function _buyLimits(uint256 n) internal view returns (uint256[] memory legs, uint256 maxUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| legs | `uint256[]` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="uniswapv3mintcallback-uint256-uint256-bytes"></a>
+
+### uniswapV3MintCallback
+
+Pays the pool for a test-minted Uniswap V3 position (RB-17 liquidity test).
+
+```solidity
+function uniswapV3MintCallback(uint256 amount0, uint256 amount1, bytes calldata) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount0 | `uint256` |  |
+| amount1 | `uint256` |  |
+| _ | `bytes` |  |
+
+<a id="_paypool-address-uint256"></a>
+
+### _payPool
+
+```solidity
+function _payPool(address token, uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amount | `uint256` |  |
+
+## Structs
+
+### QueueSnap
+
+<i>
+
+Queue-side state compared before and after an action.
+
+</i>
+
+```solidity
+struct QueueSnap {
+        uint256 usdc;
+        uint256 shares;
+        FlowBooks books;
+        uint256 settlements;
+        uint256 claims;
+        uint256 requests;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+| books | `FlowBooks` |  |
+| settlements | `uint256` |  |
+| claims | `uint256` |  |
+| requests | `uint256` |  |
+
+### FundSnap
+
+<i>
+
+Fund-side state compared before and after an action in the same block.
+
+</i>
+
+```solidity
+struct FundSnap {
+        uint256 supply;
+        uint256 idle;
+        uint256[] held;
+        uint256 feeUsdc;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| supply | `uint256` |  |
+| idle | `uint256` |  |
+| held | `uint256[]` |  |
+| feeUsdc | `uint256` |  |
+

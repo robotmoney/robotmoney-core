@@ -1,0 +1,28 @@
+---
+title: "DeployFundReceipt"
+description: "The `fund-receipt` stage: the fund system's own ConsensusRecommendationReceipt register, deployed by the vaults system's receipt script unchanged (this contract adds nothing to it). It is a script file of its own so the fund system's stage writes its own manifest (fund-receipt.json) and forge keeps its own broadcast record (broadcast/DeployFundReceipt.s.sol/&lt;chain>/), never the vaults system's receipt stage's. RECEIPT_ADMIN_ADDRESS (the deployer) holds ADMIN_ROLE until fund-timelock hands it over."
+---
+
+# DeployFundReceipt
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFundReceipt.s.sol)
+
+**Inherits:** [DeployConsensusRecommendationReceipt](/contracts/script/contract.DeployConsensusRecommendationReceipt)
+
+**Title:** DeployFundReceipt
+
+The `fund-receipt` stage: the fund system's own ConsensusRecommendationReceipt register, deployed by the vaults system's receipt
+script unchanged (this contract adds nothing to it). It is a script file of its own so the fund system's stage writes its own
+manifest (fund-receipt.json) and forge keeps its own broadcast record (broadcast/DeployFundReceipt.s.sol/&lt;chain>/), never the
+vaults system's receipt stage's. RECEIPT_ADMIN_ADDRESS (the deployer) holds ADMIN_ROLE until fund-timelock hands it over.
+
+## Constants
+
+### FUND_MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json): FUND_MANIFEST_FILE = "fund-receipt.json".
+
+```solidity
+string public constant FUND_MANIFEST_FILE = "fund-receipt.json";
+```
+

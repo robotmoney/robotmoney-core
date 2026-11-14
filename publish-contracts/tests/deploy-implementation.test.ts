@@ -4,10 +4,10 @@ import { describe, expect, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
-import { DEPLOY_IMPL_VERB, implementationDeploysOf, linkCreationCode, realDeployImplApi, runDeployImplementation, type DeployImplApi } from "../src/deploy-implementation.ts";
+import { DEPLOY_IMPL_VERB, FUND_SECOND_IMPLEMENTATIONS, implementationDeploysOf, linkCreationCode, realDeployImplApi, runDeployImplementation, type DeployImplApi } from "../src/deploy-implementation.ts";
 import { loadRunManifest, newManifest, saveRunManifest, type RunContext } from "../src/runner.ts";
 import { getStageTable, peekStageState, restoreStageState, useStageTable } from "../src/stages.ts";
-import { loadStageTable } from "../src/stage-table.ts";
+import { loadStageTable, scopeTable } from "../src/stage-table.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
 import { REPO, tmp } from "./fixtures.ts";
 import { LIBRARY_ADDRESS_CAUSE } from "../src/libs-adopt.ts";
@@ -334,5 +334,135 @@ describe("issue 1927: deploy-implementation against the live v0.5.0 build", () =
     await expect(w.run()).rejects.toMatchObject({ kind: "VERIFY", message: expect.stringContaining("is not the build's RobotMoneyGateway") });
     expect(w.s.creates.length).toBe(1);
     expect(entries(w)).toEqual([]);
+  });
+});
+
+// Deploy 4: deploy-implementation --system fund. The proxy is a fund-system proxy (the fund system's table scope), read from its stage manifest after a passed fund verify; the
+// second implementation (--contract RebalancerV2, contracts/test/helpers/FundUpgradeV2.sol) is a child that really changes code, and its own pinned snapshot must extend the deployed
+// Rebalancer's. The real CREATE, Safe and timelock run in the runbook rows P9.69 to P9.72 of v0.7.0-onevault.yaml.
+describe("Deploy 4: deploy-implementation --system fund", () => {
+  const FUND_TABLE = loadStageTable(REPO);
+  const FUND_SPECS = proxySpecs(scopeTable(FUND_TABLE, "fund"));
+  const RB = FUND_SPECS.find((x) => x.name === "rebalancer")!;
+  const V2 = FUND_SECOND_IMPLEMENTATIONS.rebalancer!;
+  const RB_PROXY = addr(0x5003), RB_LIVE = addr(0x9500);
+  const LIVE_TAIL = "5af43d82803e", V2_TAIL = "5af43d82803f02";
+  const runtimeOf = (lib: string, tail: string) => `0x608060${"73"}${lib}${tail}`;
+  const creationOf = (lib: string, tail: string) => `0x60806040${"73"}${lib}${runtimeOf(lib, tail).slice(2)}`;
+  function writeArtifact(dir: string, file: string, contract: string, tail: string): void {
+    const refs = (...starts: number[]) => ({ "src/libs/L.sol": { L: starts.map((start) => ({ start, length: 20 })) } });
+    mkdirSync(join(dir, "out", file), { recursive: true });
+    writeFileSync(join(dir, "out", file, `${contract}.json`), JSON.stringify({
+      bytecode: { object: creationOf(PLACEHOLDER, tail), linkReferences: refs(5, 29) },
+      deployedBytecode: { object: runtimeOf(PLACEHOLDER, tail), linkReferences: refs(4), immutableReferences: {} },
+    }));
+  }
+
+  function fundWorld(o: { editV2Layout?: (j: any) => void; verified?: boolean; system?: "vaults" | "fund"; liveCode?: string; frozen?: boolean } = {}) {
+    const d = setup({}, 918453);
+    const ctx = { ...d.ctx, caller: { yes: true }, signer: { address: async () => d.sheet.admin } } as unknown as RunContext;
+    const core = ctx.coreDir;
+    for (const f of [...FUND_SPECS.map((x) => x.layout), V2.layout, FUND_TABLE.upgradeAuthority!.layoutPins]) { mkdirSync(dirname(join(core, f)), { recursive: true }); copyFileSync(join(REPO, f), join(core, f)); }
+    if (o.editV2Layout) { const p = join(core, V2.layout); const j = JSON.parse(readFileSync(p, "utf8")); o.editV2Layout(j); writeFileSync(p, JSON.stringify(j)); }
+    writeArtifact(core, "Rebalancer.sol", "Rebalancer", LIVE_TAIL);
+    writeArtifact(core, "FundUpgradeV2.sol", "RebalancerV2", V2_TAIL);
+    mkdirSync(join(core, "out", "L.sol"), { recursive: true });
+    writeFileSync(join(core, "out", "L.sol", "L.json"), JSON.stringify({ bytecode: { object: LIB_CODE, linkReferences: {} }, deployedBytecode: { object: LIB_CODE, linkReferences: {}, immutableReferences: {} } }));
+    const dir = join(core, "deployments", "918453");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "rebalancer.json"), JSON.stringify({ chain_id: 918453, rebalancer: RB_PROXY, rebalancer_implementation: RB_LIVE }));
+    const saved = peekStageState();
+    useStageTable(FUND_TABLE, o.system ?? "fund");
+    try {
+      const m = newManifest(ctx, d.sheet.admin);
+      if (o.verified !== false) m.stages.verify = { status: "done", startedAt: new Date().toISOString(), system: "fund" };
+      saveRunManifest(ctx.evidenceDir, m);
+    } finally { restoreStageState(saved); }
+    const s = { codes: new Map<string, string>([[RB_LIVE.toLowerCase(), o.liveCode ?? runtimeOf(LIB.slice(2), LIVE_TAIL)], [LIB.toLowerCase(), LIB_CODE]]), creates: [] as Hex[] };
+    const api: DeployImplApi = {
+      getCode: async (a) => (s.codes.get(a.toLowerCase()) ?? "0x") as Hex,
+      implementationOf: async (p) => { expect(p.toLowerCase()).toBe(RB_PROXY.toLowerCase()); return RB_LIVE; },
+      upgradesFrozen: async () => o.frozen === true,
+      forgeVersion: PINNED_FORGE,
+      create: async (creation) => { s.creates.push(creation); s.codes.set(NEW.toLowerCase(), `0x${creation.slice(2 + 25 * 2)}`); return { txHash: keccak256(creation), status: true, address: NEW }; },
+    };
+    const run = async (args: { proxy?: string; contract?: string; system?: "vaults" | "fund" } = {}) => {
+      const was = peekStageState();
+      useStageTable(FUND_TABLE, "fund");
+      try { return await runDeployImplementation(ctx, { proxy: args.proxy ?? "rebalancer", system: "system" in args ? args.system : "fund", ...(args.contract ? { contract: args.contract } : {}) }, api); } finally { restoreStageState(was); }
+    };
+    return { ctx, s, run };
+  }
+  const entries = (w: { ctx: RunContext }) => implementationDeploysOf(loadRunManifest(w.ctx.evidenceDir)!);
+
+  test("the reviewed second implementation is the rebalancer's RebalancerV2, whose pinned snapshot is the Rebalancer's layout (it adds no state)", () => {
+    expect(Object.keys(FUND_SECOND_IMPLEMENTATIONS)).toEqual(["rebalancer"]);
+    expect(V2.contract).toBe("RebalancerV2");
+    expect(RB.contract).toBe("Rebalancer");
+    expect(JSON.parse(readFileSync(join(REPO, V2.layout), "utf8"))).toEqual(JSON.parse(readFileSync(join(REPO, RB.layout), "utf8")));
+    // no stage of any system deploys it: it is the verb's only
+    expect(FUND_TABLE.stages.flatMap((s) => (s.proxies ?? []).map((p) => p.contract))).not.toContain(V2.contract);
+  });
+
+  test("--contract RebalancerV2: one CREATE of the V2 build linked to the live library, a fund entry, and the fund Safe's schedule as the next step", async () => {
+    const w = fundWorld();
+    const res = await w.run({ contract: "RebalancerV2" });
+    expect(w.s.creates.length).toBe(1);
+    expect(w.s.creates[0]!.slice(2 + 5 * 2, 2 + 25 * 2)).toBe(LIB.slice(2));
+    expect(w.s.creates[0]!).toContain(V2_TAIL);
+    expect(res.entry).toMatchObject({ system: "fund", proxy_name: "rebalancer", proxy: RB_PROXY, contract: "RebalancerV2", live_implementation: RB_LIVE, implementation: NEW, libraries: { L: LIB } });
+    expect(res.next).toContain("publish-contracts/src/safe/cli.ts propose --action schedule");
+    expect(res.next).toContain(`--target ${RB_PROXY}`);
+    expect(res.next).toContain(`upgradeToAndCall(address,bytes)" ${NEW} 0x`);
+    expect(res.next).not.toContain("govern");
+    expect(entries(w).length).toBe(1);
+    // a rerun with the same arguments sends nothing; the proxy's own contract is another deploy
+    const again = await w.run({ contract: "RebalancerV2" });
+    expect(again).toMatchObject({ reused: true, entry: { implementation: NEW, contract: "RebalancerV2" } });
+    expect(w.s.creates.length).toBe(1);
+  });
+
+  test("without --contract the verb deploys a copy of the proxy's own contract (the vaults model), from the fund system's scope", async () => {
+    const w = fundWorld();
+    const res = await w.run();
+    expect(w.s.creates.length).toBe(1);
+    expect(w.s.creates[0]!).toContain(LIVE_TAIL);
+    expect(res.entry).toMatchObject({ system: "fund", contract: "Rebalancer" });
+  });
+
+  test("every refusal sends nothing and records nothing", async () => {
+    const cases: [string, ReturnType<typeof fundWorld>, Parameters<ReturnType<typeof fundWorld>["run"]>[0], string, string][] = [
+      ["an unreviewed contract", fundWorld(), { contract: "RebalancerV3" }, "USAGE", "--contract RebalancerV3 is not a reviewed implementation of rebalancer"],
+      ["another proxy's second implementation", fundWorld(), { proxy: "queue", contract: "RebalancerV2" }, "USAGE", "is not a reviewed implementation of queue"],
+      ["the vaults scope names no fund proxy", fundWorld(), { system: undefined }, "USAGE", "needs --proxy NAME, one of"],
+      ["no passed fund verify", fundWorld({ verified: false }), { contract: "RebalancerV2" }, "REFUSED", "records no passed fund verify"],
+      ["a vaults run manifest", fundWorld({ system: "vaults" }), { contract: "RebalancerV2" }, "REFUSED", "not the fund system's"],
+      ["a V2 snapshot that does not extend the Rebalancer's", fundWorld({ editV2Layout: (j) => { j.storage = [j.storage[1], j.storage[0], ...j.storage.slice(2)]; } }), { contract: "RebalancerV2" }, "REFUSED", "RebalancerV2: storage: a variable moved"],
+      ["a V2 snapshot that drops a linked library", fundWorld({ editV2Layout: (j) => { j.libraries = j.libraries.slice(1); } }), { contract: "RebalancerV2" }, "REFUSED", "is no longer linked"],
+      ["live code that is not the build", fundWorld({ liveCode: runtimeOf(LIB.slice(2), V2_TAIL) }), { contract: "RebalancerV2" }, "REFUSED", "is not the Rebalancer of"],
+      ["a frozen proxy", fundWorld({ frozen: true }), { contract: "RebalancerV2" }, "REFUSED", "reads upgradesFrozen() true"],
+    ];
+    for (const [what, w, args, kind, msg] of cases) {
+      await expect(w.run(args), what).rejects.toMatchObject({ kind, message: expect.stringContaining(msg) });
+      expect(w.s.creates, what).toEqual([]);
+      expect(entries(w), what).toEqual([]);
+    }
+  });
+
+  test("the vaults path refuses a --contract (it deploys the proxy's own contract from --upgrade-build only)", async () => {
+    const w = world();
+    await expect(runDeployImplementation(w.ctx, { proxy: "gateway", contract: "RebalancerV2" }, w.api)).rejects.toMatchObject({ kind: "USAGE", message: expect.stringContaining("is not a reviewed implementation of gateway") });
+    expect(w.s.creates).toEqual([]);
+  });
+
+  test("parse: deploy-implementation runs in the fund system, --contract only with it", async () => {
+    const { parseCli } = await import("../src/cli.ts");
+    const { SHA } = await import("./fixtures.ts");
+    const base = ["--chain", "8453", "--core-sha", SHA, "--rpc", "http://x", "--sheet", "s", "--signer", "keystore:/k"];
+    expect(parseCli([DEPLOY_IMPL_VERB, ...base, "--system", "fund", "--proxy", "rebalancer", "--contract", "RebalancerV2"])).toMatchObject({ verb: DEPLOY_IMPL_VERB, system: "fund", proxy: "rebalancer", contract: "RebalancerV2" });
+    expect(parseCli([DEPLOY_IMPL_VERB, ...base, "--system", "fund", "--proxy", "rebalancer"]).contract).toBeUndefined();
+    expect(() => parseCli([DEPLOY_IMPL_VERB, ...base, "--proxy", "gateway", "--contract", "RobotMoneyGatewayV2"])).toThrow("--contract goes with deploy-implementation --system fund only");
+    expect(() => parseCli(["verify", ...base, "--system", "fund", "--contract", "RebalancerV2"])).toThrow("--contract goes with deploy-implementation --system fund only");
+    expect(parseCli([DEPLOY_IMPL_VERB, ...base, "--proxy", "gateway"]).contract).toBeUndefined();
   });
 });

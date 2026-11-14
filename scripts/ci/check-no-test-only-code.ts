@@ -48,9 +48,9 @@ export const CHAINID_ALLOWLIST: ChainIdRule[] = [
     reason: "ExpectedChainGuard: the one guard that pins a run to the expected chain id",
   },
   {
-    file: /(^|\/)DeployTimelock\.s\.sol$/,
+    file: /(^|\/)CoreTimelockHandover\.sol$/,
     line: /block\.chainid\s*==\s*BASE_MAINNET_CHAIN_ID/,
-    reason: "floor guard: the timelock delay and Safe floors are keyed to chain id 8453",
+    reason: "floor guard: the timelock delay floor is keyed to chain id 8453 (moved out of DeployTimelock.s.sol so the fund system's handover shares the one copy, Deploy 4)",
   },
 ];
 

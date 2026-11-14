@@ -1,0 +1,88 @@
+---
+title: "FxMockAggregator"
+description: "A Chainlink aggregator whose answer the test sets, etched at a real feed address."
+---
+
+# FxMockAggregator
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FundExtras.t.sol)
+
+A Chainlink aggregator whose answer the test sets, etched at a real feed address.
+
+## State Variables
+
+### decimals
+
+```solidity
+uint8 public decimals;
+```
+
+### answer
+
+```solidity
+int256 public answer;
+```
+
+### startedAt
+
+```solidity
+uint256 public startedAt;
+```
+
+### updatedAt
+
+```solidity
+uint256 public updatedAt;
+```
+
+## Functions
+
+<a id="set-uint8-int256-uint256-uint256"></a>
+
+### set
+
+```solidity
+function set(uint8 decimals_, int256 answer_, uint256 startedAt_, uint256 updatedAt_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| decimals_ | `uint8` |  |
+| answer_ | `int256` |  |
+| startedAt_ | `uint256` |  |
+| updatedAt_ | `uint256` |  |
+
+<a id="description"></a>
+
+### description
+
+```solidity
+function description() external pure returns (string memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="latestrounddata"></a>
+
+### latestRoundData
+
+```solidity
+function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint80` |  |
+| &lt;none&gt; | `int256` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint80` |  |
+

@@ -27,8 +27,8 @@ RULES
 2. UNTRACKED (offline). No marker clause says its work is "to be filed", "not
    yet filed" or "tracked" somewhere while it cites no issue. A marker must cite
    an issue so rule 4 can see it ship.
-3. EXECUTOR (offline, issue #1817 acceptance). `DeployTimelock.s.sol`
-   `EXECUTOR_POLICY` is a policy this gate knows, and prd.md, architecture.md
+3. EXECUTOR (offline, issue #1817 acceptance). The `EXECUTOR_POLICY` that
+   `DeployTimelock.s.sol` inherits from `CoreTimelockHandover.sol` is a policy this gate knows, and prd.md, architecture.md
    and security-model.md each state that policy's executor text. No doc under
    docs/ keeps a STALE_PHRASES sentence that explained why the work was not
    done yet.
@@ -92,7 +92,9 @@ CLAUSE_LIMIT = 300
 
 # Rule 3. The executor-role policy DeployTimelock records, and the sentence each
 # canonical doc must keep for it (whitespace-collapsed, so a wrapped line matches).
-TIMELOCK_SCRIPT = Path("contracts/script/DeployTimelock.s.sol")
+# The constant is declared once in CoreTimelockHandover, the base DeployTimelock
+# and DeployFundTimelock share, so the gate reads it where it is declared.
+TIMELOCK_SCRIPT = Path("contracts/script/CoreTimelockHandover.sol")
 EXECUTOR_POLICY = re.compile(r'string\s+public\s+constant\s+EXECUTOR_POLICY\s*=\s*"([^"]*)"')
 EXECUTOR_TEXT: dict[str, dict[Path, str]] = {
     "open": {

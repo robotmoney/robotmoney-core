@@ -1,5 +1,5 @@
 // Issue 1603: one source of truth for the chain ids and the 172800 s delay floor.
-// (1) the TS floor equals the Solidity constant read from DeployTimelock.s.sol, (2) no file under src but chains.ts carries a literal.
+// (1) the TS floor equals the Solidity constant read from CoreTimelockHandover.sol (DeployTimelock and DeployFundTimelock share it, Deploy 4), (2) no file under src but chains.ts carries a literal.
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -73,8 +73,8 @@ function tsFiles(dir: string): string[] {
 
 describe("one source of truth for chain ids and the delay floor (1603)", () => {
   test("the TS floor and chain ids equal the Solidity constants", () => {
-    expect(MAINNET_DELAY_FLOOR).toBe(solConst("DeployTimelock.s.sol", "MIN_PRODUCTION_DELAY"));
-    expect(REHEARSAL_DELAY_FLOOR).toBe(solConst("DeployTimelock.s.sol", "MIN_REHEARSAL_DELAY")); // issue 1727
+    expect(MAINNET_DELAY_FLOOR).toBe(solConst("CoreTimelockHandover.sol", "MIN_PRODUCTION_DELAY"));
+    expect(REHEARSAL_DELAY_FLOOR).toBe(solConst("CoreTimelockHandover.sol", "MIN_REHEARSAL_DELAY")); // issue 1727
     expect(MAINNET_CHAIN_ID).toBe(solConst("ExpectedChainGuard.sol", "BASE_MAINNET_CHAIN_ID"));
     expect(TWIN_CHAIN_ID).not.toBe(MAINNET_CHAIN_ID);
   });

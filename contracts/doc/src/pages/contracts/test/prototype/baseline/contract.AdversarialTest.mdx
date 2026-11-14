@@ -1,0 +1,637 @@
+---
+title: "AdversarialTest"
+description: "One-vault experiment, plan Step 2.4: one short test per row of design doc §5.8, plus the authority checks (RB-1, `executeStep` gate, INV-1/INV-2 sweep). Every test runs on the real Base fixture with the production adapters. No market price, amount out or block number is hard-coded: assertions are bounds and conservation relationships."
+---
+
+# AdversarialTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/Adversarial.t.sol)
+
+**Inherits:** [BaselineHarness](/contracts/test/prototype/baseline/abstract.BaselineHarness)
+
+One-vault experiment, plan Step 2.4: one short test per row of design doc §5.8, plus the authority
+checks (RB-1, `executeStep` gate, INV-1/INV-2 sweep). Every test runs on the real Base fixture with the
+production adapters. No market price, amount out or block number is hard-coded: assertions are bounds
+and conservation relationships.
+
+## Constants
+
+### ALICE_DEPOSIT
+
+```solidity
+uint256 internal constant ALICE_DEPOSIT = 1_000_000e6;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+### bob
+
+```solidity
+address internal bob = makeAddr("bob");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="test_bigtrade_issplitintocappedsteps"></a>
+
+### test_bigTrade_isSplitIntoCappedSteps
+
+<i>
+
+A deviation many times `maxStepUsdc` is closed in capped slices: every step's notional is
+`min(over, under, maxStepUsdc)` and the idle leg moves by exactly the notional.
+
+</i>
+
+```solidity
+function test_bigTrade_isSplitIntoCappedSteps() public fixtureCovered;
+```
+
+<a id="test_sandwich_spotpastguard_skipswithmarketreason"></a>
+
+### test_sandwich_spotPastGuard_skipsWithMarketReason
+
+<i>
+
+Spot pushed past `navDeviationGuardBps` in the step's block: the step skips with
+`MarketDeviation` and trades nothing (RB-5). The fund refuses the same leg even from the rebalancer.
+
+</i>
+
+```solidity
+function test_sandwich_spotPastGuard_skipsWithMarketReason() public fixtureCovered;
+```
+
+<a id="test_sandwich_spotinsideguard_twapfloorrevertsswap"></a>
+
+### test_sandwich_spotInsideGuard_twapFloorRevertsSwap
+
+<i>
+
+Spot pushed inside the ORA-4 band but beyond the step's slippage allowance: the floor comes from the
+TWAP, so the swap reverts inside `executeStep` and the step skips `StepFailed` with no trade.
+
+</i>
+
+```solidity
+function test_sandwich_spotInsideGuard_twapFloorRevertsSwap() public fixtureCovered;
+```
+
+<a id="test_twappushshorterthanwindow_cannotextractbeyondcap"></a>
+
+### test_twapPushShorterThanWindow_cannotExtractBeyondCap
+
+<i>
+
+One honest step runs first, so the cooldown is live. The attacker then pushes and holds for half
+a TWAP window. While held, nothing trades: the cooldown (`stepInterval ≥ TWAP window`, §5.3 step 1)
+binds first, so no step can price against a TWAP the push bent within one window of the last step.
+Once the attacker unwinds (spot honest, TWAP still bent), no step runs before a full interval since
+the last one, and the first that runs fills at honest prices: its loss against the pre-push honest
+quote stays within `maxStepCostBps`.
+
+</i>
+
+```solidity
+function test_twapPushShorterThanWindow_cannotExtractBeyondCap() public fixtureCovered;
+```
+
+<a id="test_stepparambounds_refuseintervalbelowwindowandboundsatfee"></a>
+
+### test_stepParamBounds_refuseIntervalBelowWindowAndBoundsAtFee
+
+<i>
+
+§5.6 bounds that keep the row-3 defence and every swap step live: a cooldown shorter than the TWAP
+window, a slippage floor or cost cap at or below the pool fee(s), and a per-asset cap below the dust
+floor are each refused (the last would stall a whole plan on one asset, §5.3 step 4).
+
+</i>
+
+```solidity
+function test_stepParamBounds_refuseIntervalBelowWindowAndBoundsAtFee() public fixtureCovered;
+```
+
+<a id="test_frontrunreceipt_thinassetboughtincappedslicesbehindpath"></a>
+
+### test_frontRunReceipt_thinAssetBoughtInCappedSlicesBehindPath
+
+<i>
+
+A receipt raises the RWA bucket. The plan buys deSPXA (the thin asset) slowly: every deSPXA buy is at
+most its small `maxStepUsdc`, and its holding never runs ahead of `pathTarget(now)` (RB-7), so a trader
+positioned ahead of the public receipt faces a slow, capped buyer.
+
+</i>
+
+```solidity
+function test_frontRunReceipt_thinAssetBoughtInCappedSlicesBehindPath() public fixtureCovered;
+```
+
+<a id="test_keeperabuse_timingonly_withincostcap"></a>
+
+### test_keeperAbuse_timingOnly_withinCostCap
+
+<i>
+
+The keeper chooses only WHEN (RB-2): no amount-taking entry point, no direct `executeStep`. Its
+worst timing (right after an adverse push, exactly at the cooldown edge) stays within the per-step
+cost cap. A stranger cannot step before `keeperGrace`, and can after it.
+
+</i>
+
+```solidity
+function test_keeperAbuse_timingOnly_withinCostCap() public fixtureCovered;
+```
+
+<a id="test_keeperabuse_gasstarvationcannotforcebackoff"></a>
+
+### test_keeperAbuse_gasStarvationCannotForceBackoff
+
+<i>
+
+The one input a permissionless caller controls is the gas limit (RB-2). A stranger after
+`keeperGrace` who sends too little gas for the step gets `StepGasStarved`: no fake `StepFailed`, no
+backoff, no trade. With enough gas the stranger's step is exactly the order `previewStep` showed (the
+keeper's), and a real step uses well under `STEP_GAS_FLOOR`.
+
+</i>
+
+```solidity
+function test_keeperAbuse_gasStarvationCannotForceBackoff() public fixtureCovered;
+```
+
+<a id="test_depositredeemaroundstep_sharepricemovesatmoststepcost"></a>
+
+### test_depositRedeemAroundStep_sharePriceMovesAtMostStepCost
+
+<i>
+
+Bob deposits right before a step and redeems right after. The share price moves across the step by
+exactly the realized step cost (composition does not move it), and Bob's claim (before any fee) never
+exceeds the realized value his deposit added.
+
+</i>
+
+```solidity
+function test_depositRedeemAroundStep_sharePriceMovesAtMostStepCost() public fixtureCovered;
+```
+
+<a id="test_depositmidplan_routesalongpathnotpastit"></a>
+
+### test_depositMidPlan_routesAlongPathNotPastIt
+
+<i>
+
+§4.3 / §5.7: a deposit that lands early in a plan routes against the CURRENT path target, idle
+included. It never pushes an asset past `pathTarget(now)` (which the rebalancer would only sell back,
+a round trip every holder pays), and the next step does not sell an asset.
+
+</i>
+
+```solidity
+function test_depositMidPlan_routesAlongPathNotPastIt() public fixtureCovered;
+```
+
+<a id="test_venuefreeze_stallsonlythatasset"></a>
+
+### test_venueFreeze_stallsOnlyThatAsset
+
+<i>
+
+deSPXA transfers revert (issuer freeze, mocked). Steps that touch deSPXA fail and back off; the
+keeper on its normal cadence keeps converging the other assets; the plan stalls on deSPXA only.
+
+</i>
+
+```solidity
+function test_venueFreeze_stallsOnlyThatAsset() public fixtureCovered;
+```
+
+<a id="test_venuefreeze_redeeminkindstaysopen"></a>
+
+### test_venueFreeze_redeemInKindStaysOpen
+
+<i>
+
+§5.8 "redeemInKind remains open" under the same deSPXA freeze, while the fund holds deSPXA: a holder
+can still exit in kind and receives the USDC, wETH and cbBTC legs. The frozen deSPXA leg is not
+forfeited to the stayers and not taken from them: it is deferred (net to alice, fee share to the fee
+recipient), leaves NAV, and alice pulls it once the freeze lifts.
+
+</i>
+
+```solidity
+function test_venueFreeze_redeemInKindStaysOpen() public fixtureCovered;
+```
+
+<a id="test_lendingstall_redeeminkinddefersonlythatvenue"></a>
+
+### test_lendingStall_redeemInKindDefersOnlyThatVenue
+
+<i>
+
+§5.8 row 7, "lending pause": the Aave venue refuses every withdrawal (paused reserve or 100%
+utilization, mocked on the adapter). `redeemInKind` still pays the idle, the other lending venues and
+every basket token; the Aave share is deferred, not forfeited, and is claimable once Aave pays again.
+
+</i>
+
+```solidity
+function test_lendingStall_redeemInKindDefersOnlyThatVenue() public fixtureCovered;
+```
+
+<a id="test_runawaycost_haltsuntiladminextends"></a>
+
+### test_runawayCost_haltsUntilAdminExtends
+
+<i>
+
+A tiny budget: the plan halts on the first step that overruns it, further steps do nothing (keeper
+or stranger), and only an ADMIN (timelock) budget extension reopens it.
+
+</i>
+
+```solidity
+function test_runawayCost_haltsUntilAdminExtends() public fixtureCovered;
+```
+
+<a id="test_authority_governanceopens_rebalancerexecutes_sweeprefusesheld"></a>
+
+### test_authority_governanceOpens_rebalancerExecutes_sweepRefusesHeld
+
+<i>
+
+RB-1: only `RebalanceGovernance` (GOVERNANCE_ROLE) opens a plan, and governance's own entry points
+are timelock-only. Only the rebalancer (REBALANCER_ROLE) executes or concludes a step. The sweep
+refuses USDC, the share token, every asset token and every lending adapter, and sends a foreign
+token only to the fixed quarantine.
+
+</i>
+
+```solidity
+function test_authority_governanceOpens_rebalancerExecutes_sweepRefusesHeld()
+        public
+        fixtureCovered;
+```
+
+<a id="_wethonlyplan-uint16"></a>
+
+### _wethOnlyPlan
+
+<i>
+
+Alice deposits with no plan (all idle); cbBTC is made untradeable (maxStepUsdc 0) so wETH is the only
+buy candidate; a 100% protocol plan opens (receipt for the default budget, else `setTarget` with
+`budgetBps`); time moves to the plan's end so the path target is the end target.
+
+</i>
+
+```solidity
+function _wethOnlyPlan(uint16 budgetBps) internal returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| budgetBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="_holdeverything"></a>
+
+### _holdEverything
+
+<i>
+
+Plan to (60, 30, 10) at NAV 0, then a routed 100k deposit: the fund holds every asset. Returns the
+deSPXA held.
+
+</i>
+
+```solidity
+function _holdEverything() internal returns (uint256 spxaHeld);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spxaHeld | `uint256` |  |
+
+<a id="_freezedespxa"></a>
+
+### _freezeDespxa
+
+<i>
+
+Issuer freeze: every deSPXA `transfer` and `transferFrom` reverts.
+
+</i>
+
+```solidity
+function _freezeDespxa() internal;
+```
+
+<a id="_wethgap"></a>
+
+### _wethGap
+
+<i>
+
+wETH's distance below its path target, at TWAP.
+
+</i>
+
+```solidity
+function _wethGap() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_previewnotional"></a>
+
+### _previewNotional
+
+```solidity
+function _previewNotional() internal view returns (uint256 n);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+
+<a id="_honestquoteat-uint256"></a>
+
+### _honestQuoteAt
+
+<i>
+
+`previewStep`'s notional at time `t`, and wETH's TWAP token amount for it, on the current state with
+no market activity in between.
+
+</i>
+
+```solidity
+function _honestQuoteAt(uint256 t) internal returns (uint256 n, uint256 tokens);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| n | `uint256` |  |
+| tokens | `uint256` |  |
+
+<a id="_honestbuyorder-uint256-uint256"></a>
+
+### _honestBuyOrder
+
+<i>
+
+The order the rebalancer would build for idle -> `buy` at `n` (§5.3 step 5).
+
+</i>
+
+```solidity
+function _honestBuyOrder(uint256 buy, uint256 n) internal view returns (StepOrder memory o);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| buy | `uint256` |  |
+| n | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| o | `StepOrder` |  |
+
+<a id="_pushup-address-uint256-uint256"></a>
+
+### _pushUp
+
+<i>
+
+Buy the token on `pool` in growing chunks until asset `idx`'s ORA-4 deviation is at least
+`minDev` bps. Chunks double while the deviation is under half the goal, then hold, so the final
+deviation lands near the goal (about 1x to 1.5x). Returns the deviation and the tokens bought.
+
+</i>
+
+```solidity
+function _pushUp(address pool, uint256 idx, uint256 minDev)
+        internal
+        returns (uint256 dev, uint256 bought);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| idx | `uint256` |  |
+| minDev | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| dev | `uint256` |  |
+| bought | `uint256` |  |
+
+<a id="_swapexactin-address-uint256"></a>
+
+### _swapExactIn
+
+<i>
+
+Sell `amount` of `token` for USDC on its fee-500 pool from this contract.
+
+</i>
+
+```solidity
+function _swapExactIn(address token, uint256 amount) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_stepas-address"></a>
+
+### _stepAs
+
+<i>
+
+`step()` as `caller`, returning what the rebalancer logged.
+
+</i>
+
+```solidity
+function _stepAs(address caller) internal returns (bool did, SkipReason why, StepLog memory l);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| did | `bool` |  |
+| why | `SkipReason` |  |
+| l | `StepLog` |  |
+
+<a id="_assertstepwithincap-address"></a>
+
+### _assertStepWithinCap
+
+<i>
+
+One step as `caller`: if it trades, the realized TWAP NAV loss equals the logged cost and stays
+within `maxStepCostBps` of the notional (RB-4); if it does not, NAV is unchanged.
+
+</i>
+
+```solidity
+function _assertStepWithinCap(address caller) internal returns (bool did);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| did | `bool` |  |
+
+<a id="_valueexcept-uint256"></a>
+
+### _valueExcept
+
+<i>
+
+Sum of every asset's TWAP value except `skip`.
+
+</i>
+
+```solidity
+function _valueExcept(uint256 skip) internal view returns (uint256 sum);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| skip | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sum | `uint256` |  |
+
+<a id="_unauthorized-address-bytes32"></a>
+
+### _unauthorized
+
+```solidity
+function _unauthorized(address who, bytes32 role) internal pure returns (bytes memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| role | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+## Structs
+
+### StepLog
+
+<i>
+
+What one `step()` call logged (RebalanceStep or RebalanceStepSkipped from the rebalancer).
+
+</i>
+
+```solidity
+struct StepLog {
+        uint256 sell;
+        uint256 buy;
+        uint256 notional;
+        uint256 amountOut;
+        uint256 cost;
+        uint256 detail;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sell | `uint256` |  |
+| buy | `uint256` |  |
+| notional | `uint256` |  |
+| amountOut | `uint256` |  |
+| cost | `uint256` |  |
+| detail | `uint256` |  |
+

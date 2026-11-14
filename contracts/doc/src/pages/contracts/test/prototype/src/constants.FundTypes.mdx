@@ -1,0 +1,340 @@
+---
+title: "FundTypes Constants"
+---
+
+# FundTypes Constants
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+## BPS
+
+<i>
+
+The basis-points denominator (same value as `BpsMath.BPS_DENOMINATOR`).
+
+</i>
+
+```solidity
+uint256 constant BPS = 10_000;
+```
+
+## IDLE_INDEX
+
+<i>
+
+Sentinel asset index meaning "idle USDC" in a step leg (§5.3 step 6: either leg may be
+idle USDC). Never a valid index into the fund's asset list.
+
+</i>
+
+```solidity
+uint256 constant IDLE_INDEX = type(uint256).max;
+```
+
+## MAX_FUND_ASSETS
+
+<i>
+
+Hard cap on the fund's asset list length (lending plus basket). Keeps every per-asset loop
+(NAV, redeem, leg picking) bounded.
+
+</i>
+
+```solidity
+uint256 constant MAX_FUND_ASSETS = 12;
+```
+
+## MIN_PLAN_DURATION
+
+<i>
+
+Shortest permitted glide path (§5.6 `duration`, min 1 day).
+
+</i>
+
+```solidity
+uint64 constant MIN_PLAN_DURATION = 1 days;
+```
+
+## MAX_PLAN_DURATION
+
+<i>
+
+Longest permitted glide path.
+
+</i>
+
+```solidity
+uint64 constant MAX_PLAN_DURATION = 90 days;
+```
+
+## MAX_COST_BUDGET_BPS
+
+<i>
+
+Ceiling on a plan's `costBudgetBps` (5% of turnover). Suggested start is 30 bps.
+
+</i>
+
+```solidity
+uint16 constant MAX_COST_BUDGET_BPS = 500;
+```
+
+## MIN_STEP_INTERVAL
+
+<i>
+
+Floor on `stepInterval` (§5.6: max(longest TWAP window, 30 min)).
+
+</i>
+
+```solidity
+uint32 constant MIN_STEP_INTERVAL = 30 minutes;
+```
+
+## MAX_STEP_INTERVAL
+
+<i>
+
+Ceiling on `stepInterval`.
+
+</i>
+
+```solidity
+uint32 constant MAX_STEP_INTERVAL = 1 days;
+```
+
+## MAX_STEP_COST_BPS
+
+<i>
+
+Ceiling on `maxStepCostBps` (suggested start 50 bps).
+
+</i>
+
+```solidity
+uint16 constant MAX_STEP_COST_BPS = 500;
+```
+
+## MAX_TOLERANCE_BPS
+
+<i>
+
+Ceiling on `toleranceBps` (suggested start 50 bps).
+
+</i>
+
+```solidity
+uint16 constant MAX_TOLERANCE_BPS = 500;
+```
+
+## MAX_KEEPER_GRACE
+
+<i>
+
+Ceiling on `keeperGrace` (suggested start 6 hours).
+
+</i>
+
+```solidity
+uint32 constant MAX_KEEPER_GRACE = 7 days;
+```
+
+## MAX_OVERRUN
+
+<i>
+
+Ceiling on `maxOverrun` (suggested start 7 days).
+
+</i>
+
+```solidity
+uint32 constant MAX_OVERRUN = 30 days;
+```
+
+## DEFAULT_STEP_DEPTH_BPS
+
+<i>
+
+A basket leg's step notional is also capped at `stepDepthBps` of its pool's time-weighted USDC depth over one
+settlement window (`FundValuationLib.poolUsdcDepth`, the depth the §4.5 pool-share rule and the per-call
+flow cap read). Owner's decided default (delegation of 2026-11-12): 5 bps, the same as the flow cap.
+
+</i>
+
+```solidity
+uint16 constant DEFAULT_STEP_DEPTH_BPS = 5;
+```
+
+## MAX_STEP_DEPTH_BPS
+
+<i>
+
+Upper bound of `stepDepthBps` (1 % of depth). The setter refuses 0: the cap cannot be switched off.
+
+</i>
+
+```solidity
+uint16 constant MAX_STEP_DEPTH_BPS = 100;
+```
+
+## PRICE_SCALE
+
+<i>
+
+Scale of every flow price (a request limit, a bound price, a realized price):
+`price = usdcUnits × PRICE_SCALE / shareUnits`. The fund mints 10^18 share units per USDC unit at the
+seed scale (`_decimalsOffset() == 18`), so a share bought at the seed scale costs exactly 1e18 (par).
+A higher price is worse for a depositor and better for a redeemer.
+
+</i>
+
+```solidity
+uint256 constant PRICE_SCALE = 1e36;
+```
+
+## LENDING_ROUNDING_UNITS
+
+<i>
+
+Venue rounding margin (proposal §5.9.3 check 10, plan §9 "venue rounding"): the fund supplies this many
+USDC units MORE than the exact pro-rata amount to each lending venue in `mintInKind`, and withdraws this
+many LESS in `sellForFlow`, so a venue that rounds one or two units against the caller never fails the
+proportion check. The comparison itself is never loosened.
+
+</i>
+
+```solidity
+uint256 constant LENDING_ROUNDING_UNITS = 2;
+```
+
+## DEFAULT_MIN_SEED_USDC
+
+<i>
+
+Default and hard bounds of the two flow parameters the FUND holds (§5.9.5; every other one lives in the
+queue's `FlowParams`). `minSeedUsdc`: the least `seed` accepts (E14). `poolShareBps`: the most of a
+pool's time-weighted active liquidity one basket target times the TVL cap may take (§4.5 rule 3, E15).
+
+</i>
+
+```solidity
+uint256 constant DEFAULT_MIN_SEED_USDC = 10_000e6;
+```
+
+## MIN_MIN_SEED_USDC
+
+```solidity
+uint256 constant MIN_MIN_SEED_USDC = 1e6;
+```
+
+## MAX_MIN_SEED_USDC
+
+```solidity
+uint256 constant MAX_MIN_SEED_USDC = 10_000_000e6;
+```
+
+## DEFAULT_POOL_SHARE_BPS
+
+```solidity
+uint16 constant DEFAULT_POOL_SHARE_BPS = 2_500;
+```
+
+## MAX_POOL_SHARE_BPS
+
+```solidity
+uint16 constant MAX_POOL_SHARE_BPS = 10_000;
+```
+
+## POSITION_UNITS_PER_USDC
+
+<i>
+
+Units of a lending position created per USDC unit when the position's units start (E9, RB-21). Units are
+shares of that position: a fine scale keeps the rounding of each mint and burn far below one USDC unit.
+
+</i>
+
+```solidity
+uint256 constant POSITION_UNITS_PER_USDC = 1e18;
+```
+
+## DEFAULT_IN_KIND_BPS
+
+<i>
+
+The in-kind allowance of proposal §5.9.4 and E20, held by the fund (coordinator ruling 6, §5.9.5 "the fund
+stores ... the in-kind allowance"). Per period of `inKindPeriod` seconds, in-kind exits take lending USDC up
+to `max(inKindBps × lending holdings / 10 000, inKindFloorUsdc)`, counted in the venues' own USDC amounts.
+Defaults equal the queue's flow-cap defaults (§5.9.5: 500 bps, 250 000 USDC, a 6 h epoch); ADMIN_ROLE keeps
+them equal to the queue's values with `setInKindAllowance`.
+
+</i>
+
+```solidity
+uint16 constant DEFAULT_IN_KIND_BPS = 500;
+```
+
+## DEFAULT_IN_KIND_FLOOR_USDC
+
+```solidity
+uint128 constant DEFAULT_IN_KIND_FLOOR_USDC = 250_000e6;
+```
+
+## DEFAULT_IN_KIND_PERIOD
+
+```solidity
+uint32 constant DEFAULT_IN_KIND_PERIOD = 6 hours;
+```
+
+## MAX_IN_KIND_FLOOR_USDC
+
+<i>
+
+Hard bounds of `setInKindAllowance` (the queue's epoch and flow-floor bounds).
+
+</i>
+
+```solidity
+uint128 constant MAX_IN_KIND_FLOOR_USDC = 100_000_000e6;
+```
+
+## MIN_IN_KIND_PERIOD
+
+```solidity
+uint32 constant MIN_IN_KIND_PERIOD = 1 hours;
+```
+
+## MAX_IN_KIND_PERIOD
+
+```solidity
+uint32 constant MAX_IN_KIND_PERIOD = 7 days;
+```
+
+## DEFAULT_SETTLE_WINDOW
+
+<i>
+
+The settlement window the fund assumes before a FlowQueue is bound (§5.9.5 default). Used by the pool-history
+check of `addAsset` and the pool-share rule of `setTargetAndOpenPlan` (§4.5 rules 2 and 3, E15). Once a queue
+is bound both read the queue's own `FlowParams.settleWindow`.
+
+</i>
+
+```solidity
+uint32 constant DEFAULT_SETTLE_WINDOW = 1 hours;
+```
+
+## MAX_FEED_AGE
+
+<i>
+
+Upper bound on a basket asset's `maxFeedAge` at `addAsset` (E15): the longest Chainlink heartbeat on Base
+(24 h) plus margin. A larger value would switch the staleness check off.
+
+</i>
+
+```solidity
+uint32 constant MAX_FEED_AGE = 2 days;
+```
+

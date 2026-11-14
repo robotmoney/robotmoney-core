@@ -1,0 +1,152 @@
+{
+  "enums": {},
+  "libraries": [
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
+    "contracts/test/prototype/src/lib/FundValuationLib.sol:FundValuationLib",
+    "contracts/test/prototype/src/lib/StepFeedLib.sol:StepFeedLib"
+  ],
+  "namespaces": {
+    "openzeppelin.storage.AccessControl": [
+      "mapping(bytes32 role => RoleData) _roles;"
+    ],
+    "openzeppelin.storage.AccessControlEnumerable": [
+      "mapping(bytes32 role => EnumerableSet.AddressSet) _roleMembers;"
+    ],
+    "openzeppelin.storage.Initializable": [
+      "uint64 _initialized;",
+      "bool _initializing;"
+    ],
+    "openzeppelin.storage.ReentrancyGuard": [
+      "uint256 _status;"
+    ],
+    "robotmoney.storage.GovernedUUPS": [
+      "address upgradeTimelock;",
+      "bool upgradesFrozen;"
+    ],
+    "robotmoney.storage.RobotMoneyFund": [
+      "AssetConfig[] assets;",
+      "mapping(bytes32 codeHash => bool allowed) codeHashAllowed;",
+      "address usdc;",
+      "uint256 tvlCap;",
+      "uint256 perDepositCap;",
+      "uint256 exitFeeBps;",
+      "address feeRecipient;",
+      "uint256 maxSlippageBps;",
+      "uint256 navDeviationGuardBps;",
+      "bool depositsPaused;",
+      "bool shutdown;",
+      "uint64 lastStepAt;",
+      "uint16[] targetBps;",
+      "Plan plan;",
+      "mapping(uint256 index => uint256) deferredTotal;",
+      "mapping(uint256 index => mapping(address account => uint256)) deferredOf;",
+      "bool rolesBound;",
+      "address flowQueue;",
+      "bool flowRoleBound;",
+      "bool seeded;",
+      "uint256 minSeedUsdc;",
+      "uint16 poolShareBps;",
+      "mapping(uint256 index => uint256) positionUnits;",
+      "mapping(uint256 index => uint256) positionClaimTotal;",
+      "mapping(uint256 index => mapping(address account => uint256)) positionClaimOf;",
+      "mapping(uint256 period => uint256) inKindUsed;",
+      "uint256 lastGoodNav;",
+      "uint64 lastGoodNavAt;",
+      "uint16 inKindBps;",
+      "uint128 inKindFloorUsdc;",
+      "uint32 inKindPeriod;",
+      "uint256 haltCost;"
+    ],
+    "robotmoney.storage.RobotMoneyVaultExclusions": [
+      "ExclusionLedger ledger;",
+      "bool snapshots;",
+      "mapping(uint256 index => uint256 exclusionId) openExclusionOf;"
+    ]
+  },
+  "storage": [
+    {
+      "label": "_fund",
+      "offset": 0,
+      "slot": "0",
+      "type": "t_contract(IRobotMoneyFund)"
+    },
+    {
+      "label": "_stepParams",
+      "offset": 0,
+      "slot": "1",
+      "type": "t_struct(StepParams)_storage"
+    },
+    {
+      "label": "_assetStepParams",
+      "offset": 0,
+      "slot": "2",
+      "type": "t_mapping(t_uint256,t_struct(AssetStepParams)_storage)"
+    },
+    {
+      "label": "_backoffUntil",
+      "offset": 0,
+      "slot": "3",
+      "type": "t_mapping(t_uint256,t_uint64)"
+    },
+    {
+      "label": "_stepDepthBps",
+      "offset": 0,
+      "slot": "4",
+      "type": "t_uint16"
+    }
+  ],
+  "structs": {
+    "t_struct(AssetStepParams)_storage": [
+      {
+        "label": "maxStepUsdc",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_uint128"
+      },
+      {
+        "label": "maxStepSlippageBps",
+        "offset": 16,
+        "slot": "0",
+        "type": "t_uint16"
+      }
+    ],
+    "t_struct(StepParams)_storage": [
+      {
+        "label": "stepInterval",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_uint32"
+      },
+      {
+        "label": "keeperGrace",
+        "offset": 4,
+        "slot": "0",
+        "type": "t_uint32"
+      },
+      {
+        "label": "maxOverrun",
+        "offset": 8,
+        "slot": "0",
+        "type": "t_uint32"
+      },
+      {
+        "label": "maxStepCostBps",
+        "offset": 12,
+        "slot": "0",
+        "type": "t_uint16"
+      },
+      {
+        "label": "toleranceBps",
+        "offset": 14,
+        "slot": "0",
+        "type": "t_uint16"
+      },
+      {
+        "label": "minStepUsdc",
+        "offset": 16,
+        "slot": "0",
+        "type": "t_uint128"
+      }
+    ]
+  }
+}

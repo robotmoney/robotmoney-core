@@ -34,7 +34,7 @@ describe("manifest names come from the stage table", () => {
     expect(allManifests()).toContain("vault.json");
   });
   test("the expected count is the number of stages with a manifest", () => {
-    expect(expectedManifestCount()).toBe(REAL.stages.filter((s) => s.manifest).length);
+    expect(expectedManifestCount()).toBe(REAL.stages.filter((s) => s.manifest && (s as { system?: string }).system !== "fund").length); // Deploy 4: the fund system is not part of the stage stack
     expect(expectedManifestCount()).toBe(allManifests().length);
   });
   test("a stage without a manifest does not count, and renaming follows", () => {

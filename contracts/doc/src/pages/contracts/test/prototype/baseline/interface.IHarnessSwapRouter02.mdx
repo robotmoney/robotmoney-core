@@ -1,0 +1,58 @@
+---
+title: "IHarnessSwapRouter02"
+---
+
+# IHarnessSwapRouter02
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/BaselineHarness.sol)
+
+## Functions
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata p) external payable returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Structs
+
+### ExactInputSingleParams
+
+```solidity
+struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| recipient | `address` |  |
+| amountIn | `uint256` |  |
+| amountOutMinimum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+

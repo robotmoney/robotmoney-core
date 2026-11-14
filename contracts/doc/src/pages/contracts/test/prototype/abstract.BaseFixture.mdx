@@ -1,0 +1,402 @@
+---
+title: "BaseFixture"
+description: "One-vault experiment (docs/technical/one-vault-rebalancer-proposal.md). Base for every prototype test. The tests run on real Base state with no RPC and no anvil process:"
+---
+
+# BaseFixture
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/BaseFixture.sol)
+
+**Inherits:** Test
+
+One-vault experiment (docs/technical/one-vault-rebalancer-proposal.md). Base for every
+prototype test. The tests run on real Base state with no RPC and no anvil process:
+
+- **Replay (default).** `setUp` loads the committed fixture
+(`fixtures/base-state.alloc.json`) with `vm.loadAllocs` and sets the block, timestamp,
+base fee and chain id from `fixtures/base-state.meta.json`. Plain `forge test` runs it.
+- **Record.** With `PROTO_RECORD_RPC` and `PROTO_PIN` set, `setUp` forks real Base at the
+pin. Forge's fork cache then holds the original value of every account and slot the
+tests touched. `scripts/prototype/record-base-fixture.ts` turns that cache into the
+fixture. Re-record whenever a test starts touching new state.
+
+A fixture is lazy: it holds only what the recording run read. A slot it lacks would read
+as zero in replay, which is a silent wrong answer. So every test that uses
+`fixtureCovered` checks, after its body, that every storage slot of a fixture account it
+read first (before writing it) is in the fixture, and that every contract it called
+either is in the fixture or was created by the test. A miss fails with the account and
+slot, so the fix (re-record) is named.
+
+The check is slow: it records every storage access and decodes it after each phase. A test that
+runs thousands of slots (the rebalance sim) turns it off by default through `_fixtureCheckByDefault`.
+`PROTO_FIXTURE_CHECK=1` (or `=0`) overrides the default for every test. The recorder's replay passes
+set it to 1, so each re-recorded fixture is proven to cover the sim. A deterministic run that passed
+the check on this fixture and code reads the same state when it runs without the check.
+
+**Strict check** (`PROTO_FIXTURE_STRICT=1` with the check on; the recorder's replay passes set it). The
+recorder replays first and records only what misses, so a test may be accepted on a fixture that no
+recording of its current code produced. The strict check makes that as safe as recording it: every
+account the test touches (called, created, balance or code read, or calling) must be in the fixture,
+and every slot of a fixture account it reads or writes must be in it, not only the slots it reads
+first. An account the fixture lacks is allowed only if it holds code the test did not create (forge's
+linked libraries, `vm.etch`) or is a precompile or forge's own. The strict check also reports what it
+saw, as `-vv` logs: `fixture-strict: setUp` from `setUp`, `fixture-strict: final` after the last check
+of a `fixtureCovered` test, and `fixture-manifest-accounts` / `fixture-manifest-slots` (packed
+addresses, and address plus slot) for every fixture account and slot touched. The recorder keeps them
+as the pass's manifest. Without `PROTO_FIXTURE_STRICT` the check is exactly the one described above.
+
+## Constants
+
+### ALLOC_PATH
+
+```solidity
+string internal constant ALLOC_PATH = "contracts/test/prototype/fixtures/base-state.alloc.json";
+```
+
+### META_PATH
+
+```solidity
+string internal constant META_PATH = "contracts/test/prototype/fixtures/base-state.meta.json";
+```
+
+### LIBRARY_DEPLOYER
+
+<i>
+
+Forge's deployer of linked libraries (`keccak256("foundry library deployer")`): it deploys them through
+the CREATE2 factory on forge's own chain before the fork exists, so no recording ever fetches it.
+
+</i>
+
+```solidity
+address internal constant LIBRARY_DEPLOYER = 0x1F95D37F27EA0dEA9C252FC09D5A6eaA97647353;
+```
+
+### SKIP_CHECKED
+
+```solidity
+string internal constant SKIP_CHECKED = "[fixture-strict: checked]";
+```
+
+## State Variables
+
+### recording
+
+```solidity
+bool internal recording;
+```
+
+### fixtureCheck
+
+<i>
+
+Replay with the coverage check on (see the contract note).
+
+</i>
+
+```solidity
+bool internal fixtureCheck;
+```
+
+### fixtureStrict
+
+<i>
+
+Replay with the strict check on (see the contract note). Implies `fixtureCheck`.
+
+</i>
+
+```solidity
+bool internal fixtureStrict;
+```
+
+### _fxAccount
+
+```solidity
+mapping(address => bool) private _fxAccount;
+```
+
+### _fxSlot
+
+```solidity
+mapping(address => mapping(bytes32 => bool)) private _fxSlot;
+```
+
+### _seen
+
+```solidity
+mapping(address => mapping(bytes32 => bool)) private _seen;
+```
+
+### _created
+
+<i>
+
+Contracts the test created. Internal so a test that consumes part of the recording itself
+(Invariants) can report its creations here too.
+
+</i>
+
+```solidity
+mapping(address => bool) internal _created;
+```
+
+### _createdHere
+
+<i>
+
+Strict only: contracts the test created on the fixture's chain (forge creates the linked libraries on its
+own chain first). A record run reads each of these addresses, so the fixture must hold them.
+
+</i>
+
+```solidity
+mapping(address => bool) private _createdHere;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public virtual;
+```
+
+<a id="_fixturecheckbydefault"></a>
+
+### _fixtureCheckByDefault
+
+<i>
+
+Whether replay runs the coverage check when PROTO_FIXTURE_CHECK is unset.
+
+</i>
+
+```solidity
+function _fixtureCheckByDefault() internal view virtual returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="fixturecovered"></a>
+
+### fixtureCovered
+
+<i>
+
+Put on every prototype test. Runs the coverage check after the test body in replay.
+
+</i>
+
+```solidity
+modifier fixtureCovered();
+```
+
+<a id="_skipcovered-string"></a>
+
+### _skipCovered
+
+<i>
+
+Skips the current test the way `vm.skip(true, reason)` does, after the coverage check (when it is on) has
+checked everything the test read so far. A skip decided on fixture state (a G8 finding's numbers, "the
+fixture lacks X") is then as proven as a pass: a miss fails loudly instead of skipping. In strict mode the
+reason ends with `[fixture-strict: checked]`, which the recorder reads (forge keeps no logs of a skipped
+test, only its reason).
+
+</i>
+
+```solidity
+function _skipCovered(string memory reason) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| reason | `string` |  |
+
+<a id="_fixturecheckpoint"></a>
+
+### _fixtureCheckpoint
+
+<i>
+
+Replay only: check everything recorded so far and restart the recording. A long test calls it
+between phases. The check runs in an external self-call, so the decoded state diff lives in that
+call's own memory and is freed on return: forge's EVM memory limit then bounds one phase, not the
+whole test.
+
+</i>
+
+```solidity
+function _fixtureCheckpoint() internal;
+```
+
+<a id="checkfixturecoveragenow"></a>
+
+### checkFixtureCoverageNow
+
+<i>
+
+Self-call target of `fixtureCovered` and `_fixtureCheckpoint`. Not a test.
+
+</i>
+
+```solidity
+function checkFixtureCoverageNow() external;
+```
+
+<a id="_loadfixture"></a>
+
+### _loadFixture
+
+```solidity
+function _loadFixture() private;
+```
+
+<a id="_assertfixturecovered"></a>
+
+### _assertFixtureCovered
+
+```solidity
+function _assertFixtureCovered() private;
+```
+
+<a id="_strictaccount-address-manifest"></a>
+
+### _strictAccount
+
+```solidity
+function _strictAccount(address a, Manifest memory m) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `address` |  |
+| m | `Manifest` |  |
+
+<a id="_emitmanifest-manifest"></a>
+
+### _emitManifest
+
+<i>
+
+Packs 20-byte addresses (accounts) and 20-byte address plus 32-byte slot (slots), back to back.
+
+</i>
+
+```solidity
+function _emitManifest(Manifest memory m) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| m | `Manifest` |  |
+
+## Errors
+
+### FixtureSlotMiss
+
+```solidity
+error FixtureSlotMiss(address account, bytes32 slot);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| slot | `bytes32` |  |
+
+### FixtureAccountMiss
+
+```solidity
+error FixtureAccountMiss(address account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+### FixtureStrictAccountMiss
+
+<i>
+
+Strict check only: the test touched an account the fixture lacks.
+
+</i>
+
+```solidity
+error FixtureStrictAccountMiss(address account);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+### FixtureStrictSlotMiss
+
+<i>
+
+Strict check only: the test wrote a fixture account's slot, before reading it, that the fixture lacks.
+
+</i>
+
+```solidity
+error FixtureStrictSlotMiss(address account, bytes32 slot);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| slot | `bytes32` |  |
+
+## Structs
+
+### Manifest
+
+<i>
+
+Strict only: the fixture accounts and slots one check saw, each once per test (slots through `_seen`,
+accounts through transient storage, which forge's isolation resets per call, so an account can repeat
+across checks; the recorder dedups).
+
+</i>
+
+```solidity
+struct Manifest {
+        address[] accounts;
+        uint256 nA;
+        address[] slotAccounts;
+        bytes32[] slots;
+        uint256 nS;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| accounts | `address[]` |  |
+| nA | `uint256` |  |
+| slotAccounts | `address[]` |  |
+| slots | `bytes32[]` |  |
+| nS | `uint256` |  |
+

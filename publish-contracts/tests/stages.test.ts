@@ -17,7 +17,7 @@ const forge = STAGES.filter((s) => s.kind === "forge");
 describe("stage list built from core's stage table", () => {
   test("the order is safe, then the table's stages in table order with prove-control just before the timelock stage, then verify and govern", () => {
     // issue 1892: the default run is the vaults system, whose stages are the table's stages of that system
-    const names = table.stages.filter((s) => s.system !== "gateway").map((s) => s.name);
+    const names = table.stages.filter((s) => s.system === "vaults").map((s) => s.name); // Deploy 4: the fund system has its own rows (tests/fund-system.test.ts)
     const last = names.length - 1;
     expect(names[last]).toBe("timelock");
     expect(STAGE_NAMES).toEqual(["safe", ...names.slice(0, last), "prove-control", "timelock", "verify", "govern"]);
@@ -44,7 +44,7 @@ describe("stage list built from core's stage table", () => {
   test("no vaults-system stage reads a gateway-system manifest (SYS-1)", () => {
     const gatewayStages = new Set(table.stages.filter((s) => s.system === "gateway").map((s) => s.name));
     const readers: string[] = [];
-    for (const s of table.stages.filter((x) => x.system !== "gateway")) {
+    for (const s of table.stages.filter((x) => x.system === "vaults")) {
       for (const e of s.requiredEnv) { const src = resolveEnv(e, s.vault ?? null); if (src.from === "manifest" && gatewayStages.has(src.stage)) readers.push(s.name); }
     }
     expect(readers).toEqual([]);

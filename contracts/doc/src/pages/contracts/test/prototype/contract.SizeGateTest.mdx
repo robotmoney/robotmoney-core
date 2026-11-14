@@ -1,0 +1,85 @@
+---
+title: "SizeGateTest"
+description: "One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue): the fund, the rebalancer and the FlowQueue implementations each deploy under EIP-170 (24,576 bytes, a limit the chain enforces), and every linked library they call deploys at all. Sizes are read from the code the harness actually deployed (the ERC-1967 implementation behind each proxy, the libraries forge linked), compiled with the repo's production optimizer settings. The limit is never edited to pass. The 1 KB headroom G1 first asked for was a chosen margin, not a chain limit; the owner removed it on 2026-11-12 (proposal §13)."
+---
+
+# SizeGateTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/SizeGate.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue): the fund, the rebalancer and the
+FlowQueue implementations each deploy under EIP-170 (24,576 bytes, a limit the chain enforces), and
+every linked library they call deploys at all. Sizes are read from the code the harness actually
+deployed (the ERC-1967 implementation behind each proxy, the libraries forge linked), compiled with the
+repo's production optimizer settings. The limit is never edited to pass. The 1 KB headroom G1 first asked
+for was a chosen margin, not a chain limit; the owner removed it on 2026-11-12 (proposal §13).
+
+## Constants
+
+### EIP170_LIMIT
+
+<i>
+
+EIP-170 runtime code limit.
+
+</i>
+
+```solidity
+uint256 internal constant EIP170_LIMIT = 24_576;
+```
+
+### G1_MAX
+
+<i>
+
+G1: the EIP-170 limit itself (owner, 2026-11-12: the earlier 1 KB headroom was arbitrary).
+
+</i>
+
+```solidity
+uint256 internal constant G1_MAX = EIP170_LIMIT;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public override;
+```
+
+<a id="_impl-address"></a>
+
+### _impl
+
+```solidity
+function _impl(address proxy) internal view returns (address impl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| impl | `address` |  |
+
+<a id="test_g1_fundrebalancerandqueuefitwithheadroom"></a>
+
+### test_G1_fundRebalancerAndQueueFitWithHeadroom
+
+G1 (§13): fund, rebalancer and queue implementation `code.length` &lt;= 24,576 (EIP-170) each. Logs every size for
+the evidence log, including governance, the fund's exclusion ledger and each linked library.
+
+```solidity
+function test_G1_fundRebalancerAndQueueFitWithHeadroom() public fixtureCovered;
+```
+
