@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST, VAULT_MANIFESTS, journalHashesOf, vaultsOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf } from "./run-record.ts";
+import { FUND_MANIFEST, VAULT_MANIFESTS, journalHashesOf, vaultsOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf, stepIssuesOf } from "./run-record.ts";
 
 const SHA = "84952e18";
 /** The steps the test run's release runs on the target: the one step its journal holds, plus the report and sign-off steps the report excludes. */
@@ -262,4 +262,11 @@ test("Deploy 4: --vaults accepts the fund manifest by name, never by default, an
   expect(() => vaultsOf("fund,fund")).toThrow(/twice/);
   expect(() => vaultsOf("funds")).toThrow(/--vaults names/);
   expect(() => vaultsOf("")).toThrow(/--vaults names/);
+});
+
+test("a rerun of the sign-off step is not its own issue: its earlier failed result is still on disk while it runs again (Deploy 4 upgrade, 2026-11-14)", () => {
+  const results = { "P10.81-report": "pass", "P10.82-signoff": "fail exit 1", "P6.93-settle": "fail exit 1" };
+  const issues = stepIssuesOf(["P10.81-report", "P10.82-signoff", "P6.93-settle"], results, "P10.82-signoff");
+  expect(issues).toEqual(["P6.93-settle: fail exit 1"]);
+  expect(stepIssuesOf(["P10.82-signoff"], { "P10.82-signoff": "fail exit 1" })).toEqual(["P10.82-signoff: fail exit 1"]);
 });

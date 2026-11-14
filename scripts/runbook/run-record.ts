@@ -82,7 +82,8 @@ export function issuesOf(paused: { manifest: string; vault: string; read: string
 /** PURE. The issues in the step results: a step that did not pass or skip, and a journaled step with no result (`self` is the report's own step). */
 export function stepIssuesOf(journaled: string[], results: Record<string, string>, self?: string): string[] {
   const missing = journaled.filter((id) => id !== self && results[id] === undefined).map((id) => `${id}: no result recorded`);
-  const failed = Object.entries(results).filter(([, r]) => r !== "pass" && !/^skip( |$)/.test(r)).map(([id, r]) => `${id}: ${r || "empty result"}`);
+  // `self` (the step writing the report or the sign-off) is never its own issue: on a rerun its earlier result is still on disk while it runs again.
+  const failed = Object.entries(results).filter(([id, r]) => id !== self && r !== "pass" && !/^skip( |$)/.test(r)).map(([id, r]) => `${id}: ${r || "empty result"}`);
   return [...failed, ...missing].sort();
 }
 /** PURE. A result that no journal backs: every command the runner runs appends to <id>.out, so a `pass` with no journal file was written by hand. */
