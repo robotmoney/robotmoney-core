@@ -23,9 +23,12 @@ Authority (RB-1, RB-3):
 - REBALANCER_ROLE (Rebalancer): `executeStep`, `concludePlan`.
 Both are self-administered and granted exactly once by `bindRebalanceRoles`, so no ADMIN_ROLE
 holder can hand either to another address (the router's WEIGHT_SETTER_ROLE model).
-- EMERGENCY_ROLE (hot key): `pauseRebalance`, `pauseDeposits`, `shutdown`, `emergencyUnwind`.
+- EMERGENCY_ROLE (hot key): the pauses only, `pauseRebalance` and `pauseDeposits`. A pause only
+delays; one key cannot end the fund or sell its holdings (owner, 2026-11-13).
 - ADMIN_ROLE (timelock): assets, caps, fees, guards, `resumePlan`, `extendBudget`, `closePlan`,
-`unpauseDeposits`, `restore`, and every role grant. ADMIN carries no upgrade power: only
+`unpauseDeposits`, `shutdown`, `restore`, `emergencyUnwind`, and every role grant. `shutdown`
+and `emergencyUnwind` are governed (Safe + timelock delay, owner 2026-11-13): each ends the
+fund's deposits or sells every holding, so no single hot key holds them. ADMIN carries no upgrade power: only
 `upgradeTimelock()` upgrades or freezes the proxy.
 - `redeem` and `redeemInKind` are never gated by plan state, pause or shutdown (RB-6).
 
@@ -1950,10 +1953,11 @@ function unpauseDeposits() external onlyRole(ADMIN_ROLE);
 
 ### shutdown
 
-Deposits closed and `tvlCap` 0 until ADMIN `restore`. Redeems stay open.
+Deposits closed and `tvlCap` 0 until ADMIN `restore`. Redeems stay open. ADMIN_ROLE (the timelock: the
+Safe and the delay), not EMERGENCY_ROLE: the hot key pauses deposits at once instead (owner, 2026-11-13).
 
 ```solidity
-function shutdown() external onlyRole(EMERGENCY_ROLE);
+function shutdown() external onlyRole(ADMIN_ROLE);
 ```
 
 <a id="restore-uint256"></a>
@@ -1980,6 +1984,8 @@ Pause deposits, move every holding to idle USDC (`FundFlowsLib.emergencyUnwind`:
 tolerant of failure, excluded adapters drained into their exclusion record, Basket sold under the
 TWAP floor), and pause an Open or Halted plan so the Rebalancer stops (it would otherwise buy
 back, including after a queued `extendBudget` lands).
+ADMIN_ROLE (the timelock: the Safe and the delay), not EMERGENCY_ROLE: it sells every holding, so one hot
+key does not hold it; the hot key's `pauseDeposits` and `pauseRebalance` stop flows at once (owner, 2026-11-13).
 
 <i>
 
@@ -1989,7 +1995,7 @@ whose TWAP read fails is skipped and stays held; holders still exit it through `
 </i>
 
 ```solidity
-function emergencyUnwind() external onlyRole(EMERGENCY_ROLE) nonReentrant;
+function emergencyUnwind() external onlyRole(ADMIN_ROLE) nonReentrant;
 ```
 
 <a id="sweepforeigntoken-address"></a>

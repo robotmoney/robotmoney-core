@@ -25,7 +25,7 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
-import { manifestBase, manifestPathFor } from "./stage-table.ts";
+import { manifestBase, manifestPathFor, timelockExecutorOf } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet, type UpgradeMode } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
@@ -896,7 +896,7 @@ const isProxyStage = (name: string): boolean => { const s = systemStages().find(
 async function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, prior: StageRecord | undefined, env: Record<string, string>, resuming: boolean): Promise<ReturnType<typeof predictCoreTimelock> | undefined> {
   const u = getStageTable().upgradeAuthority, first = firstProxyStage(), authority = authorityStage();
   if (!u || !first || (!isProxyStage(row.name) && row.name !== authority)) return undefined;
-  const now = predictCoreTimelock(u, join(ctx.coreDir, "out"), env.SAFE_ADDRESS as Address, BigInt(env.TIMELOCK_MIN_DELAY!));
+  const now = predictCoreTimelock(u, join(ctx.coreDir, "out"), env.SAFE_ADDRESS as Address, BigInt(env.TIMELOCK_MIN_DELAY!), timelockExecutorOf(getStageTable(), ACTIVE_SYSTEM));
   const { runtimeHash: _, ...pin } = now;
   if (row.name === first) {
     if (prior?.timelockPrediction) assertTimelockPin(row.name, first, prior.timelockPrediction, pin);

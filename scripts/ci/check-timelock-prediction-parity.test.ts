@@ -44,6 +44,16 @@ describe("check-timelock-prediction-parity", () => {
     expect(r.err).toContain("no vector file");
   });
 
+  test("decision D4-10: a Safe-only executor vector agrees, moves the address, and an open-executor address under it fails", () => {
+    const p = predictCoreTimelock(u, OUT, SAFE, 60n, "safe");
+    const safeOnly = { safe: SAFE, minDelay: "60", address: p.address, initCodeHash: p.initCodeHash, executor: "safe" };
+    expect(p.address).not.toBe(good().address);
+    expect(run({ vectors: [good(), safeOnly] })).toEqual({ code: 0, err: "" });
+    const r = run({ vectors: [{ ...good(), executor: "safe" }] });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("executor safe");
+  });
+
   test("an empty vector file fails", () => {
     const r = run({ vectors: [] });
     expect(r.code).toBe(1);

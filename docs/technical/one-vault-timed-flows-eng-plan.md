@@ -58,7 +58,7 @@ only bound a trade or stop a settlement.
 | E14 | Empty fund | `fund.seed(usdc)`: `ADMIN_ROLE`, once, only at zero supply, at least `minSeedUsdc`. It mints at the fund's existing share scale to the fund itself. Those shares are locked for good. `mintInKind` needs a non-zero supply. | A ratio has no meaning on an empty fund. A small gift must not skew a new fund. |
 | E15 | Asset admission (D12) | `addAsset` requires a feed address and its `maxFeedAge` for a basket asset, and checks that the pool holds one settlement window of observations. A lending asset's adapter must expose the venue's rate per unit. `setTargetAndOpenPlan` checks the pool-share rule from the pool's time-weighted liquidity. The prototype's asset list drops deSPXA. | The outside-feed layer needs a feed for every asset. Liquidity added for one transaction must not count. |
 | E16 | Feeds | A `FeedLib` reads Chainlink feeds for ETH, BTC, cbBTC and USDC, and the Base sequencer uptime feed. It checks age, sign and round completeness. The fixture records the feed contracts at the pin. Tests move a feed with a mock aggregator placed at the feed's address. | Layer 2. Tests still run with no RPC. |
-| E17 | Freeze | `freezeSettlement(id)` by `EMERGENCY_ROLE` during the hold. It ends by itself `maxFreeze` after the freeze call. Before that the Safe can call `releaseSettlement` or `allowReturn`. After `allowReturn` each depositor pulls their own slice in kind. | A reversal window with no price, no other recipient and a deadline (RB-18). |
+| E17 | Freeze | `freezeSettlement(id)` by `EMERGENCY_ROLE` during the hold (pause-class, so it stays on the hot key when `shutdown` and `emergencyUnwind` moved to the timelock, owner 2026-11-13). It ends by itself `maxFreeze` after the freeze call. Before that the Safe can call `releaseSettlement` or `allowReturn`. After `allowReturn` each depositor pulls their own slice in kind. | A reversal window with no price, no other recipient and a deadline (RB-18). |
 | E18 | Request list | The queue keeps one array of requests per epoch. `settle` walks the arrays of the last `maxRoll + 1` epochs, oldest first. A cancelled or filled request is skipped. There is no cap on the number of requests. After `maxRoll` epochs an unfilled request expires, and its owner withdraws the escrow. | A cap of 200 slots could be held for about 20,000 USDC of float. A flood now only costs the keeper skips. |
 | E19 | Views | `totalAssets` and the convert functions revert when a feed is unhealthy. `lastGoodNav` returns the last healthy value and its time. `checkSettle` returns the first failing check. | A lender must not read a number nobody should trust. Clients still need a value and a reason. |
 | E20 | Caps | Each side has a cap per `epochLength` of clock time: the larger of `maxEpochFlowBps` of NAV and `epochFlowFloorUsdc`. A deposit must also leave NAV at or under the TVL cap. A cap never reverts a settlement. It leaves the rest pending. The lending part of in-kind exits has its own allowance: the larger of `maxEpochFlowBps` of the fund's lending holdings and `epochFlowFloorUsdc`, counted in the venues' own USDC amounts, so no price is read. | A rate limit on both directions. A backlog cannot stack caps. Without a floor a newly seeded fund could grow only 5% per epoch. |
@@ -77,7 +77,9 @@ its own `keeperGrace`. The defaults are in proposal §5.9.5:
 `maxFreeze`, `slices`, `quorum`, `dispersionBps`, `refBandBps`, `legBandBps`,
 `maxFeedAge` (per feed), `sequencerGrace`, `usdcPegBandBps`,
 `maxLendRateGrowthBps`, `poolShareBps` and `minSeedUsdc`. The hard bounds
-keep `minHold` between 1 and 7 days and `maxFreeze` at or under 14 days. They
+keep `minHold` between 1 hour and 7 days (the floor was 1 day until decision
+D4-11, owner 2026-11-13, which also makes 1 hour the default) and `maxFreeze`
+at or under 14 days. They
 also refuse values that would stop every settlement, such as `quorum` above
 `slices`.
 

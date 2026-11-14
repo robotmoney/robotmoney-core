@@ -8,7 +8,7 @@
 //   PIN_BLOCK_IN        the Base block the fork is pinned at, recorded in counts.json
 //   FEED_MIN_MARGIN_IN  the seconds every feed must stay fresh when the publish starts (default 300; see "The feeds" below)
 //   TWIN_RUN_PARENT     where the run directory is made (default /tmp: foundry.toml fs_permissions lets the deploy scripts write manifests only under /tmp or ./deployments)
-// The sheet: the committed fund sheet with the Twin's lines over it, as P0.68 of releases/v0.7.0-onevault.yaml does: the throwaway keys' fragment (CHAIN_ID 918453, the
+// The sheet: the committed fund sheet with the Twin's lines over it, as P0.68 of releases/v0.8.0-onevault.yaml (v0.7.0-onevault.yaml for Deploy 4) does: the throwaway keys' fragment (CHAIN_ID 918453, the
 // roles, the three Safe owners and threshold), EXPECTED_CHAIN_ID=918453 and KEEPER_ADDRESS, the deployer of a second throwaway set. Each replaces the same name; every other
 // line stays the committed one. Twin environment steps only: gas for every key and the keeper, USDC for the seed.
 // The feeds: the fund's assets and its queue read the real Chainlink feeds, and a pinned fork serves each feed's round at the pin for as long as it runs (twin-feeds.ts).
@@ -16,7 +16,7 @@
 // the fund's own refusal once ETH / USD is past its stale point: totalAssets() reverts FeedUnhealthy(WETH, Stale) and quoteDeposit SettleBlocked(Feed, WETH, Stale).
 // Then the Twin feed step (twin-feeds.ts refresh, owner decision 2026-11-13): each basket and peg feed gets one new round that restates the answer it reported at the
 // pin, at the fork's clock, written to the real aggregator's storage and journaled; totalAssets() must read again. No mock is etched, no pool, token, fund or queue
-// slot is written. The queue's timed rows run after this script, from the release runbook (releases/v0.7.0-onevault.yaml, whose Twin-only rows P6.80 to P6.86 refresh before them).
+// slot is written. The queue's timed rows run after this script, from the release runbook (releases/v0.8.0-onevault.yaml (v0.7.0-onevault.yaml for Deploy 4), whose Twin-only rows P6.80 to P6.86 refresh before them).
 // The record: counts.json names `system: "fund"` (rehearsal-counts build --system fund), the markers are the fund's own (twin-markers.ts FUND_RUN_MARKERS), and the last
 // step writes twin-qa-fund.json { kind: "twin-qa-run", system: "fund", deploySha, ..., conclusion: "success" }, which a failed run never reaches.
 // Exports: TWIN_RUN_DIR, TWIN_MANIFEST_DIR, TWIN_DEPLOYER_ADDRESS, TWIN_COUNTS_JSON, TWIN_VERIFY_LABELS_FUND, TWIN_FEEDS_JSON, TWIN_FEED_PROBE_JSON, TWIN_FEED_REFRESH_JSON,

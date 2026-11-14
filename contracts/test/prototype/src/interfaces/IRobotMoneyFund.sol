@@ -25,8 +25,9 @@ import {
 ///         Authority (RB-1, RB-3):
 ///         - `setTargetAndOpenPlan`  GOVERNANCE_ROLE only (RebalanceGovernance).
 ///         - `executeStep`, `concludePlan`  REBALANCER_ROLE only (Rebalancer).
-///         - `pauseRebalance`, `pauseDeposits`, `shutdown`, `emergencyUnwind`  EMERGENCY_ROLE.
-///         - `resumePlan`, `extendBudget`, `closePlan`, asset config, caps, fees  ADMIN_ROLE (timelock).
+///         - `pauseRebalance`, `pauseDeposits`  EMERGENCY_ROLE (the pauses only).
+///         - `resumePlan`, `extendBudget`, `closePlan`, asset config, caps, fees, `shutdown`, `emergencyUnwind`
+///           ADMIN_ROLE (timelock; the last two moved off the hot key, owner 2026-11-13).
 ///         - `redeem`, `redeemInKind`  never gated by plan state, pause, or shutdown (RB-6).
 ///
 ///         Implementation contract `initialize(FundInitParams p, address upgradeTimelock,
@@ -648,11 +649,11 @@ interface IRobotMoneyFund is IFundEvents {
     function pauseDeposits() external;
     /// @notice ADMIN_ROLE.
     function unpauseDeposits() external;
-    /// @notice EMERGENCY_ROLE. Deposits closed and tvlCap 0 until `restore`. Redeems stay open.
+    /// @notice ADMIN_ROLE (timelock, owner 2026-11-13). Deposits closed and tvlCap 0 until `restore`. Redeems stay open.
     function shutdown() external;
     /// @notice ADMIN_ROLE. Reverse `shutdown` with a new TVL cap.
     function restore(uint256 newTvlCap) external;
-    /// @notice EMERGENCY_ROLE. Withdraw every lending adapter and sell every basket token to USDC
+    /// @notice ADMIN_ROLE (timelock, owner 2026-11-13). Withdraw every lending adapter and sell every basket token to USDC
     ///         using the BasketVault emergency guards (`BasketSwaps.unwindAll` semantics). Also
     ///         pauses the live plan (Open → Paused) so the rebalancer stops.
     function emergencyUnwind() external;

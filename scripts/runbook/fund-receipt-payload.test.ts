@@ -156,8 +156,8 @@ describe("assets from flags", () => {
   });
 });
 
-describe("the v0.7.0-onevault fund flow runs the tools", () => {
-  const y = readFileSync(join(ROOT, "docs", "runbooks", "contract-qa", "releases", "v0.7.0-onevault.yaml"), "utf8");
+describe("the v0.8.0-onevault fund flow runs the tools", () => {
+  const y = readFileSync(join(ROOT, "docs", "runbooks", "contract-qa", "releases", "v0.8.0-onevault.yaml"), "utf8");
   const step = (id: string, next: string) => y.slice(y.indexOf(`id: "${id}`), y.indexOf(`id: "${next}`));
   test("P6.70 builds the fund payload from the chain; P6.71 checks it and derives the vector; P6.72 records it through the submitter Safe; P6.73 applies that vector", () => {
     expect(step("P6.70-", "P6.71-")).toContain("bun scripts/runbook/fund-receipt-payload.ts --rpc {rpcUrl} --fund-manifest {manifestDir}/fund.json");

@@ -79,7 +79,7 @@ contract HarnessSmokeTest is PrototypeHarness {
         assertEq(seqFeed, FEED_SEQUENCER, "sequencer feed");
         FlowParams memory p = queue.flowParams();
         assertEq(p.epochLength, 6 hours, "epochLength default");
-        assertEq(p.minHold, 24 hours, "minHold default");
+        assertEq(p.minHold, 1 hours, "minHold default (owner 2026-11-13, D4-11)");
         assertEq(p.legBandBps, 100, "legBandBps default");
 
         // E14: the seed, at the share scale, held by the fund itself.

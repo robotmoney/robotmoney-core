@@ -337,7 +337,7 @@ library FundAdminLib {
     ///      Extend: `extendBudget(arg)`; ADMIN_ROLE. Live plan's budget += arg; Halted → Open once the budget left
     ///      covers the step that halted it.
     ///      Close: `closePlan`; ADMIN_ROLE. Live → Superseded.
-    ///      UnwindPause: the tail of `emergencyUnwind`; EMERGENCY_ROLE. Open or Halted → Paused, else nothing.
+    ///      UnwindPause: the tail of `emergencyUnwind`; ADMIN_ROLE (owner, 2026-11-13). Open or Halted → Paused, else nothing.
     enum PlanOp {
         Conclude,
         Pause,
