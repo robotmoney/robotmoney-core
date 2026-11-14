@@ -369,7 +369,11 @@ with them.
 
 ## 8. Step 3f: netted, forward-priced flows
 
-Status: plan, 2026-11-13. Not started. It implements proposal §5.11, D16 to
+Status: plan, 2026-11-13, reconciled 2026-11-14 with the hardening release
+`v0.8.0-onevault` (proposal §5.11.8). Not started. It starts from that
+release's code: the emergency key holds only pauses, `shutdown` and
+`emergencyUnwind` are `ADMIN_ROLE`'s, the timelock's only executor is its
+Safe, and the hold is 1 hour. It implements proposal §5.11, D16 to
 D26 and RB-23 to RB-32, on the step 3e contracts. Rows E34 to E42 come
 from the adversarial review of the same day (proposal §19). The rule above all rows
 changes with it: quantity sets every share minted or burned, no price moves
@@ -394,7 +398,7 @@ method does not change. The outside feeds stay guards.
 | E35 | One price and one set of totals per window | The first `settle` call after a window fixes `S` and the totals `D` and `R` of the locked requests. Later calls for that window only distribute fills. | RB-23. A batch split over calls gets one price. |
 | E36 | Venue liquidity test | Before a match the queue asks each lending adapter whether the venue can pay out the matched shares' part of the position now. If one cannot, there is no match in that settlement. Each lending adapter gains a view for this. | D21, RB-28. |
 | E37 | Net redemption on a venue that cannot pay (amends E4) | The pro-rata sale records a position claim for that venue's part, as E9 does, and pays the rest. It does not revert. | D23. |
-| E38 | The wind-down state | `windDown()` on the fund: `ADMIN_ROLE` only, which is the Safe through the timelock. No other caller, and no trigger on a stuck fund. It stops settlement, deposits and the rebalancer, releases every pending request to its owner, waives the hold for unfrozen held shares and opens `redeemInKind`. Only `ADMIN_ROLE` ends it. `shutdown` by `EMERGENCY_ROLE` stays a halt of deposits and the match and opens no exit. | D24, RB-27. Owner, 2026-11-14: a multisig winds the fund down. |
+| E38 | The wind-down state | No new call. `shutdown` on the fund is `ADMIN_ROLE`'s since `v0.8.0-onevault`, so the Safe through the timelock, with the Safe as the only executor. From step 3f it also stops settlement and the rebalancer, releases every pending request to its owner, waives the hold for unfrozen held shares and opens `redeemInKind`. `restore`, also `ADMIN_ROLE`'s, ends it. No other caller, and no trigger on a stuck fund. | D24, RB-27. Owner, 2026-11-14: a multisig winds the fund down, and the timelock is required. |
 | E39 | Pause that ends by itself | `pauseQueue` stores an end time `now + maxPause`. It cannot be called again before `end + maxPause`. | D24, RB-32. |
 | E40 | Redemption requests keep their place | A redemption request does not expire. After `maxRoll` epochs its owner may withdraw the unfilled shares. A deposit request expires as before. A locked deposit can be cancelled while deposits are stopped. | D25. |
 | E41 | Terms fixed at the request | `Request` stores the exit fee, the hold and the expiry time. Settlement and claims read them from the request. | D26, RB-31. |
@@ -447,10 +451,10 @@ method does not change. The outside feeds stay guards.
   - RB-26: `redeemInKind` reverts for a wallet holder, for a pending request
     and for an expired request while the fund runs. It pays every holder
     once the fund is in wind-down.
-  - RB-27: `windDown` reverts for the emergency role, the keeper and an
+  - RB-27: `shutdown` reverts for the emergency role, the keeper and an
     outside caller, also with every feed stale and the keeper silent for
     `maxRoll` epochs. It runs for the Safe through the timelock, and every
-    holder then exits in kind. `shutdown` opens no in-kind exit.
+    holder then exits in kind until `restore` executes.
   - RB-28: with one venue fully borrowed there is no match, and the net
     redemption pays a position claim for that venue.
   - RB-29: matched fills use up the side's cap.

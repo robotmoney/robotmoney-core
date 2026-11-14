@@ -900,7 +900,10 @@ it is: priced and booked at the TWAP alone.
 Decided by the owner 2026-11-13 (D16 to D19, §18). Revised the same day
 after an adversarial review of this section (D20 to D26, §19). **Not built
 and not tested.** Until step 3f is built, §5.9 describes the flows as they are, and
-the prototype, the Deploy 4 rehearsal and every result in §14 rest on §5.9.
+the prototype, the Deploy 4 rehearsal, the hardening release
+`v0.8.0-onevault` and every result in §14 rest on §5.9. Step 3f is not part
+of `v0.8.0-onevault`. It builds on that release's roles and its 1 hour hold
+(§5.11.8).
 This section is the design that step 3f builds. Every size, bound and cost in
 it is an estimate.
 
@@ -1073,8 +1076,7 @@ step 3f the fund pays that venue's part as a claim on the position (the
 mechanism of RB-21) and pays the rest in USDC.
 
 **While deposits are stopped** (deposits paused, a lending asset excluded,
-an asset being sold out under §4.5, the fund shut down or in wind-down)
-there is no
+an asset being sold out under §4.5, or the fund in wind-down) there is no
 match. Redemptions settle alone, as today. A locked deposit request can be
 cancelled while deposits are stopped. No price is forming for it then.
 
@@ -1098,33 +1100,42 @@ There is no in-kind exit from a running fund.
 **The wind-down.** The in-kind exit applies only once the goal is to wind
 the fund down (D18). The wind-down is a state, not a flag (D24):
 
-- **Who starts it.** A multisig: the Safe (owner, 2026-11-14, D24). Like
-  every other Safe action it goes through the timelock, so holders see it
-  coming. Nobody else can start it. The emergency role is a hot key and
-  cannot. Its `shutdown` stays what the architecture makes it, a halt: it
-  stops deposits and the match, redemptions still settle, and no in-kind
-  exit opens. There is no trigger that anyone can call. Winding a fund
-  down is a decision, and a decision belongs to the multisig.
-- **What it does.** No settlement, no match and no deposit. The rebalancer
-  stops and its plan is paused. Every pending request is released at once
+- **Who starts it.** A multisig: the Safe, through the timelock (owner,
+  2026-11-14, D24). The timelock is required. The call is `shutdown`, which
+  `v0.8.0-onevault` already moved from the emergency key to `ADMIN_ROLE`
+  (§5.6). Since D4-10 the Safe is also the timelock's only executor.
+  Nobody else can start a wind-down: not the emergency hot key, which holds
+  only pauses, not the keeper and not an outside caller. There is no
+  trigger that anyone can call. Winding a fund down is a decision, and a
+  decision belongs to the multisig.
+- **What it does.** Today `shutdown` closes deposits and sets the TVL cap
+  to 0, and redemptions go on. From step 3f it starts the wind-down: no
+  settlement, no match and no deposit. The rebalancer stops and its plan
+  is paused. Every pending request is released at once
   and its owner withdraws the escrow. Shares in their hold are delivered
   on claim. Frozen shares keep their freeze, which still ends by itself.
 - **The exit.** `redeemInKind` opens for every holder. The mechanics are
   unchanged: the proportion check, the exit fee on every leg, the lending
   allowance and the lending claims as position shares (RB-21).
-- **Who ends it.** Only the Safe, through the timelock. The in-kind exit
-  stays open until that action executes, so holders have the timelock's
-  delay as notice.
+- **Who ends it.** Only the Safe, through the timelock (`restore`). The
+  in-kind exit stays open until that action executes, so holders have the
+  timelock's delay as notice.
+- **`emergencyUnwind`** stays the Safe's, through the timelock, as in
+  `v0.8.0-onevault`. It sells every holding to USDC. It is the Safe's tool
+  for a wind-down that pays USDC, and for an asset with a dead feed
+  (§4.5).
 
 **Emergency powers. Each can only delay.**
 
 - `EMERGENCY_ROLE` can pause the queue. A pause ends by itself after
   `maxPause` and cannot be set again for the same length of time (D24).
-- `EMERGENCY_ROLE` can shut the fund down (`shutdown`). That halts
-  deposits and the match. It does not start a wind-down.
+- `EMERGENCY_ROLE` can pause deposits and pause the rebalancer, as in
+  `v0.8.0-onevault`. `pauseDeposits` also stops the match. The hot key
+  cannot shut the fund down, unwind it or start a wind-down.
 - `EMERGENCY_ROLE` can freeze the shares of one settlement's deposits,
-  matched or minted, while they are in their hold. A freeze ends by itself
-  after `maxFreeze`. The Safe can release it sooner. The in-kind return
+  matched or minted, while they are in their hold. The hold is 1 hour
+  since D4-11, so the hot key has one hour to do it. A freeze ends by
+  itself after `maxFreeze`. The Safe can release it sooner. The in-kind return
   after a freeze (`allowReturn`, `takeReturn`) is removed: it was an
   in-kind exit from a running fund (D18).
 
@@ -1144,7 +1155,7 @@ the fund down (D18). The wind-down is a state, not a flag (D24):
 | --- | --- |
 | The match | Book moves in the queue and one fee transfer. No new call into the fund. |
 | The cutoff | One comparison in `cancel`. |
-| The wind-down state | A Safe action through the timelock. A gate on `redeemInKind`, the release of queue escrow, and the stop of the rebalancer. |
+| The wind-down state | More effect on the existing `shutdown`, which is already the Safe's through the timelock: a gate on `redeemInKind`, the release of queue escrow, and the stop of the rebalancer. |
 | The venue liquidity test | One read per lending venue before a match. |
 | A pause that ends by itself | `maxPause`, as `maxFreeze` already works. |
 | No step in a settlement window | One time check in `step` (§5.10). |
@@ -1184,6 +1195,28 @@ the fund down (D18). The wind-down is a state, not a flag (D24):
   band between a TWAP and its feed is now the bound on what one matched
   user can lose to another. The asset rule's feed and depth requirements
   matter more for it (§4.5).
+
+#### 5.11.8 Step 3f on top of `v0.8.0-onevault`
+
+The hardening release `v0.8.0-onevault` (2026-11-13, §10) landed on the
+branch after step 3f was first written. Step 3f is reconciled with it here.
+Four of its five changes touch this section.
+
+| `v0.8.0-onevault` | Effect on step 3f |
+| --- | --- |
+| The emergency key holds only the pauses. `shutdown` and `emergencyUnwind` are `ADMIN_ROLE`'s. | It is what D24 asks for. The wind-down is `shutdown`, the Safe's through the timelock. Step 3f adds no new call and no new role. It only gives `shutdown` more effect (§5.11.5). |
+| Decision D4-10: the fund timelock's only executor is its Safe. | A wind-down takes the Safe's signatures to propose and again to execute, with the delay between. Nobody else can execute it early or late. |
+| Decision D4-11: the deposit hold is 1 hour, the new default and floor. | The hold of step 3f is that hold. Matched shares are held 1 hour like minted ones. A request already waits a settlement window of 1 hour before it can fill, so a matched depositor's shares are at least two hours from the cutoff to delivery. The freeze has one hour to be called. |
+| The roles table of §5.6. | Three rows change from step 3f. `KEEPER_ROLE` is the only caller of `settle` and `step`, with no grace period (D20). `allowReturn` leaves `ADMIN_ROLE`'s list (D24). `pauseQueue` ends by itself (D24). |
+| The keeper must hold gas before its first send, and the runbook records each Safe owner's key. | No effect on the design. Both matter more under D20, where the keeper is the only caller. |
+
+**The G8 re-score at the 1 hour hold** (§14) found that no scored attack
+holds a price through the hold. That result is for the step 3d and 3e
+design. The step 3f attack tests (A21, A23 to A28, A30 to A33) run at the
+1 hour hold from the start.
+
+**The run under the caps** (§19.2) does not change: it is set by the flow
+cap, not by the hold.
 
 ## 6. Contract changes
 
@@ -1614,8 +1647,8 @@ whose release yaml stays its record) to `v0.8.0-onevault`
        through a whole plan. Report blocked settlements and the lean on the
        match price.
      - A32, a pause held by a compromised emergency key: it must end by
-       itself. A `shutdown` by that key must halt deposits and open no
-       in-kind exit.
+       itself. That key must not be able to call `shutdown` or
+       `emergencyUnwind` (as in `v0.8.0-onevault`).
      - A33, a parameter change by the timelock while requests are locked:
        their fee, hold and expiry must not move.
    - **Rerun A1 to A19** on the step 3f fund. A13 ends with the limits. A9
@@ -1668,7 +1701,7 @@ recorded so the conclusion can revisit it.
 | D21 | Can a match happen while a lending venue cannot pay? | No. Before a match the queue tests that every lending venue can pay out the matched shares' part of its position. `pauseDeposits` stops the match too. Review fix, 2026-11-13 (§19). | The NAV counts a lending position at face. A matched redeemer would otherwise leave a damaged venue at full value at the depositors' cost. |
 | D22 | Does matched volume count against the flow caps? | Yes. Every fill of a side counts. Review fix, 2026-11-13. This reverses the first draft of §5.11. | Holding a TWAP inside the band is a fixed cost and its gain grows with matched size. |
 | D23 | What does a net redemption do when one lending venue cannot pay? | It pays that venue's part as a claim on the position and the rest in USDC. Review fix, 2026-11-13. | Lending is most of the fund. One full venue would otherwise stop every redemption, and there is no in-kind exit to go around it. |
-| D24 | Who winds the fund down, and what are a pause and a wind-down? | A multisig: the Safe, through the timelock. Owner, 2026-11-14. The timelock is required and its delay is not skipped. Nobody else starts a wind-down: not the emergency hot key, not the keeper, not an outside caller. The wind-down is a state: no settlement, the rebalancer stops, queue escrow is released, in-kind opens, and only the Safe through the timelock ends it. The emergency key keeps its halts. `shutdown` stops deposits and the match and opens no exit. A pause ends by itself after `maxPause`. The in-kind return after a freeze is removed. | Winding a fund down is a decision, and the Safe is the only body that decides. The review's proposal, a trigger anyone could call on a stuck fund, is not adopted: it would let whoever can block settlement force a wind-down. The cost the owner accepts: a holder of a stuck fund waits for the multisig. |
+| D24 | Who winds the fund down, and what are a pause and a wind-down? | A multisig: the Safe, through the timelock. Owner, 2026-11-14. The timelock is required and its delay is not skipped. The call is `shutdown`, which `v0.8.0-onevault` already gave to `ADMIN_ROLE`. Nobody else starts a wind-down: not the emergency hot key, not the keeper, not an outside caller. The wind-down is a state: no settlement, the rebalancer stops, queue escrow is released, in-kind opens, and only the Safe through the timelock ends it (`restore`). The emergency key keeps only its pauses. A pause ends by itself after `maxPause`. The in-kind return after a freeze is removed. | Winding a fund down is a decision, and the Safe is the only body that decides. The review's proposal, a trigger anyone could call on a stuck fund, is not adopted: it would let whoever can block settlement force a wind-down. The cost the owner accepts: a holder of a stuck fund waits for the multisig. |
 | D25 | Does a redemption request expire? | No. It keeps its place. After `maxRoll` epochs its owner may withdraw the unfilled shares. Deposits still expire. Review fix, 2026-11-13. | In a run under the caps, expiry sent waiting redeemers to the back about five times. |
 | D26 | Can a parameter change alter a locked request? | No. The fee, the hold and the expiry are fixed at the request. Review fix, 2026-11-13. | A locked request cannot leave, so its terms must not move under it. |
 
@@ -2607,7 +2640,7 @@ wrong. The owner corrected both.
 | RB-6, RB-10, RB-12, RB-15, the "always open" exits | Amended (§7). |
 | G8 fail of 2026-11-12 (A10, A2 inside the bands) | Expected to shrink by the matched share of the volume. Not measured. A20 is a rebalance step and is not affected. |
 | G9 pass of 2026-11-12 | Must be scored again. The cutoff and the missing in-kind exit change what a customer waits for. |
-| Deploy 4 | Not affected. It rehearses the deploy tools on the step 3d and 3e code. |
+| Deploy 4 and `v0.8.0-onevault` | Not affected. Both are the step 3d and 3e code. Step 3f builds on the roles and the hold of `v0.8.0-onevault` (§5.11.8). |
 
 ### 18.6 Still open
 
@@ -2664,7 +2697,7 @@ Severity is the reviewer's.
 | One lending venue that cannot pay stops every net redemption. | High | Fixed in design: D23. |
 | A pause was a total lock for at least the timelock's delay, and a compromised key could repeat it. | High | Fixed in design: D24, RB-32. |
 | A run takes about 11 days under the caps, and expiry sent waiting redeemers to the back. | High | Partly. D25 keeps their place. The length of a run is the cap's purpose and stays. |
-| The wind-down was a flag the hot key set and the Safe could reverse while holders left. It did not stop the rebalancer or release queue escrow. | Medium | Fixed in design: D24. It is a state that only the Safe starts and ends, through the timelock. |
+| The wind-down was a flag the hot key set and the Safe could reverse while holders left. It did not stop the rebalancer or release queue escrow. | Medium | Fixed. `v0.8.0-onevault` moved `shutdown` to the Safe and the timelock. D24 makes it a state that stops the rebalancer and releases queue escrow, and that only the Safe ends. |
 | The in-kind return after a freeze contradicted D18. | Medium | Fixed: removed. |
 | The timelock could change the fee, the hold and the expiry of locked requests. | Medium | Fixed in design: D26, RB-31. |
 | The caller of `settle` chose the block and the batch size, so each chunk of one window could get its own price. | High, Medium | Closed by D20, and by fixing the price and totals at a window's first call (RB-20). |
