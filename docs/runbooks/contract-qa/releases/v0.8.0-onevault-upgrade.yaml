@@ -106,7 +106,7 @@ decisions:
   - id: "D4-15"
     question: "The flow test waits two 6 h epochs plus their 1 h settle windows. Shorten the queue's epochs on the upgraded Deploy 4?"
     status: "decided"
-    answer: "Owner, 2026-11-14: yes. P3.85 and P3.86 set epochLength 3600 and settleWindow 600 (the contract floors) through the Safe and timelock, after the executor switch; it applies from the end of the epoch in progress."
+    answer: "Owner, 2026-11-14: yes. P3.85 and P3.86 set epochLength 3600 (the contract floor) and settleWindow 720 (12 slices of 60 s; 600 was refused, FlowParamOutOfBounds(10)) through the Safe and timelock, after the executor switch; it applies from the end of the epoch in progress."
     decidedOn: "2026-11-14"
     ref: "issue 2015"
 recovery: |
@@ -999,11 +999,11 @@ steps:
   # ── Phase 4, verify again: the post-govern state. ──
   - id: "P3.85-upg-epoch-schedule"
     standing: ["4.4"]
-    description: "Owner, 2026-11-14 (D4-15): shorter epochs so the flow test does not wait hours. The Safe schedules queue.setFlowParams with epochLength 3600 (the contract floor, 1 h) and settleWindow 600 (the floor, 10 min), every other field as it reads now (minHold 3600 after P3.81). A new epochLength applies from the end of the epoch in progress (FlowQueue.setFlowParams), so no open request moves. The change is simulated from the timelock first"
+    description: "Owner, 2026-11-14 (D4-15): shorter epochs so the flow test does not wait hours. The Safe schedules queue.setFlowParams with epochLength 3600 (the contract floor, 1 h) and settleWindow 720 (12 slices of 60 s, the shortest window the live slice count allows), every other field as it reads now (minHold 3600 after P3.81). A new epochLength applies from the end of the epoch in progress (FlowQueue.setFlowParams), so no open request moves. The change is simulated from the timelock first"
     host: "control"
     phase: 3
     cmds:
-      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "$(cast sig "setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16))")$(cast to-uint256 3600 | cut -c3-)$(cast to-uint256 600 | cut -c3-)${n:130:2000}" > {runDir}/state/data-upg-epoch && cast call --from {m:fund-timelock.timelock} {m:queue.queue} "$(cat {runDir}/state/data-upg-epoch)" > /dev/null && cast keccak "robotmoney.deploy4-upgrade.epoch.{runDir}" > {runDir}/state/salt-upg-epoch && echo "{m:queue.queue}" > {runDir}/state/target-upg-epoch && echo "the queue accepts epochLength 3600 and settleWindow 600 from the timelock (simulated)"']
+      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "$(cast sig "setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16))")$(cast to-uint256 3600 | cut -c3-)$(cast to-uint256 720 | cut -c3-)${n:130:2000}" > {runDir}/state/data-upg-epoch && cast call --from {m:fund-timelock.timelock} {m:queue.queue} "$(cat {runDir}/state/data-upg-epoch)" > /dev/null && cast keccak "robotmoney.deploy4-upgrade.epoch.{runDir}" > {runDir}/state/salt-upg-epoch && echo "{m:queue.queue}" > {runDir}/state/target-upg-epoch && echo "the queue accepts epochLength 3600 and settleWindow 720 from the timelock (simulated)"']
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-epoch}", "--data", "{state:data-upg-epoch}", "--salt", "{state:salt-upg-epoch}", "--out", "{runDir}/bundles/epoch-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-schedule.json", "--signer", "{ownerSigner2}"]
@@ -1019,7 +1019,7 @@ steps:
     added: "v0.8.0-onevault-upgrade"
   - id: "P3.86-upg-epoch-execute"
     standing: ["4.4"]
-    description: "After the timelock delay the Safe executes the epoch change (the executor is the Safe only since P3.82). The queue then reads epochLength 3600, settleWindow 600 and minHold unchanged, and the run's sheet copy takes the two new values so every later check compares the chain with what it holds; the live Deploy 4 record is not touched"
+    description: "After the timelock delay the Safe executes the epoch change (the executor is the Safe only since P3.82). The queue then reads epochLength 3600, settleWindow 720 and minHold unchanged, and the run's sheet copy takes the two new values so every later check compares the chain with what it holds; the live Deploy 4 record is not touched"
     host: "control"
     phase: 3
     cmds:
@@ -1027,7 +1027,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{signer}"]
-      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "flowParams $n"; test "$(cast to-dec 0x${n:2:64})" = 3600 && test "$(cast to-dec 0x${n:66:64})" = 600 && test "$(cast to-dec 0x${n:130:64})" = "{sheet:FLOW_MIN_HOLD}" && sed -i -e "s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=3600/" -e "s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=600/" {sheet} && grep -E "^FLOW_(EPOCH_LENGTH|SETTLE_WINDOW)=" {sheet}']
+      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "flowParams $n"; test "$(cast to-dec 0x${n:2:64})" = 3600 && test "$(cast to-dec 0x${n:66:64})" = 720 && test "$(cast to-dec 0x${n:130:64})" = "{sheet:FLOW_MIN_HOLD}" && sed -i -e "s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=3600/" -e "s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=720/" {sheet} && grep -E "^FLOW_(EPOCH_LENGTH|SETTLE_WINDOW)=" {sheet}']
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
