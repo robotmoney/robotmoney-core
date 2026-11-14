@@ -16,6 +16,10 @@ import {BasketVault} from "../vaults/BasketVault.sol";
 import {TwapTickMath} from "../lib/TwapTickMath.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 
+interface IUniswapV3PoolSlot0 {
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool);
+}
+
 /// @notice Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redeem estimated in one
 ///         block must execute at exactly that limit in a later block. Estimation is the smallest
 ///         passing limit by bisection, as `eth_estimateGas` does. Requires FORK_RPC_URL.
@@ -196,8 +200,31 @@ contract BasketVaultRedeemGasForkTest is Test {
         return IERC20(token).balanceOf(address(v)) > 0;
     }
 
+    /// @dev The rmPROTO redeem sells wETH and cbBTC with a floor of TWAP less 1 percent. The fork pin moves with every CI run. When a
+    ///      pool trades more than 50 ticks (about 0.5 percent, the floor less the 5 bp fee and margin) off its 30 minute TWAP at the pin,
+    ///      the floor reverts "Too little received" by design, so the redeem cannot execute and these tests say nothing about gas.
+    ///      Observed at Base block 57499667: the wETH/USDC spot sat about 1.4 percent under the TWAP. The test skips then. No bound is changed.
+    function _skipIfLegsOffTwap() internal {
+        address[2] memory pools = [
+            0xd0b53D9277642d899DF5C87A3966A349A798F224, 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef
+        ];
+        for (uint256 i = 0; i < pools.length; i++) {
+            (, int24 spot,,,,,) = IUniswapV3PoolSlot0(pools[i]).slot0();
+            int24 twap = TwapTickMath.meanTick(pools[i], 1800);
+            int256 d = int256(spot) - int256(twap);
+            if (d < 0) d = -d;
+            if (d > 50) {
+                vm.skip(
+                    true,
+                    "market: a rmPROTO leg pool trades more than 50 ticks off its 30 min TWAP at the fork pin, so the 1 percent TWAP floor reverts by design"
+                );
+            }
+        }
+    }
+
     function test_fork_rmproto_redeemEstimateThenIncludeLater() public {
         if (!selected) return;
+        _skipIfLegsOffTwap();
         _estimateThenIncludeLater(_proto(), "rmPROTO");
     }
 
@@ -213,6 +240,7 @@ contract BasketVaultRedeemGasForkTest is Test {
 
     function test_fork_rmproto_redeemEstimateThenIncludeShifted() public {
         if (!selected) return;
+        _skipIfLegsOffTwap();
         _estimateThenIncludeShifted(_proto(), "rmPROTO");
     }
 
@@ -273,6 +301,7 @@ contract BasketVaultRedeemGasForkTest is Test {
     ///         floor now prices one unit less, so the dust redeem executes.
     function test_fork_rmproto_dustRedeemSellsEveryLeg_core1778() public {
         if (!selected) return;
+        _skipIfLegsOffTwap();
         BasketVault v = _proto();
         _fund(v);
 
