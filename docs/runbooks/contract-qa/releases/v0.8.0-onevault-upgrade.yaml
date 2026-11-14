@@ -90,16 +90,19 @@ decisions:
     status: "decided"
     answer: "Owner, 2026-11-14: upgrade the live Deploy 4 in place to v0.8.0 on Base 8453, to test upgradeability and the new features, instead of finishing the v0.7.0 checks; this is the go to broadcast the upgrade."
     decidedOn: "2026-11-14"
+    ref: "issue 2015"
   - id: "D4-13"
     question: "On 8453 deploy-implementation gates its --upgrade-build like a release candidate (publish-contracts/src/release-gate.ts assertUpgradeBuildGate): an annotated tag matching release/vA.B.C-rc.N[-rehearsal] that is on origin/releases-A.B.x. The one-vault line's tags (release/v0.8.0-onevault-rc.N-rehearsal) do not match that pattern and the branch is unmerged, so P1.81 refuses on 8453 (the Twin skips the gate). Which way: (a) waive the releases-A.B.x rule for this rehearsal as D4-6 waived the merge to dev, with a reviewed change that accepts the onevault rc tag at the branch's pushed commit; (b) cut a release branch for the one-vault line; (c) another way the owner names"
     status: "decided"
     answer: "Met, not waived (2026-11-14): branch releases-0.8.x and the annotated tag release/v0.8.0-rc.N-rehearsal on the upgrade build, as release-gate.ts assertUpgradeBuildGate requires."
     decidedOn: "2026-11-14"
+    ref: "issue 2015"
   - id: "D4-14"
     question: "Gate the 8453 upgrade on green CI at the upgrade build (check-sha-green), as every 8453 broadcast does, or waive that one check for this rehearsal?"
     status: "decided"
     answer: "Owner, 2026-11-14: the 0.8.0 upgrade rehearsal does not gate on CI runs. The run sets CI_GATE_WAIVER=D4-14 (publish-contracts/src/release-gate.ts ciGateWaiver): the plan, the implementation deploys and every publish-contracts call skip check-sha-green and log ci.gate_waived; the tag, the canonical remote tag, the release branch and the counts are still enforced. A production sheet refuses the waiver."
     decidedOn: "2026-11-14"
+    ref: "issue 2015"
 recovery: |
   Contracts are not rolled back in place by this file, but a governed upgrade back to the live implementation is possible: the fund and queue proxies stay upgradeable
   (UPGRADE_MODE upgradeable) and the live implementations stay on chain (the run manifest's proxy_upgrades names each from_implementation). Before P1.80 nothing is sent:
