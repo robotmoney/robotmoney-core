@@ -545,7 +545,8 @@ export interface EvidenceOpts {
   systemStages?: Partial<Record<"vaults" | "gateway" | "fund", readonly string[]>>;
 }
 /** Issue 1809: the proxied core set of the stage table at the root of this checkout. */
-export const repoProxyNames = (system: "vaults" | "legacy" = "legacy"): string[] => proxySpecs(scopeTable(loadStageTable(new URL("../../", import.meta.url).pathname), system)).map((s) => s.name); // issue 1892: the vaults system has no gateway proxy; legacy is the combined deployment
+// Deploy 4 (the fund-upgrade flow): a fund-system run manifest's proxy_upgrades name the fund system's proxies (FUND_PROXY_NAMES), never a vaults proxy.
+export const repoProxyNames = (system: "vaults" | "legacy" | "fund" = "legacy"): string[] => proxySpecs(scopeTable(loadStageTable(new URL("../../", import.meta.url).pathname), system)).map((s) => s.name); // issue 1892: the vaults system has no gateway proxy; legacy is the combined deployment
 const kindOf = (o?: EvidenceOpts): DeploymentKind => o?.kind ?? "production";
 /** The kind the evidence claims (absent: production) against the kind it is read as. A mismatch is always a problem, whichever way round. */
 function kindProblems(ev: any, expected: DeploymentKind, bad: (m: string) => void): void {
@@ -1607,7 +1608,7 @@ async function checkGovernedUpgradesMain(values: Record<string, string | boolean
   const { createPublicClient, http } = await import("viem");
   const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
   const floor = await floorArg(values, kind, reader);
-  const problems = [...((Array.isArray(m.proxy_upgrades) && m.proxy_upgrades.length > 0) ? [] : ["the run manifest has no proxy_upgrades entry"]), ...governedUpgradeProblems(ev, floor)];
+  const problems = [...((Array.isArray(m.proxy_upgrades) && m.proxy_upgrades.length > 0) ? [] : ["the run manifest has no proxy_upgrades entry"]), ...governedUpgradeProblems(ev, floor, repoProxyNames(m.system === "fund" ? "fund" : "legacy"))];
   if (reader) problems.push(...(await checkGovernedUpgradesOnChain(ev, reader)));
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (governed upgrades: ${m.proxy_upgrades.length} upgrade(s), ${Array.isArray(m.proxy_upgrades) ? m.proxy_upgrades.filter((x: any) => x.migration).length : 0} with a typed migration${reader ? ", chain read" : ", offline shape only"})`);

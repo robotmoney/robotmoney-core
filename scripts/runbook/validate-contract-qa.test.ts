@@ -932,3 +932,51 @@ test("version bump (owner, 2026-11-13): v0.7.0-onevault stays Deploy 4's record 
   expect(runnableProblems(now, "rehearsal")).toEqual([]);
   expect(runnableProblems(now, "twin")).toEqual([]);
 });
+
+// ─── the in-place upgrade of Deploy 4 (releases/v0.8.0-onevault-upgrade.yaml, flow fund-upgrade, owner 2026-11-14) ───
+const upgradeRelease = () => parseRelease(readFileSync(join(ROOT, QA_DIR, "releases", "v0.8.0-onevault-upgrade.yaml"), "utf8"), "v0.8.0-onevault-upgrade");
+
+test("fund-upgrade: every fund-flow rule holds for the upgrade flow, and refuses the same breaches", () => {
+  const r = upgradeRelease();
+  const sheet = parseSheetText(readFileSync(join(ROOT, FUND_SHEET), "utf8"));
+  expect([...keeperGasProblems(r), ...fundExecuteProblems(r), ...holdWaitProblems(r, sheet), ...qaSupersetProblems(r)]).toEqual([]);
+  // a direct execute on the fund timelock in the upgrade flow: refused, as in the fund flow
+  const direct = { ...r, steps: r.steps.map((s) => (s.id === "P9.82-upg-unpause-execute" ? { ...s, cmds: [...s.cmds, ["bash", "scripts/runbook/cast-send.sh", "{m:fund-timelock.timelock}", "executeBatch(address[],uint256[],bytes[],bytes32,bytes32)", "{cast}"]] } : s)) };
+  expect(fundExecuteProblems(direct).join("\n")).toContain("P9.82-upg-unpause-execute calls the fund timelock's execute directly");
+  // an execute signed by one owner: refused
+  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P3.82-upg-executor-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
+  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P3.82-upg-executor-execute proposes a fund timelock execute");
+  // the claim inside the hold: refused
+  const early = { ...r, steps: r.steps.map((s) => (s.id === "P6.94-upg-claim-deposit" ? { ...s, notBefore: { afterStep: "P6.93-upg-settle-deposit", hours: 0.5 } } : s)) };
+  expect(holdWaitProblems(early, sheet).join("\n")).toContain("P6.94-upg-claim-deposit claims deposit shares 0.5 h after");
+  // the keeper's first send without the hard gas check before it: refused
+  const noGas = { ...r, steps: r.steps.filter((s) => s.id !== "P0.95-upg-keeper-gas") };
+  expect(keeperGasProblems(noGas).join("\n")).toContain("P6.93-upg-settle-deposit sends from the keeper's key");
+  // a vaults manifest or sheet name in a fund-upgrade step: refused, as in the fund flow
+  const vaultsName = { ...r.steps.find((s) => s.id === "P2.84-upg-after-upgrade")!, cmds: [["cast", "call", "{m:router.router}", "x()"]] };
+  expect(commandProblems([vaultsName], model).join("\n")).toContain("unknown placeholder {m:router.router}");
+});
+
+test("fund-upgrade: the order of the governed changes (code, then minHold, then the executor switch last) and the live record read only", () => {
+  const r = upgradeRelease();
+  for (const target of ["twin", "rehearsal"]) {
+    const ids = applicableSteps(r, target).map((s) => s.id);
+    const at = (id: string) => { const i = ids.indexOf(id); expect(i, `${id} on ${target}`).toBeGreaterThanOrEqual(0); return i; };
+    expect(at("P2.82-upg-fund-upgrade-execute")).toBeLessThan(at("P3.80-upg-config-schedule"));
+    expect(at("P2.83-upg-queue-upgrade-execute")).toBeLessThan(at("P3.80-upg-config-schedule"));
+    expect(at("P3.81-upg-params-execute")).toBeLessThan(at("P3.82-upg-executor-execute"));
+    expect(at("P0.85-upg-copy-record")).toBeLessThan(at("P1.80-upg-record-go"));
+    expect(at("P9.83-upg-verify-final")).toBeGreaterThan(at("P9.82-upg-unpause-execute"));
+  }
+  const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
+  // the switch is one batch with the minHold operation as its predecessor
+  expect(j("P3.80-upg-config-schedule")).toContain("--action scheduleBatch --targets {state:target-upg-executor} --datas {state:data-upg-executor} --values 0,0 --salt {state:salt-upg-executor} --predecessor {state:upg-params-op}");
+  // no step writes the live record: it is only read and copied
+  for (const s of r.steps.filter((x) => x.flow === "fund-upgrade")) for (const c of s.cmds) {
+    const t = c.join(" ");
+    expect(/>\s*\{live(Manifest|Evidence)Dir\}|\{live(Manifest|Evidence)Dir\}\/\S*\.tmp|mv \S+ \{live/.test(t), `${s.id} writes the live record`).toBe(false);
+  }
+  expect(runnableProblems(r, "twin")).toEqual([]);
+  expect(runnableProblems(r, "rehearsal")).toEqual([]);
+  expect(runnableProblems(r, "production").join("\n")).toContain("has no step that runs on production");
+});
