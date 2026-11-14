@@ -1,0 +1,41 @@
+---
+title: "ForeignToken"
+---
+
+# ForeignToken
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/Adversarial.t.sol)
+
+**Inherits:** ERC20
+
+<i>
+
+A token the fund does not hold as an asset, for the positive sweep case.
+
+</i>
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor() ERC20("Foreign", "FRN");
+```
+
+<a id="mint-address-uint256"></a>
+
+### mint
+
+```solidity
+function mint(address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+

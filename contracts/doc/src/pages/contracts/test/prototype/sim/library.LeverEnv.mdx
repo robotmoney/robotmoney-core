@@ -1,0 +1,41 @@
+---
+title: "LeverEnv"
+description: "The lever settings of step 3 finish plan §3.2 from the environment, for the timed attack world and the timed-flow sim (added by `levers` 2026-11-12): PROTO_LEVER_LEG_BAND_BPS and PROTO_LEVER_REF_BAND_BPS (FlowParams), PROTO_LEVER_BASKET_CALL_BPS and PROTO_LEVER_LEG_PRICE_MODE (FlowLevers). Set as ADMIN (the timelock holds ADMIN_ROLE; pranked, so no time passes, unlike `timelockExecute`). Unset leaves a value as it is. A run with any of them needs PROTO_SIM_TAG, so it writes to its own output directory."
+---
+
+# LeverEnv
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/AttackSim.t.sol)
+
+**Title:** LeverEnv
+
+The lever settings of step 3 finish plan §3.2 from the environment, for the timed attack world and the
+timed-flow sim (added by `levers` 2026-11-12): PROTO_LEVER_LEG_BAND_BPS and PROTO_LEVER_REF_BAND_BPS
+(FlowParams), PROTO_LEVER_BASKET_CALL_BPS and PROTO_LEVER_LEG_PRICE_MODE (FlowLevers). Set as ADMIN (the
+timelock holds ADMIN_ROLE; pranked, so no time passes, unlike `timelockExecute`). Unset leaves a value as
+it is. A run with any of them needs PROTO_SIM_TAG, so it writes to its own output directory.
+
+## Functions
+
+<a id="applyfromenv-vm-flowqueue-address"></a>
+
+### applyFromEnv
+
+```solidity
+function applyFromEnv(Vm vm, FlowQueue queue, address admin) internal returns (bool changed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vm | `Vm` |  |
+| queue | `FlowQueue` |  |
+| admin | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| changed | `bool` |  |
+

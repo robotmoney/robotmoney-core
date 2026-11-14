@@ -1,0 +1,56 @@
+---
+title: "IFundLedgerSource"
+---
+
+# IFundLedgerSource
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundExclusionLedger.sol)
+
+<i>
+
+The two fund reads the ledger needs: the governed sweep target, and the entitlement balance (E13).
+
+</i>
+
+## Functions
+
+<a id="quarantineaddress"></a>
+
+### quarantineAddress
+
+```solidity
+function quarantineAddress() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="ledgerbalanceof-address"></a>
+
+### ledgerBalanceOf
+
+<i>
+
+Wallet shares plus queued shares of `account`; 0 for the FlowQueue itself (RobotMoneyFund).
+
+</i>
+
+```solidity
+function ledgerBalanceOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

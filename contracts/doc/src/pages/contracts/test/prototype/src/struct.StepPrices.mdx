@@ -1,0 +1,33 @@
+---
+title: "StepPrices"
+---
+
+# StepPrices
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+<i>
+
+Prices a rebalance step reads for its feed checks, per fund asset index (`StepFeedLib.check`). Both are
+USDC units per whole token (`unit` raw units), rounded DOWN; 0 for a lending or inactive asset.
+`feed`: the Chainlink USD price converted to USDC with the USDC / USD feed. `twap`: the asset's own TWAP over
+its `twapWindow`, through its swap adapter (the TWAP the fund values NAV with and the Rebalancer sizes with).
+
+</i>
+
+```solidity
+struct StepPrices {
+    uint256[] feed;
+    uint256[] twap;
+    uint256[] unit;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feed | `uint256[]` |  |
+| twap | `uint256[]` |  |
+| unit | `uint256[]` |  |
+

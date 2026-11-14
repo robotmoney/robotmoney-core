@@ -33,10 +33,28 @@ export interface TableStage {
    */
   upgradeTimelockEnv?: string;
 }
-export type SystemName = "vaults" | "gateway";
-export const SYSTEM_NAMES: readonly SystemName[] = ["vaults", "gateway"];
+export type SystemName = "vaults" | "gateway" | "fund";
+export const SYSTEM_NAMES: readonly SystemName[] = ["vaults", "gateway", "fund"];
 /** One system of the table (issue 1892): its stages in run order and the systems it reads (the gateway reads the vaults system's manifests, never the reverse). */
-export interface TableSystem { description: string; stages: string[]; requires: SystemName[] }
+export interface TableSystem {
+  description: string; stages: string[]; requires: SystemName[];
+  /**
+   * Deploy 4: the stage that deploys THIS system's upgrade authority, when the system has its own core-scheme timelock (the fund system: fund-timelock, the same
+   * ProposerFloorTimelock CREATE2 scheme predicted from its own Safe). Absent: the system's proxies are governed by `upgradeAuthority.stage` (the vaults system) or name an
+   * explicit timelock (the gateway system).
+   */
+  upgradeAuthorityStage?: string;
+  /**
+   * The one EXECUTOR_ROLE holder of the system's core-scheme timelock (part of its CREATE2 init code, so of the address every proxy names). Absent or "open": address(0),
+   * anyone executes a ready operation (ADR-0004, the vaults system). "safe": the Safe alone (the fund system, owner decision D4-10 of 2026-11-13; UpgradeAuthority
+   * `_timelockExecutor`, contracts/script/FundTimelockPolicy.sol).
+   */
+  timelockExecutor?: TimelockExecutor;
+}
+/** Who executes a ready operation on a core-scheme timelock: anyone (address(0)) or the Safe alone. */
+export type TimelockExecutor = "open" | "safe";
+/** The timelock executor of `system` (default open). */
+export const timelockExecutorOf = (t: Pick<StageTable, "systems">, system: string | undefined): TimelockExecutor => (system !== undefined ? t.systems?.[system as SystemName]?.timelockExecutor : undefined) ?? "open";
 /**
  * One proxied core contract a stage deploys (issue 1809): the manifest field of the proxy and of its implementation, the build artifact of the implementation and the
  * committed storage-layout snapshot (contracts/test/fixtures/storage-layout, gated by scripts/ci/check-core-storage-layout.sh) whose bytes identify its layout.
@@ -191,6 +209,9 @@ function systemProblems(t: StageTable, where: string): void {
     const listed = t.stages.filter((s) => s.system === name).map((s) => s.name);
     if (JSON.stringify(listed) !== JSON.stringify(def!.stages)) bad(`${where}: system ${name} lists stages [${def!.stages.join(", ")}] but the table's stages of that system are [${listed.join(", ")}], in table order`);
     if (!Array.isArray(def!.requires) || def!.requires.some((r) => !(r in sys) || r === name)) bad(`${where}: system ${name} requires an unknown system or itself`);
+    if (def!.upgradeAuthorityStage !== undefined && !def!.stages.includes(def!.upgradeAuthorityStage)) bad(`${where}: system ${name} names upgradeAuthorityStage ${def!.upgradeAuthorityStage}, which is not one of its stages`);
+    if (def!.timelockExecutor !== undefined && def!.timelockExecutor !== "open" && def!.timelockExecutor !== "safe") bad(`${where}: system ${name} timelockExecutor must be open or safe`);
+    if (def!.timelockExecutor === "safe" && def!.upgradeAuthorityStage === undefined) bad(`${where}: system ${name} sets timelockExecutor safe but deploys no timelock of its own (upgradeAuthorityStage)`);
   }
   for (const s of t.stages) if (s.system === undefined || !(s.system in sys)) bad(`${where}: stage ${s.name} names ${s.system === undefined ? "no system" : `undeclared system '${s.system}'`}`);
   if (sys.vaults && sys.vaults.requires.length > 0) bad(`${where}: the vaults system requires nothing: no vaults-system stage depends on the gateway (SYS-1)`);
@@ -213,6 +234,11 @@ function upgradeProblems(t: StageTable): void {
   if (typeof u.layoutPins !== "string" || !LAYOUT.test(u.layoutPins)) bad("upgradeAuthority layoutPins must be a file under contracts/test/fixtures/storage-layout");
   const at = t.stages.findIndex((s) => s.name === u.stage);
   if (at < 0) bad(`upgradeAuthority names unknown stage '${u.stage}'`);
+  // Deploy 4: a system with its own core-scheme timelock (systems.<name>.upgradeAuthorityStage) deploys it LAST of its own stages, the same rule as the vaults timelock.
+  const authorityAt = (s: TableStage): { stage: string; at: number } => {
+    const own = s.system !== undefined ? t.systems?.[s.system]?.upgradeAuthorityStage : undefined;
+    return own === undefined ? { stage: u.stage, at } : { stage: own, at: t.stages.findIndex((x) => x.name === own) };
+  };
   for (const s of t.stages) {
     const reads = s.requiredEnv.includes(u.modeEnv);
     if (reads !== (s.proxies !== undefined && s.proxies.length > 0)) bad(`stage ${s.name}: ${reads ? `reads ${u.modeEnv} but lists no proxies` : `lists proxies but does not read ${u.modeEnv}`}`);
@@ -224,7 +250,8 @@ function upgradeProblems(t: StageTable): void {
       if (s.system === "vaults") bad(`stage ${s.name} is a vaults-system stage: its proxies are governed by the core timelock, not an explicit one`);
     } else {
       for (const i of u.inputs) if (!s.requiredEnv.includes(i)) bad(`stage ${s.name} deploys a proxy but does not read ${i}`);
-      if (t.stages.indexOf(s) > at) bad(`stage ${s.name} deploys a proxy after the ${u.stage} stage: the upgrade authority is deployed last`);
+      const a = authorityAt(s);
+      if (t.stages.indexOf(s) > a.at) bad(`stage ${s.name} deploys a proxy after the ${a.stage} stage: the upgrade authority is deployed last`);
     }
     for (const p of s.proxies) {
       if (!p || typeof p.field !== "string" || typeof p.implementationField !== "string" || typeof p.contract !== "string" || p.field === "" || p.implementationField === "" || p.contract === "") bad(`stage ${s.name}: a proxy needs field, implementationField and contract`);
@@ -295,7 +322,7 @@ export function scopeTable(t: StageTable, system: SystemName | "legacy"): StageT
   if (system === "legacy") {
     // the combined deployment (deploy-2) read with a table that declares systems: the vaults stages with the gateway stage back in its combined place (after the router), and never
     // the gateway handover stage the combined deploy did not have
-    const rest = t.stages.filter((s) => s.system !== "gateway");
+    const rest = t.stages.filter((s) => s.system !== "gateway" && s.system !== "fund"); // Deploy 4: the fund system was never part of the combined deployment
     const gw = t.stages.find((s) => s.name === "gateway");
     if (!gw) return { ...t, stages: rest };
     const at = rest.findIndex((s) => s.name === "router");

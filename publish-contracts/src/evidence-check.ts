@@ -18,7 +18,8 @@
 // Recorded-fixture mode (--chain-fixture FILE, with --frozen) runs the same chain checks over a fixture of what the chain returned, recorded at the end
 // of the run with --rpc ... --record-chain-fixture OUT. CI uses it: acceptance criteria 2 (nonce and per-stage counts) and 3 (receipts, 48 hour gap)
 // are checked with no RPC and no network. No secret is read or needed.
-import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, toBytes, type Hex } from "viem";
+import { FUND_EVIDENCE_PROXIES, checkFundEvidence, fundStagesIn } from "./evidence-fund.ts";
+import { decodeEventLog, encodeFunctionData, keccak256, parseAbi, toBytes, toHex, type Address, type Hex } from "viem";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -541,7 +542,7 @@ export interface EvidenceOpts {
   /** Issue 1833 test seam: the per-vault rule rows. Absent: this checkout's stage table (vault-rules.ts). */
   vaultRules?: readonly (TableVault & VaultRules)[];
   /** Issue 1892: the stage names of each system, from the table. Absent: the gateway check uses its default list. */
-  systemStages?: Partial<Record<"vaults" | "gateway", readonly string[]>>;
+  systemStages?: Partial<Record<"vaults" | "gateway" | "fund", readonly string[]>>;
 }
 /** Issue 1809: the proxied core set of the stage table at the root of this checkout. */
 export const repoProxyNames = (system: "vaults" | "legacy" = "legacy"): string[] => proxySpecs(scopeTable(loadStageTable(new URL("../../", import.meta.url).pathname), system)).map((s) => s.name); // issue 1892: the vaults system has no gateway proxy; legacy is the combined deployment
@@ -632,7 +633,10 @@ export function checkEvidence(ev: any, frozenCounts?: Record<string, number>, ad
   const kind = kindOf(opts);
   // Issue 1892: a gateway system evidence is checked on its own; a vaults evidence that names its system carries none of the gateway system's stages. Absent system: the combined legacy evidence.
   if (ev?.system === "gateway") return checkGatewayEvidence(ev, frozenCounts, { kind, stages: opts?.systemStages?.gateway });
-  if (ev?.system !== undefined && ev.system !== "vaults") return [`system '${String(ev.system)}' is not vaults or gateway`];
+  // Deploy 4: a fund system evidence is checked on its own, and no other evidence carries a fund stage.
+  if (ev?.system === "fund") return checkFundEvidence(ev, frozenCounts, { kind, stages: opts?.systemStages?.fund });
+  for (const s of fundStagesIn(ev)) bad(`stage ${s} belongs to the fund system: only a fund evidence (system "fund") carries it`);
+  if (ev?.system !== undefined && ev.system !== "vaults") return [`system '${String(ev.system)}' is not vaults, gateway or fund`];
   if (ev?.system === "vaults") {
     for (const s of Array.isArray(ev?.stages) ? ev.stages : []) if (GATEWAY_EVIDENCE_STAGES.includes(s?.stage)) bad(`stage ${s.stage} belongs to the gateway system: a vaults evidence has no gateway stage`);
     if (ev?.gateway !== undefined) bad("'gateway' belongs to the gateway system's evidence: a vaults evidence has no gateway");
@@ -800,6 +804,33 @@ export async function checkEvidenceOnChain(ev: any, chain: ChainReader, frozenCo
       const tl = await chain.readContract({ address: ev.gateway?.address, abi: parseAbi(["function upgradeTimelock() view returns (address)"]), functionName: "upgradeTimelock" });
       if (lc(String(tl)) !== lc(String(ev.gateway?.upgrade_timelock))) bad(`gateway upgradeTimelock() on chain is ${String(tl)}, the evidence records ${String(ev.gateway?.upgrade_timelock)}`);
     } catch (e) { bad(`gateway upgradeTimelock() is not readable on chain (${(e as Error).message})`); }
+    return p;
+  }
+  if (ev?.system === "fund") {
+    // Deploy 4: the fund system's evidence is read on chain on its own: its stages' receipts, each proxy's upgrade authority, and the timelock's delay and proposer.
+    // The deployer nonce is the recorded one at the handover (checked offline): the runbook's QA rounds send from the deployer after it.
+    for (const s of Array.isArray(ev.stages) ? ev.stages : []) for (const [i, h] of (s.tx_hashes ?? []).entries()) {
+      try { const rc = await chain.getTransactionReceipt({ hash: h as Hex }); if (rc.status !== "success") bad(`stage ${s.stage} tx ${i}: receipt on chain is ${rc.status}`); } catch (e) { bad(`stage ${s.stage} tx ${i}: receipt not readable on chain (${(e as Error).message})`); }
+    }
+    const got = await chain.getTransactionCount({ address: ev.deployer });
+    if (Number.isInteger(ev.deployer_nonce_at_handover) && got < ev.deployer_nonce_at_handover) bad(`deployer nonce on chain is ${got}, below the recorded nonce at the handover ${ev.deployer_nonce_at_handover}`);
+    const read = async (what: string, address: unknown, sig: string, fn: string, args: unknown[] = []): Promise<unknown> => {
+      try { return await chain.readContract({ address: address as Address, abi: parseAbi([sig]), functionName: fn, args } as never); } catch (e) { bad(`${what} is not readable on chain (${(e as Error).message})`); return undefined; }
+    };
+    for (const k of FUND_EVIDENCE_PROXIES) {
+      const tl = await read(`${k} upgradeTimelock()`, ev.proxies?.[k]?.address, "function upgradeTimelock() view returns (address)", "upgradeTimelock");
+      if (tl !== undefined && lc(String(tl)) !== lc(String(ev.timelock?.address))) bad(`${k} upgradeTimelock() on chain is ${String(tl)}, the fund system's timelock is ${String(ev.timelock?.address)}`);
+    }
+    const d = await read("timelock getMinDelay()", ev.timelock?.address, "function getMinDelay() view returns (uint256)", "getMinDelay");
+    if (d !== undefined) delayAgrees("fund timelock getMinDelay()", d as bigint);
+    const proposer = await read("timelock hasRole(PROPOSER_ROLE, safe)", ev.timelock?.address, "function hasRole(bytes32, address) view returns (bool)", "hasRole", [keccak256(toHex("PROPOSER_ROLE")), ev.safe?.address]);
+    if (proposer === false) bad("the fund system's Safe does not hold the timelock's PROPOSER_ROLE on chain");
+    // Owner decision D4-10 (2026-11-13): the Safe alone executes on the fund timelock (the vaults system keeps ADR-0004's open executor).
+    const EXEC = keccak256(toHex("EXECUTOR_ROLE"));
+    const safeExec = await read("timelock hasRole(EXECUTOR_ROLE, safe)", ev.timelock?.address, "function hasRole(bytes32, address) view returns (bool)", "hasRole", [EXEC, ev.safe?.address]);
+    if (safeExec === false) bad("the fund system's Safe does not hold the timelock's EXECUTOR_ROLE on chain (decision D4-10: Safe-only executor)");
+    const openExec = await read("timelock hasRole(EXECUTOR_ROLE, address(0))", ev.timelock?.address, "function hasRole(bytes32, address) view returns (bool)", "hasRole", [EXEC, "0x0000000000000000000000000000000000000000"]);
+    if (openExec === true) bad("the fund timelock's executor is open (address(0) holds EXECUTOR_ROLE); decision D4-10 makes the Safe its only executor");
     return p;
   }
   const want = finalDeployerNonce(effectiveForEvidence(ev, frozenCounts), startNonceOf(ev, kind, bad)) + redeployTxs(ev);

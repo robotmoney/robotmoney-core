@@ -1,0 +1,63 @@
+---
+title: "ReviewFixesDepthTest"
+description: "R-F2: a few seconds of near-zero in-range liquidity must not drive the depth (and every cap read from it) to about 0 for a whole window; thinning held through a full slice still lowers it (the read stays conservative)."
+---
+
+# ReviewFixesDepthTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/ReviewFixes.t.sol)
+
+**Inherits:** Test
+
+**Title:** ReviewFixesDepthTest
+
+R-F2: a few seconds of near-zero in-range liquidity must not drive the depth (and every cap read from it)
+to about 0 for a whole window; thinning held through a full slice still lowers it (the read stays
+conservative).
+
+## Constants
+
+### TOKEN
+
+```solidity
+address internal constant TOKEN = address(0xBEEF);
+```
+
+### USDC_
+
+```solidity
+address internal constant USDC_ = address(0xCAFE);
+```
+
+### L
+
+```solidity
+uint256 internal constant L = 1e18;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_rf2_twosecondsofthinliquiditydonotzerothedepth"></a>
+
+### test_RF2_twoSecondsOfThinLiquidityDoNotZeroTheDepth
+
+```solidity
+function test_RF2_twoSecondsOfThinLiquidityDoNotZeroTheDepth() public;
+```
+
+<a id="test_rf2_thinningheldthroughaslicestilllowersthedepth"></a>
+
+### test_RF2_thinningHeldThroughASliceStillLowersTheDepth
+
+```solidity
+function test_RF2_thinningHeldThroughASliceStillLowersTheDepth() public;
+```
+

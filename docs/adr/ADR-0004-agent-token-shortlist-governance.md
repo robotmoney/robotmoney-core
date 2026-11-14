@@ -1,6 +1,6 @@
 # ADR-0004: Agent-token shortlist governance mechanism (production, router-eligible)
 
-- **Status:** Accepted (amended 2026-10-22, no vault uses it while rmAGENT is retired, ADR-0017; amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-canceller-executor-and-what-the-delay-split-enforces))
+- **Status:** Accepted (addendum 2026-11-13: the fund system's timelock executes through its Safe only, D4-10; amended 2026-10-22, no vault uses it while rmAGENT is retired, ADR-0017; amended 2026-10-05 — see [Amendment — 2026-10-05](#amendment--2026-10-05-canceller-executor-and-what-the-delay-split-enforces))
 - **Date:** 2026-06-03 (amended 2026-10-05)
 - **Deciders:** Product owner
 - **Related:**
@@ -215,7 +215,8 @@ There is no voting by token holders or anyone else. The Safe multisig, through t
   deployed `TimelockController` with no new contracts.
 - All shortlist changes are observable on-chain before execution, satisfying
   the transparent-performance requirement (`docs/prd.md` §2).
-- The veto path is cheap (single Safe signer can cancel) and accessible
+- The veto path needs the Safe's threshold (at least 2 signatures) to
+  cancel, per the amendment of 2026-10-05 above, and is accessible
   (any observer can raise a challenge).
 - Resolves gap-report Appendix C blocking item. AgentTokenVault (rmAGENT)
   may proceed to router-eligibility once the TWAP oracle, rebalancing model,
@@ -262,3 +263,7 @@ The owner parked RM out of rmAGENT until its market is deep enough ([ADR-0015](A
 ## Amendment — 2026-10-22 (no vault uses this mechanism, ADR-0017)
 
 This ADR stays Accepted for any future agent-token vault. No vault uses the shortlist governance while rmAGENT is retired ([ADR-0017](ADR-0017-rmagent-retired-router-uses-three-vaults.md)). The live v0.5.0 rmAGENT keeps its shortlist and its governed `addAsset` and `removeAsset` path until the retire batch executes, and `removeAsset` stays an owner decision after it.
+
+## Addendum — 2026-11-13 (the fund system's timelock executes through its Safe only)
+
+The owner decided on 2026-11-13 (decision D4-10 of `docs/runbooks/contract-qa/releases/v0.7.0-onevault.yaml`) that the one-vault fund system ("Deploy 4", `docs/technical/one-vault-rebalancer-proposal.md` §5.6 and §10) departs from this ADR's open executor. The fund-system timelock's only `EXECUTOR_ROLE` holder is its Safe, so executing a ready operation takes the Safe's owner signatures as well as scheduling it. In code, `contracts/script/FundTimelockPolicy.sol` sets the executor every fund-system stage predicts, the stage table records `systems.fund.timelockExecutor: safe`, and the fund verifier and evidence check refuse an open executor. The vaults system keeps the open executor of the 2026-10-05 amendment above, unchanged.

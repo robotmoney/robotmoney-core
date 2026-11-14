@@ -1,0 +1,39 @@
+---
+title: "FlowQueueInit"
+description: "`FlowQueue.initialize` parameters."
+---
+
+# FlowQueueInit
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+`FlowQueue.initialize` parameters.
+
+```solidity
+struct FlowQueueInit {
+    address fund;
+    address usdc;
+    address admin;
+    address emergency;
+    address keeper;
+    address usdcFeed;
+    uint32 usdcFeedMaxAge;
+    address sequencerFeed;
+    FlowParams params;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` | The RobotMoneyFund (the share token, ERC-7575 `share()`). |
+| usdc | `address` | The fund's asset (ERC-7575 `asset()`). |
+| admin | `address` | Receives ADMIN_ROLE (deployer, then the timelock). |
+| emergency | `address` | Receives EMERGENCY_ROLE. |
+| keeper | `address` | Receives KEEPER_ROLE (address(0): none, grace path only). |
+| usdcFeed | `address` | Chainlink USDC / USD (check 2 peg, and USD → USDC conversion of feed prices). |
+| usdcFeedMaxAge | `uint32` | Its maximum age in seconds. |
+| sequencerFeed | `address` | Chainlink L2 sequencer uptime feed (check 2). |
+| params | `FlowParams` | Initial FlowParams, inside the hard bounds. |
+

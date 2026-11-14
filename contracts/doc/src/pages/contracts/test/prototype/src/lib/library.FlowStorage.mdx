@@ -1,0 +1,44 @@
+---
+title: "FlowStorage"
+description: "ERC-7201 namespaced location of `FlowState` (`robotmoney.storage.FlowQueue`)."
+---
+
+# FlowStorage
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+**Title:** FlowStorage
+
+ERC-7201 namespaced location of `FlowState` (`robotmoney.storage.FlowQueue`).
+
+## Constants
+
+### SLOT
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("robotmoney.storage.FlowQueue")) - 1)) & ~bytes32(uint256(0xff))
+
+</i>
+
+```solidity
+bytes32 internal constant SLOT =
+        0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
+```
+
+## Functions
+
+<a id="layout"></a>
+
+### layout
+
+```solidity
+function layout() internal pure returns (FlowState storage $);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| $ | `FlowState` |  |
+

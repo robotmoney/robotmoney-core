@@ -1,0 +1,88 @@
+{
+  "description": "Expected outcome of scripts/prototype/check-receipt-assets.ts for every receipt fixture in this directory, against asset-map.json on chain 8453. scripts/prototype/check-receipt-assets.test.ts reads this file.",
+  "chain_id": 8453,
+  "valid": {
+    "file": "consensus-receipt-1.1.valid.json",
+    "asset_bps_by_fund_index": [
+      2000,
+      1500,
+      2500,
+      1200,
+      1300,
+      1500
+    ],
+    "note": "Built from tests/fixtures/consensus-receipt.valid.json. The agent bucket is 0 because the fund has no agent asset. So the two analyst submissions carry new vectors and are re-signed. The signing keys are TEST KEYS: each Ed25519 seed is sha256(\"robotmoney one-vault experiment test key <member_id>\"). Never use them for anything else. The submission mean is 0, 0.60, 0.25, 0.15, so weights are 0, 6000, 2500, 1500 under the largest-remainder rule. The assets are the §4.1 example."
+  },
+  "refuse": [
+    {
+      "file": "consensus-receipt-1.1.refuse.bucket-sum-mismatch.json",
+      "reason": "BUCKET_SUM_MISMATCH",
+      "fault": "100 bps moved from morpho-usdc (conservative_defi_yield) to weth (protocol_tokens). Assets still sum to 10000. The labelled sums are 5900 and 2600 against bucket weights 6000 and 2500."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.asset-sum-not-10000.json",
+      "reason": "ASSET_SUM_INVALID",
+      "fault": "morpho-usdc is 2400, so the assets sum to 9900."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.unknown-asset-key.json",
+      "reason": "UNKNOWN_ASSET",
+      "fault": "despxa is renamed paxg. The asset map has no paxg row for chain 8453."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.duplicate-asset.json",
+      "reason": "DUPLICATE_ASSET",
+      "fault": "The cbbtc entry is replaced by a second weth entry."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.unknown-bucket-label.json",
+      "reason": "UNKNOWN_BUCKET",
+      "fault": "despxa is labelled hard_assets, which is not a receipt bucket."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.agent-bucket-without-assets.json",
+      "reason": "BUCKET_HAS_NO_ASSETS",
+      "fault": "weights are the 1.0 valid fixture's (agent_tokens 1250). No asset is labelled agent_tokens."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.asset-not-listed.json",
+      "reason": "ASSET_NOT_LISTED",
+      "fault": "despxa is dropped and its 1500 bps moved to cbbtc relabelled real_world_assets. Every active asset must be listed, so an omission never sells an asset."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.lending-cap-exceeded.json",
+      "reason": "LENDING_CAP_EXCEEDED",
+      "fault": "aave-v3-usdc is 6100, above its 6000 capBps. Bucket and asset sums still hold."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.weights-missing.json",
+      "reason": "WEIGHTS_MISSING",
+      "fault": "weights is removed. assets depends on weights, because the bucket audit reads both."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.schema-version-1.0.json",
+      "reason": "SCHEMA_VERSION_UNSUPPORTED",
+      "fault": "schema_version is 1.0. Schema 1.0 has no assets field."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.assets-missing.json",
+      "reason": "ASSETS_MISSING",
+      "fault": "assets is removed. A 1.1 receipt without assets is schema-valid but gives a govern row nothing to submit."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.label-mismatch.json",
+      "reason": "LABEL_MISMATCH",
+      "fault": "compound-v3-usdc is labelled real_world_assets and despxa is labelled conservative_defi_yield. Both carry 1500 bps, so the labelled sums still match the bucket weights. The asset map fixes each asset's bucket, so the relabel is refused."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.asset-order.json",
+      "reason": "ASSET_ORDER_INVALID",
+      "fault": "The assets list is reversed. Entry order is part of the canonical bytes, so entries must follow the asset map's canonical_asset_order."
+    },
+    {
+      "file": "consensus-receipt-1.1.refuse.field-order.json",
+      "reason": "FIELD_ORDER_INVALID",
+      "fault": "assets comes before weights. Top-level keys must follow schema order, so assets is the last field."
+    }
+  ]
+}

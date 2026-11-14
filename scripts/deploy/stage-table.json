@@ -26,6 +26,22 @@
       "requires": [
         "vaults"
       ]
+    },
+    "fund": {
+      "description": "Deploy 4 (owner exception 2026-11-12): the one-vault prototype (contracts/test/prototype/src) as a rehearsal on 8453. RobotMoneyFund, its rebalancer, its governance, its flow queue and its own receipt register, Safe and timelock. It reads nothing of the vaults or gateway systems.",
+      "stages": [
+        "fund-libs",
+        "fund-receipt",
+        "fund",
+        "rebalancer",
+        "fund-governance",
+        "queue",
+        "fund-wiring",
+        "fund-timelock"
+      ],
+      "requires": [],
+      "upgradeAuthorityStage": "fund-timelock",
+      "timelockExecutor": "safe"
     }
   },
   "stages": [
@@ -437,6 +453,309 @@
       ],
       "libraryNotes": "The handover links nothing. It names tick_math so its forge compile uses the same --libraries as every other stage: the last compile of a run leaves out/ in that state, which the vaults verifier compares the deployed libraries with (issue 1892).",
       "vault": null
+    },
+    {
+      "name": "fund-libs",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployFundLibs.s.sol:DeployFundLibs",
+      "requiredEnv": [
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/fund-libs.json",
+      "libraries": [],
+      "vault": null,
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "BasketSwaps",
+        "FlowCheckLib",
+        "FlowClaimLib",
+        "FlowSettleLib",
+        "FundAdminLib",
+        "FundFlowsLib",
+        "FundPositionLib",
+        "FundStepLib",
+        "FundValuationLib",
+        "GovernedUpgrade",
+        "StepFeedLib",
+        "TickMath",
+        "TwapTickMath"
+      ],
+      "manifestNotes": "Deploy 4 (owner exception 2026-11-12): the fund system's first stage. Every library the one-vault contracts link, through the CREATE2 factory forge uses for script libraries (salt 0), TickMath included: the fund system links no --libraries address. A library already at its address is adopted (issue 1721), never redeployed."
+    },
+    {
+      "name": "fund-receipt",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployFundReceipt.s.sol:DeployFundReceipt",
+      "requiredEnv": [
+        "RECEIPT_ADMIN_ADDRESS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/fund-receipt.json",
+      "libraries": [],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "consensus_receipt",
+          "implementationField": "consensus_receipt_implementation",
+          "contract": "ConsensusRecommendationReceipt",
+          "layout": "contracts/test/fixtures/storage-layout/ConsensusRecommendationReceipt.json"
+        }
+      ],
+      "manifestNotes": "The fund system's own receipt register: the vaults system's receipt script, unchanged, through a script file of its own (DeployFundReceipt.s.sol inherits it) so this stage writes its own manifest and broadcast record. The deployer is RECEIPT_ADMIN_ADDRESS until fund-timelock hands ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the fund-system timelock."
+    },
+    {
+      "name": "fund",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployFund.s.sol:DeployFund",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "EMERGENCY_ADDRESS",
+        "FEE_RECIPIENT",
+        "SWAP_ROUTER",
+        "FUND_TVL_CAP",
+        "FUND_PER_DEPOSIT_CAP",
+        "FUND_EXIT_FEE_BPS",
+        "FUND_MAX_SLIPPAGE_BPS",
+        "FUND_NAV_DEVIATION_BPS",
+        "FUND_LENDING_CAP_BPS",
+        "FUND_MIN_SEED_USDC",
+        "SEED_DEPOSIT_USDC",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/fund.json",
+      "libraries": [],
+      "vault": null,
+      "create2Libraries": [
+        "BasketAssetConfigGuard",
+        "BasketSwaps",
+        "FundAdminLib",
+        "FundFlowsLib",
+        "FundPositionLib",
+        "FundStepLib",
+        "FundValuationLib",
+        "GovernedUpgrade",
+        "StepFeedLib",
+        "TickMath",
+        "TwapTickMath"
+      ],
+      "proxies": [
+        {
+          "field": "fund",
+          "implementationField": "fund_implementation",
+          "contract": "RobotMoneyFund",
+          "layout": "contracts/test/fixtures/storage-layout/RobotMoneyFund.json"
+        }
+      ],
+      "manifestNotes": "RobotMoneyFund behind its proxy, its four adapter copies, the adapter code hash allowlist, the five assets of proposal 4.5 with the real Base feeds and pools (PrototypeHarness.sol), setMinSeedUsdc(FUND_MIN_SEED_USDC) and the one seed (SEED_DEPOSIT_USDC, minted to the fund itself, E14). EMERGENCY_ROLE is the emergency key's from initialization."
+    },
+    {
+      "name": "rebalancer",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployRebalancer.s.sol:DeployRebalancer",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "FUND_ADDRESS",
+        "KEEPER_ADDRESS",
+        "REBALANCER_KEEPER_GRACE",
+        "REBALANCER_MAX_OVERRUN",
+        "REBALANCER_MAX_STEP_COST_BPS",
+        "REBALANCER_TOLERANCE_BPS",
+        "REBALANCER_MIN_STEP_USDC",
+        "REBALANCER_LENDING_MAX_STEP_USDC",
+        "REBALANCER_MAJOR_MAX_STEP_USDC",
+        "REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/rebalancer.json",
+      "libraries": [],
+      "vault": null,
+      "create2Libraries": [
+        "FundValuationLib",
+        "GovernedUpgrade",
+        "StepFeedLib",
+        "TickMath",
+        "TwapTickMath"
+      ],
+      "proxies": [
+        {
+          "field": "rebalancer",
+          "implementationField": "rebalancer_implementation",
+          "contract": "Rebalancer",
+          "layout": "contracts/test/fixtures/storage-layout/Rebalancer.json"
+        }
+      ],
+      "manifestNotes": "Rebalancer behind its proxy with the step parameters of proposal 5.6 and the keeper's KEEPER_ROLE, then the five per-asset step parameters."
+    },
+    {
+      "name": "fund-governance",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployRebalanceGovernance.s.sol:DeployRebalanceGovernance",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "FUND_ADDRESS",
+        "FUND_RECEIPT_ADDRESS",
+        "PLAN_DURATION",
+        "PLAN_COST_BUDGET_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/fund-governance.json",
+      "libraries": [],
+      "vault": null,
+      "create2Libraries": [
+        "GovernedUpgrade"
+      ],
+      "proxies": [
+        {
+          "field": "governance",
+          "implementationField": "governance_implementation",
+          "contract": "RebalanceGovernance",
+          "layout": "contracts/test/fixtures/storage-layout/RebalanceGovernance.json"
+        }
+      ],
+      "manifestNotes": "RebalanceGovernance behind its proxy: the fund's target setter. It applies a receipt of the fund system's own register and opens a plan in one call."
+    },
+    {
+      "name": "queue",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployFlowQueue.s.sol:DeployFlowQueue",
+      "requiredEnv": [
+        "ADMIN_ADDRESS",
+        "FUND_ADDRESS",
+        "EMERGENCY_ADDRESS",
+        "KEEPER_ADDRESS",
+        "FLOW_EPOCH_LENGTH",
+        "FLOW_SETTLE_WINDOW",
+        "FLOW_MIN_HOLD",
+        "FLOW_KEEPER_GRACE",
+        "FLOW_MAX_EPOCH_FLOW_BPS",
+        "FLOW_EPOCH_FLOOR_USDC",
+        "FLOW_MAX_SHARE_PRICE_MOVE_BPS",
+        "FLOW_MAX_ROLL",
+        "FLOW_MIN_REQUEST_USDC",
+        "FLOW_MAX_FREEZE",
+        "FLOW_SLICES",
+        "FLOW_QUORUM",
+        "FLOW_DISPERSION_BPS",
+        "FLOW_REF_BAND_BPS",
+        "FLOW_LEG_BAND_BPS",
+        "FLOW_SEQUENCER_GRACE",
+        "FLOW_USDC_PEG_BAND_BPS",
+        "FLOW_MAX_LEND_RATE_GROWTH_BPS",
+        "SAFE_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "UPGRADE_MODE",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/queue.json",
+      "libraries": [],
+      "vault": null,
+      "create2Libraries": [
+        "FlowCheckLib",
+        "FlowClaimLib",
+        "FlowSettleLib",
+        "FundValuationLib",
+        "GovernedUpgrade",
+        "TickMath",
+        "TwapTickMath"
+      ],
+      "proxies": [
+        {
+          "field": "queue",
+          "implementationField": "queue_implementation",
+          "contract": "FlowQueue",
+          "layout": "contracts/test/fixtures/storage-layout/FlowQueue.json"
+        }
+      ],
+      "manifestNotes": "FlowQueue behind its proxy with every FlowParams field from the sheet (proposal 5.9.5), the USDC / USD and sequencer feeds, the emergency key and the keeper."
+    },
+    {
+      "name": "fund-wiring",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployFundWiring.s.sol:DeployFundWiring",
+      "requiredEnv": [
+        "FUND_ADDRESS",
+        "REBALANCER_ADDRESS",
+        "FUND_GOVERNANCE_ADDRESS",
+        "QUEUE_ADDRESS",
+        "FUND_RECEIPT_ADDRESS",
+        "KEEPER_ADDRESS",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/fund-wiring.json",
+      "libraries": [],
+      "vault": null,
+      "manifestNotes": "The deployer binds the fund's GOVERNANCE_ROLE and REBALANCER_ROLE (bindRebalanceRoles) and FLOW_ROLE (bindFlowRole), each once, and grants the governance contract the receipt register's RECEIPT_RELEASER_ROLE. It reads back the keeper's KEEPER_ROLE on the queue and the rebalancer."
+    },
+    {
+      "name": "fund-timelock",
+      "system": "fund",
+      "kind": "forge",
+      "script": "contracts/script/DeployFundTimelock.s.sol:DeployFundTimelock",
+      "requiredEnv": [
+        "FUND_ADDRESS",
+        "REBALANCER_ADDRESS",
+        "FUND_GOVERNANCE_ADDRESS",
+        "QUEUE_ADDRESS",
+        "FUND_RECEIPT_ADDRESS",
+        "RECEIPT_ADMIN_ADDRESS",
+        "SAFE_ADDRESS",
+        "SAFE_OWNERS",
+        "SAFE_THRESHOLD",
+        "EMERGENCY_ADDRESS",
+        "KEEPER_ADDRESS",
+        "TIMELOCK_MIN_DELAY",
+        "DEPLOYMENT_OUT"
+      ],
+      "optionalEnv": [
+        "EXPECTED_CHAIN_ID"
+      ],
+      "manifest": "deployments/<chain>/fund-timelock.json",
+      "libraries": [],
+      "vault": null,
+      "manifestNotes": "The fund system's handover, last. The same ProposerFloorTimelock at the CREATE2 address predicted from the fund system's Safe and TIMELOCK_MIN_DELAY, with the Safe as its only proposer, canceller and executor (systems.fund.timelockExecutor safe, owner decision D4-10 of 2026-11-13; the vaults system's executor stays open, ADR-0004) (CoreTimelockHandover: the Safe check and delay floor DeployTimelock uses). ADMIN_ROLE of the fund, rebalancer, governance and queue, the governance TARGET_SETTER_ROLE and the receipt register's ADMIN_ROLE and DEFAULT_ADMIN_ROLE move to it; the deployer keeps nothing."
     }
   ],
   "upgradeAuthority": {
@@ -643,6 +962,56 @@
       "name": "GatewayWindows",
       "artifact": "GatewayWindows",
       "path": "contracts/lib/GatewayWindows.sol"
+    },
+    {
+      "name": "TickMath",
+      "artifact": "TickMath",
+      "path": "contracts/lib/TickMath.sol"
+    },
+    {
+      "name": "FundPositionLib",
+      "artifact": "FundPositionLib",
+      "path": "contracts/test/prototype/src/lib/FundPositionLib.sol"
+    },
+    {
+      "name": "FundValuationLib",
+      "artifact": "FundValuationLib",
+      "path": "contracts/test/prototype/src/lib/FundValuationLib.sol"
+    },
+    {
+      "name": "FundAdminLib",
+      "artifact": "FundAdminLib",
+      "path": "contracts/test/prototype/src/lib/FundAdminLib.sol"
+    },
+    {
+      "name": "FundFlowsLib",
+      "artifact": "FundFlowsLib",
+      "path": "contracts/test/prototype/src/lib/FundFlowsLib.sol"
+    },
+    {
+      "name": "FundStepLib",
+      "artifact": "FundStepLib",
+      "path": "contracts/test/prototype/src/lib/FundStepLib.sol"
+    },
+    {
+      "name": "StepFeedLib",
+      "artifact": "StepFeedLib",
+      "path": "contracts/test/prototype/src/lib/StepFeedLib.sol"
+    },
+    {
+      "name": "FlowCheckLib",
+      "artifact": "FlowCheckLib",
+      "path": "contracts/test/prototype/src/lib/FlowCheckLib.sol"
+    },
+    {
+      "name": "FlowSettleLib",
+      "artifact": "FlowSettleLib",
+      "path": "contracts/test/prototype/src/lib/FlowSettleLib.sol"
+    },
+    {
+      "name": "FlowClaimLib",
+      "artifact": "FlowClaimLib",
+      "path": "contracts/test/prototype/src/lib/FlowClaimLib.sol"
     }
   ],
   "artifacts": {

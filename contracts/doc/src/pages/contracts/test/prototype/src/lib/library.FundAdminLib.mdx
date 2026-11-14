@@ -1,0 +1,517 @@
+---
+title: "FundAdminLib"
+description: "Asset configuration, ADP-2 exclusion sync, plan opening and the glide-path views of `RobotMoneyFund`, as an externally linked library (DELEGATECALL as the fund). The fund checks every role; this library checks every value."
+---
+
+# FundAdminLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundAdminLib.sol)
+
+**Title:** FundAdminLib
+
+Asset configuration, ADP-2 exclusion sync, plan opening and the glide-path views of
+`RobotMoneyFund`, as an externally linked library (DELEGATECALL as the fund). The fund checks every
+role; this library checks every value.
+
+## Functions
+
+<a id="addasset-fundstate-assetconfig"></a>
+
+### addAsset
+
+Append asset `c` (`IRobotMoneyFund.addAsset`). Checks, in order:
+- `assetCount &lt; MAX_FUND_ASSETS` (`MaxAssetsReached`); adapter non-zero (`ZeroAddress`);
+- ADP-2 / NC-2: the adapter's runtime code hash is allowlisted (`AdapterCodeHashNotAllowed`);
+- no ACTIVE entry with the same asset id (`PlanMath.assetId`: adapter for Lending, token for
+Basket), of either kind (`DuplicateAsset`, NC-8 / core 1789: two active entries would count
+one balance twice, and a target vector could not tell them apart);
+- Lending: token, pool, poolFee, twapWindow zero; capBps in [1, 10 000]
+(`InvalidParam`); the adapter reports `VAULT() == fund` (`AdapterVaultMismatch`) and
+`USDC() == usdc` (`AdapterAssetMismatch`);
+- Basket: venue V3 or Aerodrome (V4 is refused: its redeem sell
+anchor, core 1793, is not ported); token and pool non-zero; twapWindow in [600, 86 400];
+ORA-3 execution pool == TWAP pool and pool usability (pair, cardinality, history,
+liquidity) through the linked `BasketAssetConfigGuard`; pool fee strictly below
+`maxSlippageBps` and below a non-zero `navDeviationGuardBps` (`BoundAtOrBelowPoolFee`).
+Step 3d admission rule (proposal §4.5, E15, RB-17):
+- Basket: a feed and its `maxFeedAge` (non-zero, `maxFeedAge ≤ MAX_FEED_AGE`; else `MissingFeed`),
+and the feed must read healthy now (`FeedLib.read`, else `FeedUnhealthy(index, status)`): a listed
+asset must have a live outside feed (rule 1). The pool must answer `observe` over one settlement
+window (`settleWindow`: the bound queue's, else `DEFAULT_SETTLE_WINDOW`), else
+`PoolHistoryTooShort(index, window)` (rule 2).
+- Lending: the adapter must answer `ratePerUnit()` with a non-zero rate (`LendingRateUnavailable`),
+the venue rate check 5 reads; and `feed`, `maxFeedAge` must be 0 (`InvalidParam`).
+`active` is forced true and `targetBps` grows by a 0. There is no sleeve to check (§4.1).
+
+```solidity
+function addAsset(FundState storage s, AssetConfig memory c) public returns (uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| c | `AssetConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+<a id="setlimit-fundstate-bool-uint256"></a>
+
+### setLimit
+
+Body of `setPoolShareBps` (`poolShare` true) and `setTvlCap` (false). §4.5 rule 3 holds for the live
+targets after either change (review B-F4): a tighter pool share or a higher TVL cap re-checks it. A
+looser pool share or a lower cap is never refused.
+
+```solidity
+function setLimit(FundState storage s, bool poolShare, uint256 value) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| poolShare | `bool` |  |
+| value | `uint256` |  |
+
+<a id="_rejectduplicate-fundstate-assetconfig"></a>
+
+### _rejectDuplicate
+
+```solidity
+function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| c | `AssetConfig` |  |
+
+<a id="_requirelendingempty-fundstate-uint256-address-uint256"></a>
+
+### _requireLendingEmpty
+
+<i>
+
+`deactivateAsset` for a lending entry (review B-F1). The holders' part of the adapter must be at most
+`LENDING_ROUNDING_UNITS` (the fund's own paths leave that much: `drain`, `claimPosition`, `sellForFlow`);
+the position claims' part may stay, it remains claimable. An adapter whose `totalAssets()` read fails
+may leave only while its exclusion record is open: its value is already in the ledger.
+
+</i>
+
+```solidity
+function _requireLendingEmpty(FundState storage s, uint256 i, address adapter, uint256 openId)
+        private
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| adapter | `address` |  |
+| openId | `uint256` |  |
+
+<a id="_checklending-fundstate-assetconfig"></a>
+
+### _checkLending
+
+```solidity
+function _checkLending(FundState storage s, AssetConfig memory c) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| c | `AssetConfig` |  |
+
+<a id="_checkbasket-fundstate-assetconfig-uint256"></a>
+
+### _checkBasket
+
+```solidity
+function _checkBasket(FundState storage s, AssetConfig memory c, uint256 index) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| c | `AssetConfig` |  |
+| index | `uint256` |  |
+
+<a id="deactivateasset-fundstate-uint256"></a>
+
+### deactivateAsset
+
+Deactivate asset `i` (`IRobotMoneyFund.deactivateAsset`). The fund must hold nothing of it:
+Lending `adapter.totalAssets() == 0`; Basket a zero balance or dust whose TWAP sale floor rounds
+to 0 USDC (QA plan D6), and nothing still owed to in-kind exits (`deferredTotal`), else
+`AssetStillHeld`. Its persistent target must already be 0, else `AssetStillTargeted`.
+So an inactive asset always has target 0 (RB-9), and deposits never route to it.
+A target vector may no longer name it. A Lending entry's open
+exclusion record closes (`Removed`, core 1820); it stays claimable forever.
+
+```solidity
+function deactivateAsset(FundState storage s, uint256 i) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+<a id="createledger-address"></a>
+
+### createLedger
+
+Create the fund's exclusion ledger, once, from the fund's initializer (replaces
+`RobotMoneyVaultOps.createLedger`). Step 3d (E13, RB-22): the ledger is `FundExclusionLedger`, the test
+copy whose per-holder balance is the fund's `ledgerBalanceOf` (wallet plus queued shares). It is stored
+in the same `RobotMoneyVaultOps.Exclusions` slot, typed as `ExclusionLedger`: the copy has the same
+ABI for every call the fund makes (`open`, `credit`, `finalize`, `checkpoint`), and the same enum
+ordinals. Its creation code lives here, in a linked library, so it does not count against the fund's
+EIP-170 budget. Reverts `InvalidParam` if a ledger already exists.
+
+```solidity
+function createLedger(address usdc) public returns (address ledger);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ledger | `address` |  |
+
+<a id="syncexclusions-fundstate-uint256-bool"></a>
+
+### syncExclusions
+
+Match exclusion records to adapter eligibility (`RobotMoneyVaultOps.syncExclusions`, with
+eligibility = code hash allowlisted). An active Lending entry whose code hash is no longer
+allowed and that has no record gets one, snapshotting `supply` (skipped at zero supply): its
+balance leaves NAV and everything later recovered from it belongs pro rata to the holders at
+this moment (core 1820, exclusion is not confiscation). With `restore`, an entry that is
+eligible again and still has a record is drained INTO the record first (`InvalidParam` when
+it cannot pay out), then the record closes (`Restored`) and the empty entry counts again.
+
+```solidity
+function syncExclusions(FundState storage s, uint256 supply, bool restore)
+        public
+        returns (bool opened);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| supply | `uint256` |  |
+| restore | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` | True when a record opened (the fund then checkpoints every share balance change). |
+
+<a id="_restore-fundstate-robotmoneyvaultops-exclusions-uint256-uint256"></a>
+
+### _restore
+
+<i>
+
+`syncExclusions` restore branch (own frame for stack depth): drain entry `i` into record `id`,
+leaving the USDC owed to in-kind exits (`deferredTotal`) and the position claims' part in the adapter
+(`FundPositionLib.drain`, which also burns the holders' units), then close the record.
+
+</i>
+
+```solidity
+function _restore(
+        FundState storage s,
+        RobotMoneyVaultOps.Exclusions storage x,
+        uint256 i,
+        uint256 id
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| x | `RobotMoneyVaultOps.Exclusions` |  |
+| i | `uint256` |  |
+| id | `uint256` |  |
+
+<a id="planop-fundstate-planop-uint256"></a>
+
+### planOp
+
+Run plan transition `op` (see `PlanOp`). Every transition emits exactly one `PlanStatusChanged`;
+a transition the current status does not allow reverts `InvalidPlanTransition`.
+
+```solidity
+function planOp(FundState storage s, PlanOp op, uint256 arg) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `PlanOp` |  |
+| arg | `uint256` |  |
+
+<a id="requirenoliveplan-fundstate"></a>
+
+### requireNoLivePlan
+
+Revert `PlanLive` while a plan is Open, Halted or Paused (asset config is frozen then).
+
+```solidity
+function requireNoLivePlan(FundState storage s) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+<a id="_move-plan-planstatus-planstatus"></a>
+
+### _move
+
+<i>
+
+One plan transition `from → to` (§5.5), with exactly one `PlanStatusChanged`.
+
+</i>
+
+```solidity
+function _move(Plan storage p, PlanStatus from, PlanStatus to) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Plan` |  |
+| from | `PlanStatus` |  |
+| to | `PlanStatus` |  |
+
+<a id="_overbudget-fundstate-plan"></a>
+
+### _overBudget
+
+<i>
+
+Over budget: spent past it (a plan from before the review fix B-F5), or the budget left is below the
+cost of the step that halted it.
+
+</i>
+
+```solidity
+function _overBudget(FundState storage s, Plan storage p) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| p | `Plan` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_islive-planstatus"></a>
+
+### _isLive
+
+```solidity
+function _isLive(PlanStatus st) private pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| st | `PlanStatus` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="openplan-fundstate-address-uint256-planparams-bytes32"></a>
+
+### openPlan
+
+Body of `IRobotMoneyFund.setTargetAndOpenPlan` (the fund checks GOVERNANCE_ROLE, RB-1):
+validate params; `endBps = PlanMath.assetTargets(assets, bps, s.assets)`, which runs every §4.1
+vector check (RB-9, including a Lending end target ≤ its `capBps`); supersede a live plan (plans
+never stack); snapshot the ACTUAL TWAP weights as the start (never the old plan's target); store
+and emit.
+
+```solidity
+function openPlan(
+        FundState storage s,
+        address[] memory assets,
+        uint256[] memory bps,
+        PlanParams memory params,
+        bytes32 receiptId
+    ) public returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| assets | `address[]` |  |
+| bps | `uint256[]` |  |
+| params | `PlanParams` |  |
+| receiptId | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="initflows-fundstate-address"></a>
+
+### initFlows
+
+From the fund's `initialize`: the step 3d defaults the fund holds (`minSeedUsdc`, `poolShareBps`, the
+in-kind allowance of E20), then the exclusion ledger (`createLedger`).
+
+```solidity
+function initFlows(FundState storage s, address usdc) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| usdc | `address` |  |
+
+<a id="_open-fundstate-uint16-planparams-bytes32"></a>
+
+### _open
+
+<i>
+
+`openPlan` after the vector became `endBps` (own frame for stack depth).
+
+</i>
+
+```solidity
+function _open(
+        FundState storage s,
+        uint16[] memory endBps,
+        PlanParams memory params,
+        bytes32 receiptId
+    ) private returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| endBps | `uint16[]` |  |
+| params | `PlanParams` |  |
+| receiptId | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+
+<a id="_emitopened-plan"></a>
+
+### _emitOpened
+
+```solidity
+function _emitOpened(Plan storage p) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `Plan` |  |
+
+## Enums
+
+### PlanOp
+
+Which transition `planOp` runs.
+
+<i>
+
+Conclude: `concludePlan(to)`, `arg = uint256(to)`; REBALANCER_ROLE. Open → Converged (now ≥ endTime) or
+Expired (now > endTime).
+Pause: `pauseRebalance`; EMERGENCY_ROLE. Open or Halted → Paused.
+Resume: `resumePlan`; ADMIN_ROLE. Paused → Open, or → Halted while over budget (`_overBudget`).
+Extend: `extendBudget(arg)`; ADMIN_ROLE. Live plan's budget += arg; Halted → Open once the budget left
+covers the step that halted it.
+Close: `closePlan`; ADMIN_ROLE. Live → Superseded.
+UnwindPause: the tail of `emergencyUnwind`; ADMIN_ROLE (owner, 2026-11-13). Open or Halted → Paused, else nothing.
+
+</i>
+
+```solidity
+enum PlanOp {
+        Conclude,
+        Pause,
+        Resume,
+        Extend,
+        Close,
+        UnwindPause
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Conclude |  |
+| Pause |  |
+| Resume |  |
+| Extend |  |
+| Close |  |
+| UnwindPause |  |
+

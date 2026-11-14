@@ -1,0 +1,675 @@
+---
+title: "FundFlowsLib"
+description: "Every value-moving path of `RobotMoneyFund` except the share mint/burn and the final payouts, as an externally linked library (DELEGATECALL: `address(this)` is the fund, approvals and balances are the fund's). Every swap goes through `BasketSwaps.swap` with the asset's allowlisted `IBasketSwapAdapter` and pays the fund itself. Every USDC that leaves the fund here goes to an allowlisted Lending adapter, a Basket swap adapter, or the fund's `ExclusionLedger` (RB-3, INV-1). No function here takes a recipient."
+---
+
+# FundFlowsLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/lib/FundFlowsLib.sol)
+
+**Title:** FundFlowsLib
+
+Every value-moving path of `RobotMoneyFund` except the share mint/burn and the final payouts, as an
+externally linked library (DELEGATECALL: `address(this)` is the fund, approvals and balances are
+the fund's). Every swap goes through `BasketSwaps.swap` with the asset's allowlisted
+`IBasketSwapAdapter` and pays the fund itself. Every USDC that leaves the fund here goes to an
+allowlisted Lending adapter, a Basket swap adapter, or the fund's `ExclusionLedger` (RB-3, INV-1).
+No function here takes a recipient.
+
+## Functions
+
+<a id="deposit-fundstate-address-uint256-uint256"></a>
+
+### deposit
+
+The deposit path up to the mint (§4.3), ported from `BasketVault._deposit`. The fund holds
+`nonReentrant`, mints the returned shares and emits `Deposit`.
+1. Gates: `DepositsArePaused`, `FundIsShutdown`, `PerDepositCapExceeded`,
+`DepositsClosedDuringExclusion` while a Lending asset is excluded (core 1788), ORA-4 on every active Basket asset
+(`NavMarketDeviationExceeded`), `TVLCapExceeded` against the pre-deposit NAV.
+2. Pull `assets` USDC from `caller`; route deficit-first against `currentTargetBps()`.
+3. `delta = navAfter − navBefore` at TWAP; `DepositBelowSlippageFloor` when
+`delta &lt; assets × (1 − maxSlippageBps)`; shares `= delta × (supplyBefore + 10^18) /
+(navBefore + 1)`, floored (AZ-BSK-1/-3: realized delta over the FULL pre-deposit NAV).
+
+```solidity
+function deposit(FundState storage s, address caller, uint256 assets, uint256 supplyBefore)
+        public
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| caller | `address` |  |
+| assets | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="routedeposit-fundstate-uint256-uint256-uint256-uint256"></a>
+
+### routeDeposit
+
+Route `amount` USDC (already idle in the fund) deficit-first (§4.3, D7): `PlanMath.deficitSplit`
+against `curBps` (the current plan target), measured at `navBefore` with per-asset `values`.
+- Lending legs are clipped at the asset's `capBps` headroom of the post-deposit NAV (the
+ported `RobotMoneyVault` cap allocator), and a venue that refuses the supply hands the USDC
+back (security round 2); both stay idle.
+- Basket legs buy through the asset's swap adapter with `minOut = TWAP × (1 − maxSlippageBps)`
+(the `BasketVault._routeDeposit` floor). A leg whose floor rounds to 0 stays idle (dust).
+Excluded or inactive assets get nothing. The caller mints on the realized NAV delta.
+
+```solidity
+function routeDeposit(
+        FundState storage s,
+        uint256 amount,
+        uint256 navBefore,
+        uint256[] memory values,
+        uint256[] memory curBps
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| amount | `uint256` |  |
+| navBefore | `uint256` |  |
+| values | `uint256[]` |  |
+| curBps | `uint256[]` |  |
+
+<a id="sellproportional-fundstate-uint256-uint256"></a>
+
+### sellProportional
+
+Realize `shares / supplyBefore` of every holding into USDC (§4.4): the pro-rata idle, a
+pro-rata `withdraw` from each counted Lending adapter, and a pro-rata sale of each active
+Basket token (`BasketVault._sellProportional`, unchanged: floor = TWAP of one unit less ×
+(1 − maxSlippageBps), a zero floor is dust and is skipped). Returns the realized gross.
+
+<i>
+
+Short fills never revert here: a Lending leg pays what the adapter actually delivered (balance
+delta), never the asked amount. Each leg floors, so rounding favours the holders who stay.
+Called after the shares burned (nonReentrant fund entry). Never reads plan state (RB-6).
+Strict by design: a frozen venue (a Lending `withdraw` or a Basket swap that reverts) reverts the
+redeem, as on `BasketVault.redeem` and `RobotMoneyVault.redeem`. The design promises only that
+`redeemInKind` stays open under a venue freeze (§5.8 row 7); see `payInKind`. Every leg is taken
+from `heldBalance`, so value owed to past in-kind exits is never sold or paid twice.
+
+</i>
+
+```solidity
+function sellProportional(FundState storage s, uint256 shares, uint256 supplyBefore)
+        public
+        returns (uint256 usdcOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcOut | `uint256` |  |
+
+<a id="redeempayout-fundstate-address-address-uint256-uint256"></a>
+
+### redeemPayout
+
+Realize the redeemed shares (`sellProportional`), charge `exitFeeBps` on the REALIZED gross only
+(FEE-2 / NC-11), pay the fee to `feeRecipient` and the rest to `receiver` (the caller's own
+ERC-4626 receiver). Emits `ExitFeeCharged`. Returns the USDC paid to `receiver`.
+
+```solidity
+function redeemPayout(
+        FundState storage s,
+        address owner,
+        address receiver,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public returns (uint256 net);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| owner | `address` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| net | `uint256` |  |
+
+<a id="sweepforeign-fundstate-address-address"></a>
+
+### sweepForeign
+
+Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2). Reverts
+`ProtectedToken` for USDC, the share token, every asset token (active or not) and every Lending
+adapter address. Emits `ForeignTokenSwept`.
+
+```solidity
+function sweepForeign(FundState storage s, address token, address caller) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| token | `address` |  |
+| caller | `address` |  |
+
+<a id="payinkind-fundstate-address-uint256-uint256"></a>
+
+### payInKind
+
+Oracle-free, swap-free payout of `shares / supplyBefore` (§4.4 `redeemInKind`): the pro-rata
+idle USDC plus the USDC withdrawn pro rata from each counted Lending adapter as one USDC leg,
+then each active Basket token's pro-rata balance. Each leg pays `exitFeeBps` to
+`feeRecipient` and the rest to `receiver` (the caller's own ERC-4626 receiver, INV-1).
+
+<i>
+
+Port of `BasketAssetConfigGuard.payInKind` plus the `RobotMoneyVault` lending pull. No TWAP read,
+no swap, never gated by plan state, pause or shutdown (RB-6).
+
+</i>
+
+Venue freeze (§5.8 row 7: "`redeemInKind` remains open"). One frozen venue must not lock every
+holder of the one vault in. So a leg that cannot pay out does not revert the exit:
+- Lending: `withdraw(want)` runs under try/catch; whatever did not arrive (a revert, a paused
+reserve, 100% utilization, a short fill) is DEFERRED, not forfeited.
+- Basket: each transfer (to the receiver, then the fee) is attempted; one that fails is DEFERRED.
+A deferred amount stays where it is (tokens in the fund, USDC in the adapter) but leaves the
+holders' books: `deferredTotal[i]` is subtracted by `heldBalance`, so NAV and every later pro-rata
+leg exclude it, and the stayers neither gain nor lose by the freeze. The owed account later pulls it
+with `claimDeferred`. The fee share is deferred to `feeRecipient` the same way, so the split is
+exactly what an unfrozen exit would have paid. A Lending claim is a fixed USDC amount: interest on
+it, and any later venue loss, stay with the holders (prototype simplification).
+The idle USDC leg uses a plain transfer: USDC failing for the fund itself stops every path.
+
+```solidity
+function payInKind(FundState storage s, address receiver, uint256 shares, uint256 supplyBefore)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| receiver | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+<a id="claimdeferred-fundstate-uint256-address-address"></a>
+
+### claimDeferred
+
+Pay `account` everything it is owed from asset `index` (`IRobotMoneyFund.claimDeferred`), to
+`to` (the account's own choice, as an ERC-4626 receiver). Basket: transfer the tokens. Lending:
+`withdraw` exactly the owed USDC from the adapter (`DeferredShortfall` when it delivers less, so
+the claim stays whole) and transfer it. Works whatever the asset's status (inactive, excluded):
+the claim was fixed at exit time. Reverts `NothingDeferred` when nothing is owed.
+
+```solidity
+function claimDeferred(FundState storage s, uint256 index, address account, address to)
+        public
+        returns (uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| account | `address` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="_defersplit-fundstate-uint256-uint256-address-uint256-address"></a>
+
+### _deferSplit
+
+<i>
+
+Defer `amount` of asset `i` owed to an in-kind exit: the `feeBps` share to `feeTo`, the rest to
+`receiver` (the split an unfrozen leg would have paid).
+
+</i>
+
+```solidity
+function _deferSplit(
+        FundState storage s,
+        uint256 i,
+        uint256 amount,
+        address receiver,
+        uint256 feeBps,
+        address feeTo
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+| receiver | `address` |  |
+| feeBps | `uint256` |  |
+| feeTo | `address` |  |
+
+<a id="_defer-fundstate-uint256-address-uint256"></a>
+
+### _defer
+
+```solidity
+function _defer(FundState storage s, uint256 i, address account, uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| account | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_trytransfer-address-address-uint256"></a>
+
+### _tryTransfer
+
+<i>
+
+`IERC20.transfer` that reports failure instead of reverting (SafeERC20 semantics: a call that
+reverts, returns false, or targets no code is a failure; empty return data is success).
+
+</i>
+
+```solidity
+function _tryTransfer(address token, address to, uint256 amount) private returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="executestep-fundstate-steporder"></a>
+
+### executeStep
+
+The legs of one rebalance step (`IRobotMoneyFund.executeStep`). The fund checks the role and
+holds `nonReentrant`. Order: plan Open → legs valid and counted, ORA-4 on Basket legs (RB-5)
+→ RB-7 path guard at `navBefore` → sell leg → buy leg → `navAfter` and the cost cap (RB-4)
+→ plan accounting and the budget halt → `StepExecuted`.
+
+```solidity
+function executeStep(FundState storage s, StepOrder memory o)
+        public
+        returns (StepResult memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `StepResult` |  |
+
+<a id="_checkleg-fundstate-uint256"></a>
+
+### _checkLeg
+
+<i>
+
+A non-idle leg must name a counted (active, not excluded) asset, and a Basket leg must pass ORA-4
+(RB-5 defence in depth: the Rebalancer already masks failing assets).
+
+</i>
+
+```solidity
+function _checkLeg(FundState storage s, uint256 i) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+<a id="_pathguard-fundstate-steporder"></a>
+
+### _pathGuard
+
+<i>
+
+RB-7 guard: at `navBefore` and `now`, the sell leg sits over its `pathTarget` value by at least the
+notional and a non-idle buy leg sits under it by at least the notional (`PlanMath.pathTargetValue`,
+the same function the Rebalancer sizes with). Returns `navBefore`.
+
+</i>
+
+```solidity
+function _pathGuard(FundState storage s, StepOrder memory o)
+        private
+        view
+        returns (uint256 navBefore);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navBefore | `uint256` |  |
+
+<a id="_sellleg-fundstate-steporder-stepresult"></a>
+
+### _sellLeg
+
+<i>
+
+Sell leg → USDC (§5.3 step 6). Idle: take `notional` of idle (`InsufficientIdle`). Lending:
+`withdraw(notional)`, measured by the fund's balance delta. Basket: sell
+`min(balance, TWAP tokens for notional)` with floor `minSellUsdcOut`. Then require the USDC
+received ≥ `minSellUsdcOut` (`StepBelowMinOut`).
+
+</i>
+
+```solidity
+function _sellLeg(FundState storage s, StepOrder memory o, StepResult memory r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+| r | `StepResult` |  |
+
+<a id="_buyleg-fundstate-steporder-stepresult"></a>
+
+### _buyLeg
+
+<i>
+
+Buy leg (§5.3 step 6) with `spend = min(received, notional)`: idle keeps it; Lending deploys it
+(USDC the venue hands back stays idle; `amountOut` is what the adapter kept); Basket buys with floor
+`minBuyOut × spend / notional` (`StepBelowMinOut`). USDC received beyond the notional stays idle.
+
+</i>
+
+```solidity
+function _buyLeg(FundState storage s, StepOrder memory o, StepResult memory r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| o | `StepOrder` |  |
+| r | `StepResult` |  |
+
+<a id="_emitstep-uint256-steporder-stepresult"></a>
+
+### _emitStep
+
+<i>
+
+`StepExecuted` in its own frame (stack depth without viaIR).
+
+</i>
+
+```solidity
+function _emitStep(uint256 planId, StepOrder memory o, StepResult memory r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` |  |
+| o | `StepOrder` |  |
+| r | `StepResult` |  |
+
+<a id="emergencyunwind-fundstate"></a>
+
+### emergencyUnwind
+
+Move every holding to idle USDC. Lending: drain each active adapter, tolerant of a failing
+adapter (`RobotMoneyVaultOps._emergencyPull`); an adapter under an open exclusion record is
+drained INTO its record, never into idle (exclusion is not confiscation, core 1820). Basket:
+sell each active balance with floor = TWAP × (1 − maxSlippageBps) (`BasketSwaps.unwindAll`); a
+zero floor is dust and is skipped; a leg whose TWAP read fails is skipped and stays held (there
+is no configured-floor override here, see the fund's NatSpec). A swap below its floor reverts
+the whole unwind, as on BasketVault. Returns the USDC that reached idle.
+
+```solidity
+function emergencyUnwind(FundState storage s) public returns (uint256 recovered);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recovered | `uint256` |  |
+
+<a id="drain-address-address-exclusionledger-uint256-exclusionledger-recoverysource-uint256"></a>
+
+### drain
+
+Withdraw `adapter`'s whole reported balance, tolerant of a failing adapter. With `id != 0` the
+USDC that arrived (balance delta, never the adapter's return value) moves into exclusion
+record `id` of `ledger` (`RobotMoneyVaultOps._drain` + `_credit`). `ok` is false when
+`totalAssets` or `withdraw` reverted. The `reserved` USDC (owed to in-kind exits, `deferredTotal`)
+is left in the adapter for `claimDeferred`: it belongs neither to idle nor to an exclusion record.
+
+```solidity
+function drain(
+        address usdc,
+        address adapter,
+        ExclusionLedger ledger,
+        uint256 id,
+        ExclusionLedger.RecoverySource source,
+        uint256 reserved
+    ) public returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| adapter | `address` |  |
+| ledger | `ExclusionLedger` |  |
+| id | `uint256` |  |
+| source | `ExclusionLedger.RecoverySource` |  |
+| reserved | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_deploy-address-address-uint256"></a>
+
+### _deploy
+
+<i>
+
+Move `amount` USDC into Lending `adapter` and deploy it; return what the adapter kept (the fund's
+balance delta, `RobotMoneyVaultOps._allocate`). A refused supply comes straight back and stays idle.
+
+</i>
+
+```solidity
+function _deploy(address usdc, address adapter, uint256 amount)
+        private
+        returns (uint256 placed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| adapter | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| placed | `uint256` |  |
+
+<a id="_swap-assetconfig-address-address-uint256-uint256"></a>
+
+### _swap
+
+<i>
+
+Swap through the asset's adapter (`BasketSwaps.swap`: approve, swap with recipient = the fund,
+clear approval). Returns `tokenOut` received by balance delta.
+
+</i>
+
+```solidity
+function _swap(
+        AssetConfig memory a,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| minOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="_payleg-address-address-uint256-uint256-address"></a>
+
+### _payLeg
+
+<i>
+
+Pay one in-kind leg: `exitFeeBps` of it to `feeTo`, the rest to `receiver`.
+
+</i>
+
+```solidity
+function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps, address feeTo)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| receiver | `address` |  |
+| amount | `uint256` |  |
+| feeBps | `uint256` |  |
+| feeTo | `address` |  |
+
+<a id="_haircut-uint256-uint256"></a>
+
+### _haircut
+
+<i>
+
+`value × (1 − bps)`, floored (BasketVault._applySlippage).
+
+</i>
+
+```solidity
+function _haircut(uint256 value, uint256 bps) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| value | `uint256` |  |
+| bps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

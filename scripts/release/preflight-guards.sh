@@ -61,6 +61,28 @@ CEREMONY_CONTRACTS=(
   # rmPROTO: every vault contract the stage table deploys is in this list
   # (issue 1926, asserted by scripts/release/preflight-guards.test.ts).
   "ProtocolAssetVault"
+  # Deploy 4: the fund system (the one-vault prototype as a rehearsal). Its four proxied
+  # contracts, the ledger the fund creates, its adapter copies and every library a fund stage
+  # creates (FundAdminLib sits near the limit). out/<Name>.sol resolves to contracts/test/prototype/src
+  # (the baseline tree's same-named contracts build under out/src/), asserted by preflight-guards.test.ts.
+  "RobotMoneyFund"
+  "Rebalancer"
+  "RebalanceGovernance"
+  "FlowQueue"
+  "FundExclusionLedger"
+  "AaveV3RateAdapter"
+  "CompoundV3RateAdapter"
+  "MorphoRateAdapter"
+  "UniswapV3ExactOutSwapAdapter"
+  "FundPositionLib"
+  "FundValuationLib"
+  "FundAdminLib"
+  "FundFlowsLib"
+  "FundStepLib"
+  "StepFeedLib"
+  "FlowCheckLib"
+  "FlowSettleLib"
+  "FlowClaimLib"
 )
 
 fail() {

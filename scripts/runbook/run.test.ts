@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Resolver, configProblems, parseConfig, readyAt, runStep, shouldRun, stepsToRun, withResume } from "./run.ts";
+import { Resolver, configProblems, parseConfig, readyAt, runStep, shouldRun, stepsToRun, twinClockWait, withResume } from "./run.ts";
 import { ROOT, loadModel, validateAll, type RunbookStep } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
@@ -52,6 +52,26 @@ test("notBefore waits from the earlier step's result: the delay and hours are re
     mkdirSync(join(runDir, "journal"), { recursive: true });
     writeFileSync(join(runDir, "journal", "P0.80-earlier.result"), "pass\n");
     expect(runStep(step({ notBefore: { afterStep: "P0.80-earlier", hours: 0 } }), r, opts(runDir))).toBe("pass");
+  });
+});
+
+test("on the twin target a wait of hours is a Twin clock warp, never a wall sleep; the fund flow's timelock waits too; every 8453 wait stays a wall sleep", () => {
+  expect(twinClockWait("twin", 24)).toBe(true);
+  expect(twinClockWait("twin", 0)).toBe(false);
+  expect(twinClockWait("twin", "timelockDelay")).toBe(false); // the vaults flows: govern warps by itself
+  expect(twinClockWait("twin", "timelockDelay", "fund")).toBe(true); // the fund flow's Safe executes do not
+  expect(twinClockWait("rehearsal", "timelockDelay", "fund")).toBe(false);
+  expect(twinClockWait("rehearsal", 24)).toBe(false);
+  expect(twinClockWait("production", 24)).toBe(false);
+  withRun((runDir) => {
+    const r = new Resolver({ scalars: { runDir, sheet: join(runDir, "sheet.env"), rpcUrl: "http://127.0.0.1:1" } });
+    mkdirSync(join(runDir, "journal"), { recursive: true });
+    writeFileSync(join(runDir, "journal", "P0.80-earlier.result"), "pass\n");
+    const t0 = Date.now();
+    // 24 h after a result written now: on the Twin the runner warps (here the RPC answers nothing, so the warp fails at once and the step fails, never sleeping)
+    expect(runStep(step({ notBefore: { afterStep: "P0.80-earlier", hours: 24 } }), r, { ...opts(runDir), target: "twin" })).toStartWith("fail notBefore twin clock warp exit");
+    expect(Date.now() - t0).toBeLessThan(60_000);
+    expect(readFileSync(join(runDir, "journal", "P0.90-test.err"), "utf8").length).toBeGreaterThan(0);
   });
 });
 

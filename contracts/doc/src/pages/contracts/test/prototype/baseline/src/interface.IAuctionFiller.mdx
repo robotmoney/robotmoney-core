@@ -1,0 +1,41 @@
+---
+title: "IAuctionFiller"
+description: "The solver side of a fill. Called once per basket leg, after the fund's `amountIn` of `tokenIn` reached the filler. Before it returns, the filler must approve this executor for `amountOwed` of `tokenOut`. The executor then pulls it straight to the fund."
+---
+
+# IAuctionFiller
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/baseline/src/AuctionStepExecutor.sol)
+
+The solver side of a fill. Called once per basket leg, after the fund's `amountIn` of `tokenIn`
+reached the filler. Before it returns, the filler must approve this executor for `amountOwed` of
+`tokenOut`. The executor then pulls it straight to the fund.
+
+## Functions
+
+<a id="onauctionleg-address-address-uint256-uint256-uint256-uint256"></a>
+
+### onAuctionLeg
+
+```solidity
+function onAuctionLeg(
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOwed,
+        uint256 twapQuote,
+        uint256 floor
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| amountIn | `uint256` |  |
+| amountOwed | `uint256` |  |
+| twapQuote | `uint256` |  |
+| floor | `uint256` |  |
+

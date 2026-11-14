@@ -1,0 +1,87 @@
+---
+title: "Roles"
+description: "Role identifiers shared by the three prototype contracts. Contracts re-export them as `bytes32 public constant X_ROLE = Roles.X_ROLE;` so the getter exists in their ABI."
+---
+
+# Roles
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+
+**Title:** Roles
+
+Role identifiers shared by the three prototype contracts. Contracts re-export them as
+`bytes32 public constant X_ROLE = Roles.X_ROLE;` so the getter exists in their ABI.
+
+| Role               | Held by                     | Lives on                       |
+| ------------------ | --------------------------- | ------------------------------ |
+| ADMIN_ROLE         | TimelockController          | fund, rebalancer, governance   |
+| EMERGENCY_ROLE     | emergency hot key           | fund (pauses), rebalancer none |
+| GOVERNANCE_ROLE    | RebalanceGovernance proxy   | fund (`setTargetAndOpenPlan`)  |
+| REBALANCER_ROLE    | Rebalancer proxy            | fund (`executeStep`, conclude) |
+| KEEPER_ROLE        | keeper bot                  | rebalancer (`step` pre-grace)  |
+| TARGET_SETTER_ROLE | TimelockController          | governance (`applyReceipt`)    |
+| FLOW_ROLE          | FlowQueue proxy             | fund (`mintInKind`, `sellForFlow`, `ledgerCheckpoint`) |
+
+On the fund, EMERGENCY_ROLE holds only `pauseRebalance` and `pauseDeposits`; `shutdown` and `emergencyUnwind`
+are ADMIN_ROLE's (the timelock), owner 2026-11-13.
+On the FlowQueue: ADMIN_ROLE (timelock: params, release, allowReturn, unpause), EMERGENCY_ROLE (pause,
+freezeSettlement: pause-class, it only delays one settlement's held shares, ends by itself after
+`maxFreeze` and moves no value) and KEEPER_ROLE (`settle` before `keeperGrace`).
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+```
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+```
+
+### GOVERNANCE_ROLE
+
+```solidity
+bytes32 internal constant GOVERNANCE_ROLE = keccak256("GOVERNANCE_ROLE");
+```
+
+### REBALANCER_ROLE
+
+```solidity
+bytes32 internal constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
+```
+
+### KEEPER_ROLE
+
+```solidity
+bytes32 internal constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
+```
+
+### TARGET_SETTER_ROLE
+
+<i>
+
+RebalanceGovernance's port of RouterGovernance.WEIGHT_SETTER_ROLE. Self-administered.
+
+</i>
+
+```solidity
+bytes32 internal constant TARGET_SETTER_ROLE = keccak256("TARGET_SETTER_ROLE");
+```
+
+### FLOW_ROLE
+
+<i>
+
+The FlowQueue's authority on the fund (E1). Bound once by `bindFlowRole`, then self-administered,
+exactly like GOVERNANCE_ROLE and REBALANCER_ROLE, so no ADMIN_ROLE holder can hand it to anyone else.
+
+</i>
+
+```solidity
+bytes32 internal constant FLOW_ROLE = keccak256("FLOW_ROLE");
+```
+

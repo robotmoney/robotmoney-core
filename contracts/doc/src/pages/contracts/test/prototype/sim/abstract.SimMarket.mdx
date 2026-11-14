@@ -1,0 +1,517 @@
+---
+title: "SimMarket"
+description: "The market of the rebalance simulation, for the two basket pools of the §4.5 list (wETH, cbBTC), as a harness-neutral mixin: the timed-flow sim (`TimedFlowSim.t.sol`, live harness) and the sim attacks (`AttackSim.t.sol`, both harnesses) share it. It is the step 3 model of `RebalanceSim.t.sol` without deSPXA, line for line where the two overlap, so a seed draws the same walk, noise and arbitrage for wETH and cbBTC as the synchronous sim does (pool index b = 0 wETH, b = 1 cbBTC, as there):"
+---
+
+# SimMarket
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/SimMarket.sol)
+
+**Inherits:** Test
+
+**Title:** SimMarket
+
+The market of the rebalance simulation, for the two basket pools of the §4.5 list (wETH, cbBTC), as a
+harness-neutral mixin: the timed-flow sim (`TimedFlowSim.t.sol`, live harness) and the sim attacks
+(`AttackSim.t.sol`, both harnesses) share it. It is the step 3 model of `RebalanceSim.t.sol` without
+deSPXA, line for line where the two overlap, so a seed draws the same walk, noise and arbitrage for wETH
+and cbBTC as the synchronous sim does (pool index b = 0 wETH, b = 1 cbBTC, as there):
+
+- a zero-drift reference walk per pool, ref *= exp(sigma × z) once per slot, sigma = the pool's own
+30-minute mean-tick difference stdev at the pin, scaled by sqrt(3/2) (`RebalanceSim._sigma`, review R4);
+- noise: 1 or 2 seeded price-limited swaps per pool per slot, each moving the price u × 10 bps;
+- an arbitrageur that closes a seeded fraction a in [0.5, 1) of each pool's gap to the reference once per
+slot with a price-limited swap (a = 1 on a scripted jump). wETH and cbBTC trade 24/7 against deep outside
+venues, so its inventory is unlimited (as in step 3).
+
+Step 3e rule for the JUMP scenarios (proposal §10 step 3e): the scripted jump moves the wETH reference by
+the size and at the slot the step 3 sim moved deSPXA (`_mkWalkAndArb(jump = true, ...)`).
+
+Determinism: every draw is `SimLib.draw(seed, slot, tag, asset)`. Nothing reads gasleft or vm.random*.
+
+## Constants
+
+### MK_USDC
+
+```solidity
+address internal constant MK_USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+### MK_WETH
+
+```solidity
+address internal constant MK_WETH = 0x4200000000000000000000000000000000000006;
+```
+
+### MK_CBBTC
+
+```solidity
+address internal constant MK_CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
+```
+
+### MK_WETH_POOL
+
+```solidity
+address internal constant MK_WETH_POOL = 0xd0b53D9277642d899DF5C87A3966A349A798F224;
+```
+
+### MK_CBBTC_POOL
+
+```solidity
+address internal constant MK_CBBTC_POOL = 0xfBB6Eed8e7aa03B138556eeDaF5D271A5E1e43ef;
+```
+
+### MK_ROUTER
+
+```solidity
+address internal constant MK_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+```
+
+### MK_POOL_FEE
+
+```solidity
+uint24 internal constant MK_POOL_FEE = 500;
+```
+
+### MK_N
+
+```solidity
+uint256 internal constant MK_N = 2;
+```
+
+### MK_SIGMA_WINDOW
+
+```solidity
+uint32 internal constant MK_SIGMA_WINDOW = 1_800;
+```
+
+### MK_FALLBACK_SIGMA_MILLITICKS
+
+```solidity
+uint256 internal constant MK_FALLBACK_SIGMA_MILLITICKS = 10_000;
+```
+
+### MK_SIGMA_DIFF_SCALE_E4
+
+```solidity
+uint256 internal constant MK_SIGMA_DIFF_SCALE_E4 = 12_247;
+```
+
+### MK_ARB_BUDGET_USDC
+
+```solidity
+uint256 internal constant MK_ARB_BUDGET_USDC = 100_000_000e6;
+```
+
+## State Variables
+
+### mkSeed
+
+```solidity
+uint256 internal mkSeed;
+```
+
+### mkSlot
+
+<i>
+
+The slot index the draws are keyed by (`slotIndex` in RebalanceSim).
+
+</i>
+
+```solidity
+uint256 internal mkSlot;
+```
+
+### mkPools
+
+```solidity
+address[2] internal mkPools;
+```
+
+### mkTokens
+
+```solidity
+address[2] internal mkTokens;
+```
+
+### mkUsdc0
+
+```solidity
+bool[2] internal mkUsdc0;
+```
+
+### mkRefMilli
+
+<i>
+
+The reference walk, in milli-ticks of the pool's own price (token1 per token0).
+
+</i>
+
+```solidity
+int256[2] internal mkRefMilli;
+```
+
+### mkP0Tick
+
+```solidity
+int256[2] internal mkP0Tick;
+```
+
+### mkSigma
+
+```solidity
+uint256[2] internal mkSigma;
+```
+
+### mkSigmaN
+
+```solidity
+uint256[2] internal mkSigmaN;
+```
+
+### mkDepth10Bps
+
+```solidity
+uint256[2] internal mkDepth10Bps;
+```
+
+### mkPinL
+
+```solidity
+uint256[2] internal mkPinL;
+```
+
+### mkJumpAt
+
+<i>
+
+Timestamp of the scripted jump (0 until it happened).
+
+</i>
+
+```solidity
+uint256 internal mkJumpAt;
+```
+
+## Functions
+
+<a id="_mkfundusdc-address-uint256"></a>
+
+### _mkFundUsdc
+
+<i>
+
+Credit `amount` USDC to `to` (the harness's `fundUsdc`). The arbitrageur and the noise trader mint their
+input, as in step 3.
+
+</i>
+
+```solidity
+function _mkFundUsdc(address to, uint256 amount) internal virtual;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_mkinit-uint256"></a>
+
+### _mkInit
+
+Read sigma, the 30-minute mean tick (the walk's start), the depth and the liquidity of both pools now.
+Call at the pin, before any warp: sigma comes from the pool's observation ring.
+
+```solidity
+function _mkInit(uint256 seed_) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| seed_ | `uint256` |  |
+
+<a id="_mksigmaof-isimmarketpool"></a>
+
+### _mkSigmaOf
+
+<i>
+
+`RebalanceSim._sigma` for a 24/7 asset: the stdev of 30-minute mean-tick changes over the longest
+lookback the ring holds (ladder 48, 24, 12, 8, 4), times sqrt(3/2).
+
+</i>
+
+```solidity
+function _mkSigmaOf(ISimMarketPool p) internal view returns (uint256 sigma, uint256 intervals);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ISimMarketPool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sigma | `uint256` |  |
+| intervals | `uint256` |  |
+
+<a id="_mkmeantick-isimmarketpool-uint32"></a>
+
+### _mkMeanTick
+
+```solidity
+function _mkMeanTick(ISimMarketPool p, uint32 window) internal view returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ISimMarketPool` |  |
+| window | `uint32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_mkat-uint256"></a>
+
+### _mkAt
+
+Warp to `t` and roll one block per 2 seconds (Base), as RebalanceSim does. `t` must not lie behind.
+
+```solidity
+function _mkAt(uint256 t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+<a id="_mknoise"></a>
+
+### _mkNoise
+
+RebalanceSim `_noise` for wETH and cbBTC (same draws: asset key b × 2 + j).
+
+```solidity
+function _mkNoise() internal;
+```
+
+<a id="_mkwalkandarb-bool-int256"></a>
+
+### _mkWalkAndArb
+
+One walk step of each reference, then the arbitrageur (RebalanceSim `_arb` without deSPXA). On the
+jump slot (`jump`), wETH's reference also moves by `usdJumpMilli` milli-ticks of its USD price and the
+arbitrageur closes the whole gap (a = 1), as step 3 did for deSPXA (§10 step 3e).
+
+```solidity
+function _mkWalkAndArb(bool jump, int256 usdJumpMilli) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| jump | `bool` |  |
+| usdJumpMilli | `int256` |  |
+
+<a id="_mkarbto-uint256-uint256"></a>
+
+### _mkArbTo
+
+The arbitrageur closes the fraction `a` (1e18 = all) of pool b's gap to its reference.
+
+```solidity
+function _mkArbTo(uint256 b, uint256 a) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| a | `uint256` |  |
+
+<a id="_mkswaptolimit-uint256-bool-uint160"></a>
+
+### _mkSwapToLimit
+
+<i>
+
+`up`: pool price (token1 per token0) rises, so token1 goes in. A price-limited exact-input swap from
+this contract with a generous minted input; the pool sizes it. Returns the input spent and the output.
+
+</i>
+
+```solidity
+function _mkSwapToLimit(uint256 b, bool up, uint160 limit)
+        internal
+        returns (uint256 spent, uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| up | `bool` |  |
+| limit | `uint160` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+| got | `uint256` |  |
+
+<a id="_mkreftick-uint256"></a>
+
+### _mkRefTick
+
+The reference tick (milli-ticks truncated, as RebalanceSim `_refSqrt`).
+
+```solidity
+function _mkRefTick(uint256 b) internal view returns (int24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int24` |  |
+
+<a id="_mkrefsqrt-uint256"></a>
+
+### _mkRefSqrt
+
+```solidity
+function _mkRefSqrt(uint256 b) internal view returns (uint160);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint160` |  |
+
+<a id="_mkspotsqrt-uint256"></a>
+
+### _mkSpotSqrt
+
+```solidity
+function _mkSpotSqrt(uint256 b) internal view returns (uint160 sp);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sp | `uint160` |  |
+
+<a id="_mkusdcfor-uint256-uint256-uint160"></a>
+
+### _mkUsdcFor
+
+USDC units for `amount` token units of pool b at sqrt price `sqrtP`.
+
+```solidity
+function _mkUsdcFor(uint256 b, uint256 amount, uint160 sqrtP) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| amount | `uint256` |  |
+| sqrtP | `uint160` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_mktokenforusdc-uint256-uint256-uint160"></a>
+
+### _mkTokenForUsdc
+
+Token units of pool b for `usdc` at sqrt price `sqrtP` (the inverse of `_mkUsdcFor`).
+
+```solidity
+function _mkTokenForUsdc(uint256 b, uint256 usdc, uint160 sqrtP)
+        internal
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| usdc | `uint256` |  |
+| sqrtP | `uint160` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_mkbps-uint256-uint256"></a>
+
+### _mkBps
+
+Signed bps of `a` against `b`: (a − b) × 1e4 / b.
+
+```solidity
+function _mkBps(uint256 a, uint256 b) internal pure returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `uint256` |  |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+

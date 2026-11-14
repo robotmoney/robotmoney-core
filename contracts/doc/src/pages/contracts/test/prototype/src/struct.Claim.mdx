@@ -1,0 +1,39 @@
+---
+title: "Claim"
+description: "One fill of one request (E8: each fill is its own claim with its own unlock time)."
+---
+
+# Claim
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+
+One fill of one request (E8: each fill is its own claim with its own unlock time).
+
+```solidity
+struct Claim {
+    uint256 requestId;
+    address owner;
+    RequestKind kind;
+    uint64 settlementId;
+    uint64 unlockAt;
+    uint256 shares;
+    uint256 usdc;
+    uint256 claimed;
+    uint256 sharesClaimed;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` | The request it came from. |
+| owner | `address` | The request's owner. The only receiver (RB-11). |
+| kind | `RequestKind` | Deposit (shares held until `unlockAt`) or Redeem (USDC claimable at once). |
+| settlementId | `uint64` | The settlement that made it (the freeze is per settlement, E17). |
+| unlockAt | `uint64` | Deposit: settlement time + `minHold`. Redeem: settlement time. |
+| shares | `uint256` | Deposit: shares held for the owner. Redeem: shares burned. |
+| usdc | `uint256` | Deposit: USDC spent for them. Redeem: USDC owed to the owner (net of the exit fee). |
+| claimed | `uint256` | Deposit: shares already delivered or returned. Redeem: USDC already paid. |
+| sharesClaimed | `uint256` | Redeem only (appended by `queue`): burned shares whose USDC was already taken. The USDC paid<br/>is always `usdc × sharesClaimed / shares` rounded DOWN, so partial claims never sum above<br/>`usdc`. Deposit: unused (0). |
+

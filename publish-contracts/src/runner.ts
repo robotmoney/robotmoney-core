@@ -3,6 +3,7 @@
 // It spawns forge, cast and a read-only git status only. Every log line is JSON. Every failure class is a typed PublishError with its own exit code.
 // Resume: the run manifest keeps each stage's start nonce and count. A rerun adopts the existing Safe and skips finished stages.
 // A count mismatch after a broadcast is a hard failure. Plan: "One deploy sequence" (Resume), principle 17.
+import type { TableCreate2Library } from "./stage-table.ts";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { decodeErrorResult, type Abi, type Hex } from "viem";
@@ -16,7 +17,7 @@ import type { Logger } from "./log.ts";
 import { adoptableCoreTimelock, assertTimelockPin, predictCoreTimelock, type TimelockPrediction } from "./timelock-pin.ts";
 import { DryRunFiles, type ChainStarter } from "./preflight.ts";
 import type { PublishSigner } from "./signer.ts";
-import { ACTIVE_SYSTEM, DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
+import { ACTIVE_SYSTEM, handoverStage, DEPLOYER_STAGES, STAGES, expectedStartNonce, getStageTable, proofNoncesBefore, manifestRef, stageByName, type StageRow } from "./stages.ts";
 import { PROOF_STAGE, assertControlProven } from "./control-proof.ts";
 import { CONSUMED_VAULTS_MANIFESTS, hashConsumedManifests } from "./verify/gateway.ts";
 import { LIBS_STAGE, VAULT_KIND, resolveEnv } from "./core-wiring.ts";
@@ -24,7 +25,7 @@ import { runCoreConfigCheck, type CoreConfigCheck } from "./core-config-check.ts
 import { configCheck, loadVaultConfiguredAssets } from "./ci/config-check.ts";
 import { viemReader } from "./verify/reader.ts";
 import type { ChainReader } from "./verify/types.ts";
-import { manifestBase, manifestPathFor } from "./stage-table.ts";
+import { manifestBase, manifestPathFor, timelockExecutorOf } from "./stage-table.ts";
 import { eligibilityBps, type Address, type Sheet, type UpgradeMode } from "./sheet.ts";
 import type { RedeployRecord } from "./redeploy-vault.ts";
 import type { ImplementationDeploy } from "./deploy-implementation.ts";
@@ -109,7 +110,7 @@ export interface StageRecord {
 export interface RunManifest {
   version: 1;
   /** Issue 1892: the system this run deploys. Absent: a run manifest from before the split, the combined (vaults) run. */
-  system?: "vaults" | "gateway";
+  system?: "vaults" | "gateway" | "fund";
   /** Issue 1892, the gateway system only: sha256 of each vaults-system manifest the run consumed, taken when the run began. The verifier fails when one changed. */
   consumedVaultsManifests?: Record<string, string>;
   /** Issue 1727: the deployment kind of the run, from the sheet's DEPLOYMENT_KIND. A manifest written before the field existed is a production run. */
@@ -736,7 +737,7 @@ async function applyToSimulationChain(ctx: RunContext, row: StageRow, base: stri
  * the live Safe nonce is 1 or more. A dry run has no proof to find (it sends nothing) and skips the gate, loudly.
  */
 export async function controlProofGate(ctx: RunContext, row: StageRow, manifest: RunManifest): Promise<void> {
-  if (row.name !== "timelock") return;
+  if (row.name !== handoverStage()) return; // Deploy 4: the fund system hands over in fund-timelock
   if (ctx.dryRun) { ctx.log.log("warn", "stage.control_proof_skipped", { stage: row.name, reason: "dry run: the proof is a real transaction" }); return; }
   const api: Pick<SafeApi, "connectSafe"> = { connectSafe, ...(ctx.safeApi ?? {}) };
   const safe = readManifestField(ctx, manifestRef("safe", "safe"));
@@ -791,7 +792,7 @@ const createdEarlier = (manifest: RunManifest): Set<string> => new Set([...Objec
 async function adoptCreate2Libraries(ctx: RunContext, row: StageRow, manifest: RunManifest, dry: { count: number; creates: string[] }, expectedCount: number | undefined): Promise<AdoptedLibrary[]> {
   if (row.create2Libraries.length === 0) return [];
   if (expectedCount !== undefined && dry.count >= expectedCount) return [];
-  const all = getStageTable().create2Libraries ?? [];
+  const all = activeCreate2Libraries();
   const outDir = join(ctx.coreDir, "out");
   if (!create2ArtifactsPresent(all, outDir)) { ctx.log.log("warn", "stage.create2_not_evaluated", { stage: row.name, reason: `no build artifacts under ${outDir}` }); return []; }
   const built = buildCreate2Libraries(all, outDir);
@@ -841,7 +842,7 @@ export async function linkedLibraryCodeGate(ctx: RunContext, row: StageRow, mani
   }
   if (row.create2Libraries.length === 0) return checked;
   const outDir = join(ctx.coreDir, "out");
-  const all = t.create2Libraries ?? [];
+  const all = activeCreate2Libraries();
   if (!create2ArtifactsPresent(all, outDir)) refuse(`no build artifacts of the CREATE2 libraries under ${outDir}, so their addresses cannot be derived and proven to hold code before the stage links them.`, { out: outDir });
   const built = buildCreate2Libraries(all, outDir);
   const ownCreates = new Set(row.create2Libraries.map((l) => built.get(l.artifact)!.address.toLowerCase()));
@@ -861,15 +862,28 @@ export async function linkedLibraryCodeGate(ctx: RunContext, row: StageRow, mani
   return checked;
 }
 
+/**
+ * Deploy 4: the create2 libraries the active system's stages list. A run derives, adopts and gates only its own system's libraries, so a vaults run needs no build artifact of a
+ * fund-system library and the reverse (every stage lists the libraries its contracts link, transitively, so the set resolves every link of its own stages).
+ */
+function activeCreate2Libraries(): TableCreate2Library[] {
+  const names = new Set(systemStages().flatMap((s) => s.create2Libraries ?? []));
+  return (getStageTable().create2Libraries ?? []).filter((l) => names.has(l.name));
+}
+
 /** The first stage of the table that deploys proxies: it pins the core timelock prediction (issue 1835). */
-const firstProxyStage = (): string | undefined => getStageTable().stages.find((s) => (s.proxies?.length ?? 0) > 0 && s.upgradeTimelockEnv === undefined)?.name;
+const firstProxyStage = (): string | undefined => systemStages().find((s) => (s.proxies?.length ?? 0) > 0 && s.upgradeTimelockEnv === undefined)?.name;
+/** Deploy 4: the stages of the active system (a table from before the split: every stage). The fund system's proxies pin its own timelock, never the vaults system's. */
+const systemStages = () => { const t = getStageTable(); return t.systems ? t.stages.filter((s) => s.system === ACTIVE_SYSTEM) : t.stages; };
+/** The stage that deploys the active system's core-scheme timelock: the table's upgradeAuthority stage, or the system's own (fund-timelock). */
+const authorityStage = (): string | undefined => { const u = getStageTable().upgradeAuthority; return u ? (getStageTable().systems?.[ACTIVE_SYSTEM]?.upgradeAuthorityStage ?? u.stage) : undefined; };
 /** Pins of a dry run, which never persists the run manifest. */
 const dryRunPins = new WeakMap<object, TimelockPrediction>();
 /** The pin of this run: the first proxy stage's record (`rec` while that stage runs), or a dry run's. */
 const timelockPinOf = (manifest: RunManifest, rec?: StageRecord): TimelockPrediction | undefined => rec?.timelockPrediction ?? manifest.stages[firstProxyStage() ?? ""]?.timelockPrediction ?? dryRunPins.get(manifest);
 
 /** The stages of the table that deploy proxies (issue 1853: every one checks the pin before it broadcasts). */
-const isProxyStage = (name: string): boolean => { const s = getStageTable().stages.find((x) => x.name === name); return (s?.proxies?.length ?? 0) > 0 && s?.upgradeTimelockEnv === undefined; }; // issue 1892: a stage with an explicit upgrade timelock is not pinned to the core timelock
+const isProxyStage = (name: string): boolean => { const s = systemStages().find((x) => x.name === name); return (s?.proxies?.length ?? 0) > 0 && s?.upgradeTimelockEnv === undefined; }; // issue 1892: a stage with an explicit upgrade timelock is not pinned to the core timelock
 
 /**
  * Issue 1835, 1853. The first proxy stage pins the core timelock prediction (address and init code hash, from the build, the Safe and TIMELOCK_MIN_DELAY) in its run
@@ -880,9 +894,9 @@ const isProxyStage = (name: string): boolean => { const s = getStageTable().stag
  * Returns the recomputed prediction for the timelock stage.
  */
 async function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunManifest, rec: StageRecord, prior: StageRecord | undefined, env: Record<string, string>, resuming: boolean): Promise<ReturnType<typeof predictCoreTimelock> | undefined> {
-  const u = getStageTable().upgradeAuthority, first = firstProxyStage();
-  if (!u || !first || (!isProxyStage(row.name) && row.name !== u.stage)) return undefined;
-  const now = predictCoreTimelock(u, join(ctx.coreDir, "out"), env.SAFE_ADDRESS as Address, BigInt(env.TIMELOCK_MIN_DELAY!));
+  const u = getStageTable().upgradeAuthority, first = firstProxyStage(), authority = authorityStage();
+  if (!u || !first || (!isProxyStage(row.name) && row.name !== authority)) return undefined;
+  const now = predictCoreTimelock(u, join(ctx.coreDir, "out"), env.SAFE_ADDRESS as Address, BigInt(env.TIMELOCK_MIN_DELAY!), timelockExecutorOf(getStageTable(), ACTIVE_SYSTEM));
   const { runtimeHash: _, ...pin } = now;
   if (row.name === first) {
     if (prior?.timelockPrediction) assertTimelockPin(row.name, first, prior.timelockPrediction, pin);
@@ -894,7 +908,7 @@ async function timelockPinStep(ctx: RunContext, row: StageRow, manifest: RunMani
   }
   assertTimelockPin(row.name, first, timelockPinOf(manifest) ?? await backfillTimelockPin(ctx, row, manifest, first, pin), pin);
   ctx.log.log("info", "stage.timelock_pin_ok", { stage: row.name, timelock: pin.address, init_code_hash: pin.initCodeHash });
-  return row.name === u.stage ? now : undefined;
+  return row.name === authority ? now : undefined;
 }
 
 /**

@@ -61,13 +61,16 @@ export interface ProxySpec { name: string; stage: string; field: string; impleme
  */
 export const PINNED_PROXIES: readonly string[] = ["gateway"];
 
+/** Deploy 4: the verifier name of each fund-system proxy stage. They are not core contracts of the vaults system (CORE_CONTRACT_REFS), so a fund name never reaches its verifier. */
+export const FUND_PROXY_NAMES: Readonly<Record<string, string>> = { "fund-receipt": "fund-receipt", fund: "fund", rebalancer: "rebalancer", "fund-governance": "fund-governance", queue: "queue" };
+
 /** The full proxied core set from the stage table, in table order. A core name for a non-vault stage (CORE_CONTRACT_REFS), `vault[<name>]` for a vault stage. */
 export function proxySpecs(table: StageTable): ProxySpec[] {
   // Issue 1927: a prior line's table (the live v0.5.0 deployment) names its receipt in the ic-policy stage, beside the InvestmentCommitteePolicy proxy, and the retired rmAGENT vault.
   const refs = coreContractRefs(table.stages.map((s) => s.name));
   return table.stages.flatMap((s) => (s.proxies ?? []).map((p) => {
     const core = refs.find((r) => r.stage === s.name && r.field === p.field);
-    const name = s.vault ? `vault[${vaultDisplayName(s.vault)}]` : core?.name;
+    const name = s.vault ? `vault[${vaultDisplayName(s.vault)}]` : s.system === "fund" ? FUND_PROXY_NAMES[s.name] : core?.name;
     if (!name) throw new Error(`the stage table proxy ${s.name}.${p.field} is neither a vault nor a core contract this verifier names`);
     return { name, stage: s.name, ...p };
   }));

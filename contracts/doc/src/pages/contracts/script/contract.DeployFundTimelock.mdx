@@ -1,0 +1,246 @@
+---
+title: "DeployFundTimelock"
+description: "The fund system's handover, its LAST stage (Deploy 4). `DeployTimelock.s.sol` cannot be used: it hands over the vaults system (vaults, registry, router, RouterGovernance). This stage deploys the same `ProposerFloorTimelock` (Safe = only proposer, canceller AND executor, no admin: decision D4-10, `FundTimelockPolicy`; the vaults system's executor stays open, ADR-0004) at the CREATE2 address every fund-system proxy already names, with the same Safe check and delay floor (`CoreTimelockHandover`), asserts each of the five proxies names it, and only then moves the roles: - fund, rebalancer, queue: ADMIN_ROLE to the timelock, the deployer's copy renounced; - governance: ADMIN_ROLE and TARGET_SETTER_ROLE to the timelock (a receipt is applied only by a Safe-scheduled timelock operation), the deployer's copies renounced; - receipt register: ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the timelock, revoked from RECEIPT_ADMIN_ADDRESS (INV-3). After it the deployer holds no role on any fund-system contract. EMERGENCY_ROLE (fund, queue) is the emergency key's from initialization, KEEPER_ROLE (queue, rebalancer) the keeper's: both are read back here."
+---
+
+# DeployFundTimelock
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFundTimelock.s.sol)
+
+**Inherits:** [CoreTimelockHandover](/contracts/script/abstract.CoreTimelockHandover), [FundTimelockPolicy](/contracts/script/abstract.FundTimelockPolicy)
+
+**Title:** DeployFundTimelock
+
+The fund system's handover, its LAST stage (Deploy 4). `DeployTimelock.s.sol` cannot be used: it hands over the
+vaults system (vaults, registry, router, RouterGovernance). This stage deploys the same `ProposerFloorTimelock`
+(Safe = only proposer, canceller AND executor, no admin: decision D4-10, `FundTimelockPolicy`; the vaults system's
+executor stays open, ADR-0004) at the CREATE2 address every fund-system
+proxy already names, with the same Safe check and delay floor (`CoreTimelockHandover`), asserts each of the
+five proxies names it, and only then moves the roles:
+- fund, rebalancer, queue: ADMIN_ROLE to the timelock, the deployer's copy renounced;
+- governance: ADMIN_ROLE and TARGET_SETTER_ROLE to the timelock (a receipt is applied only by a Safe-scheduled
+timelock operation), the deployer's copies renounced;
+- receipt register: ADMIN_ROLE and DEFAULT_ADMIN_ROLE to the timelock, revoked from RECEIPT_ADMIN_ADDRESS (INV-3).
+After it the deployer holds no role on any fund-system contract. EMERGENCY_ROLE (fund, queue) is the emergency
+key's from initialization, KEEPER_ROLE (queue, rebalancer) the keeper's: both are read back here.
+
+Required env vars (no defaults): FUND_ADDRESS, REBALANCER_ADDRESS, FUND_GOVERNANCE_ADDRESS, QUEUE_ADDRESS,
+FUND_RECEIPT_ADDRESS, RECEIPT_ADMIN_ADDRESS, SAFE_ADDRESS, SAFE_OWNERS, SAFE_THRESHOLD, EMERGENCY_ADDRESS,
+KEEPER_ADDRESS, TIMELOCK_MIN_DELAY, DEPLOYMENT_OUT. DEPLOYMENT_KIND selects the rehearsal delay floor.
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
+
+```solidity
+string public constant MANIFEST_FILE = "fund-timelock.json";
+```
+
+### DEFAULT_ADMIN
+
+```solidity
+bytes32 internal constant DEFAULT_ADMIN = 0x00;
+```
+
+## Functions
+
+<a id="_timelockexecutor-address"></a>
+
+### _timelockExecutor
+
+<i>
+
+The fund system's executor policy (decision D4-10): the Safe.
+
+</i>
+
+```solidity
+function _timelockExecutor(address safe)
+        internal
+        pure
+        override(UpgradeAuthority, FundTimelockPolicy)
+        returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| safe | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="run"></a>
+
+### run
+
+Forge broadcast entrypoint.
+
+```solidity
+function run() external returns (Deployed memory d);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_validate-deployed-address-uint256"></a>
+
+### _validate
+
+```solidity
+function _validate(Deployed memory d, address[] memory owners, uint256 threshold)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+| owners | `address[]` |  |
+| threshold | `uint256` |  |
+
+<a id="_handover-deployed"></a>
+
+### _handOver
+
+<i>
+
+Grant first, then drop the deployer's copy: no contract is ever left without an admin.
+
+</i>
+
+```solidity
+function _handOver(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_moverole-address-bytes32-address"></a>
+
+### _moveRole
+
+```solidity
+function _moveRole(address target, bytes32 role, address timelock) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| role | `bytes32` |  |
+| timelock | `address` |  |
+
+<a id="_check-deployed"></a>
+
+### _check
+
+<i>
+
+The state this stage exists to establish, read back from the chain.
+
+</i>
+
+```solidity
+function _check(Deployed memory d) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+<a id="_implementationcodehash-address"></a>
+
+### _implementationCodeHash
+
+<i>
+
+ADR-0014: keccak256 of the code of `proxy`'s ERC-1967 implementation.
+
+</i>
+
+```solidity
+function _implementationCodeHash(address proxy) internal view returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_writejson-deployed"></a>
+
+### _writeJson
+
+```solidity
+function _writeJson(Deployed memory d) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| d | `Deployed` |  |
+
+## Structs
+
+### Deployed
+
+```solidity
+struct Deployed {
+        address timelock;
+        address fund;
+        address rebalancer;
+        address governance;
+        address queue;
+        address receipts;
+        address receiptAdmin;
+        address safe;
+        address emergency;
+        address keeper;
+        uint256 minDelay;
+        bool rehearsal;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+| fund | `address` |  |
+| rebalancer | `address` |  |
+| governance | `address` |  |
+| queue | `address` |  |
+| receipts | `address` |  |
+| receiptAdmin | `address` |  |
+| safe | `address` |  |
+| emergency | `address` |  |
+| keeper | `address` |  |
+| minDelay | `uint256` |  |
+| rehearsal | `bool` |  |
+

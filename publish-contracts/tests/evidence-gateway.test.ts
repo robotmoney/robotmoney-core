@@ -39,7 +39,7 @@ describe("a gateway system evidence (issue 1892)", () => {
     const vaultsStage = gatewayEvidence();
     vaultsStage.stages.push({ stage: "timelock", frozen_count: 25, receipt_count: 25, tx_hashes: [], receipts_status: [] });
     expect(problems(vaultsStage)).toContain("the gateway system runs [gateway, gateway-handover]");
-    expect(checkEvidence({ system: "other" }, FROZEN)).toEqual(["system 'other' is not vaults or gateway"]);
+    expect(checkEvidence({ system: "other" }, FROZEN)).toEqual(["system 'other' is not vaults, gateway or fund"]);
   });
   test("a vaults evidence that names its system carries no gateway stage and no gateway section", () => {
     const v: any = { system: "vaults", stages: [{ stage: "gateway", frozen_count: 3, receipt_count: 3, tx_hashes: [], receipts_status: [] }], gateway: {} };

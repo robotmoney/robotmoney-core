@@ -92,8 +92,9 @@ export async function stub(tool: "forge" | "cast" | "git"): Promise<void> {
     if (cfg.upgradeTimelock?.[file]) return cfg.upgradeTimelock[file]!;
     if (process.env.GATEWAY_UPGRADE_TIMELOCK) return process.env.GATEWAY_UPGRADE_TIMELOCK; // issue 1892: the gateway stage names the explicit timelock of its sheet
     if (!existsSync(join("out", "ProposerFloorTimelock.sol", "ProposerFloorTimelock.json")) || !process.env.SAFE_ADDRESS || !process.env.TIMELOCK_MIN_DELAY) return addr(0x1008);
-    const [{ loadStageTable }, { predictCoreTimelock }] = await Promise.all([import("../../src/stage-table.ts"), import("../../src/timelock-pin.ts")]);
-    return predictCoreTimelock(loadStageTable(".").upgradeAuthority!, "out", process.env.SAFE_ADDRESS as `0x${string}`, BigInt(process.env.TIMELOCK_MIN_DELAY)).address;
+    const [{ loadStageTable, timelockExecutorOf }, { predictCoreTimelock }] = await Promise.all([import("../../src/stage-table.ts"), import("../../src/timelock-pin.ts")]);
+    const t = loadStageTable("."), system = t.stages.find((s) => basename((s.script ?? "").split(":")[0]!) === file)?.system;
+    return predictCoreTimelock(t.upgradeAuthority!, "out", process.env.SAFE_ADDRESS as `0x${string}`, BigInt(process.env.TIMELOCK_MIN_DELAY), timelockExecutorOf(t, system)).address;
   };
   // Like real forge: `forge script --broadcast` runs the script (which writes its manifest) and then sends; `--resume` only sends what is missing from the
   // broadcast cache and never runs the script, so it writes no manifest (Deploy 3, 2026-10-18).

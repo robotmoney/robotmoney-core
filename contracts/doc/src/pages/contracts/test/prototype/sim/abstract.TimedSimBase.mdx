@@ -1,0 +1,1249 @@
+---
+title: "TimedSimBase"
+description: "The timed world the timed-flow sim and the timed sim attacks run in: the live five-asset fund and its FlowQueue (PrototypeHarness), the step 3 market for wETH and cbBTC (`SimMarket`), Chainlink feeds that follow the market's fair-price walk, and a keeper that settles every epoch at the end of its window."
+---
+
+# TimedSimBase
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/TimedSimBase.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness), [SimMarket](/contracts/test/prototype/sim/abstract.SimMarket)
+
+**Title:** TimedSimBase
+
+The timed world the timed-flow sim and the timed sim attacks run in: the live five-asset fund and its
+FlowQueue (PrototypeHarness), the step 3 market for wETH and cbBTC (`SimMarket`), Chainlink feeds that follow
+the market's fair-price walk, and a keeper that settles every epoch at the end of its window.
+
+Feed model (eng plan §4.4). Each basket feed is a `MockAggregator` at the real feed address (the harness
+places them). Its answer is the reference walk's price, never the pool's. A new round is written when the
+walk moves the price more than the feed's deviation threshold from the last answer (checked right after
+each walk step, which is the only time the reference moves), and when `heartbeat` seconds passed since the
+last round (stamped at the heartbeat time, with the price of that moment). Thresholds and heartbeats are
+the Chainlink directory values for Base that `docs/technical/research/vault-share-pricing-models.md`
+records (2026-11-11): ETH / USD 0.15 % and 20 min, cbBTC / USD 0.3 % and 20 min. The harness sets cbBTC's
+`maxFeedAge` from a 24 h heartbeat; the 20 min heartbeat here only writes rounds more often, so the feed is
+never staler than either reading allows (recorded in notes/sim.md). USDC / USD is held at 1.00000000 with a
+24 h heartbeat, and the sequencer is up: the sim models neither a depeg nor an outage (A17 covers them).
+
+Keeper model (§5.9.2 step 4, D3). The keeper calls `settle(256, max)` at each window end, `k ×
+epochLength + settleWindow`, when `checkSettle()` says something is settleable. A call that reverts, or in
+which a side fails, is retried at the start of every later 30-minute slot until one succeeds. The keeper
+settles before it steps the rebalance in the same block. It never sends a call the sim does not record:
+every attempt is kept with its outcome and the state around it (`attempts`).
+
+Records. Every attempt (`AttemptRec`), every settlement that traded (`SettleRec`) and every request the
+sim made (`ReqRec`) is kept for the JSON. Costs are against the feed (NAV per share at the feeds before the
+settlement, the value the queue's own checks use) and against the reference walk, before the exit fee.
+
+## Constants
+
+### FEED_DEV_BPS_ETH
+
+```solidity
+uint256 internal constant FEED_DEV_BPS_ETH = 15;
+```
+
+### FEED_DEV_BPS_CBBTC
+
+```solidity
+uint256 internal constant FEED_DEV_BPS_CBBTC = 30;
+```
+
+### FEED_HEARTBEAT_SEC
+
+```solidity
+uint256 internal constant FEED_HEARTBEAT_SEC = 1_200;
+```
+
+### USDC_FEED_HEARTBEAT_SEC
+
+```solidity
+uint256 internal constant USDC_FEED_HEARTBEAT_SEC = 86_400;
+```
+
+### ATT_FIRST
+
+<i>
+
+A window-end call for an epoch that holds new requests (the "first call after the window" of G9).
+
+</i>
+
+```solidity
+uint8 internal constant ATT_FIRST = 1;
+```
+
+### ATT_CONTINUE
+
+<i>
+
+A window-end call that only continues older requests (a cap or a block left them pending).
+
+</i>
+
+```solidity
+uint8 internal constant ATT_CONTINUE = 2;
+```
+
+### ATT_RETRY
+
+<i>
+
+A retry at a slot start after a call that reverted or in which a side failed.
+
+</i>
+
+```solidity
+uint8 internal constant ATT_RETRY = 3;
+```
+
+### OUT_OK
+
+<i>
+
+Both sides that had fills traded.
+
+</i>
+
+```solidity
+uint16 internal constant OUT_OK = 0;
+```
+
+### OUT_NOOP
+
+<i>
+
+No revert and no side failed, but nothing traded (every request skipped by its limit or left by a cap).
+
+</i>
+
+```solidity
+uint16 internal constant OUT_NOOP = 2;
+```
+
+### OUT_DEP_FAILED
+
+```solidity
+uint16 internal constant OUT_DEP_FAILED = 10;
+```
+
+### OUT_RED_FAILED
+
+```solidity
+uint16 internal constant OUT_RED_FAILED = 11;
+```
+
+### OUT_BOTH_FAILED
+
+```solidity
+uint16 internal constant OUT_BOTH_FAILED = 12;
+```
+
+### OUT_BLOCKED_BASE
+
+<i>
+
+100 + SettleCheck: `settle` reverted `SettleBlocked(check, index, detail)`.
+
+</i>
+
+```solidity
+uint16 internal constant OUT_BLOCKED_BASE = 100;
+```
+
+### OUT_OUT_OF_GAS
+
+```solidity
+uint16 internal constant OUT_OUT_OF_GAS = 300;
+```
+
+### OUT_OTHER_REVERT
+
+```solidity
+uint16 internal constant OUT_OTHER_REVERT = 400;
+```
+
+## State Variables
+
+### feedAddr
+
+```solidity
+address[2] internal feedAddr;
+```
+
+### basketIdx
+
+```solidity
+uint256[2] internal basketIdx;
+```
+
+### feedPx8
+
+```solidity
+int256[2] internal feedPx8;
+```
+
+### feedAt
+
+```solidity
+uint256[2] internal feedAt;
+```
+
+### usdcFeedAt
+
+```solidity
+uint256 internal usdcFeedAt;
+```
+
+### feedRoundsDeviation
+
+```solidity
+uint256[2] internal feedRoundsDeviation;
+```
+
+### feedRoundsHeartbeat
+
+```solidity
+uint256[2] internal feedRoundsHeartbeat;
+```
+
+### lastSchedK
+
+<i>
+
+The last window end (k of `k × epochLength + settleWindow`) the keeper handled.
+
+</i>
+
+```solidity
+uint256 internal lastSchedK;
+```
+
+### retryDue
+
+```solidity
+bool internal retryDue;
+```
+
+### attempts
+
+```solidity
+AttemptRec[] internal attempts;
+```
+
+### settles
+
+```solidity
+SettleRec[] internal settles;
+```
+
+### reqs
+
+```solidity
+ReqRec[] internal reqs;
+```
+
+### reqIndex
+
+<i>
+
+requestId => index + 1 in `reqs` (0: not a sim request, e.g. genesis).
+
+</i>
+
+```solidity
+mapping(uint256 => uint256) internal reqIndex;
+```
+
+### lastSettlePx
+
+<i>
+
+NAV per share at the feeds and the venue rates at the last settlement that traded (normal range).
+
+</i>
+
+```solidity
+uint256 internal lastSettlePx;
+```
+
+### lastSettleAt
+
+```solidity
+uint256 internal lastSettleAt;
+```
+
+### lastLendRate
+
+```solidity
+uint256[3] internal lastLendRate;
+```
+
+### lastDepBound
+
+<i>
+
+Bound prices of the last quotes that answered, for a client whose quote reverts now.
+
+</i>
+
+```solidity
+uint256 internal lastDepBound;
+```
+
+### lastRedBound
+
+```solidity
+uint256 internal lastRedBound;
+```
+
+### lastAttemptDepFills
+
+<i>
+
+Fills of the last attempt (read by `_onSettlePost`).
+
+</i>
+
+```solidity
+uint256 internal lastAttemptDepFills;
+```
+
+### lastAttemptRedFills
+
+```solidity
+uint256 internal lastAttemptRedFills;
+```
+
+## Functions
+
+<a id="_mkfundusdc-address-uint256"></a>
+
+### _mkFundUsdc
+
+<i>
+
+Credit `amount` USDC to `to` (the harness's `fundUsdc`). The arbitrageur and the noise trader mint their
+input, as in step 3.
+
+</i>
+
+```solidity
+function _mkFundUsdc(address to, uint256 amount) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="_fixturecheckbydefault"></a>
+
+### _fixtureCheckByDefault
+
+<i>
+
+The sims skip the per-slot fixture coverage check unless PROTO_FIXTURE_CHECK=1, as RebalanceSim does.
+
+</i>
+
+```solidity
+function _fixtureCheckByDefault() internal pure virtual override returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_onsettlepre"></a>
+
+### _onSettlePre
+
+<i>
+
+Called right before each keeper `settle` attempt and right after it (plan accounting in the sim; the
+attacker's last push before the keeper's call and its unwind after it in the sim attacks). Same block.
+
+</i>
+
+```solidity
+function _onSettlePre() internal virtual;
+```
+
+<a id="_onsettlepost-uint16"></a>
+
+### _onSettlePost
+
+```solidity
+function _onSettlePost(uint16 outcome) internal virtual;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| outcome | `uint16` |  |
+
+<a id="_feedinit"></a>
+
+### _feedInit
+
+Put every feed on the reference walk now (a fresh round), USDC at 1, the sequencer up.
+
+```solidity
+function _feedInit() internal;
+```
+
+<a id="_refprice8-uint256"></a>
+
+### _refPrice8
+
+USD price (8 decimals) of one whole basket token at the reference walk.
+
+```solidity
+function _refPrice8(uint256 b) internal view returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_pushfeed-uint256-int256-uint256"></a>
+
+### _pushFeed
+
+```solidity
+function _pushFeed(uint256 b, int256 px8, uint256 at) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| px8 | `int256` |  |
+| at | `uint256` |  |
+
+<a id="_feedtick"></a>
+
+### _feedTick
+
+Heartbeat rounds due by now (each at its heartbeat time, at the reference of that moment), the USDC
+feed's daily round, and the sequencer's status. Call after every warp, before the reference moves.
+
+```solidity
+function _feedTick() internal;
+```
+
+<a id="_feeddeviation"></a>
+
+### _feedDeviation
+
+Deviation rounds: right after a walk step, each feed whose answer is more than its threshold from the
+new reference price writes a round now.
+
+```solidity
+function _feedDeviation() internal;
+```
+
+<a id="_feedpertoken-uint256"></a>
+
+### _feedPerToken
+
+Feed price of one whole basket token in USDC units, as the queue reads it (USD feed / USDC feed).
+
+```solidity
+function _feedPerToken(uint256 b) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_refpertoken-uint256"></a>
+
+### _refPerToken
+
+```solidity
+function _refPerToken(uint256 b) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_navfeedref"></a>
+
+### _navFeedRef
+
+NAV at the feeds and at the reference walk from the fund's held amounts (heldBalances).
+
+```solidity
+function _navFeedRef() internal view returns (uint256 navFeed, uint256 navRef, uint256 supply);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navFeed | `uint256` |  |
+| navRef | `uint256` |  |
+| supply | `uint256` |  |
+
+<a id="_schedinit"></a>
+
+### _schedInit
+
+Start the keeper's schedule now: the next window end after now is the first it handles.
+
+```solidity
+function _schedInit() internal;
+```
+
+<a id="_until-uint256"></a>
+
+### _until
+
+Advance time to `t`, stopping at every window end on the way for the keeper's scheduled call.
+
+```solidity
+function _until(uint256 t) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+<a id="_scheduledsettle-uint256"></a>
+
+### _scheduledSettle
+
+The keeper's call at the end of window k (epoch k − 1 closed an hour ago), if anything is settleable.
+
+```solidity
+function _scheduledSettle(uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+
+<a id="_retrysettle"></a>
+
+### _retrySettle
+
+At a slot start: retry a call that failed, while something is settleable.
+
+```solidity
+function _retrySettle() internal;
+```
+
+<a id="_settled-uint16"></a>
+
+### _settled
+
+No revert and no failed side.
+
+```solidity
+function _settled(uint16 out) internal pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_settleattempt-uint8"></a>
+
+### _settleAttempt
+
+One keeper `settle` call, recorded with the market around it.
+
+```solidity
+function _settleAttempt(uint8 kind) internal returns (uint16 outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| outcome | `uint16` |  |
+
+<a id="_sqrtmovebps-uint256-uint160-uint160"></a>
+
+### _sqrtMoveBps
+
+<i>
+
+Signed move of the token's USDC price from sqrt price `s0` to `s1`, in bps.
+
+</i>
+
+```solidity
+function _sqrtMoveBps(uint256 b, uint160 s0, uint160 s1) internal view returns (int256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `uint256` |  |
+| s0 | `uint160` |  |
+| s1 | `uint160` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `int256` |  |
+
+<a id="_observesettle-attemptrec"></a>
+
+### _observeSettle
+
+<i>
+
+The quantities the §5.9.5 values bound, read before the call: TWAP (slice median) against the feed, the
+slices in the dispersion band and the widest slice, the spot against the feed, the share-price move
+since the last settlement per epoch passed, and the fastest venue-rate growth per day since then.
+
+</i>
+
+```solidity
+function _observeSettle(AttemptRec memory a) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AttemptRec` |  |
+
+<a id="_slicestats-int24-uint16"></a>
+
+### _sliceStats
+
+<i>
+
+Median (lower) of the slice means, the slices within `dispersionBps` of it (TwapSlicesLib's band) and the
+widest slice's distance from it in ticks (one tick is about 1 bp of price).
+
+</i>
+
+```solidity
+function _sliceStats(int24[] memory means, uint16 dispersionBps)
+        internal
+        pure
+        returns (int24 med, uint256 inBand, uint256 widest);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| means | `int24[]` |  |
+| dispersionBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| med | `int24` |  |
+| inBand | `uint256` |  |
+| widest | `uint256` |  |
+
+<a id="_lendrates"></a>
+
+### _lendRates
+
+```solidity
+function _lendRates() internal view returns (uint256[3] memory r);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `uint256[3]` |  |
+
+<a id="_booksettle-uint256-vmsafe-log-basis-attemptrec"></a>
+
+### _bookSettle
+
+<i>
+
+Book a call that returned: its fills (against the feed and the reference), its skips, its failed sides.
+
+</i>
+
+```solidity
+function _bookSettle(uint256 sid, VmSafe.Log[] memory logs, Basis memory v, AttemptRec memory a)
+        internal
+        returns (uint16 outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| logs | `VmSafe.Log[]` |  |
+| v | `Basis` |  |
+| a | `AttemptRec` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| outcome | `uint16` |  |
+
+<a id="_bookdepositfill-vmsafe-log-basis"></a>
+
+### _bookDepositFill
+
+<i>
+
+`DepositFilled(requestId, claimId, settlementId; usdc, shares, unlockAt)`: cost = USDC spent − the
+shares' value at NAV per share before the settlement.
+
+</i>
+
+```solidity
+function _bookDepositFill(VmSafe.Log memory log, Basis memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| log | `VmSafe.Log` |  |
+| v | `Basis` |  |
+
+<a id="_bookredeemfill-vmsafe-log-basis"></a>
+
+### _bookRedeemFill
+
+<i>
+
+`RedeemFilled(requestId, claimId, settlementId; shares, usdc)`, `usdc` net of the exit fee: cost = the
+shares' value − the USDC before the fee (`usdc / (1 − fee)`).
+
+</i>
+
+```solidity
+function _bookRedeemFill(VmSafe.Log memory log, Basis memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| log | `VmSafe.Log` |  |
+| v | `Basis` |  |
+
+<a id="_booksettlement-uint256-bytes-basis"></a>
+
+### _bookSettlement
+
+```solidity
+function _bookSettlement(uint256 sid, bytes memory data, Basis memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sid | `uint256` |  |
+| data | `bytes` |  |
+| v | `Basis` |  |
+
+<a id="_markdone"></a>
+
+### _markDone
+
+<i>
+
+Mark every open sim request the queue now reports closed.
+
+</i>
+
+```solidity
+function _markDone() internal;
+```
+
+<a id="_blockedoutcome-bytes-attemptrec"></a>
+
+### _blockedOutcome
+
+<i>
+
+A reverted `settle`: SettleBlocked names its check; anything else is recorded by selector.
+
+</i>
+
+```solidity
+function _blockedOutcome(bytes memory err, AttemptRec memory a) internal pure returns (uint16);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| err | `bytes` |  |
+| a | `AttemptRec` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16` |  |
+
+<a id="_words-bytes"></a>
+
+### _words
+
+<i>
+
+The selector and the first three words of revert data (zero where absent).
+
+</i>
+
+```solidity
+function _words(bytes memory err)
+        internal
+        pure
+        returns (bytes4 sel, uint256 w0, uint256 w1, uint256 w2);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| err | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sel | `bytes4` |  |
+| w0 | `uint256` |  |
+| w1 | `uint256` |  |
+| w2 | `uint256` |  |
+
+<a id="_reqdeposit-address-uint256-uint256"></a>
+
+### _reqDeposit
+
+Fund `who` with `usdc` and request a deposit with the limit `quote × (1 + slackBps)`. A quote that
+reverts now (checks 2 to 5 fail) leaves the client with the last quote that answered (or the TWAP NAV
+per share plus twice `legBandBps` when none did). Returns false when the request reverts.
+
+```solidity
+function _reqDeposit(address who, uint256 usdc, uint256 slackBps)
+        internal
+        returns (bool ok, uint256 id, bytes memory err);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| usdc | `uint256` |  |
+| slackBps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| id | `uint256` |  |
+| err | `bytes` |  |
+
+<a id="_reqredeem-address-uint256-uint256"></a>
+
+### _reqRedeem
+
+`who` requests a redemption of `shares` with the limit `quote × (1 − slackBps)` (same fallback).
+
+```solidity
+function _reqRedeem(address who, uint256 shares, uint256 slackBps)
+        internal
+        returns (bool ok, uint256 id, bytes memory err);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| shares | `uint256` |  |
+| slackBps | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| id | `uint256` |  |
+| err | `bytes` |  |
+
+<a id="_recordreq-uint256-bool-bool-uint256-uint256-uint256"></a>
+
+### _recordReq
+
+```solidity
+function _recordReq(
+        uint256 id,
+        bool isDeposit,
+        bool quoteFailed,
+        uint256 amount,
+        uint256 value,
+        uint256 limit
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| isDeposit | `bool` |  |
+| quoteFailed | `bool` |  |
+| amount | `uint256` |  |
+| value | `uint256` |  |
+| limit | `uint256` |  |
+
+<a id="_twappx"></a>
+
+### _twapPx
+
+NAV per share at the TWAP (`portfolioValues`, which reads no feed), PRICE_SCALE units.
+
+```solidity
+function _twapPx() internal view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_exitfeebps"></a>
+
+### _exitFeeBps
+
+```solidity
+function _exitFeeBps() internal view returns (uint256 fee);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fee | `uint256` |  |
+
+<a id="_applyflowoverrides"></a>
+
+### _applyFlowOverrides
+
+<i>
+
+PROTO_SIM_FLOW_&lt;FIELD> overrides, set through the timelock (the queue's only admin path). Shared by the
+timed-flow sim and the timed sim attacks, so a lever is measured in both the same way.
+
+</i>
+
+```solidity
+function _applyFlowOverrides() internal returns (bool changed);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| changed | `bool` |  |
+
+<a id="_envu-string-uint256"></a>
+
+### _envU
+
+```solidity
+function _envU(string memory field, uint256 cur) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| field | `string` |  |
+| cur | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_investquiet-uint16-5"></a>
+
+### _investQuiet
+
+Spread idle USDC over `v` with a 1-day plan through the timelock, stepping as the keeper every
+interval with fresh feeds (the harness's `investFund` without the stale-feed warps).
+
+```solidity
+function _investQuiet(uint16[5] memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+<a id="_depositquiet-address-uint256-uint256"></a>
+
+### _depositQuiet
+
+Deposit `total` USDC through the queue for `holders`, one request of at most `chunk` per cap period
+(each request fills whole in its own period, so none waits past `maxRoll`), then deliver every share
+after the hold. The keeper settles each at its window end with fresh feeds.
+
+```solidity
+function _depositQuiet(address[] memory holders, uint256 total, uint256 chunk) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holders | `address[]` |  |
+| total | `uint256` |  |
+| chunk | `uint256` |  |
+
+<a id="_stampquiet"></a>
+
+### _stampQuiet
+
+Stamp every feed now at its current answer (no market runs yet, so the reference stands still).
+
+```solidity
+function _stampQuiet() internal;
+```
+
+## Structs
+
+### AttemptRec
+
+<i>
+
+One keeper attempt. Basket arrays are [wETH, cbBTC]. `index`/`detail`: of the revert (SettleBlocked's
+asset and detail; the selector of any other revert), or of the failed side (its reason's selector in
+`detail`). The `*Bps` fields describe the market just before the call (the normal range of §5.9.5).
+
+</i>
+
+```solidity
+struct AttemptRec {
+        uint64 at;
+        uint8 kind;
+        uint16 outcome;
+        uint256 index;
+        uint256 detail;
+        uint256 settlementId;
+        uint256 fills;
+        uint256 limitSkips;
+        int256[2] twapVsFeedBps;
+        uint256[2] slicesInBand;
+        uint256[2] sliceDevBps;
+        int256[2] spotVsFeedBps;
+        int256[2] spotMoveBps;
+        uint256 sharePriceMoveBps;
+        uint256 lendGrowthCentiBpsPerDay;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| at | `uint64` |  |
+| kind | `uint8` |  |
+| outcome | `uint16` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+| settlementId | `uint256` |  |
+| fills | `uint256` |  |
+| limitSkips | `uint256` |  |
+| twapVsFeedBps | `int256[2]` |  |
+| slicesInBand | `uint256[2]` |  |
+| sliceDevBps | `uint256[2]` |  |
+| spotVsFeedBps | `int256[2]` |  |
+| spotMoveBps | `int256[2]` |  |
+| sharePriceMoveBps | `uint256` |  |
+| lendGrowthCentiBpsPerDay | `uint256` |  |
+
+### SettleRec
+
+<i>
+
+One settlement that traded. Fair values are NAV per share before the settlement × shares.
+
+</i>
+
+```solidity
+struct SettleRec {
+        uint64 at;
+        uint256 settlementId;
+        uint256 depUsdc;
+        uint256 depFairFeed;
+        uint256 depFairRef;
+        uint256 redGross;
+        uint256 redFairFeed;
+        uint256 redFairRef;
+        uint256 navFeed;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| at | `uint64` |  |
+| settlementId | `uint256` |  |
+| depUsdc | `uint256` |  |
+| depFairFeed | `uint256` |  |
+| depFairRef | `uint256` |  |
+| redGross | `uint256` |  |
+| redFairFeed | `uint256` |  |
+| redFairRef | `uint256` |  |
+| navFeed | `uint256` |  |
+
+### ReqRec
+
+<i>
+
+One request the sim made. Deposit: `amount` is USDC escrowed, `filled` USDC spent, `basis` the USDC
+spent; cost = spent − fair value of the shares. Redemption: `amount` shares escrowed, `filled` shares
+burned, `basis` the fair value of the burned shares; cost = fair value − USDC before the exit fee.
+
+</i>
+
+```solidity
+struct ReqRec {
+        uint256 id;
+        bool isDeposit;
+        bool quoteFailed;
+        uint64 at;
+        uint64 epoch;
+        uint256 amount;
+        uint256 valueUsdc;
+        uint256 limit;
+        uint256 filled;
+        uint256 basis;
+        int256 costFeed;
+        int256 costRef;
+        uint64 firstFillAt;
+        uint64 doneAt;
+        uint64 unlockAt;
+        uint256 fills;
+        uint256 limitSkips;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| isDeposit | `bool` |  |
+| quoteFailed | `bool` |  |
+| at | `uint64` |  |
+| epoch | `uint64` |  |
+| amount | `uint256` |  |
+| valueUsdc | `uint256` |  |
+| limit | `uint256` |  |
+| filled | `uint256` |  |
+| basis | `uint256` |  |
+| costFeed | `int256` |  |
+| costRef | `int256` |  |
+| firstFillAt | `uint64` |  |
+| doneAt | `uint64` |  |
+| unlockAt | `uint64` |  |
+| fills | `uint256` |  |
+| limitSkips | `uint256` |  |
+
+### Basis
+
+<i>
+
+NAV per share before a settlement, at the feeds and at the reference, and the exit fee.
+
+</i>
+
+```solidity
+struct Basis {
+        uint256 navFeed;
+        uint256 navRef;
+        uint256 supply;
+        uint256 feeBps;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| navFeed | `uint256` |  |
+| navRef | `uint256` |  |
+| supply | `uint256` |  |
+| feeBps | `uint256` |  |
+

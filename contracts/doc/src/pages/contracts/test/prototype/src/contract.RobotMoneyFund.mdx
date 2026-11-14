@@ -1,0 +1,2047 @@
+---
+title: "RobotMoneyFund"
+description: "The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind `GovernedUUPS` (ADR-0014). It holds a flat list of Lending adapters and Basket tokens, one persistent target weight per asset, and one rebalance plan at a time. No sleeve or category is stored or read (§4.1, RB-9). It is the union of `RobotMoneyVault` (cap allocator, ADP-2 exclusion, `ExclusionLedger`) and `BasketVault` (TWAP NAV, ORA-4, realized-delta mint, proportional sell, `redeemInKind`, emergency unwind), plus the plan state and `executeStep`."
+---
+
+# RobotMoneyFund
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/RobotMoneyFund.sol)
+
+**Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRobotMoneyFund](/contracts/test/prototype/src/interfaces/interface.IRobotMoneyFund)
+
+**Title:** RobotMoneyFund
+
+The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind `GovernedUUPS` (ADR-0014). It holds
+a flat list of Lending adapters and Basket tokens, one persistent target weight per asset, and one
+rebalance plan at a time. No sleeve or category is stored or read (§4.1, RB-9). It is the union of
+`RobotMoneyVault` (cap allocator, ADP-2 exclusion, `ExclusionLedger`) and `BasketVault` (TWAP NAV,
+ORA-4, realized-delta mint, proportional sell, `redeemInKind`, emergency unwind), plus the plan state
+and `executeStep`.
+
+Authority (RB-1, RB-3):
+- GOVERNANCE_ROLE (RebalanceGovernance): `setTargetAndOpenPlan`.
+- REBALANCER_ROLE (Rebalancer): `executeStep`, `concludePlan`.
+Both are self-administered and granted exactly once by `bindRebalanceRoles`, so no ADMIN_ROLE
+holder can hand either to another address (the router's WEIGHT_SETTER_ROLE model).
+- EMERGENCY_ROLE (hot key): the pauses only, `pauseRebalance` and `pauseDeposits`. A pause only
+delays; one key cannot end the fund or sell its holdings (owner, 2026-11-13).
+- ADMIN_ROLE (timelock): assets, caps, fees, guards, `resumePlan`, `extendBudget`, `closePlan`,
+`unpauseDeposits`, `shutdown`, `restore`, `emergencyUnwind`, and every role grant. `shutdown`
+and `emergencyUnwind` are governed (Safe + timelock delay, owner 2026-11-13): each ends the
+fund's deposits or sells every holding, so no single hot key holds them. ADMIN carries no upgrade power: only
+`upgradeTimelock()` upgrades or freezes the proxy.
+- `redeem` and `redeemInKind` are never gated by plan state, pause or shutdown (RB-6).
+
+Size (§6.1, G1): value-moving and validation logic lives in the delegatecall-linked
+`FundValuationLib`, `FundFlowsLib`, `FundAdminLib` and (step 3d) `FundPositionLib`, which in turn link the existing
+`TwapTickMath`, `BasketSwaps`, `BasketAssetConfigGuard` and `RobotMoneyVaultOps` (ledger creation).
+The fund keeps ERC-4626 accounting, roles, plan transitions and lifecycle flags.
+
+Custody (INV-1): no function sends a protocol asset to a caller-supplied address except the
+ERC-4626 `receiver` of the caller's own (or allowance-approved) redemption. Swaps pay the fund; USDC
+leaves only to an allowlisted adapter, the fixed exit-fee recipient, or the exclusion ledger.
+
+## Constants
+
+### ADMIN_ROLE
+
+```solidity
+bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
+```
+
+### EMERGENCY_ROLE
+
+```solidity
+bytes32 public constant EMERGENCY_ROLE = Roles.EMERGENCY_ROLE;
+```
+
+### GOVERNANCE_ROLE
+
+```solidity
+bytes32 public constant GOVERNANCE_ROLE = Roles.GOVERNANCE_ROLE;
+```
+
+### REBALANCER_ROLE
+
+```solidity
+bytes32 public constant REBALANCER_ROLE = Roles.REBALANCER_ROLE;
+```
+
+### FLOW_ROLE
+
+The FlowQueue's authority (E1): `mintInKind`, `sellForFlow`, `ledgerCheckpoint`. Bound once.
+
+```solidity
+bytes32 public constant FLOW_ROLE = Roles.FLOW_ROLE;
+```
+
+## Functions
+
+<a id="initialize-fundinitparams-address-governeduups-upgrademode"></a>
+
+### initialize
+
+Atomic proxy initialization. Validates the BasketVault / RobotMoneyVault parameter ceilings,
+grants ADMIN_ROLE (self-administered) and EMERGENCY_ROLE; GOVERNANCE_ROLE and REBALANCER_ROLE
+are self-administered and bound once later (`bindRebalanceRoles`: the governance and rebalancer
+proxies take the fund address at their own initialization). Creates the fund's `ExclusionLedger` (ADP-2, core 1820) through the
+linked `RobotMoneyVaultOps.createLedger`, so the ledger names this proxy as its only writer.
+
+```solidity
+function initialize(
+        FundInitParams calldata p,
+        address upgradeTimelock,
+        GovernedUUPS.UpgradeMode mode
+    ) external initializer;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `FundInitParams` |  |
+| upgradeTimelock | `address` |  |
+| mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="decimals"></a>
+
+### decimals
+
+6, as both vault families (the 10^18 virtual offset makes raw share counts large).
+
+```solidity
+function decimals() public pure override(ERC4626Upgradeable) returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="_decimalsoffset"></a>
+
+### _decimalsOffset
+
+<i>
+
+18: the vault families' inflation-attack offset (security-model.md).
+
+</i>
+
+```solidity
+function _decimalsOffset() internal pure override returns (uint8);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint8` |  |
+
+<a id="totalassets"></a>
+
+### totalAssets
+
+Idle USDC + Σ counted Lending holders' part + Σ active Basket balance × TWAP (§4.2). Never reads
+spot. An excluded Lending adapter (ADP-2) and the position claims of past in-kind exits are not
+counted. Step 3d (E19, §5.9.6): reverts `FeedUnhealthy(index, status)` while a feed is unhealthy (the
+feeds of settlement check 2), and so do `convertToShares` and `convertToAssets`, which read it. A client
+reads `lastGoodNav` then.
+
+```solidity
+function totalAssets() public view override returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deposit-uint256-address"></a>
+
+### deposit
+
+Closed (E2): reverts `UseFlowQueue(flowQueue())`. Deposit through `FlowQueue.requestDeposit`.
+
+```solidity
+function deposit(uint256, address) public view override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="mint-uint256-address"></a>
+
+### mint
+
+Closed (E2): reverts `UseFlowQueue(flowQueue())`.
+
+```solidity
+function mint(uint256, address) public view override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="redeem-uint256-address-address"></a>
+
+### redeem
+
+Closed (E2): reverts `UseFlowQueue(flowQueue())`. Redeem through `FlowQueue.requestRedeem`, or
+exit at once in kind with `redeemInKind`.
+
+```solidity
+function redeem(uint256, address, address) public view override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `address` |  |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewdeposit-uint256"></a>
+
+### previewDeposit
+
+Reverts `UseFlowQueue`: no synchronous price exists for a timed flow (ERC-7540 previews revert).
+`FlowQueue.quoteDeposit` gives the worst case instead (E21).
+
+```solidity
+function previewDeposit(uint256) public view override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewmint-uint256"></a>
+
+### previewMint
+
+Reverts `UseFlowQueue` (see `previewDeposit`).
+
+```solidity
+function previewMint(uint256) public view override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewredeem-uint256"></a>
+
+### previewRedeem
+
+Reverts `UseFlowQueue` (see `previewDeposit`; `FlowQueue.quoteRedeem`).
+
+```solidity
+function previewRedeem(uint256) public view override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxdeposit-address"></a>
+
+### maxDeposit
+
+0: the fund's own `deposit` is closed (ERC-4626 requires 0 for a disabled path, never a revert).
+
+```solidity
+function maxDeposit(address) public pure override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxmint-address"></a>
+
+### maxMint
+
+0 (see `maxDeposit`).
+
+```solidity
+function maxMint(address) public pure override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxredeem-address"></a>
+
+### maxRedeem
+
+0: the fund's own `redeem` is closed. `redeemInKind` stays open.
+
+```solidity
+function maxRedeem(address) public pure override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_usequeue"></a>
+
+### _useQueue
+
+<i>
+
+Revert `UseFlowQueue` naming the bound queue (address(0) before `bindFlowRole`).
+
+</i>
+
+```solidity
+function _useQueue() private view;
+```
+
+<a id="redeeminkind-uint256-address-address"></a>
+
+### redeemInKind
+
+Oracle-free, swap-free exit of last resort (§4.4): pro-rata idle and Lending USDC as one leg,
+plus each active Basket token, each net of the exit fee. Never gated (RB-6). Step 3d: asserts the
+proportion check (check 10, RB-13) inside `FundFlowsLib.payInKind`; pays the lending part in USDC up to
+the period's in-kind allowance and the rest as claims on a share of each position (E9, E20, RB-21);
+refuses a zero `receiver` and survives a venue whose value read reverts (E23). The FlowQueue calls it
+with `owner == queue` and `receiver` = the request's owner for escrowed shares (`exitInKind`,
+`takeReturn`); then `caller == owner`, so no allowance is spent, and claims are keyed to `receiver`.
+
+```solidity
+function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+
+<a id="claimdeferred-uint256-address"></a>
+
+### claimDeferred
+
+Pull everything `msg.sender` is owed from asset `index` by past in-kind exits, to `to`.
+Reverts `NothingDeferred`, or `DeferredShortfall` while the lending venue still cannot pay.
+
+<i>
+
+Pays only `msg.sender`'s own claim, to the address it names (as an ERC-4626 receiver, INV-1).
+
+</i>
+
+```solidity
+function claimDeferred(uint256 index, address to) external nonReentrant returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deferredof-uint256-address"></a>
+
+### deferredOf
+
+What `account` is owed from asset `index` (token units for Basket, USDC for Lending).
+
+```solidity
+function deferredOf(uint256 index, address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="deferredtotal-uint256"></a>
+
+### deferredTotal
+
+Total owed from asset `index`; excluded from NAV and from every pro-rata leg.
+
+```solidity
+function deferredTotal(uint256 index) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="withdraw-uint256-address-address"></a>
+
+### withdraw
+
+Not offered (§4.4): the fund holds inexact positions. Redeem through the FlowQueue.
+
+```solidity
+function withdraw(uint256, address, address) public pure override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `address` |  |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewwithdraw-uint256"></a>
+
+### previewWithdraw
+
+Not offered (§4.4).
+
+```solidity
+function previewWithdraw(uint256) public pure override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxwithdraw-address"></a>
+
+### maxWithdraw
+
+0: `withdraw` is not offered (ERC-4626 requires 0 for a disabled path).
+
+```solidity
+function maxWithdraw(address) public pure override returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_update-address-address-uint256"></a>
+
+### _update
+
+<i>
+
+core 1820: once an exclusion record exists, report both pre-change balances to the ledger before
+every mint, burn and transfer, so each holder's claim stays fixed at its balance at exclusion. The
+ledger (`FundExclusionLedger`) reads `ledgerBalanceOf`, so a share the FlowQueue holds counts for its
+owner; the queue checkpoints that owner first through `ledgerCheckpoint` (E13, RB-22).
+E14: the seed shares the fund holds for itself never move (`SeedSharesLocked`). No fund path transfers
+or burns them; this makes that a checked rule rather than an absence.
+
+</i>
+
+```solidity
+function _update(address from, address to, uint256 value) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+| value | `uint256` |  |
+
+<a id="bindflowrole-address"></a>
+
+### bindFlowRole
+
+ADMIN_ROLE, once: grant FLOW_ROLE to `queue` (E1). FLOW_ROLE is self-administered afterwards, so
+no ADMIN_ROLE holder can grant it to another address. Reverts `FlowRoleAlreadyBound`, `ZeroAddress`.
+
+```solidity
+function bindFlowRole(address queue) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| queue | `address` |  |
+
+<a id="flowqueue"></a>
+
+### flowQueue
+
+The bound FlowQueue (address(0) before `bindFlowRole`).
+
+```solidity
+function flowQueue() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="seed-uint256"></a>
+
+### seed
+
+ADMIN_ROLE, once, only at zero supply (E14): pull `usdc` (≥ `minSeedUsdc`) from the caller and mint
+`usdc × 10^18` shares (the existing share scale) to the fund itself. Those shares never move.
+Reverts `AlreadySeeded`, `SeedBelowMinimum`.
+
+<i>
+
+Body in `FundFlowsLib.seed`; the shares are minted to the fund itself and never move (`_update`).
+
+</i>
+
+```solidity
+function seed(uint256 usdc)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant
+        returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` | Shares minted to the fund. |
+
+<a id="mintinkind-uint256-uint256-uint256"></a>
+
+### mintInKind
+
+FLOW_ROLE only (E3). Buy the pro-rata slice for `sharesOut` new shares and mint them to the caller.
+For every active asset and idle USDC, on held amounts (`heldBalances`): the fund adds
+`ceil(held × sharesOut / supply)` (idle: kept from the USDC pulled; Lending: supplied, plus
+`LENDING_ROUNDING_UNITS`; Basket: an exact-output swap whose input is at most `maxUsdcPerLeg[i]`).
+Then it mints exactly `sharesOut` and asserts the proportion check (check 10, `ProportionViolated`).
+The caller's USDC falls by exactly `usdcSpent` (≤ `maxUsdc`, else `MintInKindOverMax`); unused USDC is
+never taken. A venue that refuses a supply reverts the call. Reverts `NotSeeded` at zero supply,
+`LegLimitsLength`, `FlowLegLimit`.
+
+<i>
+
+Body in `FundFlowsLib.mintInKind`, which buys the slice and asserts check 10 against
+`supply + sharesOut`; the mint here moves no asset, so the check still holds after it.
+
+</i>
+
+```solidity
+function mintInKind(uint256 sharesOut, uint256 maxUsdc, uint256[] calldata maxUsdcPerLeg)
+        external
+        onlyRole(FLOW_ROLE)
+        nonReentrant
+        returns (uint256 usdcSpent);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesOut | `uint256` | Shares to mint, computed by the caller and rounded DOWN. |
+| maxUsdc | `uint256` | The most USDC the caller lets the fund take (approved to the fund). |
+| maxUsdcPerLeg | `uint256[]` | Per asset index (length `assetCount()`): the most USDC the purchase of that Basket<br/>asset may spend (check 9). Ignored for Lending and inactive assets. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcSpent | `uint256` | USDC taken from the caller. |
+
+<a id="sellforflow-uint256-uint256"></a>
+
+### sellForFlow
+
+FLOW_ROLE only (E4). Burn `shares` of the caller, withdraw `floor(held × shares / supply)` of each
+Lending position less `LENDING_ROUNDING_UNITS`, sell the same fraction of each Basket token with at
+least `minUsdcPerLeg[i]` USDC out (check 8), add the pro-rata idle USDC, pay `exitFeeBps` of the
+realized gross to the fee recipient and the rest to the caller. Asserts the proportion check.
+Reverts `NotSeeded`, `LegLimitsLength`, `FlowLegLimit`, `ProportionViolated`.
+
+<i>
+
+Burn first (before any external call), then `FundFlowsLib.sellForFlow` sells the slice, pays and
+asserts check 10 against `supplyBefore − shares`.
+
+</i>
+
+```solidity
+function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg)
+        external
+        onlyRole(FLOW_ROLE)
+        nonReentrant
+        returns (uint256 usdcOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| minUsdcPerLeg | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcOut | `uint256` | USDC paid to the caller, net of the exit fee. |
+
+<a id="positionclaimof-uint256-address"></a>
+
+### positionClaimOf
+
+Lending position `index` claim of `account` (E9, RB-21): its units and their USDC value today
+(`units × adapter.totalAssets() / positionUnits`, rounded down).
+
+```solidity
+function positionClaimOf(uint256 index, address account)
+        external
+        view
+        returns (uint256, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="positionunits-uint256"></a>
+
+### positionUnits
+
+Total units of lending position `index`, and the units held by claims (E9).
+
+```solidity
+function positionUnits(uint256 index)
+        external
+        view
+        returns (uint256 totalUnits, uint256 claimUnits);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalUnits | `uint256` |  |
+| claimUnits | `uint256` |  |
+
+<a id="claimposition-uint256-address"></a>
+
+### claimPosition
+
+The caller redeems its whole claim on lending position `index` at today's value and the USDC goes
+to `to` (E9, RB-21). Reverts `NoPositionClaim`, `ZeroAddress`, or `DeferredShortfall` while the
+venue cannot pay (the claim then stays whole). fund-extras: it pays `LENDING_ROUNDING_UNITS` less than
+the claim's value (venue rounding falls on the claim, never on the holders) and burns the claim's
+units; a venue whose `withdraw` reverts reverts the call.
+
+<i>
+
+Pays only `msg.sender`'s own claim, to the address it names (as `claimDeferred`, INV-1).
+
+</i>
+
+```solidity
+function claimPosition(uint256 index, address to) external nonReentrant returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` | USDC paid. |
+
+<a id="ledgercheckpoint-address"></a>
+
+### ledgerCheckpoint
+
+FLOW_ROLE only (E13, RB-22). Checkpoint `account` in the exclusion ledger BEFORE the queue changes
+its queued shares. A no-op while no exclusion record exists.
+
+<i>
+
+The ledger's own `checkpoint(account, 0)`: stores `account`'s `ledgerBalanceOf` as it stands now, once
+per record, before the queue changes it. A no-op until the first record opens (`snapshots`).
+
+</i>
+
+```solidity
+function ledgerCheckpoint(address account) external onlyRole(FLOW_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+<a id="ledgerbalanceof-address"></a>
+
+### ledgerBalanceOf
+
+What the exclusion ledger credits to `account` (E13): wallet shares plus the shares the queue holds
+for it (`IFlowQueue.queuedSharesOf`). 0 for the queue's own address.
+
+```solidity
+function ledgerBalanceOf(address account) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="heldbalances"></a>
+
+### heldBalances
+
+Held amounts (E3, E4, check 7): idle USDC, and per asset index the amount the fund holds net of
+deferred in-kind claims (Lending: USDC in the adapter attributable to holders; Basket: tokens).
+Assets that are not counted (inactive, or a Lending asset under an open ADP-2 exclusion) read 0: no
+flow trades them, so the proportion check does not compare them. These are the amounts check 10
+compares.
+
+```solidity
+function heldBalances() external view returns (uint256 idle, uint256[] memory held);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle | `uint256` |  |
+| held | `uint256[]` |  |
+
+<a id="lastgoodnav"></a>
+
+### lastGoodNav
+
+The last NAV computed while every feed was healthy, and its time (E19). Never reverts.
+fund-extras: while `totalAssets()` reads (feeds healthy), it is `(totalAssets(), block.timestamp)`;
+otherwise the value the fund recorded at its last `seed`, `mintInKind`, `sellForFlow` or `executeStep`
+with healthy feeds, and that time; `(0, 0)` if it never recorded one.
+
+```solidity
+function lastGoodNav() external view returns (uint256, uint64);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="setinkindallowance-uint16-uint128-uint32"></a>
+
+### setInKindAllowance
+
+ADMIN_ROLE. Set the in-kind allowance: per period of `period` seconds, in-kind exits take lending USDC
+up to `max(bps × lending holdings / 10 000, floorUsdc)` (E20). `bps ≤ 10 000`, `floorUsdc ≤
+MAX_IN_KIND_FLOOR_USDC`, `period` in [MIN_IN_KIND_PERIOD, MAX_IN_KIND_PERIOD] (`InvalidParam`).
+The Safe keeps these equal to the queue's `maxEpochFlowBps`, `epochFlowFloorUsdc` and `epochLength`.
+
+```solidity
+function setInKindAllowance(uint16 bps, uint128 floorUsdc, uint32 period)
+        external
+        onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+| floorUsdc | `uint128` |  |
+| period | `uint32` |  |
+
+<a id="inkindallowance"></a>
+
+### inKindAllowance
+
+The in-kind allowance parameters and the lending USDC in-kind exits took in the current period.
+
+```solidity
+function inKindAllowance() external view returns (uint16, uint128, uint32, uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16` |  |
+| &lt;none&gt; | `uint128` |  |
+| &lt;none&gt; | `uint32` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="minseedusdc"></a>
+
+### minSeedUsdc
+
+The least `seed` accepts (§5.9.5, fund-held).
+
+```solidity
+function minSeedUsdc() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="poolsharebps"></a>
+
+### poolShareBps
+
+The pool-share rule (§4.5 rule 3, fund-held).
+
+```solidity
+function poolShareBps() external view returns (uint16);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16` |  |
+
+<a id="setminseedusdc-uint256"></a>
+
+### setMinSeedUsdc
+
+ADMIN_ROLE. In [`MIN_MIN_SEED_USDC`, `MAX_MIN_SEED_USDC`].
+
+```solidity
+function setMinSeedUsdc(uint256 newMin) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newMin | `uint256` |  |
+
+<a id="setpoolsharebps-uint16"></a>
+
+### setPoolShareBps
+
+ADMIN_ROLE. In (0, `MAX_POOL_SHARE_BPS`].
+
+```solidity
+function setPoolShareBps(uint16 newBps) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newBps | `uint16` |  |
+
+<a id="settargetandopenplan-address-uint256-planparams-bytes32"></a>
+
+### setTargetAndOpenPlan
+
+Set the end target and open a plan (§5.1 step 3). GOVERNANCE_ROLE only (RB-1).
+1. `params` within §5.6 bounds (`PlanParamOutOfBounds`).
+2. `endBps = PlanMath.assetTargets(assets, bps, assetConfigs)`, which enforces the
+§4.1 checks (RB-9): every listed asset is active (`TargetAssetNotActive`), no
+asset is listed twice (`TargetAssetDuplicate`), every active asset is listed
+(`TargetAssetMissing`), the weights sum to 10 000 (`TargetSumInvalid`), and a
+Lending target is at or below its `capBps` (`TargetExceedsCap`). A length
+mismatch reverts `InvalidParam`.
+3. If the current plan is live (Open, Halted, Paused): status → Superseded
+(`PlanStatusChanged`). Plans never stack.
+4. Value every asset at TWAP; `(startBps, startIdleBps) = PlanMath.snapshotStart`.
+5. Store the new plan: id = previous + 1, Open, startTime = now,
+endTime = now + duration, turnover and budget per `Plan` docs, costSpent 0.
+The fund's persistent target (`targetBps()`) becomes `endBps`.
+6. Emit `PlanOpened`.
+
+```solidity
+function setTargetAndOpenPlan(
+        address[] calldata assets,
+        uint256[] calldata bps,
+        PlanParams calldata params,
+        bytes32 receiptId
+    ) external onlyRole(GOVERNANCE_ROLE) returns (uint256 planId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `address[]` | Asset ids, any order: each active asset's fund asset address<br/>(`PlanMath.assetId`: `token` for Basket, `adapter` for Lending). |
+| bps | `uint256[]` | Parallel target weights in bps of NAV. Idle USDC carries no target. |
+| params | `PlanParams` | Per-plan parameters. |
+| receiptId | `bytes32` | The applied receipt, or bytes32(0) for a `setTarget` plan. |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| planId | `uint256` | The new plan's id. |
+
+<a id="executestep-steporder"></a>
+
+### executeStep
+
+Execute one step's legs (§5.3 steps 5-8). REBALANCER_ROLE only. `nonReentrant`.
+Reverts unless the current plan is Open. Order of operations:
+1. Validate indices (`InvalidAssetIndex`; sell != buy; not both idle; active).
+2. ORA-4 on every Basket leg (`NavMarketDeviationExceeded`, RB-5 defence in depth).
+3. Value all holdings at TWAP → `navBefore`. RB-7 guard: the sell leg must be over its
+`pathTarget(now)` value by ≥ notional, and the buy leg (if not idle) under it by
+≥ notional, else `StepExceedsPath`.
+4. Sell leg → USDC: Lending `withdraw(notional)` measured by balance delta; Basket
+sells `min(balance, assetTokenValue(sell, notional))` tokens through its swap
+adapter with recipient = fund; idle uses `notional` of idle USDC
+(`InsufficientIdle`). Require received ≥ `minSellUsdcOut` (`StepBelowMinOut`).
+5. Buy leg ← spend = min(received, notional): Lending `deploy(spend)` (USDC the
+adapter hands back stays idle); Basket swap with floor `minBuyOut × spend /
+notional`, recipient = fund (`StepBelowMinOut`); idle keeps it.
+6. `navAfter` at TWAP; cost = max(navBefore − navAfter, 0); revert
+`StepCostExceeded` if cost > `maxCostUsdc` (RB-4).
+7. plan.costSpent += cost; plan.stepCount += 1; lastStepAt = now. If
+costSpent > costBudget: status → Halted (`PlanStatusChanged`).
+8. Emit `StepExecuted`.
+Every swap recipient is the fund and every USDC destination is an allowlisted
+adapter or swap adapter (RB-3, INV-1).
+
+```solidity
+function executeStep(StepOrder calldata order)
+        external
+        onlyRole(REBALANCER_ROLE)
+        nonReentrant
+        returns (StepResult memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| order | `StepOrder` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `StepResult` |  |
+
+<a id="concludeplan-planstatus"></a>
+
+### concludePlan
+
+Move the Open plan to a terminal status decided by the Rebalancer (§5.5).
+REBALANCER_ROLE only. `to` must be Converged (requires now ≥ endTime) or Expired
+(requires now > endTime); anything else reverts `InvalidPlanTransition`.
+
+```solidity
+function concludePlan(PlanStatus to) external onlyRole(REBALANCER_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `PlanStatus` |  |
+
+<a id="pauserebalance"></a>
+
+### pauseRebalance
+
+Open or Halted → Paused. EMERGENCY_ROLE (§5.5 "pause a plan at once"): a Halted plan is
+paused too, so a queued `extendBudget` cannot reopen it behind the hot key's back.
+Reverts `InvalidPlanTransition` otherwise.
+
+```solidity
+function pauseRebalance() external onlyRole(EMERGENCY_ROLE);
+```
+
+<a id="resumeplan"></a>
+
+### resumePlan
+
+Paused → Open, or Paused → Halted when `costSpent > costBudget` (a plan paused while
+Halted stays over budget until the Safe extends it). ADMIN_ROLE (§5.5).
+Reverts `InvalidPlanTransition` otherwise.
+Does not reset `lastStepAt`; the next step still observes the cooldown.
+
+```solidity
+function resumePlan() external onlyRole(ADMIN_ROLE);
+```
+
+<a id="bindrebalanceroles-address-address"></a>
+
+### bindRebalanceRoles
+
+ADMIN_ROLE, once: grant GOVERNANCE_ROLE to `governance` and REBALANCER_ROLE to
+`rebalancer`. Both roles are self-administered, so after this no ADMIN_ROLE holder can
+grant either to anyone else (RB-1; the router's WEIGHT_SETTER_ROLE model). The contracts
+behind both addresses are upgradeable proxies, so they never need re-binding.
+
+```solidity
+function bindRebalanceRoles(address governance, address rebalancer)
+        external
+        onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| governance | `address` |  |
+| rebalancer | `address` |  |
+
+<a id="extendbudget-uint256"></a>
+
+### extendBudget
+
+Add `addedUsdc` to the live plan's `costBudget`. ADMIN_ROLE (§5.5). Allowed on Open,
+Halted and Paused. A Halted plan becomes Open when `costSpent ≤ costBudget` after
+the addition. Emits `PlanBudgetExtended` (and `PlanStatusChanged` when it reopens).
+
+```solidity
+function extendBudget(uint256 addedUsdc) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| addedUsdc | `uint256` |  |
+
+<a id="closeplan"></a>
+
+### closePlan
+
+Close the live plan (Open, Halted or Paused) → Superseded. ADMIN_ROLE (§5.5
+"Only the Safe ... closes it"). The persistent target is unchanged.
+
+```solidity
+function closePlan() external onlyRole(ADMIN_ROLE);
+```
+
+<a id="_plan-fundadminlib-planop-uint256"></a>
+
+### _plan
+
+<i>
+
+Every plan transition (§5.5) runs in `FundAdminLib.planOp` through this one call site (step 3d size
+budget, §6.1). The role is checked by the caller above.
+
+</i>
+
+```solidity
+function _plan(FundAdminLib.PlanOp op, uint256 arg) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| op | `FundAdminLib.PlanOp` |  |
+| arg | `uint256` |  |
+
+<a id="assetcount"></a>
+
+### assetCount
+
+Number of assets (active and inactive). Indices are stable.
+
+```solidity
+function assetCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assetconfig-uint256"></a>
+
+### assetConfig
+
+The config of asset `index`.
+
+```solidity
+function assetConfig(uint256 index) external view returns (AssetConfig memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig` |  |
+
+<a id="assetconfigs"></a>
+
+### assetConfigs
+
+Every asset config, index-aligned.
+
+```solidity
+function assetConfigs() external view returns (AssetConfig[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `AssetConfig[]` |  |
+
+<a id="idleusdc"></a>
+
+### idleUsdc
+
+Idle USDC held by the fund.
+
+```solidity
+function idleUsdc() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assetvalue-uint256"></a>
+
+### assetValue
+
+USDC value of asset `index` at TWAP (Lending: `adapter.totalAssets()`; Basket:
+balance × TWAP). 0 for an inactive asset and for an excluded Lending asset (ADP-2:
+its balance leaves NAV while the exclusion record is open).
+
+```solidity
+function assetValue(uint256 index) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="portfoliovalues"></a>
+
+### portfolioValues
+
+One-call valuation: `nav == idle + Σ values == totalAssets()`.
+
+```solidity
+function portfolioValues()
+        external
+        view
+        returns (uint256 nav, uint256 idle, uint256[] memory values);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| nav | `uint256` |  |
+| idle | `uint256` |  |
+| values | `uint256[]` |  |
+
+<a id="assetusdcvalue-uint256-uint256"></a>
+
+### assetUsdcValue
+
+USDC value of `tokenAmount` of Basket asset `index` at its TWAP. Lending: identity.
+
+```solidity
+function assetUsdcValue(uint256 index, uint256 tokenAmount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| tokenAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="assettokenvalue-uint256-uint256"></a>
+
+### assetTokenValue
+
+Amount of Basket asset `index` worth `usdcAmount` at its TWAP. Lending: identity.
+
+```solidity
+function assetTokenValue(uint256 index, uint256 usdcAmount) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| usdcAmount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="marketcheck-uint256"></a>
+
+### marketCheck
+
+ORA-4 for one asset: `ok` when Lending and counted, when `navDeviationGuardBps == 0`,
+or when |spot − TWAP| ≤ `navDeviationGuardBps`. Never reverts. An excluded Lending
+asset (ADP-2) returns `ok == false`, so the Rebalancer's eligibility mask drops it. A
+Basket asset whose TWAP, spot or observe read fails returns `(false, type(uint256).max)`.
+
+<i>
+
+Also NOT ok for an excluded Lending asset (ADP-2): it can neither take nor return USDC.
+
+</i>
+
+```solidity
+function marketCheck(uint256 index) external view returns (bool ok, uint256 deviationBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| deviationBps | `uint256` |  |
+
+<a id="poolfeebps-uint256"></a>
+
+### poolFeeBps
+
+Asset `index`'s pool fee in bps, rounded UP (`ceil(fee pips / 100)`); 0 for Lending.
+V3 / V4: fee pips = `poolFee`. Aerodrome: `poolFee` is the tick spacing, so the fee
+pips are read from the pool's `fee()` (falls back to `poolFee` if that read fails).
+
+```solidity
+function poolFeeBps(uint256 index) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxtwapwindow"></a>
+
+### maxTwapWindow
+
+Longest `twapWindow` over active Basket assets (0 if none). The Rebalancer's
+`stepInterval` must be ≥ this (§5.3 step 1).
+
+```solidity
+function maxTwapWindow() external view returns (uint32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+
+<a id="maxpoolfeebps"></a>
+
+### maxPoolFeeBps
+
+Largest `poolFeeBps` over active Basket assets (0 if none).
+
+```solidity
+function maxPoolFeeBps() public view returns (uint256 maxBps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxBps | `uint256` |  |
+
+<a id="navdeviationguardbps"></a>
+
+### navDeviationGuardBps
+
+ORA-4 band in bps (0 = disabled).
+
+```solidity
+function navDeviationGuardBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="maxslippagebps"></a>
+
+### maxSlippageBps
+
+Deposit/redeem swap floor vs TWAP in bps; the ceiling for `maxStepSlippageBps`.
+
+```solidity
+function maxSlippageBps() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="plan"></a>
+
+### plan
+
+The current plan (the latest opened; may be terminal). `id == 0` before any plan.
+
+```solidity
+function plan() external view returns (Plan memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Plan` |  |
+
+<a id="currentplanid"></a>
+
+### currentPlanId
+
+The current plan's id (0 before any plan).
+
+```solidity
+function currentPlanId() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="planstatus"></a>
+
+### planStatus
+
+The current plan's status (`None` before any plan).
+
+```solidity
+function planStatus() external view returns (PlanStatus);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `PlanStatus` |  |
+
+<a id="laststepat"></a>
+
+### lastStepAt
+
+Timestamp of the last executed step across all plans (0 if none). Not reset by a
+new plan, so the cooldown always spans the previous trade.
+
+```solidity
+function lastStepAt() external view returns (uint64);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="targetbps"></a>
+
+### targetBps
+
+The persistent end target per asset (bps, index-aligned, sums to 10 000 once set;
+all zero before the first plan). Survives the plan that set it.
+
+```solidity
+function targetBps() external view returns (uint16[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint16[]` |  |
+
+<a id="pathtarget-uint256"></a>
+
+### pathTarget
+
+`pathTarget(t)` of the current plan per asset and for idle (§5.2), via
+`PlanMath.pathTargetsBps`. With no plan ever opened returns zeros.
+
+```solidity
+function pathTarget(uint256 t) external view returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+
+<a id="currentweightsbps"></a>
+
+### currentWeightsBps
+
+Actual TWAP weights per asset and idle, rounded down.
+
+```solidity
+function currentWeightsBps() external view returns (uint256[] memory bps, uint256 idleBps);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint256[]` |  |
+| idleBps | `uint256` |  |
+
+<a id="depositspaused"></a>
+
+### depositsPaused
+
+Whether deposits are paused.
+
+```solidity
+function depositsPaused() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="isshutdown"></a>
+
+### isShutdown
+
+Whether the fund is shut down.
+
+```solidity
+function isShutdown() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="config"></a>
+
+### config
+
+TVL cap, per-deposit cap, exit fee and its recipient.
+
+```solidity
+function config()
+        external
+        view
+        returns (uint256 tvlCap, uint256 perDepositCap, uint256 exitFeeBps, address feeRecipient);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+
+<a id="adaptercodehashallowed-bytes32"></a>
+
+### adapterCodeHashAllowed
+
+Whether adapter runtime code hash `codeHash` is allowlisted (ADP-2 / NC-2).
+
+```solidity
+function adapterCodeHashAllowed(bytes32 codeHash) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| codeHash | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="exclusionledger"></a>
+
+### exclusionLedger
+
+The fund's `ExclusionLedger` (created at initialize; holders of an excluded Lending
+adapter claim recoveries there).
+
+<i>
+
+The ledger is the core 1820 `ExclusionLedger`, created by `RobotMoneyVaultOps.createLedger`.
+
+</i>
+
+```solidity
+function exclusionLedger() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="openexclusionof-uint256"></a>
+
+### openExclusionOf
+
+Open exclusion record id of asset `index` (0 = none).
+
+```solidity
+function openExclusionOf(uint256 index) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="quarantineaddress"></a>
+
+### quarantineAddress
+
+The fixed address `sweepForeignToken` sends to (`ForeignTokenQuarantine.QUARANTINE`).
+
+<i>
+
+Also read by the `ExclusionLedger`.
+
+</i>
+
+```solidity
+function quarantineAddress() external pure returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="setadaptercodehashallowed-bytes32-bool"></a>
+
+### setAdapterCodeHashAllowed
+
+Allow or revoke an adapter runtime code hash (ADP-2 / NC-2). Revoking excludes every active
+Lending asset that runs it: its balance leaves NAV and an exclusion record opens with a snapshot
+of the share supply, so anything later recovered belongs to the holders of that moment (core
+1820). Re-allowing drains the adapter into its record, closes it, and the empty entry counts
+again. Basket assets are not touched retroactively (as on BasketVault).
+
+<i>
+
+Deliberately NOT frozen by a live plan: excluding a bad adapter must never wait for a plan to end.
+Indices are untouched, so plan arrays stay aligned.
+
+</i>
+
+```solidity
+function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed)
+        external
+        onlyRole(ADMIN_ROLE)
+        nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| codeHash | `bytes32` |  |
+| allowed | `bool` |  |
+
+<a id="addasset-assetconfig"></a>
+
+### addAsset
+
+Append an asset. ADMIN_ROLE. Checks: adapter codehash allowlisted, Lending adapter
+binds VAULT == fund (`AdapterVaultMismatch`) and USDC == the fund's asset
+(`AdapterAssetMismatch`), Basket pool pairs token with USDC (ORA-3), twapWindow in
+bounds, pool cardinality and liquidity (BasketAssetConfigGuard), no active duplicate
+asset id, across kinds (`DuplicateAsset`), `assetCount &lt; MAX_FUND_ASSETS`, Basket poolFeeBps &lt;
+maxSlippageBps and &lt; navDeviationGuardBps when non-zero (`BoundAtOrBelowPoolFee`).
+`config.active` is forced true. Its persistent target starts at 0. The next target
+vector must name it (`TargetAssetMissing`).
+
+```solidity
+function addAsset(AssetConfig calldata c)
+        external
+        onlyRole(ADMIN_ROLE)
+        returns (uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `AssetConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` | The new asset's index. |
+
+<a id="deactivateasset-uint256"></a>
+
+### deactivateAsset
+
+Deactivate asset `index` (never removed, indices stay stable). ADMIN_ROLE. Reverts
+`AssetStillTargeted` unless its persistent target is 0. Reverts `AssetStillHeld`
+unless its value is 0. A target vector may no longer name it.
+
+```solidity
+function deactivateAsset(uint256 index) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+<a id="settvlcap-uint256"></a>
+
+### setTvlCap
+
+```solidity
+function setTvlCap(uint256 newCap) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newCap | `uint256` |  |
+
+<a id="setperdepositcap-uint256"></a>
+
+### setPerDepositCap
+
+```solidity
+function setPerDepositCap(uint256 newCap) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newCap | `uint256` |  |
+
+<a id="setexitfeebps-uint256"></a>
+
+### setExitFeeBps
+
+<i>
+
+≤ 100 bps.
+
+</i>
+
+```solidity
+function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newBps | `uint256` |  |
+
+<a id="setfeerecipient-address"></a>
+
+### setFeeRecipient
+
+```solidity
+function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newRecipient | `address` |  |
+
+<a id="setmaxslippagebps-uint256"></a>
+
+### setMaxSlippageBps
+
+≤ 500 and strictly above every active Basket pool fee (§5.6: a floor at or below the pool fee
+would fail every swap; BasketVault L-17).
+
+```solidity
+function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newBps | `uint256` |  |
+
+<a id="setnavdeviationguardbps-uint256"></a>
+
+### setNavDeviationGuardBps
+
+0 (ORA-4 off), or strictly above every active Basket pool fee and ≤ 2 000.
+
+```solidity
+function setNavDeviationGuardBps(uint256 newBps) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newBps | `uint256` |  |
+
+<a id="pausedeposits"></a>
+
+### pauseDeposits
+
+Block deposit and mint. Redeems stay open (core 1494, RB-6).
+
+```solidity
+function pauseDeposits() external onlyRole(EMERGENCY_ROLE);
+```
+
+<a id="unpausedeposits"></a>
+
+### unpauseDeposits
+
+ADMIN_ROLE.
+
+```solidity
+function unpauseDeposits() external onlyRole(ADMIN_ROLE);
+```
+
+<a id="shutdown"></a>
+
+### shutdown
+
+Deposits closed and `tvlCap` 0 until ADMIN `restore`. Redeems stay open. ADMIN_ROLE (the timelock: the
+Safe and the delay), not EMERGENCY_ROLE: the hot key pauses deposits at once instead (owner, 2026-11-13).
+
+```solidity
+function shutdown() external onlyRole(ADMIN_ROLE);
+```
+
+<a id="restore-uint256"></a>
+
+### restore
+
+Reverse `shutdown` with a fresh non-zero cap at or above `perDepositCap` (BasketVault.restoreVault).
+
+```solidity
+function restore(uint256 newTvlCap) external onlyRole(ADMIN_ROLE);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newTvlCap | `uint256` |  |
+
+<a id="emergencyunwind"></a>
+
+### emergencyUnwind
+
+Pause deposits, move every holding to idle USDC (`FundFlowsLib.emergencyUnwind`: Lending drained
+tolerant of failure, excluded adapters drained into their exclusion record, Basket sold under the
+TWAP floor), and pause an Open or Halted plan so the Rebalancer stops (it would otherwise buy
+back, including after a queued `extendBudget` lands).
+ADMIN_ROLE (the timelock: the Safe and the delay), not EMERGENCY_ROLE: it sells every holding, so one hot
+key does not hold it; the hot key's `pauseDeposits` and `pauseRebalance` stop flows at once (owner, 2026-11-13).
+
+<i>
+
+Differs from BasketVault: there is no configured per-token floor or override path. A Basket leg
+whose TWAP read fails is skipped and stays held; holders still exit it through `redeemInKind`.
+
+</i>
+
+```solidity
+function emergencyUnwind() external onlyRole(ADMIN_ROLE) nonReentrant;
+```
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+Permissionless: send a non-protected token's whole balance to the fixed quarantine address
+(INV-1/INV-2; no caller-chosen destination). Protected (`ProtectedToken`): USDC, the share token,
+every asset token (active or not), and every Lending adapter address (an adapter that is itself
+a share token).
+
+```solidity
+function sweepForeignToken(address token) external nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+<a id="_setdepositspaused-bool"></a>
+
+### _setDepositsPaused
+
+```solidity
+function _setDepositsPaused(bool paused) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paused | `bool` |  |
+
+<a id="_s"></a>
+
+### _s
+
+```solidity
+function _s() private pure returns (FundState storage);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `FundState` |  |
+
