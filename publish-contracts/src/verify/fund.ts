@@ -14,6 +14,7 @@ import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT } from "./upgradeability.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
 import { layoutExtensionProblems, type LayoutRename } from "../upgrade-rows.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
+import { FUND_PROXY_NAMES } from "./upgradeability.ts";
 import { keccak256, toHex } from "viem";
 import type { Address, ChainReader, ExpectedFundAsset, Hex, VerifyOptions, VerifyReport } from "./types.ts";
 
@@ -163,6 +164,16 @@ const LEGACY_FLOW_PARAMS_SIG = `function flowParams() view returns ((uint32 epoc
 /** The fund's asset count: three lending venues and two basket tokens (proposal 4.5, DeployFund.s.sol N_ASSETS). */
 export const FUND_ASSET_COUNT = 5;
 
+/**
+ * The build (forge out/) a fund-system proxy's implementation is compared with: the deploy's build, or, for a proxy a governed upgrade moved to another build, that build
+ * (opts.proxyBuildDirs, read from the run manifest's `proxy_upgrades` by verify-stage.ts proxyBuildDirsOf, keyed by the proxy's verifier name, FUND_PROXY_NAMES). The code is
+ * still compared exactly (links, immutables and the metadata trailer masked): only the build it is compared with follows the recorded upgrade (Deploy 4 in-place upgrade).
+ */
+export function fundProxyBuildDir(stage: string, opts: Pick<VerifyOptions, "artifactsDir" | "proxyBuildDirs">): string {
+  const name = FUND_PROXY_NAMES[stage];
+  return (name !== undefined ? opts.proxyBuildDirs?.[name] : undefined) ?? opts.artifactsDir;
+}
+
 export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyReport> {
   const c = new Collector();
   const { chain, sheet } = opts;
@@ -199,9 +210,10 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   for (const s of table.stages) for (const p of s.proxies ?? []) {
     const m = files[manifestBase(s.manifest)];
     const at = A(m[p.field]);
-    const label = `${s.name} ${p.contract}`;
+    const built = fundProxyBuildDir(s.name, opts);
+    const label = `${s.name} ${p.contract}${built === opts.artifactsDir ? "" : ` (upgraded: the build of ${built})`}`;
     await c.run(`${label}: runtime code equals build artifact (masked)`, async () => {
-      const r = await compareDeployedCode(chain, at, loadArtifact(opts.artifactsDir, p.contract), proxyArtifact);
+      const r = await compareDeployedCode(chain, at, loadArtifact(built, p.contract), proxyArtifact);
       return { ok: r.ok, detail: r.detail };
     });
     await c.run(`${label}: linked libraries equal build`, async () => {

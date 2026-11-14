@@ -61,6 +61,8 @@ test("on the twin target a wait of hours is a Twin clock warp, never a wall slee
   expect(twinClockWait("twin", "timelockDelay")).toBe(false); // the vaults flows: govern warps by itself
   expect(twinClockWait("twin", "timelockDelay", "fund")).toBe(true); // the fund flow's Safe executes do not
   expect(twinClockWait("rehearsal", "timelockDelay", "fund")).toBe(false);
+  expect(twinClockWait("twin", "timelockDelay", "fund-upgrade")).toBe(true); // the in-place upgrade's Safe executes too
+  expect(twinClockWait("rehearsal", "timelockDelay", "fund-upgrade")).toBe(false);
   expect(twinClockWait("rehearsal", 24)).toBe(false);
   expect(twinClockWait("production", 24)).toBe(false);
   withRun((runDir) => {
