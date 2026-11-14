@@ -116,4 +116,17 @@ The review of 2026-11-13 (proposal §19) also found PRD passages that step
 | §6 and §9, lines 318-320 and 391-393 | An owner can revoke an agent's policy, or let it expire, and that stops the agent. | A deposit request the agent already made is locked until it fills or expires. |
 | §9, line 390 | Surfaces "itemize fees and slippage". | There is no slippage estimate before a settlement. Fees are itemized. |
 
-Line numbers are the reviewer's and were not rechecked.
+Line numbers were rechecked against `docs/prd.md` on 2026-11-14 (design review 0.8.0, ARCH-07, FLOW-08).
+
+### 5.1 Proposed text for the four passages in the table above
+
+Design review 0.8.0 (ARCH-07, FLOW-08) found that these four passages have no
+amendment. The text below is proposed, for the owner's review. It applies only
+if step 3f is built.
+
+| PRD lines | Proposed text |
+| --- | --- |
+| §5, lines 303-309 (retired vaults) | "A retired vault stays withdraw-only, and its holders can redeem it at any time, as before. Holders of the one-vault fund redeem by timed request, and in kind only in a wind-down. A holder who moves from a retired vault into the fund accepts those terms, and the product states them before the move." |
+| §12, lines 736-737 (INV-2) | "Every asset is redeemable by its holder, or absorbed into the product's value. In the fund a redemption is a timed request that settles. After a wind-down it is in kind. No role can keep a holder from redeeming for good." |
+| §6 and §9, lines 318-320 and 391-393 (agent policy) | "Revoking an agent's policy stops its new requests at once. A request it already made stays locked until it fills, expires, or is cancelled in its open epoch. The depositor may cancel it on the same terms as any depositor." |
+| §9, line 390 (fees and slippage) | "Surfaces show before approval the fee, the bands that bound the price, the cancel cutoff and the earliest settlement time. Once a request has settled they show the executed amounts, with the fee and the slippage itemized." |

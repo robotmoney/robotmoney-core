@@ -37,3 +37,5 @@ The 7 High IDs are four distinct problems (R1 to R4 in `00` §3). Each is a cont
 Chapters `01` to `05` keep their Pass 2 text. Each finding there carries a **Pass 3** note with its final rating.
 
 The design answered this review on 2026-11-14: `docs/technical/one-vault-rebalancer-proposal.md` §22. One Pass 3 fix was corrected while it was written into the design (erratum in `06` §2).
+
+**Disposition of every finding.** `docs/technical/one-vault-rebalancer-proposal.md` §22.8 gives one status for each ID, with the place in the design where it is answered, or the reason it is defeated (§22.4a). Owner rulings are listed in §22.6.
