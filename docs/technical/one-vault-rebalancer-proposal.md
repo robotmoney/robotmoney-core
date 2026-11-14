@@ -1668,7 +1668,7 @@ recorded so the conclusion can revisit it.
 | D21 | Can a match happen while a lending venue cannot pay? | No. Before a match the queue tests that every lending venue can pay out the matched shares' part of its position. `pauseDeposits` stops the match too. Review fix, 2026-11-13 (§19). | The NAV counts a lending position at face. A matched redeemer would otherwise leave a damaged venue at full value at the depositors' cost. |
 | D22 | Does matched volume count against the flow caps? | Yes. Every fill of a side counts. Review fix, 2026-11-13. This reverses the first draft of §5.11. | Holding a TWAP inside the band is a fixed cost and its gain grows with matched size. |
 | D23 | What does a net redemption do when one lending venue cannot pay? | It pays that venue's part as a claim on the position and the rest in USDC. Review fix, 2026-11-13. | Lending is most of the fund. One full venue would otherwise stop every redemption, and there is no in-kind exit to go around it. |
-| D24 | Who winds the fund down, and what are a pause and a wind-down? | A multisig: the Safe, through the timelock. Owner, 2026-11-14. Nobody else starts a wind-down: not the emergency hot key, not the keeper, not an outside caller. The wind-down is a state: no settlement, the rebalancer stops, queue escrow is released, in-kind opens, and only the Safe through the timelock ends it. The emergency key keeps its halts. `shutdown` stops deposits and the match and opens no exit. A pause ends by itself after `maxPause`. The in-kind return after a freeze is removed. | Winding a fund down is a decision, and the Safe is the only body that decides. The review's proposal, a trigger anyone could call on a stuck fund, is not adopted: it would let whoever can block settlement force a wind-down. The cost the owner accepts: a holder of a stuck fund waits for the multisig. |
+| D24 | Who winds the fund down, and what are a pause and a wind-down? | A multisig: the Safe, through the timelock. Owner, 2026-11-14. The timelock is required and its delay is not skipped. Nobody else starts a wind-down: not the emergency hot key, not the keeper, not an outside caller. The wind-down is a state: no settlement, the rebalancer stops, queue escrow is released, in-kind opens, and only the Safe through the timelock ends it. The emergency key keeps its halts. `shutdown` stops deposits and the match and opens no exit. A pause ends by itself after `maxPause`. The in-kind return after a freeze is removed. | Winding a fund down is a decision, and the Safe is the only body that decides. The review's proposal, a trigger anyone could call on a stuck fund, is not adopted: it would let whoever can block settlement force a wind-down. The cost the owner accepts: a holder of a stuck fund waits for the multisig. |
 | D25 | Does a redemption request expire? | No. It keeps its place. After `maxRoll` epochs its owner may withdraw the unfilled shares. Deposits still expire. Review fix, 2026-11-13. | In a run under the caps, expiry sent waiting redeemers to the back about five times. |
 | D26 | Can a parameter change alter a locked request? | No. The fee, the hold and the expiry are fixed at the request. Review fix, 2026-11-13. | A locked request cannot leave, so its terms must not move under it. |
 
@@ -2615,10 +2615,9 @@ wrong. The owner corrected both.
 - **Whether matched volume needs a cap of its own.** Closed by D22: it
   counts against the flow caps.
 - **The depth floor's value** (`minPoolDepthUsdc`). The sim sets it.
-- **Who starts a wind-down, and how fast.** Answered by D24: the Safe,
-  through the timelock. Whether a wind-down should skip the timelock's
-  delay is not decided. The working default keeps the delay, because the
-  architecture has the Safe act only through the timelock.
+- **Who starts a wind-down, and how fast.** Closed by D24: the Safe,
+  through the timelock. The owner confirmed on 2026-11-14 that a wind-down
+  requires the timelock. Its delay is not skipped.
 - **The freeze return.** Removed by D24.
 - **The gateway.** An agent's request no longer carries a price limit. Its
   depositor's policy loses that field again (PRD amendment 4).

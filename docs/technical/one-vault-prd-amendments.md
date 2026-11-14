@@ -103,8 +103,8 @@ net amount only after settlement. That needs an amendment of its own:
 before approval, and net amounts once a request has settled."
 
 Still to settle before this section applies: the result of step 3f
-(proposal §13), and whether a wind-down keeps the timelock's delay
-(proposal §18.6).
+(proposal §13). The owner confirmed on 2026-11-14 that a wind-down
+requires the timelock (proposal D24).
 
 The review of 2026-11-13 (proposal §19) also found PRD passages that step
 3f breaks and that no amendment covers yet:
