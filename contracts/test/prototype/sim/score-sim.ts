@@ -190,6 +190,8 @@ function expectedDefaultParams(
         ? { ...(DEFAULT_PARAMS_TIMED.flowParams as Record<string, unknown>), ...DEFAULT_STEP3F_FLOW_PARAMS }
         : DEFAULT_PARAMS_TIMED.flowParams,
   };
+  // StepParams.keeperGrace is retired in step 3f. A run of the step 3d or 3e code still reads it back, at 6 h.
+  if ("keeperGrace" in observedParams) base.keeperGrace = 21600;
   if (observedParams.step3f !== undefined && typeof observedParams.step3f === "object" && observedParams.step3f !== null) {
     const s3f = observedParams.step3f as Record<string, unknown>;
     const expectedS3f: Record<string, unknown> = { ...DEFAULT_STEP3F_FUND_PARAMS };

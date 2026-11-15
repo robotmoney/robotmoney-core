@@ -2334,7 +2334,77 @@ fixture pin it rests on.
 | Deploy 4 on Base 8453, `v0.7.0-onevault` (2026-11-13) | Rehearsal, stopped by the owner at 33 of 45 steps, 0 failed | Published from `contracts-0.7.0` (7c23569f8, rc.5): 65 deployer transactions, equal to the frozen counts; fund proxy `0xb2c17a384b6fc03d96D77f39E016aD7b9E34af2B`. Passed: publish, verify, governance, receipt record and apply, pause drill, upgrade there and back, deposits settled. The owner stopped it on 2026-11-14 rather than wait out the 24 h hold, and upgraded it in place instead (next row). Found on chain: the keeper key held no gas (P3.63 added), and a publish crash before any send (the owner check read the stage list before it was loaded). Run record: `~/tmp/deploy4-run/run2`. |
 | Deploy 4 upgraded in place to `v0.8.0-onevault` on Base 8453 (2026-11-14) | Signed off (`go/signoff.json`, 46 steps, no issue) | Release `v0.8.0-onevault-upgrade`, deployed from `contracts-0.8.0` (fa7c47182), tools to df4bec824 (rc.7). New implementations through the Safe and timelock: fund `0x1e69cc84b698b84129e3adb43ba6f59a242d040c`, queue `0x5e627b6e4402f753fb7ffa54a72897ed06a5018d`; storage layouts extend the live ones. Then minHold 3600, the executor switched to the Safe only, and epochs of 3600 s with a 720 s window (D4-15). Proven on chain: the emergency key is refused `shutdown` and `emergencyUnwind`, a non-Safe executor is refused, a deposit claimed after a 3,600 s hold, a redeem settled and claimed, a pause drill whose unpause only the Safe could execute, the final verify against the build, the 0.7.0 deposits untouched. Found on chain and fixed in branch: a settle window must split into the live 12 slices of at least 60 s (600 refused, 720 used); a zero-margin deposit limit was skipped when the share price rose 0.001% (the flow test now uses a 0.5% margin); the sign-off basis (start sha, the go's sheet) and a sign-off rerun counting its own earlier failure. CI was waived for this rehearsal (D4-14). Run record: `~/tmp/deploy4-upgrade/run8453`. |
 | G9 | Pass (2026-11-12, at the owner defaults) | Timed default run, no-jump set: 99.20% of settlements succeed at the keeper's first call (497 of 501; the 4 misses are check 4). Redemption wait median 3.57 h, p95 6.53 h (0 unfilled past 14 h). Flow cost against the feed median 0.32 bps, max 18.95 bps. At `refBandBps` 50 it failed at 84.02% (step 3 finish report). | 2026-11-12 |
+| G3 (step 3f) | Pass (2026-11-15) | Whole prototype suite on `release-0.9.0`: 476 tests pass, 0 fail, 73 skipped (44 suites). The skips are the opt-in sims (16 sync, 16 timed, the E48 and SAFE-09 runs and their 16 inherited stubs) and the measured G8 findings A10 and A21. `SizeGate.t.sol` passes. `Attacks.t.sol`: 135 pass, 2 skipped (A10, A21). A1 to A12 and A14 to A19 pass on step 3f. A9 and A14 use the in-kind exit only in wind-down. | 2026-11-15 |
+| G5 (step 3f) | Not pass (no fail clause fired), 2026-11-15 | Fixed scorer, same 16 files and seeds as 3e. Blocked skips 92 of 9,663 step attempts (0.95%, 3e: 0.61%). One plan is over 10%: SEQ-5M-s1 receipt d05 at 18.8% (3e: 3.7%). It skips 48 steps with `StepFailed` while it sits at its cost budget, then halts. Three plans do not converge, the same three as 3e: SEQ-5M d05 in all three seeds halts on the cost budget. No liquid asset is off tolerance. The literal skip rate (every non-executing call) is 9.82%. EXT-PROBE 5M passes. | 2026-11-15 |
+| G8 (step 3f) | Fail (2026-11-15) | `Attacks.t.sol` and `sim/AttackSim.t.sol` with `PROTO_SIM_ATTACKS=1`. Holders lose 0 in every run. Positive attacker nets: A10 slow ramp inside the band +156.64 USDC (same as 3e), sim strict max +61.76; A2 sim strict max +0.35; A6 sim strict max +467.55 (as 3e); and a new one, A21 (a lagging TWAP, an informed user joins the favoured side inside the feed guard) +49,861.20 USDC on a 6M USDC match, with the matched user's loss inside `refBandBps` (the test asserts it). The sim attack numbers equal 3e's to the unit. The step 3f match does not change them. | 2026-11-15 |
+| G9 (step 3f) | Fail (2026-11-15) | Fixed scorer, no-jump set (SEQ, EXT; 9 files, 503 settlements). First call: 99.40% (500 of 503; the 3 misses are check 4). Redemption wait median 3.57 h, p95 6.55 h, 0 unfilled past 14 h, 3 censored. Flow cost against the feed: median 0.21 bps, but max 39.25 bps against the 30 bps limit. One request of 780 is over 30 bps: a matched deposit in EXT-1M-s1 (20.08, 17.20 and 16.94 bps are the next worst). The matched part prices at the TWAP and the feed leads the TWAP in EXT, so the cost is the lag, bounded only by `refBandBps` (90). The gate is not tuned. Step 3e on the same seeds scores PASS: first call 99.40% (495 of 498), wait median 3.57 h, p95 6.55 h, cost median 0.30 bps, max 15.53 bps. | 2026-11-15 |
 | G7 | Dropped | | |
+
+**Step 3f rescore (2026-11-15).** This is the rerun of work packages 10 and 11 (eng plan §8.4). The scorer is the fixed one (SIM-01, SIM-02). Its first run of the step 3f files failed provenance on the retired `StepParams.keeperGrace`. The expected defaults were changed to drop it. A run of the step 3d or 3e code still reads it back and is still expected to.
+
+Commands. Pin 55462550, replay fixture, no RPC, `PROTO_FIXTURE_CHECK=false`, run from the worktree root.
+
+```
+PROTO_FIXTURE_CHECK=false PROTO_SIM=1 PROTO_SIM_FLOWS=timed forge test --match-path 'contracts/test/prototype/sim/TimedFlowSim.t.sol' --match-contract TimedFlowSimTest
+bun contracts/test/prototype/sim/score-sim.ts out/prototype/default-timed
+```
+
+Seeds. `SimLib.seedOf(scenario, size, k)` with k = 0, 1, 2 for SEQ 1M, SEQ 5M, EXT 1M, JUMP-DOWN 1M and JUMP-UP 1M, and k = 0 for EXT-PROBE 5M. That is 16 files and 36 scored plans. Step 3e was rerun on the same seeds from `contracts-0.8.0` (fa7c47182) with the same command and the same fixed scorer (`score-sim.ts` expects `keeperGrace` when a run reads it back). Step 3d and 3e share contracts and sim. The step 3d run recorded above (`refBandBps` 50) cannot be rerun on the current fixture. Its G9 miss, 84.02% first calls, stays as recorded.
+
+| Gate | Step 3e, rerun | Step 3f |
+| --- | --- | --- |
+| G4 median / max cost | 7.22 / 28.77 bps | 7.12 / 28.00 bps (pass) |
+| G5 blocked skips, plans over 10% | 0.61%, none | 0.95%, one (SEQ-5M-s1 d05, 18.8%) |
+| G5 unconverged | 3 (SEQ-5M d05, cost budget) | the same 3 |
+| G9 first call | 99.40% (495 of 498) | 99.40% (500 of 503) |
+| G9 redemption wait median / p95 | 3.57 h / 6.55 h | 3.57 h / 6.55 h |
+| G9 flow cost median / max | 0.30 / 15.53 bps (pass) | 0.21 / 39.25 bps (fail) |
+| Matched share of volume | none (no match in 3e) | 27.7% of deposit USDC, 27.3% of redemption USDC (G9 set) |
+| G8 A10 / A2 / A6 sim strict max | +61.76 / +0.35 / +467.55 USDC | the same, plus A21 +49,861.20 |
+
+What the sim had to learn before this was scorable. Both are fixes to the sim, not to a contract or a gate.
+
+- A matched fill is booked in the queue's own books and emits no per-request event (E24, E52). The sim read such requests as unfilled, so waits and costs were missing. It now reads each open request through `pending*Request` and `requestStatus` after every settle, and costs the matched part at the match price against the feed.
+- The keeper sent a pool step every slot. The round's first `settle` then reverted `StepInWindow` (E42, RB-30) on 6,455 of 6,752 calls and the first-call share was 6.26%. The keeper now holds basket steps from an epoch's close to its round's end, and while a first call is retried, if a request of a closed epoch is open. The held slots are in `meta.stepsHeldForRound`.
+
+One contract observation, not fixed. `FlowMatchLib.hasPendingForRound` returns true for any deposit bucket that has not expired, even when `depPoolUsdc` is 0. So `checkSettle` reports work for an empty round. The keeper's call then does nothing or reverts `StepInWindow`. No user is hurt. SEQ-1M-s0 shows 30 such reverts in a week. The sim sends the call at the window end and does not retry it.
+
+**E48 scenarios (2026-11-15).** `TimedFlowFaultSimTest` in `sim/TimedFlowSim.t.sol`. One fault at a time, 1M USDC, seed 0, the SEQ market, the sim's own flows and keeper, no rebalance plan. Two probe requests are made when the fault starts: a deposit of 0.20% of NAV and a redemption of 0.20% of supply. Each holder action is tried inside a snapshot and reverted. Command:
+
+```
+PROTO_FIXTURE_CHECK=false PROTO_SIM=1 PROTO_SIM_FLOWS=timed forge test --match-path 'contracts/test/prototype/sim/TimedFlowSim.t.sol' --match-contract TimedFlowFaultSimTest --match-test 'test_e48_(none|sequencer|usdc|keeper|pause|freeze|venue|lendRateSpike)' -vv
+```
+
+Output: `out/prototype/default-timed-e48/e48-<fault>-s0.json`. Waits are in hours from the start of the fault. The max columns cover every request the sim made. An open request counts to the end of the run, an expired deposit to its expiry. Thresholds: none. These are reported only (the owner has not set one).
+
+| Fault | Fault length (h) | Probe redemption paid (h) | Probe deposit shares usable (h) | Longest redemption (h) | Longest deposit (h) | Blocked calls | A holder can, mid fault | A holder can, at its end |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| none | 0 | 4.5 | 5.5 | 4.5 | 5.5 | 0 | nothing needed | deliver shares |
+| sequencer outage | 6 | 7.5 | 8.0 | 7.0 | 8.0 | 6 (check 2) | cancel the deposit | nothing needed |
+| USDC depeg to 0.97 | 12 | 12.5 | 13.0 | 12.0 | 13.0 | 15 (check 2) | nothing | nothing needed |
+| USDC depeg to 0.95, stuck | 72 | 72.5 | expired at 48 h | 72.0 | 51.5 | 125 (check 2) | nothing | withdraw the expired deposit, give notice on the redemption |
+| keeper stopped | 36 | 36.5 | 37.0 | 36.0 | 37.0 | 0 | nothing | nothing |
+| queue paused (emergency key) | 72 | 72.5 | expired at 48 h | 72.0 | 51.5 | 125 (check 1) | nothing | withdraw the expired deposit, give notice on the redemption |
+| freeze of the probe's settlement | 173.5 | 4.5 | 173.5 | 5.6 | 7.1 (the frozen deposit waits 173.5) | 0 | nothing | deliver shares |
+| venue fully borrowed | 24 | 4.5 (a shortfall claim on the venue's position) | 11.5 | 4.5 | 11.5 | 0 | deliver shares | deliver shares |
+| lend rate spike of +20% | 12 | 4.5 | 11.5 | 4.5 | 11.5 | 0 | cancel the deposit | deliver shares |
+
+Reading it. `redeemInKind` fails at every point of every fault, as E29 says: it opens only in wind-down. The longest wait of a redemption is the length of the fault, up to 72 h (a depeg that does not end, or a pause). A deposit does not wait that long. It expires after `maxRoll` epochs (48 h) and the holder takes the USDC back. A freeze is the one case where shares wait past the hold: 173.5 h from the request, the freeze's own limit (`maxFreeze`, 7 days) after the unlock. The "nothing" cells mean no listed action succeeded for the probe holders: cancel, withdraw expired, notice, in kind. `withdrawCredit` succeeds when the holder has any credit, so it says nothing about the probe. A lend rate spike stops one round for deposits and the match (a round later the deposit settles). It does not stop a redemption. In a venue that cannot pay, the redemption settles at once with a claim on the venue's position (E37).
+
+**SAFE-09 calibration (2026-11-15).** `test_e48_lendRateCalibration_s0` runs 14 days of the SEQ market with the sim's flows and no fault, under `maxLendRateGrowthBps` set by `PROTO_SIM_FLOW_MAX_LEND_RATE_GROWTH_BPS` and a `PROTO_SIM_TAG` (here `safe09-<v>`). It counts the rounds check 5 stopped for deposits and the match.
+
+```
+PROTO_FIXTURE_CHECK=false PROTO_SIM=1 PROTO_SIM_FLOWS=timed PROTO_SIM_TAG=safe09-<v> PROTO_SIM_FLOW_MAX_LEND_RATE_GROWTH_BPS=<v> forge test --match-path 'contracts/test/prototype/sim/TimedFlowSim.t.sol' --match-contract TimedFlowFaultSimTest --match-test test_e48_lendRateCalibration -vv
+```
+
+| Value (bps per day) | Rounds stopped by check 5 | Result |
+| --- | --- | --- |
+| 1 | every round | the sim's genesis cannot fill a deposit (`DepositStoppedForRound`, reason 2) |
+| 2 | 0 of 31 settlements | passes |
+| 5 | 0 | passes |
+| 10 (the default) | 0 | passes |
+
+The fastest growth any call saw in the 14 days was 1.22 bps per day (1.4 in the scored run, p50 1.2). A value of 1 stops every round. A value of 2 is the lowest that does not. The default of 10 has seven times the headroom over the worst normal reading. A +20% jump in one venue's rate stops one round (the spike row above). This sim sets no value. It reports that 10 sits between the normal range and a real jump. The owner may keep it or lower it to as low as 2.
 
 **Step 3 simulation (2026-11-10).** The sim replays real Base state at pin
 55462550 with no RPC. It runs five scenarios. SEQ applies the anchored
