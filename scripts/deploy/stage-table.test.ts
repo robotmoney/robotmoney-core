@@ -36,7 +36,8 @@ describe("stage-table.json", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
     // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row. ADR-0017: rmAGENT is retired, so the rmAGENT vault script and the V4 price recorder script stay
     // in the repo as parked code that no stage reads (the live v0.5.0 deployment was made with them)
-    const skip = new Set(["RedeployProtocolAssetVault.s.sol", "DeployAgentTokenVault.s.sol", "DeployUniswapV4PriceRecorder.s.sol"]);
+    // E56: DeployKeeperAccount runs before the sheet is final (its CREATE2 address is the sheet's KEEPER_ADDRESS), so it is a pre-sheet step and no stage.
+    const skip = new Set(["RedeployProtocolAssetVault.s.sol", "DeployAgentTokenVault.s.sol", "DeployUniswapV4PriceRecorder.s.sol", "DeployKeeperAccount.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
     expect(missing).toEqual([]);
