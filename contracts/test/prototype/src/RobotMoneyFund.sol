@@ -58,7 +58,8 @@ import {FundDelistLib} from "./lib/FundDelistLib.sol";
 ///           and `emergencyUnwind` are governed (Safe + timelock delay, owner 2026-11-13): each ends the
 ///           fund's deposits or sells every holding, so no single hot key holds them. ADMIN carries no upgrade power: only
 ///           `upgradeTimelock()` upgrades or freezes the proxy.
-///         - `redeem` and `redeemInKind` are never gated by plan state, pause or shutdown (RB-6).
+///         - `redeemInKind` is never gated by plan state or a pause. It reverts `InKindClosed` unless the fund is in
+///           wind-down (E29, RB-26). The fund's own `redeem` is closed (E2).
 ///
 ///         Size (§6.1, G1): value-moving and validation logic lives in the delegatecall-linked
 ///         `FundValuationLib`, `FundFlowsLib`, `FundAdminLib` and (step 3d) `FundPositionLib`, which in turn link the existing
@@ -155,8 +156,8 @@ contract RobotMoneyFund is
         _useQueue();
     }
 
-    /// @notice Closed (E2): reverts `UseFlowQueue(flowQueue())`. Redeem through `FlowQueue.requestRedeem`, or
-    ///         exit at once in kind with `redeemInKind`.
+    /// @notice Closed (E2): reverts `UseFlowQueue(flowQueue())`. Redeem through `FlowQueue.requestRedeem`. In a
+    ///         wind-down `redeemInKind` also exits.
     function redeem(uint256, address, address) public view override returns (uint256) {
         _useQueue();
     }
@@ -187,7 +188,7 @@ contract RobotMoneyFund is
         return 0;
     }
 
-    /// @notice 0: the fund's own `redeem` is closed. `redeemInKind` stays open.
+    /// @notice 0: the fund's own `redeem` is closed. `redeemInKind` opens only in wind-down (E29).
     function maxRedeem(address) public pure override returns (uint256) {
         return 0;
     }
@@ -202,12 +203,11 @@ contract RobotMoneyFund is
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Oracle-free, swap-free exit of last resort (§4.4): pro-rata idle and Lending USDC as one leg,
-    ///         plus each active Basket token, each net of the exit fee. Never gated (RB-6). Step 3d: asserts the
-    ///         proportion check (check 10, RB-13) inside `FundFlowsLib.payInKind`; pays the lending part in USDC up to
+    ///         plus each active Basket token, each net of the exit fee. Open only in wind-down (E29, RB-26), never gated by a pause.
+    ///         Asserts the proportion check (check 10, RB-13) inside `FundFlowsLib.payInKind`; pays the lending part in USDC up to
     ///         the period's in-kind allowance and the rest as claims on a share of each position (E9, E20, RB-21);
-    ///         refuses a zero `receiver` and survives a venue whose value read reverts (E23). The FlowQueue calls it
-    ///         with `owner == queue` and `receiver` = the request's owner for escrowed shares (`exitInKind`,
-    ///         `takeReturn`); then `caller == owner`, so no allowance is spent, and claims are keyed to `receiver`.
+    ///         refuses a zero `receiver` and survives a venue whose value read reverts (E23). The queue no longer calls it (E29).
+    ///         A holder calls it for their own shares, or an approved caller does, and claims are keyed to `receiver`.
     function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant {
         if (!_s().shutdown) revert InKindClosed();
         if (shares == 0) return;
@@ -832,7 +832,7 @@ contract RobotMoneyFund is
     }
 
     /// @notice Enter WindDown (`shutdown = true`, `tvlCap = 0`), pause live plan, and notify queue to checkpoint &
-    ///         release escrow. Redeems stay open (`redeemInKind` unlocks). ADMIN_ROLE only.
+    ///         release escrow. `redeemInKind` opens. ADMIN_ROLE only.
     function shutdown() external {
         _adminOp(FundAdminLib.ADMIN_SHUTDOWN, 0, address(0));
     }

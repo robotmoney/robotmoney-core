@@ -32,7 +32,6 @@ import {
     MAX_STEP_INTERVAL,
     MAX_STEP_COST_BPS,
     MAX_TOLERANCE_BPS,
-    MAX_KEEPER_GRACE,
     MAX_OVERRUN,
     DEFAULT_STEP_DEPTH_BPS,
     MAX_STEP_DEPTH_BPS,
@@ -644,7 +643,7 @@ contract Rebalancer is
     }
 
     /// @dev §5.6 bounds. `stepInterval ≥ max(MIN_STEP_INTERVAL, fund.maxTwapWindow())`;
-    ///      `keeperGrace ≤ MAX_KEEPER_GRACE` (retired in Step 3f, E34); `maxOverrun ≤ MAX_OVERRUN`;
+    ///      `maxOverrun ≤ MAX_OVERRUN`;
     ///      `maxStepCostBps ∈ (fee1 + fee2, MAX_STEP_COST_BPS]` where fee1, fee2 are the two largest
     ///      active basket pool fees: leg picking pairs the most-over with the most-under asset, so a
     ///      basket-to-basket step pays both fees, and a cap at or below their sum would make every such
@@ -656,7 +655,6 @@ contract Rebalancer is
         uint256 minInterval = Math.max(MIN_STEP_INTERVAL, f.maxTwapWindow());
         if (
             params.stepInterval < minInterval || params.stepInterval > MAX_STEP_INTERVAL
-                || params.keeperGrace > MAX_KEEPER_GRACE
                 || params.maxOverrun > MAX_OVERRUN || params.maxStepCostBps > MAX_STEP_COST_BPS
                 || params.toleranceBps == 0 || params.toleranceBps > MAX_TOLERANCE_BPS
         ) revert StepParamOutOfBounds();

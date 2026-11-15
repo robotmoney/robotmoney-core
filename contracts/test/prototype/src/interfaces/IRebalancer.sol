@@ -126,7 +126,7 @@ interface IRebalancer is IFundEvents {
 
     /// @notice Set the global step parameters. Bounds (`StepParamOutOfBounds` /
     ///         `BoundAtOrBelowPoolFee`): `stepInterval ∈ [max(MIN_STEP_INTERVAL, fund.maxTwapWindow()), MAX_STEP_INTERVAL]`,
-    ///         `keeperGrace ≤ MAX_KEEPER_GRACE` (retired in Step 3f, E34), `maxOverrun ≤ MAX_OVERRUN`,
+    ///         `maxOverrun ≤ MAX_OVERRUN`,
     ///         `maxStepCostBps ∈ (fee1 + fee2, MAX_STEP_COST_BPS]` (sum of the two largest active basket pool fees),
     ///         `toleranceBps ∈ [1, MAX_TOLERANCE_BPS]`, and `minStepUsdc ≤` every asset's non-zero
     ///         `maxStepUsdc` (`MaxStepBelowMinStep`).

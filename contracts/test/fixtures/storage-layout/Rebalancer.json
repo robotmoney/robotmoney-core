@@ -157,32 +157,26 @@
         "type": "t_uint32"
       },
       {
-        "label": "keeperGrace",
+        "label": "maxOverrun",
         "offset": 4,
         "slot": "0",
         "type": "t_uint32"
       },
       {
-        "label": "maxOverrun",
-        "offset": 8,
-        "slot": "0",
-        "type": "t_uint32"
-      },
-      {
         "label": "maxStepCostBps",
-        "offset": 12,
+        "offset": 8,
         "slot": "0",
         "type": "t_uint16"
       },
       {
         "label": "toleranceBps",
-        "offset": 14,
+        "offset": 10,
         "slot": "0",
         "type": "t_uint16"
       },
       {
         "label": "minStepUsdc",
-        "offset": 16,
+        "offset": 12,
         "slot": "0",
         "type": "t_uint128"
       }

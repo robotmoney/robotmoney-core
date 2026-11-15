@@ -44,8 +44,6 @@ uint32 constant MAX_STEP_INTERVAL = 1 days;
 uint16 constant MAX_STEP_COST_BPS = 500;
 /// @dev Ceiling on `toleranceBps` (suggested start 50 bps).
 uint16 constant MAX_TOLERANCE_BPS = 500;
-/// @dev Ceiling on `keeperGrace` (suggested start 6 hours).
-uint32 constant MAX_KEEPER_GRACE = 7 days;
 /// @dev Ceiling on `maxOverrun` (suggested start 7 days).
 uint32 constant MAX_OVERRUN = 30 days;
 /// @dev A basket leg's step notional is also capped at `stepDepthBps` of its pool's time-weighted USDC depth over one
@@ -84,7 +82,7 @@ uint16 constant MAX_POOL_SHARE_BPS = 10_000;
 ///      shares of that position: a fine scale keeps the rounding of each mint and burn far below one USDC unit.
 uint256 constant POSITION_UNITS_PER_USDC = 1e18;
 
-/// @dev The in-kind allowance of proposal §5.9.4 and E20, held by the fund (coordinator ruling 6, §5.9.5 "the fund
+/// @dev The in-kind allowance of proposal §5.9.4 and E20, held by the fund, applied only in a wind-down (E29) (coordinator ruling 6, §5.9.5 "the fund
 ///      stores ... the in-kind allowance"). Per period of `inKindPeriod` seconds, in-kind exits take lending USDC up
 ///      to `max(inKindBps × lending holdings / 10 000, inKindFloorUsdc)`, counted in the venues' own USDC amounts.
 ///      Defaults equal the queue's flow-cap defaults (§5.9.5: 500 bps, 250 000 USDC, a 6 h epoch); ADMIN_ROLE keeps
@@ -130,15 +128,15 @@ struct StepPrices {
 ///         | EMERGENCY_ROLE     | emergency hot key           | fund (pauses), rebalancer none |
 ///         | GOVERNANCE_ROLE    | RebalanceGovernance proxy   | fund (`setTargetAndOpenPlan`)  |
 ///         | REBALANCER_ROLE    | Rebalancer proxy            | fund (`executeStep`, conclude) |
-///         | KEEPER_ROLE        | keeper bot                  | rebalancer (`step` pre-grace)  |
+///         | KEEPER_ROLE        | keeper bot                  | rebalancer (`step`, E34)       |
 ///         | TARGET_SETTER_ROLE | TimelockController          | governance (`applyReceipt`)    |
 ///         | FLOW_ROLE          | FlowQueue proxy             | fund (`mintInKind`, `sellForFlow`, `ledgerCheckpoint`) |
 ///
 ///         On the fund, EMERGENCY_ROLE holds only `pauseRebalance` and `pauseDeposits`; `shutdown` and `emergencyUnwind`
 ///         are ADMIN_ROLE's (the timelock), owner 2026-11-13.
-///         On the FlowQueue: ADMIN_ROLE (timelock: params, release, allowReturn, unpause), EMERGENCY_ROLE (pause,
+///         On the FlowQueue: ADMIN_ROLE (timelock: params, release, unpause), EMERGENCY_ROLE (pause,
 ///         freezeSettlement: pause-class, it only delays one settlement's held shares, ends by itself after
-///         `maxFreeze` and moves no value) and KEEPER_ROLE (`settle` before `keeperGrace`).
+///         `maxFreeze` and moves no value) and KEEPER_ROLE (`settle`, keeper-only, E34).
 library Roles {
     bytes32 internal constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
     bytes32 internal constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
@@ -418,8 +416,6 @@ struct StepResult {
 /// @notice Global step parameters held by the Rebalancer (§5.6 rows scoped "global").
 /// @param stepInterval   Cooldown between executed steps. >= max(MIN_STEP_INTERVAL,
 ///                       fund.maxTwapWindow()), <= MAX_STEP_INTERVAL.
-/// @param keeperGrace    After this long with no executed step on an Open plan, `step()` is open to
-///                       anyone. In [stepInterval, MAX_KEEPER_GRACE].
 /// @param maxOverrun     After `endTime + maxOverrun` an unconverged Open plan expires.
 ///                       <= MAX_OVERRUN.
 /// @param maxStepCostBps Per-step NAV-loss cap in bps of notional. In (max basket poolFeeBps,
@@ -428,7 +424,6 @@ struct StepResult {
 /// @param minStepUsdc    Dust floor: a step below this notional is skipped `BelowMinStep`.
 struct StepParams {
     uint32 stepInterval;
-    uint32 keeperGrace;
     uint32 maxOverrun;
     uint16 maxStepCostBps;
     uint16 toleranceBps;

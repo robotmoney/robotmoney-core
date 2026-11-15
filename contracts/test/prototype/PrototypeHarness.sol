@@ -432,7 +432,6 @@ abstract contract PrototypeHarness is BaseFixture {
         uint32 interval = uint32(Math.max(30 minutes, fund.maxTwapWindow()));
         StepParams memory sp = StepParams({
             stepInterval: interval,
-            keeperGrace: KEEPER_GRACE,
             maxOverrun: MAX_OVERRUN,
             maxStepCostBps: MAX_STEP_COST_BPS,
             toleranceBps: TOLERANCE_BPS,

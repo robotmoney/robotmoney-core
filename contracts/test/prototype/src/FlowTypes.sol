@@ -35,6 +35,11 @@ uint32 constant MAX_HOLD = 7 days;
 uint32 constant MIN_CANCEL_BUFFER = 1 minutes;
 uint32 constant MAX_CANCEL_BUFFER = 6 hours;
 uint32 constant DEFAULT_CANCEL_BUFFER = 15 minutes;
+/// @dev E51 reference delay. The queue does not read the live timelock. The timelock's delay is an operating setting
+///      (the Deploy 4 rehearsal runs 15 minutes), and a bound that followed it would make every default parameter set
+///      invalid there. The bound is this constant: `maxRoll * epochLength <= TIMELOCK_DELAY_REFERENCE` and
+///      `maxPause >= TIMELOCK_DELAY_REFERENCE + epochLength`. It is the longest delay the release runbook may schedule.
+///      `FlowQueue.t.sol` tests both edges.
 uint32 constant TIMELOCK_DELAY_REFERENCE = 48 hours;
 uint32 constant MIN_MAX_PAUSE = 48 hours;
 uint32 constant MAX_PAUSE_DURATION = 14 days;

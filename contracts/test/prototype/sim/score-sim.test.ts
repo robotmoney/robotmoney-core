@@ -32,7 +32,6 @@ const MANIFEST_SPECS: { file: string; scenario: string; fundUsdc: number; seeds:
 function defaultTimedParams() {
   return {
     stepInterval: 1800,
-    keeperGrace: 21600,
     maxOverrun: 604800,
     maxStepCostBps: 50,
     toleranceBps: 50,

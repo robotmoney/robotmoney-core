@@ -826,9 +826,6 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(o, "endSleeveBps", _arr4(acc.endSleeve));
         vm.serializeUint(o, "startBps", _arr16(p.startBps));
         vm.serializeUint(o, "endBps", _arr16(p.endBps));
-        vm.serializeUint(
-            o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace
-        );
     }
 
     function _jsonCost(string memory o, Plan memory p) internal {
@@ -1065,7 +1062,6 @@ contract TimedFlowSimTest is TimedSimBase {
         PlanParams memory pp = governance.defaultPlanParams();
         vm.serializeString(k, "set", runName);
         vm.serializeUint(k, "stepInterval", rebalancer.effectiveStepInterval());
-        vm.serializeUint(k, "keeperGrace", sp.keeperGrace);
         vm.serializeUint(k, "maxOverrun", sp.maxOverrun);
         vm.serializeUint(k, "maxStepCostBps", sp.maxStepCostBps);
         vm.serializeUint(k, "toleranceBps", sp.toleranceBps);
