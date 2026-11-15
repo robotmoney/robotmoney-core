@@ -2484,6 +2484,19 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         warpToSettleable(didLocked);
         refreshFeeds();
         settleAll();
+        // Lending interest accrues with time and every holder earns it. Record the share price at settlement so
+        // the yield on the attacker's shares afterwards is taken out of the net: it is not attack profit.
+        uint256 navAtSettle = _navRef();
+        uint256 supplyAtSettle = fund.totalSupply();
+        // The match prices at the TWAP NAV, which trails the rising NAV by the yield of the window (design: feeds
+        // are guards only). Any depositor matched in that settlement gets the same, so it is the benchmark, not an
+        // edge from the cancel cutoff. A21 measures the lag on its own.
+        {
+            Settlement memory sm = queue.getSettlement(queue.settlementCount());
+            uint256 refNow = navAtSettle.mulDiv(sm.matchedShares, supplyAtSettle);
+            uint256 paid = sm.matchedShares.mulDiv(sm.matchSharePrice, 1e36);
+            if (refNow > paid) extraNet -= int256(refNow - paid);
+        }
         deliverAfterHold(attacker);
         vm.warp(block.timestamp + p.minHold);
         refreshFeeds();
@@ -2494,6 +2507,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         }
         _claimRedeemUsdc(alice);
         _takeCredit(attacker);
+        {
+            uint256 held = fund.balanceOf(attacker);
+            uint256 supplyNow = fund.totalSupply();
+            uint256 yieldGain = held.mulDiv(_navRef(), supplyNow) - held.mulDiv(navAtSettle, supplyAtSettle);
+            extraNet -= int256(yieldGain);
+        }
         _end("A24: cancel cutoff and last-block lock", true);
     }
 
