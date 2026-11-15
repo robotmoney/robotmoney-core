@@ -140,7 +140,7 @@ describe("sources", () => {
   const idx = new SourceIndex(cfg);
 
   test("the import closure equals forge's own (its build cache), for every prototype test file", () => {
-    const cachePath = process.env.RECORDER_FORGE_CACHE ?? "/drive2/home/lucas/tmp/recorder-speedup/forge/cache";
+    const cachePath = process.env.RECORDER_FORGE_CACHE ?? join(REPO, "cache");
     const f = join(cachePath, "solidity-files-cache.json");
     if (!existsSync(f)) return; // needs a build of this checkout
     const files = JSON.parse(readFileSync(f, "utf8")).files as Record<string, { imports: string[] }>;
