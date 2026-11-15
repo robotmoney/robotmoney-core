@@ -2579,8 +2579,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(fund.balanceOf(alice), initAlice, "A26: all shares restored");
 
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        uint256 aliceWallet = fund.balanceOf(alice); // read first: a prank covers only the next call
         vm.prank(alice);
-        fund.redeemInKind(fund.balanceOf(alice), alice, alice);
+        fund.redeemInKind(aliceWallet, alice, alice);
         assertGt(IERC20(WETH).balanceOf(alice), 0, "A26: wind-down pays basket tokens in kind");
         _end("A26: stuck fund maxRoll exits & Safe wind-down", true);
     }
