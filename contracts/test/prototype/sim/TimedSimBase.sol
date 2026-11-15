@@ -16,7 +16,14 @@ import {PrototypeHarness} from "../PrototypeHarness.sol";
 import {MockAggregator} from "../mocks/MockAggregator.sol";
 import {TwapSlicesLib} from "../src/lib/TwapSlicesLib.sol";
 import {BPS, PRICE_SCALE, PlanParams, PlanStatus} from "../src/FundTypes.sol";
-import {FlowParams, IFlowEvents, Quote, Request, RequestStatus, SettleCheck} from "../src/FlowTypes.sol";
+import {
+    FlowParams,
+    IFlowEvents,
+    Quote,
+    Request,
+    RequestStatus,
+    SettleCheck
+} from "../src/FlowTypes.sol";
 import {ILendingRateAdapter} from "../src/interfaces/IFlowAdapters.sol";
 import {SimMarket} from "./SimMarket.sol";
 
@@ -643,7 +650,9 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         for (uint256 i; i < n; ++i) {
             ReqRec storage r = reqs[i];
             if (r.doneAt != 0 || r.fills == 0) continue;
-            if (queue.requestStatus(r.id) == RequestStatus.Closed) r.doneAt = uint64(vm.getBlockTimestamp());
+            if (queue.requestStatus(r.id) == RequestStatus.Closed) {
+                r.doneAt = uint64(vm.getBlockTimestamp());
+            }
         }
     }
 
@@ -690,13 +699,18 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     /// @notice Fund `who` with `usdc` and request a limit-free deposit. Returns false when the request reverts.
-    function _reqDeposit(address who, uint256 usdc, uint256 /*retiredSlackBps*/ )
+    function _reqDeposit(
+        address who,
+        uint256 usdc,
+        uint256 /*retiredSlackBps*/
+    )
         internal
         returns (bool ok, uint256 id, bytes memory err)
     {
         fundUsdc(who, usdc);
         bool quoteFailed;
-        try queue.quoteDeposit(usdc) returns (Quote memory) {} catch {
+        try queue.quoteDeposit(usdc) returns (Quote memory) {}
+        catch {
             quoteFailed = true;
         }
         vm.startPrank(who);
@@ -711,12 +725,17 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     }
 
     /// @notice `who` requests a limit-free redemption of `shares`. Returns false when the request reverts.
-    function _reqRedeem(address who, uint256 shares, uint256 /*retiredSlackBps*/ )
+    function _reqRedeem(
+        address who,
+        uint256 shares,
+        uint256 /*retiredSlackBps*/
+    )
         internal
         returns (bool ok, uint256 id, bytes memory err)
     {
         bool quoteFailed;
-        try queue.quoteRedeem(shares) returns (Quote memory) {} catch {
+        try queue.quoteRedeem(shares) returns (Quote memory) {}
+        catch {
             quoteFailed = true;
         }
         vm.startPrank(who);

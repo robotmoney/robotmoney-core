@@ -325,11 +325,10 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function sellForFlowGross(
-        uint256 shares,
-        uint256[] calldata minUsdcPerLeg,
-        uint256 claimFeeBps
-    ) external returns (uint256 grossUsdcOut) {
+    function sellForFlowGross(uint256 shares, uint256[] calldata minUsdcPerLeg, uint256 claimFeeBps)
+        external
+        returns (uint256 grossUsdcOut)
+    {
         FundFlowsLib.SellFlowCtx memory ctx;
         ctx.shares = shares;
         ctx.feeBps = claimFeeBps;
@@ -355,10 +354,12 @@ contract RobotMoneyFund is
         return _sellForFlow(ctx, minUsdcPerLeg);
     }
 
-    function _sellForFlow(
-        FundFlowsLib.SellFlowCtx memory ctx,
-        uint256[] calldata minUsdcPerLeg
-    ) private onlyRole(FLOW_ROLE) nonReentrant returns (uint256) {
+    function _sellForFlow(FundFlowsLib.SellFlowCtx memory ctx, uint256[] calldata minUsdcPerLeg)
+        private
+        onlyRole(FLOW_ROLE)
+        nonReentrant
+        returns (uint256)
+    {
         if (ctx.batch) _validateSellBatch(ctx);
         ctx.caller = _msgSender();
         uint256 supplyBefore = totalSupply();
@@ -631,8 +632,9 @@ contract RobotMoneyFund is
 
     function depositsPaused() external view returns (bool) {
         FundState storage s = _s();
-        return s.depositsPaused
-            || (s.depositsPausedUntil != 0 && block.timestamp < s.depositsPausedUntil);
+        return
+            s.depositsPaused
+                || (s.depositsPausedUntil != 0 && block.timestamp < s.depositsPausedUntil);
     }
 
     function depositsPausedUntil() external view returns (uint64) {

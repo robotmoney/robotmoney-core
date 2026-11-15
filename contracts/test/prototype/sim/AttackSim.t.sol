@@ -1033,12 +1033,19 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
         }
     }
 
-    function _a9InKind(uint256[] memory ids, uint256[] memory /*askedAt*/) internal {
+    function _a9InKind(
+        uint256[] memory ids,
+        uint256[] memory /*askedAt*/
+    )
+        internal
+    {
         for (uint256 i; i < N_RUNNERS; ++i) {
             if (ids[i] == 0) continue;
             Request memory q = queue.getRequest(ids[i]);
             if (!q.closed) {
-                if (q.noticeRound == 0 && queue.currentEpoch() > q.expiryEpoch && !fund.isShutdown()) {
+                if (
+                    q.noticeRound == 0 && queue.currentEpoch() > q.expiryEpoch && !fund.isShutdown()
+                ) {
                     vm.prank(runners[i]);
                     queue.giveRedemptionNotice(ids[i]);
                 } else if (q.noticeRound != 0) {

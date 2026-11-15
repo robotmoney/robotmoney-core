@@ -435,7 +435,9 @@ contract EndToEndTest is PrototypeHarness {
         assertGt(IERC20(USDC).balanceOf(alice), before[0], "USDC leg to the owner");
         assertGt(IERC20(WETH).balanceOf(alice), before[1], "wETH leg to the owner");
         assertGt(IERC20(CBBTC).balanceOf(alice), before[2], "cbBTC leg to the owner");
-        assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "wind-down closed request");
+        assertEq(
+            uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "wind-down closed request"
+        );
         for (uint256 i; i < listedAssets(); ++i) {
             (uint256 units,) = fund.positionClaimOf(i, address(queue));
             assertEq(units, 0, "E23: no position claim keyed to the queue");
@@ -888,7 +890,9 @@ contract EndToEndTest is PrototypeHarness {
         // RB-6: queue exits work while Paused, and leave the plan as it was.
         _checkedRedeem(alice, fund.balanceOf(alice) / 2);
         assertEq(fund.currentPlanId(), planId, "same plan");
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after queue exit");
+        assertEq(
+            uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after queue exit"
+        );
 
         // Alice exits the rest through the queue while still Paused.
         _checkedRedeem(alice, fund.balanceOf(alice));
@@ -901,7 +905,9 @@ contract EndToEndTest is PrototypeHarness {
         _checkedRedeemInKind(bob, bob, fund.balanceOf(bob));
         assertEq(fund.balanceOf(bob), 0, "bob fully out in kind");
         assertEq(fund.currentPlanId(), planId, "same plan after wind-down exit");
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after wind-down exit");
+        assertEq(
+            uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after wind-down exit"
+        );
         assertEq(fund.totalSupply(), SEED_USDC * 1e18, "everyone out but the seed");
         _assertBooks("after every exit");
     }
@@ -1086,7 +1092,9 @@ contract EndToEndTest is PrototypeHarness {
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_WETH)));
         assertTrue(fund.isAssetInSale(IDX_WETH), "E53: WETH in sale");
         assertTrue(fund.hasAssetInSale(), "E53: fund reports asset in sale");
-        assertTrue(queue.liveness().depositsStoppedNow, "E53: queue stops deposits during delisting");
+        assertTrue(
+            queue.liveness().depositsStoppedNow, "E53: queue stops deposits during delisting"
+        );
 
         uint256 aRedeem = aShares / 2;
         uint256 bRedeem = bShares / 2;
@@ -1100,7 +1108,9 @@ contract EndToEndTest is PrototypeHarness {
             assertGt(cashA, 0, "alice received non-WETH proceeds via queue");
             assertGt(cashB, 0, "bob received non-WETH proceeds via queue");
             assertEq(fund.balanceOf(carol), 0, "E53: queued deposit not minted while inSale");
-            assertFalse(queue.getRequest(idC).closed, "E53: queued deposit stays pending during delist");
+            assertFalse(
+                queue.getRequest(idC).closed, "E53: queued deposit stays pending during delist"
+            );
 
             (, uint256[] memory heldAfter) = fund.heldBalances();
             assertLt(
@@ -1209,7 +1219,9 @@ contract EndToEndTest is PrototypeHarness {
 
         vm.clearMockedCalls();
 
-        setTargetViaTimelock(assetVec(0, 4_000, 3_000, 3_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(0, 4_000, 3_000, 3_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.warp(block.timestamp + Math.max(1 days, rebalancer.effectiveStepInterval()) + 2);
         refreshFeeds();
 
@@ -1220,7 +1232,9 @@ contract EndToEndTest is PrototypeHarness {
             }
             vm.prank(address(rebalancer));
             vm.expectRevert(
-                abi.encodeWithSelector(IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, totalClaims)
+                abi.encodeWithSelector(
+                    IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, totalClaims
+                )
             );
             fund.executeStep(StepOrder(IDX_AAVE, IDX_MOONWELL, 1_000e6, 0, 0, 10e6));
         }

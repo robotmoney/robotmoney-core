@@ -344,8 +344,12 @@ contract AdaptersTest is BaseFixture {
         );
         adapter.poolFeeBps(bob);
 
-        assertTrue(uni.isFixedFeePool(UNI_WETH_POOL), "Uniswap V3 pool has fixed fee + 7-word slot0");
-        assertFalse(uni.isFixedFeePool(AERO_WETH_USDC), "Uni adapter rejects 6-word Slipstream pool");
+        assertTrue(
+            uni.isFixedFeePool(UNI_WETH_POOL), "Uniswap V3 pool has fixed fee + 7-word slot0"
+        );
+        assertFalse(
+            uni.isFixedFeePool(AERO_WETH_USDC), "Uni adapter rejects 6-word Slipstream pool"
+        );
         assertFalse(uni.isFixedFeePool(bob), "Uni adapter rejects EOA");
         assertFalse(uni.isFixedFeePool(address(0)), "Uni adapter rejects zero address");
         uint24 uniPips = IAeroCLPoolRead(UNI_WETH_POOL).fee();
@@ -383,10 +387,7 @@ contract AdaptersTest is BaseFixture {
         sb.seqFeed.setRound(0, 0, sb.seqStartedAt, block.timestamp);
     }
 
-    function _deployShortPaySandbox()
-        private
-        returns (ShortPaySandbox memory sb)
-    {
+    function _deployShortPaySandbox() private returns (ShortPaySandbox memory sb) {
         sb.mUsdc = new LocalMintableErc20("Mock USDC", "mUSDC", 6);
         sb.mWeth = new LocalMintableErc20("Mock WETH", "mWETH", 18);
         sb.pool = new LocalAavePool(sb.mUsdc);
@@ -440,36 +441,38 @@ contract AdaptersTest is BaseFixture {
         sb.mechSwap = new MechSwapAdapter(address(sb.router));
         sb.fund.setAdapterCodeHashAllowed(address(sb.mechAave).codehash, true);
         sb.fund.setAdapterCodeHashAllowed(address(sb.mechSwap).codehash, true);
-        sb.fund.addAsset(
-            AssetConfig({
-                kind: AssetKind.Lending,
-                active: true,
-                capBps: 6_000,
-                adapter: address(sb.mechAave),
-                token: address(0),
-                pool: address(0),
-                poolFee: 0,
-                twapWindow: 0,
-                venue: Venue.V3,
-                feed: address(0),
-                maxFeedAge: 0
-            })
-        );
-        sb.fund.addAsset(
-            AssetConfig({
-                kind: AssetKind.Basket,
-                active: true,
-                capBps: 0,
-                adapter: address(sb.mechSwap),
-                token: address(sb.mWeth),
-                pool: address(sb.v3Pool),
-                poolFee: 500,
-                twapWindow: 1_800,
-                venue: Venue.V3,
-                feed: address(sb.ethFeed),
-                maxFeedAge: 1_500
-            })
-        );
+        sb.fund
+            .addAsset(
+                AssetConfig({
+                    kind: AssetKind.Lending,
+                    active: true,
+                    capBps: 6_000,
+                    adapter: address(sb.mechAave),
+                    token: address(0),
+                    pool: address(0),
+                    poolFee: 0,
+                    twapWindow: 0,
+                    venue: Venue.V3,
+                    feed: address(0),
+                    maxFeedAge: 0
+                })
+            );
+        sb.fund
+            .addAsset(
+                AssetConfig({
+                    kind: AssetKind.Basket,
+                    active: true,
+                    capBps: 0,
+                    adapter: address(sb.mechSwap),
+                    token: address(sb.mWeth),
+                    pool: address(sb.v3Pool),
+                    poolFee: 500,
+                    twapWindow: 1_800,
+                    venue: Venue.V3,
+                    feed: address(sb.ethFeed),
+                    maxFeedAge: 1_500
+                })
+            );
         RobotMoneyFund(address(sb.fund)).bindRebalanceRoles(address(this), address(this));
 
         address qImpl = address(new FlowQueue());
@@ -539,7 +542,10 @@ contract AdaptersTest is BaseFixture {
             (uint256 nav,,) = sb.fund.portfolioValues();
             uint256 notional = nav.mulDiv(4_500, BPS);
             uint256 minOut = i == 1 ? sb.fund.assetTokenValue(1, notional).mulDiv(98, 100) : 0;
-            sb.fund.executeStep(StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS)));
+            sb.fund
+                .executeStep(
+                    StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS))
+                );
         }
     }
 
@@ -554,7 +560,8 @@ contract AdaptersTest is BaseFixture {
         uint256 wantWeth = held0[1].mulDiv(sharesOut, sup0, Math.Rounding.Ceil);
         lims[1] = sb.fund.assetUsdcValue(1, wantWeth).mulDiv(BPS + 100, BPS) + 1;
         maxUsdc = idle0.mulDiv(sharesOut, sup0, Math.Rounding.Ceil)
-            + held0[0].mulDiv(sharesOut, sup0, Math.Rounding.Ceil) + LENDING_ROUNDING_UNITS + lims[1];
+            + held0[0].mulDiv(sharesOut, sup0, Math.Rounding.Ceil) + LENDING_ROUNDING_UNITS
+            + lims[1];
     }
 
     function _sbMintAsQueue(
@@ -679,7 +686,9 @@ contract AdaptersTest is BaseFixture {
         assertGt(sb.mechAave.totalAssets(), 0, "venue still holds remaining trapped position");
         vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.AssetStillHeld.selector, 0));
         sb.fund.deactivateAsset(0);
-        assertEq(sb.fund.openExclusionOf(0), exclId, "exclusion cannot close while collateral trapped");
+        assertEq(
+            sb.fund.openExclusionOf(0), exclId, "exclusion cannot close while collateral trapped"
+        );
 
         // Shutdown in-kind + `claimPosition` under SHORT_PAY rejects with `DeferredShortfall`.
         sb.pool.setPartialWithdrawBps(0);
@@ -753,7 +762,9 @@ contract AdaptersTest is BaseFixture {
         emit IFlowEvents.DepositStoppedForRound(0, 3);
         sb.queue.settle(256, type(uint256).max);
 
-        assertTrue(sb.queue.getRequest(redId).closed, "E36/A34: redemption settled despite low liquidity");
+        assertTrue(
+            sb.queue.getRequest(redId).closed, "E36/A34: redemption settled despite low liquidity"
+        );
         assertGt(sb.queue.maxRedeem(redUser), 0, "redUser has claimable USDC");
         assertEq(sb.fund.balanceOf(depUser), 0, "A34: deposit blocked by liquidity stop");
         assertEq(sb.queue.maxMint(depUser), 0, "A34: no deposit shares minted");
@@ -854,18 +865,17 @@ contract LocalUniV3Pool {
         return 1e22;
     }
 
-    function slot0()
-        external
-        view
-        returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
-    {
+    function slot0() external view returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
         return (initialSqrtPriceX96, fixedTick, 0, 1024, 1024, 0, true);
     }
 
     function observe(uint32[] calldata secondsAgos)
         external
         view
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        )
     {
         uint256 len = secondsAgos.length;
         tickCumulatives = new int56[](len);

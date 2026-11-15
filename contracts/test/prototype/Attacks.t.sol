@@ -209,12 +209,17 @@ abstract contract AttackBook is Test {
     ///         sells into a pool, so it pays the pool's fee and its price impact. The fund's own part of that cost is
     ///         a known, budgeted spend (`delistBudgetBps`), not a leak. The holders' loss may exceed the 1 bps bound by
     ///         at most that measured cost. Anything beyond it (a value leak in the split) still fails.
-    function _assertG8AfterSale(string memory id, AttackPnl memory r, uint256 saleCost) internal pure {
+    function _assertG8AfterSale(string memory id, AttackPnl memory r, uint256 saleCost)
+        internal
+        pure
+    {
         assertLe(r.attackerNet, 0, string.concat(id, ": G8 fail, the attacker's net is positive"));
         assertLe(
             r.holdersLoss,
             r.navRef.mulDiv(G8_HOLDER_LOSS_BPS, BPS) + saleCost,
-            string.concat(id, ": G8 fail, holders lost more than 1 bps of NAV plus the sale's execution cost")
+            string.concat(
+                id, ": G8 fail, holders lost more than 1 bps of NAV plus the sale's execution cost"
+            )
         );
     }
 
@@ -697,7 +702,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             "E36: DepositStoppedForRound cause 2 emitted on rate jump"
         );
         assertEq(queue.getRequest(v2).remaining, 50_000e6, "the deposit waits under check 5 stop");
-        assertLt(queue.getRequest(r2).remaining, aliceShares0, "redemptions still settle under rate stop");
+        assertLt(
+            queue.getRequest(r2).remaining, aliceShares0, "redemptions still settle under rate stop"
+        );
         assertLt(fund.totalSupply(), supply0, "no deposit minted; net redemption burned shares");
         vm.clearMockedCalls();
     }
@@ -859,7 +866,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(idx, IDLE_INDEX, "caller check returns idle index");
         vm.prank(attacker);
         vm.expectRevert(
-            abi.encodeWithSelector(IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0)
+            abi.encodeWithSelector(
+                IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0
+            )
         );
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         assertEq(queue.getRequest(vid).remaining, 250_000e6, "victim request untouched");
@@ -1970,10 +1979,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         queue.freezeSettlement(sid1);
         uint64 cooldownUntil = uint64(block.timestamp) + p.maxFreeze;
         vm.prank(emergency);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil)
+        );
         queue.freezeSettlement(sid1);
         vm.prank(emergency);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil)
+        );
         queue.freezeSettlement(sid2);
         uint64 until1 = queue.getSettlement(sid1).frozenUntil;
         assertLe(
@@ -2016,9 +2029,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         queue.mint(c3.shares, victim2);
         assertEq(
-            fund.balanceOf(victim2),
-            c3.shares,
-            "the released depositor gets all shares immediately"
+            fund.balanceOf(victim2), c3.shares, "the released depositor gets all shares immediately"
         );
         // After waiting for minHold of sid2 too, victim2 delivers sid2.
         warpForward(c2.unlockAt);
@@ -2057,7 +2068,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         Quote memory qRed = queue.quoteRedeem(1e18);
         assertEq(qDep.feeBps, 0, "E31: deposit quote has zero exit fee even during depeg");
         assertEq(qRed.feeBps, EXIT_FEE_BPS, "E31: redeem quote returns fee even during depeg");
-        assertGt(qDep.holdEnds, qDep.earliestSettle, "E31: terms quote computes schedule during depeg");
+        assertGt(
+            qDep.holdEnds, qDep.earliestSettle, "E31: terms quote computes schedule during depeg"
+        );
 
         // E29 / RB-25: locked redemption cannot exit in kind while live; it may give notice after maxRoll.
         vm.prank(alice);
@@ -2065,7 +2078,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         fund.redeemInKind(1, alice, alice);
         // A locked deposit cannot cancel in a quiet depeg either (only in open epoch or under a deposit stop),
         // and exits via withdrawExpired once maxRoll epochs have passed.
-        vm.warp(block.timestamp + uint256(queue.flowParams().maxRoll + 1) * queue.flowParams().epochLength);
+        vm.warp(
+            block.timestamp + uint256(queue.flowParams().maxRoll + 1)
+                * queue.flowParams().epochLength
+        );
         vm.prank(victim);
         queue.withdrawExpired(vid);
         assertEq(IERC20(USDC).balanceOf(victim), 50_000e6, "the expired escrow came back whole");
@@ -2324,7 +2340,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         MechAaveAdapter impl = new MechAaveAdapter(AAVE_POOL, USDC, AAVE_A_USDC, address(fund));
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(impl).codehash, true)
+            )
         );
         vm.etch(address(aaveAdapter), address(impl).code);
         m = MechAaveAdapter(address(aaveAdapter));
@@ -2334,7 +2352,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         MechSwapAdapter impl = new MechSwapAdapter(ROUTER);
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(impl).codehash, true)
+            )
         );
         vm.etch(address(swapAdapter), address(impl).code);
         m = MechSwapAdapter(address(swapAdapter));
@@ -2442,8 +2462,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertGe(redUsed, st.matchedUsdc, "A23: self-match counted against redeem cap");
 
         // Newly matched deposit shares are STILL under minHold (`maxDeposit == 0`).
-        assertEq(queue.maxDeposit(attacker), 0, "A23: matched deposit shares remain held during minHold");
-        assertGt(queue.claimableRedeemRequest(rid, attacker), 0, "A23: matched redeem claim created");
+        assertEq(
+            queue.maxDeposit(attacker), 0, "A23: matched deposit shares remain held during minHold"
+        );
+        assertGt(
+            queue.claimableRedeemRequest(rid, attacker), 0, "A23: matched redeem claim created"
+        );
         deliverAfterHold(attacker);
         _claimRedeemUsdc(attacker);
         _takeCredit(attacker);
@@ -2527,7 +2551,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         {
             uint256 held = fund.balanceOf(attacker);
             uint256 supplyNow = fund.totalSupply();
-            uint256 yieldGain = held.mulDiv(_navRef(), supplyNow) - held.mulDiv(navAtSettle, supplyAtSettle);
+            uint256 yieldGain =
+                held.mulDiv(_navRef(), supplyNow) - held.mulDiv(navAtSettle, supplyAtSettle);
             extraNet -= int256(yieldGain);
         }
         _end("A24: cancel cutoff and last-block lock", true);
@@ -2564,7 +2589,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             uint8(RequestStatus.Closed),
             "A25: matched redemption fully closed"
         );
-        assertGt(queue.getRequest(vid).remaining, 0, "A25: unmatched deposit remainder kept safely pending");
+        assertGt(
+            queue.getRequest(vid).remaining,
+            0,
+            "A25: unmatched deposit remainder kept safely pending"
+        );
 
         _sellExact(attacker, WETH_POOL, WETH, USDC, boughtWeth);
         _claimRedeemUsdc(alice);
@@ -2573,7 +2602,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     /// @notice A26: stuck fund — settlement blocked for `maxRoll` epochs. Reports blocker cost, holder actions
     ///         before expiry, expired/notice exits, and Safe timelock wind-down.
-    function test_A26_stuckFund_blockedMaxRollEpochs_reportsCostAndWindDown() public fixtureCovered {
+    function test_A26_stuckFund_blockedMaxRollEpochs_reportsCostAndWindDown()
+        public
+        fixtureCovered
+    {
         _world();
         uint256 vid = _victimDeposit(victim, 50_000e6);
         uint256 initAlice = fund.balanceOf(alice);
@@ -2713,17 +2745,29 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             uint8(queue.requestStatus(depId)), uint8(RequestStatus.Closed), "A28: depositor filled"
         );
         // FIFO net side: r1 closed first while r3 waits for subsequent cap periods.
-        assertEq(uint8(queue.requestStatus(id1)), uint8(RequestStatus.Closed), "A28: oldest redeemer closed");
+        assertEq(
+            uint8(queue.requestStatus(id1)),
+            uint8(RequestStatus.Closed),
+            "A28: oldest redeemer closed"
+        );
 
         uint256 settledEpochs = 1;
-        while (uint8(queue.requestStatus(id3)) != uint8(RequestStatus.Closed) && settledEpochs < 12) {
+        while (
+            uint8(queue.requestStatus(id3)) != uint8(RequestStatus.Closed) && settledEpochs < 12
+        ) {
             vm.warp(block.timestamp + queue.flowParams().epochLength);
             refreshFeeds();
             settleAll();
             ++settledEpochs;
         }
-        assertEq(uint8(queue.requestStatus(id3)), uint8(RequestStatus.Closed), "A28: last redeemer drained");
-        emit log_named_uint("A28: wait time to drain last redeemer (seconds)", block.timestamp - tStart);
+        assertEq(
+            uint8(queue.requestStatus(id3)),
+            uint8(RequestStatus.Closed),
+            "A28: last redeemer drained"
+        );
+        emit log_named_uint(
+            "A28: wait time to drain last redeemer (seconds)", block.timestamp - tStart
+        );
         _claimRedeemUsdc(alice);
         _claimRedeemUsdc(r2);
         _claimRedeemUsdc(r3);
@@ -2749,7 +2793,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         timelockExecute(
             address(fund),
             abi.encodeCall(
-                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+                IRobotMoneyFund.setAdapterCodeHashAllowed,
+                (address(moonwellAdapter).codehash, false)
             )
         );
         refreshFeeds();
@@ -2757,13 +2802,17 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(keeper);
         uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         assertGt(sid1, 0, "A30-impaired: redemption settled");
-        assertEq(queue.getSettlement(sid1).matchedShares, 0, "A30-impaired: no match during exclusion");
+        assertEq(
+            queue.getSettlement(sid1).matchedShares, 0, "A30-impaired: no match during exclusion"
+        );
         assertTrue(
             _sawDepositStopped(queue.getRequest(vid).epoch, 1),
             "A30-impaired: DepositStopped cause 1 emitted"
         );
         assertEq(
-            uint8(queue.requestStatus(rid)), uint8(RequestStatus.Closed), "A30-impaired: redeem settled"
+            uint8(queue.requestStatus(rid)),
+            uint8(RequestStatus.Closed),
+            "A30-impaired: redeem settled"
         );
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "A30-impaired: deposit stayed pending");
 
@@ -2792,10 +2841,16 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(keeper);
         uint256 sid2 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         vm.clearMockedCalls();
-        assertTrue(_sawDepositStopped(queue.getRequest(vid2).epoch, 3), "A30-borrowed: cause 3 emitted");
-        assertEq(queue.getSettlement(sid2).matchedShares, 0, "A30-borrowed: no match while illiquid");
+        assertTrue(
+            _sawDepositStopped(queue.getRequest(vid2).epoch, 3), "A30-borrowed: cause 3 emitted"
+        );
         assertEq(
-            uint8(queue.requestStatus(rid2)), uint8(RequestStatus.Closed), "A30-borrowed: redeem closed"
+            queue.getSettlement(sid2).matchedShares, 0, "A30-borrowed: no match while illiquid"
+        );
+        assertEq(
+            uint8(queue.requestStatus(rid2)),
+            uint8(RequestStatus.Closed),
+            "A30-borrowed: redeem closed"
         );
         (, uint256 aliceClaimUsdc) = fund.positionClaimOf(IDX_AAVE, alice);
         assertGt(aliceClaimUsdc, 0, "A30-borrowed: redeemer received Aave position claim");
@@ -2961,7 +3016,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
         vm.warp(block.timestamp + oldP.minHold);
         refreshFeeds();
-        assertGt(queue.maxDeposit(victim), 0, "A33: deposit delivered at old minHold before tripled hold");
+        assertGt(
+            queue.maxDeposit(victim), 0, "A33: deposit delivered at old minHold before tripled hold"
+        );
         deliverAfterHold(victim);
         deliverAfterHold(victim2);
         _claimRedeemUsdc(alice);
@@ -2990,8 +3047,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.recordLogs();
         vm.prank(keeper);
         uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        assertTrue(_sawDepositStopped(queue.getRequest(vid).epoch, 3), "A34: venue liquidity stopped match");
-        assertEq(queue.getSettlement(sid1).matchedShares, 0, "A34: no match booked under short liquidity");
+        assertTrue(
+            _sawDepositStopped(queue.getRequest(vid).epoch, 3), "A34: venue liquidity stopped match"
+        );
+        assertEq(
+            queue.getSettlement(sid1).matchedShares, 0, "A34: no match booked under short liquidity"
+        );
         mech.clearAvailableLiquidity();
 
         // 2) Net redemption short-pay: Check 11 (`RealizedPrice`) blocks settlement without paying inflated shares.
@@ -3015,7 +3076,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         mech.setMode(mech.SHORT_PAY(), 5_000);
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(mech).codehash, false))
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(mech).codehash, false)
+            )
         );
         uint256 exclId = fund.openExclusionOf(IDX_AAVE);
         assertGt(exclId, 0, "A34: exclusion opened");
@@ -3031,9 +3094,13 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         mech.setMode(mech.HONEST(), 0);
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(mech).codehash, true))
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(mech).codehash, true)
+            )
         );
-        assertEq(fund.openExclusionOf(IDX_AAVE), 0, "A34: honest venue restores and the record closes");
+        assertEq(
+            fund.openExclusionOf(IDX_AAVE), 0, "A34: honest venue restores and the record closes"
+        );
         // No per-share check: the recovery moved the venue's balance into the exclusion ledger, for the holders.
         _end("A34: short-paying adapter rejected across venue test, redeem, and recovery", false);
     }
@@ -3073,7 +3140,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         // price) is measured here, and G8 below allows exactly that much on top of the 1 bps bound.
         uint256 unwindWeth = IERC20(WETH).balanceOf(address(fund));
         uint256 unwindIdle = fund.idleUsdc();
-        timelockExecute(address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH));
+        timelockExecute(
+            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+        );
         uint256 unwindRef = unwindWeth.mulDiv(refWeth, 1e18);
         uint256 unwindGot = fund.idleUsdc() - unwindIdle;
         uint256 unwindCost = unwindRef > unwindGot ? unwindRef - unwindGot : 0;
@@ -3089,7 +3158,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         mech.setPoolFeeBps(uint24(legBand));
         vm.prank(address(timelock));
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.PoolFeeMarginTooSmall.selector, legBand, margin, legBand)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.PoolFeeMarginTooSmall.selector, legBand, margin, legBand
+            )
         );
         fund.addAsset(wethCfg);
         mech.setPoolFeeBps(5);
@@ -3181,7 +3252,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         vm.prank(alice);
         uint64 targetRound = queue.giveRedemptionNotice(rid);
-        assertEq(targetRound, queue.currentEpoch() - 1, "A37: notice binds to currently active round");
+        assertEq(
+            targetRound, queue.currentEpoch() - 1, "A37: notice binds to currently active round"
+        );
         // Calling claimNoticeReturn while that round is still open MUST revert `NoticeNotReady`.
         vm.prank(alice);
         vm.expectPartialRevert(IFlowEvents.NoticeNotReady.selector);
@@ -3246,7 +3319,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertTrue(
             _sawDepositStopped(queue.getRequest(did).epoch, 1), "A38: deposit stop prevented match"
         );
-        assertEq(queue.getSettlement(sid).matchedShares, 0, "A38: zero match while shutdown scheduled");
+        assertEq(
+            queue.getSettlement(sid).matchedShares, 0, "A38: zero match while shutdown scheduled"
+        );
         assertEq(queue.getRequest(did).remaining, 40_000e6, "A38: locked deposit untouched");
 
         // Now execute shutdown after timelock delay -> wind-down releases deposit to credit & redeems cleanly.
@@ -3360,7 +3435,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         timelockExecute(
             address(fund),
             abi.encodeCall(
-                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+                IRobotMoneyFund.setAdapterCodeHashAllowed,
+                (address(moonwellAdapter).codehash, false)
             )
         );
         uint256 ex1 = fund.openExclusionOf(IDX_MOONWELL);
@@ -3408,7 +3484,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         timelockExecute(
             address(fund),
             abi.encodeCall(
-                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+                IRobotMoneyFund.setAdapterCodeHashAllowed,
+                (address(moonwellAdapter).codehash, false)
             )
         );
         uint256 ex2 = fund.openExclusionOf(IDX_MOONWELL);
@@ -3552,7 +3629,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertGt(dGot, 0, "A42: dave claim paid");
         assertEq(IERC20(USDC).balanceOf(alice) - aBefore, aGot);
         assertEq(IERC20(USDC).balanceOf(dave) - dBefore, dGot);
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, IDX_WETH, alice));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, IDX_WETH, alice)
+        );
         fund.settleClaim(IDX_WETH, alice);
         AttackPnl memory r = _end("A42: interleaved delisting sale & claim settlement", false);
         _assertG8AfterSale("A42: interleaved delisting sale & claim settlement", r, _fundSaleCost());
@@ -3560,7 +3639,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
 
     /// @notice A43: a basket rebalance step inside the window before a round's first call makes `settle` revert
     ///         `StepInWindow` (RB-30); while the queue is paused, steps still execute.
-    function test_A43_stepInsideWindowBlocksFirstSettle_pausedQueueAllowsSteps() public fixtureCovered {
+    function test_A43_stepInsideWindowBlocksFirstSettle_pausedQueueAllowsSteps()
+        public
+        fixtureCovered
+    {
         _world();
         _begin();
         _startAttacker();
@@ -3585,14 +3667,20 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         uint32 settleWin = queue.flowParams().settleWindow;
         vm.prank(keeper);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.StepInWindow.selector, lastBasket, settleWin));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.StepInWindow.selector, lastBasket, settleWin)
+        );
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
 
         // Once settleWindow elapses after lastBasket, round settles.
         vm.warp(uint256(lastBasket) + queue.flowParams().settleWindow);
         refreshFeeds();
         vm.prank(keeper);
-        assertGt(queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max), 0, "A43: settled after window wait");
+        assertGt(
+            queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max),
+            0,
+            "A43: settled after window wait"
+        );
         deliverAfterHold(victim);
 
         // Pausing queue does NOT block rebalance steps.
@@ -3644,7 +3732,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         emit log_named_uint("A44 REPORT: total scarce match (USDC)", matchedTotal);
         emit log_named_uint("A44 REPORT: fair 1x match share (USDC)", honestShareOfMatch);
         emit log_named_uint("A44 REPORT: 10x request match share (USDC)", tenXMatchFill);
-        emit log_named_uint("A44 REPORT: locked surplus exposed to net costs (USDC)", 100_000e6 - tenXMatchFill);
+        emit log_named_uint(
+            "A44 REPORT: locked surplus exposed to net costs (USDC)", 100_000e6 - tenXMatchFill
+        );
         pending = honestShareOfMatch > (matchedTotal - tenXMatchFill)
             ? honestShareOfMatch - (matchedTotal - tenXMatchFill)
             : 0;
@@ -3667,7 +3757,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         // Create an Aave position claim for Alice via wind-down `redeemInKind` with inKindAllowance = 0, then restore.
         timelockExecute(
             address(fund),
-            abi.encodeCall(IRobotMoneyFund.setInKindAllowance, (0, 0, queue.flowParams().epochLength))
+            abi.encodeCall(
+                IRobotMoneyFund.setInKindAllowance, (0, 0, queue.flowParams().epochLength)
+            )
         );
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
         uint256 half = fund.balanceOf(alice) / 2;
@@ -3692,7 +3784,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             vm.warp(block.timestamp + rebalancer.stepParams().stepInterval + 1);
             refreshFeeds();
         }
-        (uint256 aaveUnitsAfterSteps, uint256 claimUsdcAfterSteps) = fund.positionClaimOf(IDX_AAVE, alice);
+        (uint256 aaveUnitsAfterSteps, uint256 claimUsdcAfterSteps) =
+            fund.positionClaimOf(IDX_AAVE, alice);
         assertEq(aaveUnitsAfterSteps, aaveUnits0, "A45: rebalance step never consumed claim units");
         assertGe(claimUsdcAfterSteps, claimUsdc0, "A45: claim value preserved across steps");
 
@@ -3701,10 +3794,13 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(attacker);
         uint256 netPaid = fund.settleClaim(IDX_AAVE, alice);
         assertGt(netPaid, 0, "A45: stranger settled Aave claim");
-        assertEq(IERC20(USDC).balanceOf(alice) - aliceUsdcBefore, netPaid, "A45: USDC sent to Alice");
+        assertEq(
+            IERC20(USDC).balanceOf(alice) - aliceUsdcBefore, netPaid, "A45: USDC sent to Alice"
+        );
         (uint256 unitsEnd,) = fund.positionClaimOf(IDX_AAVE, alice);
         assertEq(unitsEnd, 0, "A45: claim cleared after settleClaim");
-        AttackPnl memory r = _end("A45: lending claim protects venue from step & stranger settles", false);
+        AttackPnl memory r =
+            _end("A45: lending claim protects venue from step & stranger settles", false);
         _assertG8("A45: lending claim protects venue from step & stranger settles", r);
     }
 
@@ -4574,7 +4670,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         bytes32 sig = keccak256("DelistStepExecuted(uint256,uint256,uint256,uint256)");
         for (uint256 i; i < logs.length; ++i) {
             if (logs[i].emitter != address(fund) || logs[i].topics[0] != sig) continue;
-            (uint256 tokens, uint256 usdcIn, uint256 claimUsdc) = abi.decode(logs[i].data, (uint256, uint256, uint256));
+            (uint256 tokens, uint256 usdcIn, uint256 claimUsdc) =
+                abi.decode(logs[i].data, (uint256, uint256, uint256));
             if (usdcIn == 0) continue;
             uint256 fundUsdc = usdcIn - claimUsdc;
             uint256 fundTokens = tokens.mulDiv(fundUsdc, usdcIn);
@@ -4705,7 +4802,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     }
 
     /// @dev `who` asks to deposit `usdc` it already holds (no funding), with limit `limit`.
-    function _reqDeposit(address who, uint256 usdc, uint256 /* limit */) internal returns (uint256 id) {
+    function _reqDeposit(
+        address who,
+        uint256 usdc,
+        uint256 /* limit */
+    )
+        internal
+        returns (uint256 id)
+    {
         vm.startPrank(who);
         IERC20(USDC).approve(address(queue), usdc);
         id = queue.requestDeposit(usdc, who);

@@ -22,12 +22,7 @@ import {
     MAX_IN_KIND_PERIOD
 } from "../FundTypes.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
-import {
-    FundState,
-    FundStorage,
-    LendingClaimAccount,
-    LendingClaimEpoch
-} from "./FundStorage.sol";
+import {FundState, FundStorage, LendingClaimAccount, LendingClaimEpoch} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 
 /// @title FundPositionLib
@@ -196,8 +191,7 @@ library FundPositionLib {
         }
         uint256 holdersBurned;
         uint256 h0;
-        (gotHolder, holdersBurned, h0) =
-            _takeWithdrawAndApply(s, i, wantHolder, u0, p0, ctx.batch);
+        (gotHolder, holdersBurned, h0) = _takeWithdrawAndApply(s, i, wantHolder, u0, p0, ctx.batch);
         if (h0 != 0 && gotHolder < wantHolder) {
             uint256 targetBurned = wantHolder.mulDiv(u0, p0);
             uint256 shortfallUnits = targetBurned > holdersBurned ? targetBurned - holdersBurned : 0;
@@ -205,12 +199,9 @@ library FundPositionLib {
         }
     }
 
-    function _claimShortfall(
-        FundState storage s,
-        uint256 i,
-        uint256 units,
-        TakeClaimCtx memory ctx
-    ) private {
+    function _claimShortfall(FundState storage s, uint256 i, uint256 units, TakeClaimCtx memory ctx)
+        private
+    {
         if (units == 0) return;
         if (!ctx.batch) {
             _claimWithFee(s, i, ctx.claimant, units, ctx.claimFeeBps, ctx.linkedFee);
@@ -578,11 +569,9 @@ library FundPositionLib {
         }
     }
 
-    function _harvestLendingEntry(
-        FundState storage s,
-        uint256 i,
-        LendingClaimAccount storage entry
-    ) private {
+    function _harvestLendingEntry(FundState storage s, uint256 i, LendingClaimAccount storage entry)
+        private
+    {
         uint256 cur = s.lendingClaimEpoch[i];
         if (entry.scaled != 0) {
             LendingClaimEpoch storage ep = s.lendingEpochs[i][entry.epoch];
@@ -634,11 +623,11 @@ library FundPositionLib {
         s.lendingClaimEpoch[i] = next;
     }
 
-    function _lendingEntryUnits(
-        FundState storage s,
-        uint256 i,
-        LendingClaimAccount storage entry
-    ) private view returns (uint256 units, uint256 pending) {
+    function _lendingEntryUnits(FundState storage s, uint256 i, LendingClaimAccount storage entry)
+        private
+        view
+        returns (uint256 units, uint256 pending)
+    {
         uint256 cur = s.lendingClaimEpoch[i];
         uint256 c0 = s.positionClaimTotal[i];
         pending = entry.pendingUsdc;
@@ -678,9 +667,7 @@ library FundPositionLib {
         uint256 potOwed = entry.pendingUsdc;
         if (units == 0 && potOwed == 0) revert IRobotMoneyFund.NoPositionClaim(i, account);
 
-        uint256 adapterUsdc = units != 0
-            ? _withdrawClaimUnits(s, i, entry, cur, c0, units)
-            : 0;
+        uint256 adapterUsdc = units != 0 ? _withdrawClaimUnits(s, i, entry, cur, c0, units) : 0;
         uint256 potPaid = _takeLendingPot(s, i, potOwed);
         entry.pendingUsdc = 0;
         usdc = adapterUsdc + potPaid;
@@ -839,11 +826,11 @@ library FundPositionLib {
             burned = combUnits <= c0 ? combUnits : c0;
         } else {
             uint256 p1 = _valueAfter(s, i, p0, got);
-        // RB-34 / A34: the position may fall only by what arrived (plus venue rounding). A venue that takes more
-        // than it pays would book the exiter's slice as paid; refuse it so the net side fails (check 10).
-        if (p0 > p1 && p0 - p1 > got + LENDING_ROUNDING_UNITS) {
-            revert IRobotMoneyFund.ProportionViolated(i, p0, p1 + got, 1, 1);
-        }
+            // RB-34 / A34: the position may fall only by what arrived (plus venue rounding). A venue that takes more
+            // than it pays would book the exiter's slice as paid; refuse it so the net side fails (check 10).
+            if (p0 > p1 && p0 - p1 > got + LENDING_ROUNDING_UNITS) {
+                revert IRobotMoneyFund.ProportionViolated(i, p0, p1 + got, 1, 1);
+            }
             burned = p1 >= p0 ? 0 : (p0 - p1).mulDiv(u0, p0, Math.Rounding.Ceil);
             if (burned > combUnits) burned = combUnits;
         }

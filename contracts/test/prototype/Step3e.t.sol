@@ -492,9 +492,7 @@ contract Step3eTest is PrototypeHarness {
         _buyWethReady();
         vm.warp(block.timestamp + KEEPER_GRACE);
         _freshFeeds();
-        assertEq(
-            rebalancer.permissionlessAt(), type(uint256).max, "E34: step stays keeper-only"
-        );
+        assertEq(rebalancer.permissionlessAt(), type(uint256).max, "E34: step stays keeper-only");
         uint256 slip = rebalancer.assetStepParams(IDX_WETH).maxStepSlippageBps;
         fundUsdc(attacker, FLASH_USDC);
         _pushBps(attacker, WETH_POOL, WETH, int256(slip + 30));

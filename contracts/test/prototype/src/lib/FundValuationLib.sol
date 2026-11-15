@@ -639,8 +639,9 @@ library FundValuationLib {
 
     /// @notice True while deposits are paused via legacy bool or active self-expiring deadline.
     function isDepositsPaused(FundState storage s) internal view returns (bool) {
-        return s.depositsPaused
-            || (s.depositsPausedUntil != 0 && block.timestamp < s.depositsPausedUntil);
+        return
+            s.depositsPaused
+                || (s.depositsPausedUntil != 0 && block.timestamp < s.depositsPausedUntil);
     }
 
     /// @notice Effective plan status accounting for self-expired emergency rebalance pause (E39).
@@ -675,11 +676,7 @@ library FundValuationLib {
     }
 
     /// @notice Consolidated scalar view entrypoint called via one `DELEGATECALL` site on `RobotMoneyFund`.
-    function viewUint(FundState storage s, uint8 op, uint256 index)
-        public
-        view
-        returns (uint256)
-    {
+    function viewUint(FundState storage s, uint8 op, uint256 index) public view returns (uint256) {
         if (op == VIEW_IDLE_USDC) return idleUsdc(s);
         if (op == VIEW_ASSET_VALUE) return assetValue(s, index);
         if (op == VIEW_POOL_FEE_BPS) return poolFeeBps(s, index);

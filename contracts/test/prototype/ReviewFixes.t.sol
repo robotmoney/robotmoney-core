@@ -11,7 +11,14 @@ import {PlanParams, PlanStatus, SkipReason, IDLE_INDEX} from "./src/FundTypes.so
 import {IObservablePool} from "../../interfaces/IObservablePool.sol";
 import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
 import {FlowQueueFixesBase} from "./FlowQueueFixes.t.sol";
-import {Claim, FlowLevers, FlowParams, IFlowEvents, RequestKind, Settlement} from "./src/FlowTypes.sol";
+import {
+    Claim,
+    FlowLevers,
+    FlowParams,
+    IFlowEvents,
+    RequestKind,
+    Settlement
+} from "./src/FlowTypes.sol";
 import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
 
 /// @title ReviewFixesRebalancerTest
@@ -271,7 +278,9 @@ contract ReviewFixesQueueTest is FlowQueueFixesBase {
         vm.prank(emergency);
         queue.freezeSettlement(sid);
         Settlement memory st = queue.getSettlement(sid);
-        assertEq(st.frozenUntil, uint64(block.timestamp) + p.maxFreeze, "frozenUntil = now + maxFreeze");
+        assertEq(
+            st.frozenUntil, uint64(block.timestamp) + p.maxFreeze, "frozenUntil = now + maxFreeze"
+        );
 
         // At holdEndsAt (< frozenUntil), the hold has passed but the freeze still withholds delivery,
         // and a second freeze is refused by cooldown.
@@ -282,7 +291,9 @@ contract ReviewFixesQueueTest is FlowQueueFixesBase {
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotEnoughClaimable.selector, 1e6, 0));
         queue.deposit(1e6, alice);
         vm.prank(emergency);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, st.frozenUntil));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, st.frozenUntil)
+        );
         queue.freezeSettlement(sid);
 
         // Once frozenUntil arrives, the freeze ends by itself without admin intervention and shares deliver cleanly.

@@ -727,7 +727,9 @@ contract FundExtrasTest is BaseFixture {
         assertGt(c0, 0, "open lending claims exist");
         (uint256 nav,,) = fund.portfolioValues();
         uint256 n = nav / 20;
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, c0));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, c0)
+        );
         fund.executeStep(StepOrder(IDX_AAVE, IDLE_INDEX, n, n - 1, 0, n.mulDiv(100, BPS)));
 
         // Settle alice's claim; feeRecipient's separate claim keeps its full value and still guards step-out.
@@ -735,7 +737,11 @@ contract FundExtrasTest is BaseFixture {
         fund.settleClaim(IDX_AAVE, alice);
         (, uint256 feeValAfter) = fund.positionClaimOf(IDX_AAVE, feeRecipient);
         assertGe(feeValAfter, feeValBefore, "settling one claim never lowers another");
-        assertLe(feeValAfter, feeValBefore + 2, "settling one claim never inflates another beyond rounding");
+        assertLe(
+            feeValAfter,
+            feeValBefore + 2,
+            "settling one claim never inflates another beyond rounding"
+        );
         (, uint256 cMid) = _units(IDX_AAVE);
         assertGt(cMid, 0, "feeRecipient claim still open");
         vm.expectRevert(
@@ -1377,9 +1383,8 @@ contract FundExtrasTest is BaseFixture {
         // Budget check: a swap inside `delistBandBps` (300 bps) whose loss exceeds `delistBudgetBps` (50 bps) reverts `DelistBudgetExceeded`.
         uint256 wethUsd = fund.assetUsdcValue(IDX_WETH, contractWeth);
         fund.setDelistBudgetBps(50);
-        FxMockAggregator(FEED_ETH).set(
-            8, ethPrice8 * 1_015 / 1_000, block.timestamp, block.timestamp
-        );
+        FxMockAggregator(FEED_ETH)
+            .set(8, ethPrice8 * 1_015 / 1_000, block.timestamp, block.timestamp);
         vm.expectPartialRevert(IRobotMoneyFund.DelistBudgetExceeded.selector);
         fund.executeDelistStep(IDX_WETH, wethUsd * 2);
         fund.setDelistBudgetBps(300);
@@ -1539,7 +1544,9 @@ contract FundExtrasTest is BaseFixture {
             (uint256 nav,,) = mechFund.portfolioValues();
             uint256 notional = nav.mulDiv(4_500, BPS);
             uint256 minOut = i == 1 ? mechFund.assetTokenValue(1, notional).mulDiv(98, 100) : 0;
-            mechFund.executeStep(StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS)));
+            mechFund.executeStep(
+                StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS))
+            );
         }
     }
 

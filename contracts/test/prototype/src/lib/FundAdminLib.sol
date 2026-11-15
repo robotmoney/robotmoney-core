@@ -454,7 +454,9 @@ library FundAdminLib {
 
     function _adminParamOp(FundState storage s, uint8 op, uint256 val, address addr) private {
         if (op == ADMIN_SET_MIN_SEED_USDC) {
-            if (val < MIN_MIN_SEED_USDC || val > MAX_MIN_SEED_USDC) revert IFundEvents.InvalidParam();
+            if (val < MIN_MIN_SEED_USDC || val > MAX_MIN_SEED_USDC) {
+                revert IFundEvents.InvalidParam();
+            }
             s.minSeedUsdc = val;
             emit IRobotMoneyFund.MinSeedUsdcSet(val);
         } else if (op == ADMIN_SET_POOL_SHARE_BPS) {
@@ -507,9 +509,7 @@ library FundAdminLib {
         }
     }
 
-    function _adminLifecycleOp(FundState storage s, uint8 op, uint256 val, address caller)
-        private
-    {
+    function _adminLifecycleOp(FundState storage s, uint8 op, uint256 val, address caller) private {
         if (op == ADMIN_DEACTIVATE_ASSET) {
             _deactivateAsset(s, val);
         } else if (op == ADMIN_DELIST_ASSET) {
@@ -526,7 +526,9 @@ library FundAdminLib {
             if (q != address(0)) IFlowQueue(q).onShutdown();
             emit IRobotMoneyFund.Shutdown();
         } else if (op == ADMIN_RESTORE) {
-            if (!s.shutdown || val == 0 || s.perDepositCap > val) revert IFundEvents.InvalidParam();
+            if (!s.shutdown || val == 0 || s.perDepositCap > val) {
+                revert IFundEvents.InvalidParam();
+            }
             s.shutdown = false;
             s.tvlCap = val;
             emit IRobotMoneyFund.Restored(val);

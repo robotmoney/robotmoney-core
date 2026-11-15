@@ -518,7 +518,9 @@ contract FundCoreTest is PrototypeHarness {
 
         uint16[5] memory overBasket = assetVec(2_000, 2_000, 3_000, 3_000, 0);
         (address[] memory ids, uint256[] memory wOver) = assetArrays(overBasket);
-        vm.expectRevert(abi.encodeWithSelector(IFundEvents.BasketCapExceeded.selector, 6_000, 5_000));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFundEvents.BasketCapExceeded.selector, 6_000, 5_000)
+        );
         vm.prank(address(governance));
         fund.setTargetAndOpenPlan(ids, wOver, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
 
@@ -569,9 +571,7 @@ contract FundCoreTest is PrototypeHarness {
         mocked.setFixedFeePool(false);
         (address[] memory ids, uint256[] memory w) =
             assetArrays(assetVec(3_000, 3_000, 2_000, 2_000, 0));
-        vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL)
-        );
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL));
         vm.prank(address(governance));
         fund.setTargetAndOpenPlan(ids, w, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
 
@@ -604,15 +604,15 @@ contract FundCoreTest is PrototypeHarness {
         // Admission (`addAsset`) also enforces fixed-fee and fee-margin rules.
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.closePlan, ()));
         AssetConfig memory wethCfg = fund.assetConfig(IDX_WETH);
-        timelockExecute(address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH));
+        timelockExecute(
+            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+        );
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.deactivateAsset, (IDX_WETH)));
         refreshFeeds();
 
         mocked.setFixedFeePool(false);
         vm.prank(address(timelock));
-        vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL)
-        );
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL));
         fund.addAsset(wethCfg);
 
         mocked.setFixedFeePool(true);
@@ -655,7 +655,9 @@ contract FundCoreTest is PrototypeHarness {
 
         // Single-asset unwind on wETH Basket leg.
         uint256 idleMid = fund.idleUsdc();
-        timelockExecute(address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH));
+        timelockExecute(
+            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+        );
         assertEq(fund.assetValue(IDX_WETH), 0, "weth unwound");
         assertEq(fund.targetBps()[IDX_WETH], 0, "weth target zeroed");
         assertGt(fund.idleUsdc(), idleMid, "idle grew from basket unwind");
@@ -677,9 +679,7 @@ contract FundCoreTest is PrototypeHarness {
         assertFalse(fund.depositsPaused(), "pause self-expired");
 
         // By contrast, pauseRebalance enforces PauseOnCooldown after an earlier pause.
-        setTargetViaTimelock(
-            assetVec(0, 5_000, 0, 5_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
-        );
+        setTargetViaTimelock(assetVec(0, 5_000, 0, 5_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
         vm.prank(emergency);
         fund.pauseRebalance();
         uint64 cd = fund.rebalancePauseCooldownUntil();

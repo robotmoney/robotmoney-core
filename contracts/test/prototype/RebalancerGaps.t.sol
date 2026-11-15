@@ -43,9 +43,7 @@ contract RebalancerGapsTest is PrototypeHarness {
         if (withDeposit) deposit(alice, DEPOSIT);
         timelockExecute(
             address(rebalancer),
-            abi.encodeCall(
-                rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0))
-            )
+            abi.encodeCall(rebalancer.setAssetStepParams, (IDX_CBBTC, AssetStepParams(0, 0)))
         );
         setTargetViaTimelock(bucketVec(0, 10_000), PlanParams(PLAN_DURATION, budgetBps));
         vm.warp(fund.plan().endTime);
@@ -104,7 +102,9 @@ contract RebalancerGapsTest is PrototypeHarness {
         Booked memory b2 = _bookedStep();
         assertTrue(b2.did, "step 2 traded");
         uint256 navFeedAfter = _feedValueOfFund();
-        assertGt(navFeedAfter, navFeedBefore, "step 2 gained value at the feeds (a negative raw cost)");
+        assertGt(
+            navFeedAfter, navFeedBefore, "step 2 gained value at the feeds (a negative raw cost)"
+        );
         assertEq(b2.feedCost, 0, "a gain books a cost of 0");
         assertEq(b2.planCostAfter, spentAfterLoss, "the earlier loss is not offset");
         assertEq(fund.plan().costSpent, spentAfterLoss, "costSpent never falls");
@@ -142,8 +142,16 @@ contract RebalancerGapsTest is PrototypeHarness {
         Booked memory probe = _bookedStep();
         assertTrue(probe.did, "probe step traded");
         uint256 c = probe.feedCost;
-        assertGt(c, b0, "the probe cost is above the plan's own budget, so the budget can be raised to it");
-        assertLe(probe.twapCost, c, "the TWAP cost does not exceed the booked cost, so the budget can equal the cost");
+        assertGt(
+            c,
+            b0,
+            "the probe cost is above the plan's own budget, so the budget can be raised to it"
+        );
+        assertLe(
+            probe.twapCost,
+            c,
+            "the TWAP cost does not exceed the booked cost, so the budget can equal the cost"
+        );
 
         // Edge 1: budget == cost -> left 0 -> Halted.
         vm.revertToState(snap);
@@ -168,7 +176,9 @@ contract RebalancerGapsTest is PrototypeHarness {
         Booked memory e3 = _bookedStep();
         assertTrue(e3.did, "edge 3 traded");
         assertEq(fund.plan().costBudget - fund.plan().costSpent, c, "a whole step left");
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "left == the step's cost stays Open");
+        assertEq(
+            uint8(fund.planStatus()), uint8(PlanStatus.Open), "left == the step's cost stays Open"
+        );
     }
 
     /// @dev Move the plan's budget to `target` with `extendBudget`, which can only add. The plan is Open, so the
@@ -176,7 +186,9 @@ contract RebalancerGapsTest is PrototypeHarness {
     function _setBudget(uint256 target, uint256 current) internal {
         require(target >= current, "test: budget below the plan's own");
         if (target == current) return;
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.extendBudget, (target - current)));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.extendBudget, (target - current))
+        );
         refreshFeeds();
         alignFeedsToPools();
     }
@@ -242,7 +254,9 @@ contract RebalancerGapsTest is PrototypeHarness {
         vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
         refreshFeeds();
         (SkipReason before_,,, uint256 detail) = rebalancer.previewStep();
-        assertEq(uint8(before_), uint8(SkipReason.BelowMinStep), "before endTime the dust is skipped");
+        assertEq(
+            uint8(before_), uint8(SkipReason.BelowMinStep), "before endTime the dust is skipped"
+        );
         assertLt(detail, 5_000e6, "the notional is under the dust floor");
         (bool did1, SkipReason why1) = keeperStep();
         assertFalse(did1, "no step on dust before endTime");
@@ -280,9 +294,7 @@ contract RebalancerGapsTest is PrototypeHarness {
         refreshFeeds();
         (SkipReason r, uint256 sIdx, uint256 bIdx,) = rebalancer.previewStep();
         assertEq(uint8(r), uint8(SkipReason.None), "a step is ready");
-        assertTrue(
-            !isBasketIndex(sIdx) && !isBasketIndex(bIdx), "both legs are lending or idle"
-        );
+        assertTrue(!isBasketIndex(sIdx) && !isBasketIndex(bIdx), "both legs are lending or idle");
         (bool did,) = keeperStep();
         assertTrue(did, "the lending step ran");
         assertGt(fund.plan().stepCount, steps0, "it counted as a step");

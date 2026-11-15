@@ -1423,7 +1423,10 @@ contract TimedFlowFaultSimTest is TimedFlowSimTest {
         vm.serializeUint(o, "depositsExpired", st.expiredDep);
         string memory json = vm.serializeUint(o, "requests", reqs.length);
         string memory dir = string.concat(
-            "out/prototype/", runName, "-timed-e48", bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
+            "out/prototype/",
+            runName,
+            "-timed-e48",
+            bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
         );
         vm.createDir(dir, true);
         vm.writeFile(string.concat(dir, "/e48-lendRateCalibration-s0.json"), json);
@@ -1599,7 +1602,9 @@ contract TimedFlowFaultSimTest is TimedFlowSimTest {
                 midDone = true;
             }
         }
-        if (redClosedAt == 0 && queue.requestStatus(pRedId) == RequestStatus.Closed) redClosedAt = now_;
+        if (redClosedAt == 0 && queue.requestStatus(pRedId) == RequestStatus.Closed) {
+            redClosedAt = now_;
+        }
         if (depClosedAt != 0 && depUsableAt == 0 && queue.maxMint(pDep) != 0) depUsableAt = now_;
     }
 
@@ -1636,12 +1641,20 @@ contract TimedFlowFaultSimTest is TimedFlowSimTest {
         emit log_named_string("E48 fault", _faultName(f));
         emit log_named_uint("E48 attempts blocked", st.blocked);
         emit log_named_uint("E48 first blocked check", st.firstBlocked);
-        emit log_named_uint("E48 probe redeem wait (s, 0 = unfilled)", redClosedAt == 0 ? 0 : redClosedAt - fT0);
-        emit log_named_uint("E48 probe deposit usable wait (s, 0 = not usable)", depUsableAt == 0 ? 0 : depUsableAt - fT0);
+        emit log_named_uint(
+            "E48 probe redeem wait (s, 0 = unfilled)", redClosedAt == 0 ? 0 : redClosedAt - fT0
+        );
+        emit log_named_uint(
+            "E48 probe deposit usable wait (s, 0 = not usable)",
+            depUsableAt == 0 ? 0 : depUsableAt - fT0
+        );
         emit log_named_uint("E48 max redeem wait over all requests (s)", st.maxRed);
         emit log_named_uint("E48 max deposit wait over all requests (s)", st.maxDep);
         emit log_named_uint("E48 deposits expired unfilled", st.expiredDep);
-        emit log_named_uint("E48 probe deposit status at end (1 pending, 2 expired, 3 closed)", uint8(queue.requestStatus(pDepId)));
+        emit log_named_uint(
+            "E48 probe deposit status at end (1 pending, 2 expired, 3 closed)",
+            uint8(queue.requestStatus(pDepId))
+        );
         emit log_named_uint("E48 actions mid (bits)", midActions);
         emit log_named_uint("E48 actions end (bits)", endActions);
     }

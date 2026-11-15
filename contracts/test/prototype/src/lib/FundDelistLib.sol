@@ -111,10 +111,9 @@ library FundDelistLib {
         s.targetBps[index] = 0;
         Plan storage p = s.plan;
         if (
-            (
-                p.status == PlanStatus.Open || p.status == PlanStatus.Halted
-                    || p.status == PlanStatus.Paused
-            ) && index < p.endBps.length
+            (p.status == PlanStatus.Open
+                    || p.status == PlanStatus.Halted
+                    || p.status == PlanStatus.Paused) && index < p.endBps.length
         ) {
             p.endBps[index] = 0;
         }
@@ -138,8 +137,10 @@ library FundDelistLib {
         (bool ok,, uint256 px) = FundValuationLib.feedPricePerToken(s, index);
         if (ok && px != 0) return px;
         if (s.lastGoodAssetPrice[index] != 0) return s.lastGoodAssetPrice[index];
-        try IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, s.usdc, tokenUnit, a.twapWindow)
-        returns (uint256 twapPx) {
+        try IBasketSwapAdapter(a.adapter)
+            .twapPrice(a.pool, a.token, s.usdc, tokenUnit, a.twapWindow) returns (
+            uint256 twapPx
+        ) {
             if (twapPx != 0) return twapPx;
         } catch {}
         return 0;
@@ -192,7 +193,9 @@ library FundDelistLib {
             uint256 claimedBefore
         )
     {
-        if (index >= s.assets.length) revert IFundEvents.InvalidAssetIndex(index);
+        if (index >= s.assets.length) {
+            revert IFundEvents.InvalidAssetIndex(index);
+        }
         if (!s.inSale[index]) revert IRobotMoneyFund.AssetNotInSale(index);
         if (s.shutdown) return (false, 0, 0, 0, 0, 0);
 
@@ -241,7 +244,9 @@ library FundDelistLib {
             : tokensSold.mulDiv(claimedBefore, totalBefore);
         usdcClaim = (claimedSold == 0 || tokensSold == 0)
             ? 0
-            : (claimedSold == tokensSold ? usdcReceived : usdcReceived.mulDiv(claimedSold, tokensSold));
+            : (claimedSold == tokensSold
+                    ? usdcReceived
+                    : usdcReceived.mulDiv(claimedSold, tokensSold));
 
         if (claimedSold != 0) {
             _recordDelistClaimPot(s, index, claimedBefore, claimedSold, usdcClaim);
@@ -284,8 +289,9 @@ library FundDelistLib {
         if (usdcClaim != 0 && totalScaled != 0) {
             s.delistUsdcPot[index] += usdcClaim;
             s.reservedClaimUsdc += usdcClaim;
-            s.delistUsdcPerScaled[index] +=
-                usdcClaim.mulDiv(FundStorage.DELIST_ACC_SCALE, totalScaled);
+            s.delistUsdcPerScaled[
+                index
+            ] += usdcClaim.mulDiv(FundStorage.DELIST_ACC_SCALE, totalScaled);
         }
     }
 
@@ -350,8 +356,7 @@ library FundDelistLib {
         if (accEntry.scaled != 0) {
             uint256 delta = acc - accEntry.usdcDebt;
             if (delta != 0) {
-                accEntry.pendingUsdc +=
-                    accEntry.scaled.mulDiv(delta, FundStorage.DELIST_ACC_SCALE);
+                accEntry.pendingUsdc += accEntry.scaled.mulDiv(delta, FundStorage.DELIST_ACC_SCALE);
             }
         }
         accEntry.usdcDebt = acc;

@@ -355,12 +355,9 @@ library FlowSettleLib {
         return kind == RequestKind.Deposit ? w.depRoom - w.depTotal : w.redRoom - w.redValue;
     }
 
-    function _moveCursor(
-        FlowState storage s,
-        RequestKind kind,
-        SidePos memory pos,
-        bool sideOk
-    ) private {
+    function _moveCursor(FlowState storage s, RequestKind kind, SidePos memory pos, bool sideOk)
+        private
+    {
         if (!pos.walked) return;
         WalkCursor storage at = s.cursors[0][uint8(kind)];
         if (pos.ended) {
@@ -498,8 +495,8 @@ library FlowSettleLib {
                 if (i < cfg.length) (ok, rate) = FlowCheckLib.lendRate(cfg[i].adapter);
                 s.lastLendRate[i] = ok ? rate : c.lendRates[i];
             } else if (ap.kind == PRICE_KIND_BASKET && ap.unit != 0) {
-                s.lastAssetPerShare[i] = c.held[i].mulDiv(ap.feedPerToken, ap.unit)
-                    .mulDiv(PRICE_SCALE, c.supply);
+                s.lastAssetPerShare[i] =
+                    c.held[i].mulDiv(ap.feedPerToken, ap.unit).mulDiv(PRICE_SCALE, c.supply);
             }
         }
     }

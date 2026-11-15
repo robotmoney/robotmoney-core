@@ -255,10 +255,7 @@ library FlowMatchLib {
         }
         cohorts.push(
             OwnerDepCohort({
-                expiryEpoch: expiryEpoch,
-                matchCycle: cyc,
-                startMatchId: matchLen,
-                normBasis: nb
+                expiryEpoch: expiryEpoch, matchCycle: cyc, startMatchId: matchLen, normBasis: nb
             })
         );
     }
@@ -331,12 +328,9 @@ library FlowMatchLib {
             st.holdEndsAt = uint64(block.timestamp) + s.maxDepositMinHold;
         }
 
-        _advanceDepositMatchIndex(
-            s, roundEpoch, uint64(settlementId), M, matchedUsdc, D, matchDust
-        );
-        uint256 totalFee = _advanceRedeemMatchIndex(
-            s, uint64(settlementId), M, matchedUsdc, R, feeRecipient
-        );
+        _advanceDepositMatchIndex(s, roundEpoch, uint64(settlementId), M, matchedUsdc, D, matchDust);
+        uint256 totalFee =
+            _advanceRedeemMatchIndex(s, uint64(settlementId), M, matchedUsdc, R, feeRecipient);
 
         RoundState storage rs = s.rounds[roundEpoch];
         rs.matchTime = uint64(block.timestamp);
@@ -344,13 +338,10 @@ library FlowMatchLib {
         emit IFlowEvents.Matched(roundEpoch, settlementId, M, matchedUsdc, totalFee, S);
     }
 
-    function _reserveMatchCap(
-        FlowState storage s,
-        uint256 navFeed,
-        uint256 D,
-        uint256 R,
-        uint256 S
-    ) private returns (uint256 M, uint256 matchedUsdc, uint256 matchDust) {
+    function _reserveMatchCap(FlowState storage s, uint256 navFeed, uint256 D, uint256 R, uint256 S)
+        private
+        returns (uint256 M, uint256 matchedUsdc, uint256 matchDust)
+    {
         uint256 curPeriod = FlowEpochs.current(s);
         uint256 cap = navFeed.mulDiv(s.params.maxEpochFlowBps, BPS);
         if (cap < s.params.epochFlowFloorUsdc) cap = s.params.epochFlowFloorUsdc;
@@ -380,19 +371,20 @@ library FlowMatchLib {
         uint256 cyc = s.depCycle;
         uint256 oldF = s.depCycleFactor[cyc];
         uint256 totalB = s.depTotalNormBasis;
-        s.depMatches.push(
-            DepMatchRecord({
-                roundEpoch: roundEpoch,
-                settlementId: settlementId,
-                matchTime: uint64(block.timestamp),
-                matchCycle: cyc,
-                matchedShares: M,
-                matchedUsdc: matchedUsdc,
-                totalNormBasis: totalB,
-                remainingNormBasis: totalB,
-                remainingShares: M
-            })
-        );
+        s.depMatches
+            .push(
+                DepMatchRecord({
+                    roundEpoch: roundEpoch,
+                    settlementId: settlementId,
+                    matchTime: uint64(block.timestamp),
+                    matchCycle: cyc,
+                    matchedShares: M,
+                    matchedUsdc: matchedUsdc,
+                    totalNormBasis: totalB,
+                    remainingNormBasis: totalB,
+                    remainingShares: M
+                })
+            );
         s.totalPendingUsdc -= matchedUsdc;
         if (matchDust != 0) {
             s.totalPendingUsdc -= matchDust;
@@ -626,7 +618,8 @@ library FlowMatchLib {
                 _retireRedeemNormBasis(s, rc, r.exitFeeBps, r.normBasis);
                 if (s.ownerRedStates[owner].matchCycle == r.matchCycle) {
                     uint256 curNb = s.ownerRedStates[owner].normBasis;
-                    s.ownerRedStates[owner].normBasis = curNb > r.normBasis ? curNb - r.normBasis : 0;
+                    s.ownerRedStates[owner].normBasis =
+                        curNb > r.normBasis ? curNb - r.normBasis : 0;
                 }
                 r.normBasis = 0;
                 _markClosedCount(s, r);
@@ -747,7 +740,10 @@ library FlowMatchLib {
         if (!r.enrolled || r.era < s.windDownEra) {
             if (!r.enrolled) {
                 s.ownerUnenrolledRedShares[r.owner] -= consumed;
-            } else if ((!keepLeftover || leftover == 0) && s.ownerRedStates[r.owner].matchCycle == r.matchCycle) {
+            } else if (
+                (!keepLeftover || leftover == 0)
+                    && s.ownerRedStates[r.owner].matchCycle == r.matchCycle
+            ) {
                 uint256 curNb = s.ownerRedStates[r.owner].normBasis;
                 s.ownerRedStates[r.owner].normBasis = curNb > r.normBasis ? curNb - r.normBasis : 0;
             }
@@ -771,7 +767,8 @@ library FlowMatchLib {
         }
         s.totalEscrowShares -= consumed;
         r.normBasis = newNb;
-        r.remaining = newNb == 0 ? 0 : (curF == MATCH_SCALE ? leftover : newNb.mulDiv(curF, MATCH_SCALE));
+        r.remaining =
+            newNb == 0 ? 0 : (curF == MATCH_SCALE ? leftover : newNb.mulDiv(curF, MATCH_SCALE));
         if (!keepLeftover || r.remaining == 0) _closeRedeemReq(s, rId, r);
     }
 
@@ -1122,18 +1119,19 @@ library FlowMatchLib {
     }
 
     /// @notice Unmaterialized matched redemption shares whose USDC has not yet been claimed.
-    function previewUnsyncedRedClaimable(
-        FlowState storage s,
-        address owner,
-        uint256 onlyRequestId
-    ) public view returns (uint256 sharesClaimable) {
+    function previewUnsyncedRedClaimable(FlowState storage s, address owner, uint256 onlyRequestId)
+        public
+        view
+        returns (uint256 sharesClaimable)
+    {
         uint256[] storage reqs = s.ownerActiveRedReqs[owner];
         for (uint256 i; i < reqs.length; ++i) {
             uint256 rId = reqs[i];
             if (onlyRequestId != 0 && rId != onlyRequestId) continue;
             Request storage r = s.requests[rId];
             if (r.closed || !r.enrolled) continue;
-            uint256 remNow = r.normBasis.mulDiv(s.redCycles[r.matchCycle].unmatchedFactor, MATCH_SCALE);
+            uint256 remNow =
+                r.normBasis.mulDiv(s.redCycles[r.matchCycle].unmatchedFactor, MATCH_SCALE);
             if (r.remaining > remNow) sharesClaimable += (r.remaining - remNow);
         }
     }

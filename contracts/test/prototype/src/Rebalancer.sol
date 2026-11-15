@@ -231,7 +231,8 @@ contract Rebalancer is
         if (
             _backoffUntil[index] >= block.timestamp
                 || (_lastDelistStepAt[index] != 0
-                    && block.timestamp < uint256(_lastDelistStepAt[index]) + _stepParams.stepInterval)
+                    && block.timestamp
+                        < uint256(_lastDelistStepAt[index]) + _stepParams.stepInterval)
         ) return false;
         uint256 cap = _stepCap(f, cfgs, index);
         if (cap == 0) return false;
@@ -442,10 +443,9 @@ contract Rebalancer is
         }
         d.sellIndex = legs.sellIndex;
         d.buyIndex = legs.buyIndex;
-        d.hasBasketLeg = (
-                legs.sellIndex != IDLE_INDEX && cfgs[legs.sellIndex].kind == AssetKind.Basket
-            )
-            || (legs.buyIndex != IDLE_INDEX && cfgs[legs.buyIndex].kind == AssetKind.Basket);
+        d.hasBasketLeg =
+            (legs.sellIndex != IDLE_INDEX && cfgs[legs.sellIndex].kind == AssetKind.Basket)
+                || (legs.buyIndex != IDLE_INDEX && cfgs[legs.buyIndex].kind == AssetKind.Basket);
 
         // 4. Size: min(over, under, the cap of each non-idle leg). Never past path (RB-7). A basket leg's cap is
         //    also `stepDepthBps` of its pool's time-weighted USDC depth (`_stepCap`): a step is small against the

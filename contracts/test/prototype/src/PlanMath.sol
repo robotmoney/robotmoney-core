@@ -103,7 +103,9 @@ library PlanMath {
                 revert IFundEvents.TargetAssetMissing(assetId(cfgs[i]));
             }
         }
-        if (basketSum > maxBasketBps) revert IFundEvents.BasketCapExceeded(basketSum, maxBasketBps);
+        if (basketSum > maxBasketBps) {
+            revert IFundEvents.BasketCapExceeded(basketSum, maxBasketBps);
+        }
     }
 
     /// @dev Index of the ACTIVE entry whose `assetId` is `id`. `addAsset` keeps that entry unique.

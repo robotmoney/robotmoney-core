@@ -83,11 +83,7 @@ abstract contract MechReentry {
         _try(hook, q, abi.encodeWithSignature("withdrawExpired(uint256)", id));
         _try(hook, q, abi.encodeWithSignature("releaseWindDown(address)", v));
         _try(hook, q, abi.encodeWithSignature("sweep()"));
-        _try(
-            hook,
-            q,
-            abi.encodeWithSignature("requestDeposit(uint256,address)", uint256(100e6), v)
-        );
+        _try(hook, q, abi.encodeWithSignature("requestDeposit(uint256,address)", uint256(100e6), v));
         _try(hook, q, abi.encodeWithSignature("requestRedeem(uint256,address)", uint256(1), v));
         _try(
             hook,

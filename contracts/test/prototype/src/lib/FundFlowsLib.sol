@@ -264,12 +264,9 @@ library FundFlowsLib {
         return got;
     }
 
-    function _recordDelistBatch(
-        FundState storage s,
-        uint256 i,
-        uint256 amt,
-        SellFlowCtx memory ctx
-    ) private {
+    function _recordDelistBatch(FundState storage s, uint256 i, uint256 amt, SellFlowCtx memory ctx)
+        private
+    {
         uint256 remAmt = amt;
         uint256 remShares = ctx.shares;
         for (uint256 k; k < ctx.owners.length && remAmt != 0; ++k) {
@@ -513,15 +510,14 @@ library FundFlowsLib {
     ///         is no configured-floor override here, see the fund's NatSpec). A swap below its floor reverts
     ///         the whole unwind, as on BasketVault. Returns the USDC that reached idle.
     /// @notice Consolidated non-reentrant claim / unwind / sweep dispatcher called via one `DELEGATECALL` site.
-    function flowAction(
-        FundState storage s,
-        uint8 op,
-        uint256 index,
-        address addr,
-        address caller
-    ) public returns (uint256) {
+    function flowAction(FundState storage s, uint8 op, uint256 index, address addr, address caller)
+        public
+        returns (uint256)
+    {
         if (op == FLOW_CLAIM_DEFERRED) return _claimDeferred(s, index, caller, addr);
-        if (op == FLOW_CLAIM_POSITION) return FundPositionLib.claimPosition(s, index, caller, addr);
+        if (op == FLOW_CLAIM_POSITION) {
+            return FundPositionLib.claimPosition(s, index, caller, addr);
+        }
         if (op == FLOW_SETTLE_CLAIM) return _settleClaim(s, index, addr);
         if (op == FLOW_EMERGENCY_UNWIND) {
             if (!s.depositsPaused) {
@@ -625,8 +621,7 @@ library FundFlowsLib {
     {
         (
             bool shouldSell,
-            uint256 tokensToSell,
-            ,
+            uint256 tokensToSell,,
             uint256 expectedUsdc,
             uint256 fundTokensBefore,
             uint256 claimedBefore
@@ -654,10 +649,9 @@ library FundFlowsLib {
         s.targetBps[index] = 0;
         Plan storage p = s.plan;
         if (
-            (
-                p.status == PlanStatus.Open || p.status == PlanStatus.Halted
-                    || p.status == PlanStatus.Paused
-            ) && index < p.endBps.length
+            (p.status == PlanStatus.Open
+                    || p.status == PlanStatus.Halted
+                    || p.status == PlanStatus.Paused) && index < p.endBps.length
         ) {
             p.endBps[index] = 0;
         }

@@ -282,7 +282,9 @@ contract FlowQueue is
     /// @inheritdoc IFlowQueue
     function unpauseQueue() external onlyRole(ADMIN_ROLE) nonReentrant {
         FlowState storage s = _s();
-        if (!s.paused && (s.queuePausedUntil == 0 || block.timestamp >= s.queuePausedUntil)) return;
+        if (!s.paused && (s.queuePausedUntil == 0 || block.timestamp >= s.queuePausedUntil)) {
+            return;
+        }
         s.paused = false;
         s.queuePausedUntil = 0;
         emit QueueUnpaused(msg.sender);
@@ -331,10 +333,9 @@ contract FlowQueue is
         address fundAddr = _s().fund;
         if (fundAddr != address(0)) {
             IRobotMoneyFundFull f = IRobotMoneyFundFull(fundAddr);
-            if (
-                _hasActiveBasket(f)
-                    && p.legBandBps <= f.maxPoolFeeBps() + f.feeMarginBps()
-            ) revert FlowParamOutOfBounds(14);
+            if (_hasActiveBasket(f) && p.legBandBps <= f.maxPoolFeeBps() + f.feeMarginBps()) {
+                revert FlowParamOutOfBounds(14);
+            }
             _requireFundedPoolsFixedFee(f);
         }
         if (p.sequencerGrace > MAX_SEQUENCER_GRACE) revert FlowParamOutOfBounds(15);
@@ -373,7 +374,9 @@ contract FlowQueue is
             if (!cfgs[i].active || cfgs[i].kind != AssetKind.Basket) continue;
             if (i >= targets.length || targets[i] == 0) continue;
             bool fixedFee;
-            try IExactOutSwapAdapter(cfgs[i].adapter).isFixedFeePool(cfgs[i].pool) returns (bool b) {
+            try IExactOutSwapAdapter(cfgs[i].adapter).isFixedFeePool(cfgs[i].pool) returns (
+                bool b
+            ) {
                 fixedFee = b;
             } catch {}
             if (!fixedFee) revert FlowParamOutOfBounds(14);

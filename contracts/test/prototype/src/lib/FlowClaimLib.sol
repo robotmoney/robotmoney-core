@@ -221,7 +221,10 @@ library FlowClaimLib {
         bool prefix = true;
         for (uint256 k = s.claimCursor[receiver]; k < ids.length && left != 0; ++k) {
             Claim storage c = s.claims[ids[k]];
-            if (c.kind == RequestKind.Deposit && c.claimed < c.shares && _deliverable(s, c, shutdown)) {
+            if (
+                c.kind == RequestKind.Deposit && c.claimed < c.shares
+                    && _deliverable(s, c, shutdown)
+            ) {
                 uint256 x;
                 uint256 cost;
                 (x, cost, left) = _take(c, left, byShares);
@@ -308,7 +311,9 @@ library FlowClaimLib {
         if (IRobotMoneyFundFull(s.fund).isShutdown()) revert IFlowEvents.FundIsShutdown();
         Settlement storage st = _settlement(s, id);
         if (s.lastFreezeAt != 0 && block.timestamp < uint256(s.lastFreezeAt) + s.params.maxFreeze) {
-            revert IFlowEvents.FreezeOnCooldown(uint64(uint256(s.lastFreezeAt) + s.params.maxFreeze));
+            revert IFlowEvents.FreezeOnCooldown(uint64(
+                    uint256(s.lastFreezeAt) + s.params.maxFreeze
+                ));
         }
         if ((st.matchedShares + st.sharesMinted) == 0 || block.timestamp >= st.holdEndsAt) {
             revert IFlowEvents.FreezeOutsideHold(id);
@@ -400,7 +405,9 @@ library FlowClaimLib {
         returns (uint256)
     {
         Request storage r = s.requests[requestId];
-        if (r.owner != controller || r.kind != kind || status(s, requestId) != RequestStatus.Pending) {
+        if (
+            r.owner != controller || r.kind != kind || status(s, requestId) != RequestStatus.Pending
+        ) {
             return 0;
         }
         return FlowMatchLib.currentRequestRemaining(s, requestId);
@@ -490,7 +497,9 @@ library FlowClaimLib {
         r.remaining = amount;
         r.exitFeeBps = exitFeeBps;
         r.minHold = p.minHold;
-        if (kind == RequestKind.Deposit && p.minHold > s.maxDepositMinHold) s.maxDepositMinHold = p.minHold;
+        if (kind == RequestKind.Deposit && p.minHold > s.maxDepositMinHold) {
+            s.maxDepositMinHold = p.minHold;
+        }
         r.maxRoll = p.maxRoll;
         r.createdAt = uint64(block.timestamp);
         r.expiryEpoch = expiryEpoch;
@@ -535,9 +544,7 @@ library FlowClaimLib {
         if (pauseUntil != 0 && pauseUntil <= block.timestamp && pauseUntil > stopEnd) {
             stopEnd = pauseUntil;
         }
-        if (
-            stopEnd != 0 && stopEnd >= FlowEpochs.startOf(s, cur) && r.createdAt <= stopEnd
-        ) {
+        if (stopEnd != 0 && stopEnd >= FlowEpochs.startOf(s, cur) && r.createdAt <= stopEnd) {
             return true;
         }
         return s.lastDepositStopEpoch != 0 && r.epoch <= s.lastDepositStopEpoch

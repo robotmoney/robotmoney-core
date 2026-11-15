@@ -121,12 +121,10 @@ contract SizeGateTest is PrototypeHarness {
             "contracts/test/prototype/src/RobotMoneyFund.sol:RobotMoneyFund"
         );
         _assertInitCode(
-            "Rebalancer initcode         ",
-            "contracts/test/prototype/src/Rebalancer.sol:Rebalancer"
+            "Rebalancer initcode         ", "contracts/test/prototype/src/Rebalancer.sol:Rebalancer"
         );
         _assertInitCode(
-            "FlowQueue initcode          ",
-            "contracts/test/prototype/src/FlowQueue.sol:FlowQueue"
+            "FlowQueue initcode          ", "contracts/test/prototype/src/FlowQueue.sol:FlowQueue"
         );
         _assertInitCode(
             "RebalanceGovernance initcode",
@@ -140,9 +138,7 @@ contract SizeGateTest is PrototypeHarness {
         _assertInitCode(
             "TwapTickMath initcode       ", "contracts/lib/TwapTickMath.sol:TwapTickMath"
         );
-        _assertInitCode(
-            "BasketSwaps initcode        ", "contracts/lib/BasketSwaps.sol:BasketSwaps"
-        );
+        _assertInitCode("BasketSwaps initcode        ", "contracts/lib/BasketSwaps.sol:BasketSwaps");
         _assertInitCode(
             "BasketAssetConfigGuard init ",
             "contracts/lib/BasketAssetConfigGuard.sol:BasketAssetConfigGuard"
@@ -231,11 +227,24 @@ contract SizeGateTest is PrototypeHarness {
         // Internal/inlined prototype libraries (verify stub runtime <= EIP-170 and initcode <= EIP-3860).
         assertLe(type(FundStorage).runtimeCode.length, EIP170_LIMIT, "FundStorage over EIP-170");
         assertLe(type(PlanMath).runtimeCode.length, EIP170_LIMIT, "PlanMath over EIP-170");
-        _assertInitCode("FundStorage initcode        ", "contracts/test/prototype/src/lib/FundStorage.sol:FundStorage");
-        _assertInitCode("PlanMath initcode           ", "contracts/test/prototype/src/PlanMath.sol:PlanMath");
-        _assertInitCode("FeedLib initcode            ", "contracts/test/prototype/src/lib/FeedLib.sol:FeedLib");
-        _assertInitCode("TwapSlicesLib initcode      ", "contracts/test/prototype/src/lib/TwapSlicesLib.sol:TwapSlicesLib");
-        _assertInitCode("FlowStorage initcode        ", "contracts/test/prototype/src/lib/FlowStorage.sol:FlowStorage");
+        _assertInitCode(
+            "FundStorage initcode        ",
+            "contracts/test/prototype/src/lib/FundStorage.sol:FundStorage"
+        );
+        _assertInitCode(
+            "PlanMath initcode           ", "contracts/test/prototype/src/PlanMath.sol:PlanMath"
+        );
+        _assertInitCode(
+            "FeedLib initcode            ", "contracts/test/prototype/src/lib/FeedLib.sol:FeedLib"
+        );
+        _assertInitCode(
+            "TwapSlicesLib initcode      ",
+            "contracts/test/prototype/src/lib/TwapSlicesLib.sol:TwapSlicesLib"
+        );
+        _assertInitCode(
+            "FlowStorage initcode        ",
+            "contracts/test/prototype/src/lib/FlowStorage.sol:FlowStorage"
+        );
     }
 
     function _assertAdapterArtifact(string memory label, string memory artifact) private view {

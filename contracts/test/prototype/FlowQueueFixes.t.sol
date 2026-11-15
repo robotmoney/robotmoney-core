@@ -789,8 +789,12 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         Settlement memory st = queue.getSettlement(sid);
         assertGt(st.matchedShares, 0, "all 24 deposits matched O(1)");
         assertGt(st.sharesBurned, 0, "net redemptions settled in the same call");
-        assertEq(queue.claimCount() - claims0, 2 * n, "24 synced match claims + 24 net redemption fills");
-        emit log_named_uint("gas of one keeper settle with 24 matched deposits + 24 net redemptions", used);
+        assertEq(
+            queue.claimCount() - claims0, 2 * n, "24 synced match claims + 24 net redemption fills"
+        );
+        emit log_named_uint(
+            "gas of one keeper settle with 24 matched deposits + 24 net redemptions", used
+        );
     }
 
     function _gasSweep(bytes memory data, uint256 used, bool burning)
@@ -1062,7 +1066,10 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
                 if (st == RequestStatus.Expired) {
                     vm.prank(r.owner);
                     queue.withdrawExpired(id);
-                } else if (st == RequestStatus.Pending && r.kind == RequestKind.Redeem && r.noticeRound == 0) {
+                } else if (
+                    st == RequestStatus.Pending && r.kind == RequestKind.Redeem
+                        && r.noticeRound == 0
+                ) {
                     vm.prank(r.owner);
                     queue.giveRedemptionNotice(id);
                     noticed = true;
@@ -1522,7 +1529,8 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
         uint256 rem = _liveRem(id, r);
         bool enrollDustOnly = !pre.enrolled[k] && r.enrolled && !f.newSettlement
             && rem < pre.remaining[k] && pre.remaining[k] - rem <= 1;
-        bool realFill = rem < pre.remaining[k] && !(r.closed && _cancelledNow(logs, id)) && !enrollDustOnly;
+        bool realFill =
+            rem < pre.remaining[k] && !(r.closed && _cancelledNow(logs, id)) && !enrollDustOnly;
         if (realFill) {
             ++fillsChecked;
             if (noRoom && !f.matched) {
@@ -1574,7 +1582,10 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
 
     function _matchedNow(Vm.Log[] memory logs) internal view returns (bool) {
         for (uint256 k; k < logs.length; ++k) {
-            if (logs[k].emitter == address(queue) && logs[k].topics[0] == IFlowEvents.Matched.selector) {
+            if (
+                logs[k].emitter == address(queue)
+                    && logs[k].topics[0] == IFlowEvents.Matched.selector
+            ) {
                 return true;
             }
         }

@@ -7,13 +7,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {
-    AssetConfig,
-    AssetKind,
-    BPS,
-    IDLE_INDEX,
-    PRICE_SCALE
-} from "../FundTypes.sol";
+import {AssetConfig, AssetKind, BPS, IDLE_INDEX, PRICE_SCALE} from "../FundTypes.sol";
 import {
     AssetPrice,
     FlowParams,
@@ -73,7 +67,12 @@ library FlowCheckLib {
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Run checks 1 to 7 for a settlement called by `caller` now (`isKeeper == KEEPER_ROLE`).
-    function preTrade(FlowState storage s, address, /*caller*/ bool isKeeper)
+    function preTrade(
+        FlowState storage s,
+        address,
+        /*caller*/
+        bool isKeeper
+    )
         public
         view
         returns (SettleCheck check, uint256 index, uint256 detail, SettleContext memory c)
@@ -107,7 +106,8 @@ library FlowCheckLib {
         RoundState storage rs = s.rounds[roundEpoch];
         m.depositsOpen = rs.opened
             ? rs.depositsOpen
-            : (m.excludedMask == 0 && m.saleMask == 0 && !fund.depositsPaused() && !fund.isShutdown());
+            : (m.excludedMask == 0 && m.saleMask == 0 && !fund.depositsPaused()
+                    && !fund.isShutdown());
         return (SettleCheck.Ok, IDLE_INDEX, 0, m);
     }
 
@@ -174,7 +174,9 @@ library FlowCheckLib {
             if (m.prices[i].kind != PRICE_KIND_LENDING) {
                 if ((s.lastExcludedMask & bit) == 0 && (m.excludedMask & bit) == 0) continue;
             }
-            if ((s.lastExcludedMask & bit) == (m.excludedMask & bit) && (cycled & bit) == 0) continue;
+            if ((s.lastExcludedMask & bit) == (m.excludedMask & bit) && (cycled & bit) == 0) {
+                continue;
+            }
             uint256 v = s.lastLendPerShare[i];
             ref = ref > v ? ref - v : 0;
             if (m.excludedMask & bit == 0) ref += m.held[i].mulDiv(PRICE_SCALE, m.supply);
@@ -185,7 +187,8 @@ library FlowCheckLib {
             uint256 bit = 1 << i;
             if ((m.saleMask & bit) == 0) continue;
             if (m.prices[i].kind == PRICE_KIND_BASKET && m.prices[i].unit != 0) {
-                uint256 curValPerShare = m.held[i].mulDiv(m.prices[i].feedPerToken, m.prices[i].unit)
+                uint256 curValPerShare = m.held[i]
+                    .mulDiv(m.prices[i].feedPerToken, m.prices[i].unit)
                     .mulDiv(PRICE_SCALE, m.supply);
                 curPx = curPx > curValPerShare ? curPx - curValPerShare : 0;
             }
@@ -304,8 +307,7 @@ library FlowCheckLib {
         }
 
         // ── Check 5: lending rate check (folded into round deposit stop, E36 / SAFE-09) ──
-        (c.lendRateOk, c.lendRateFailIdx, c.lendRateFailDetail, c.lendRates) =
-            _lendRates(s, cfg, p);
+        (c.lendRateOk, c.lendRateFailIdx, c.lendRateFailDetail, c.lendRates) = _lendRates(s, cfg, p);
 
         // ── Check 7: snapshot, navFeed, navTwap (`S`) ──
         c.supply = fund.totalSupply();

@@ -377,7 +377,15 @@ abstract contract FlowQueueBase is PrototypeHarness {
     }
 
     /// @dev Step 3f retired `RequestSkipped` because requests carry no price limits (E25).
-    function _skipped(Vm.Log[] memory /* logs */, uint256 /* requestId */) internal pure returns (bool) {
+    function _skipped(
+        Vm.Log[] memory,
+        /* logs */
+        uint256 /* requestId */
+    )
+        internal
+        pure
+        returns (bool)
+    {
         return false;
     }
 
@@ -509,7 +517,9 @@ contract FlowQueueTest is FlowQueueBase {
             Request memory rRed = queue.getRequest(red);
             vm.prank(bob);
             vm.expectRevert(
-                abi.encodeWithSelector(IFlowEvents.NoticeNotReady.selector, red, rRed.expiryEpoch + 1)
+                abi.encodeWithSelector(
+                    IFlowEvents.NoticeNotReady.selector, red, rRed.expiryEpoch + 1
+                )
             );
             queue.giveRedemptionNotice(red);
             _assertQueueSame(s0, _queueSnap(), "before the window ends");
@@ -540,7 +550,9 @@ contract FlowQueueTest is FlowQueueBase {
             vm.prank(alice);
             queue.cancel(dep);
             assertEq(
-                IERC20(USDC).balanceOf(address(queue)), queueUsdc, "cancel pays nothing out: a credit"
+                IERC20(USDC).balanceOf(address(queue)),
+                queueUsdc,
+                "cancel pays nothing out: a credit"
             );
             vm.prank(dave);
             vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NothingToWithdraw.selector, dave));
@@ -669,7 +681,9 @@ contract FlowQueueTest is FlowQueueBase {
         _timelockExpectRevert(
             address(queue),
             abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max)),
-            abi.encodeWithSelector(IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0)
+            abi.encodeWithSelector(
+                IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0
+            )
         );
         _assertQueueSame(q0, _queueSnap(), "blocked: queue");
 
@@ -679,7 +693,9 @@ contract FlowQueueTest is FlowQueueBase {
         Settlement memory st = queue.getSettlement(sid);
         assertGt(st.matchedShares, 0, "paired deposit and redemption matched once the peg is back");
         assertGt(st.sharesBurned, 0, "net redemption settled once the peg is back");
-        assertEq(queue.pendingDepositRequest(dep, alice), 0, "matched deposit has no pending escrow");
+        assertEq(
+            queue.pendingDepositRequest(dep, alice), 0, "matched deposit has no pending escrow"
+        );
         assertTrue(queue.getRequest(red).closed, "net redemption closed");
     }
 
@@ -1413,7 +1429,9 @@ contract FlowQueueTest is FlowQueueBase {
         fund.shutdown();
         _expectBlocked(keeper, SettleCheck.Paused, IDLE_INDEX);
         assertEq(queue.getRequest(_depId).remaining, 20_000e6, "deposit untouched on shutdown");
-        assertEq(queue.getRequest(_redId).remaining, _bobShares / 2, "redemption untouched on shutdown");
+        assertEq(
+            queue.getRequest(_redId).remaining, _bobShares / 2, "redemption untouched on shutdown"
+        );
 
         vm.prank(alice);
         (uint256 aUsdc,) = queue.withdrawCredit();
@@ -1507,7 +1525,9 @@ contract FlowQueueTest is FlowQueueBase {
         );
         uint256 sid = _keeperSettle();
         vm.clearMockedCalls();
-        assertGt(queue.getSettlement(sid).sharesMinted, 0, "deposit settled despite Aave withdraw down");
+        assertGt(
+            queue.getSettlement(sid).sharesMinted, 0, "deposit settled despite Aave withdraw down"
+        );
         assertTrue(queue.getRequest(_depId).closed, "deposit closed");
         _assertBooks("deposit settled with Aave withdraw down");
     }
@@ -1632,14 +1652,20 @@ contract FlowQueueTest is FlowQueueBase {
         assertGt(queue.getSettlement(sid).matchedShares, 0, "matched portion settled once");
         assertEq(queue.pendingDepositRequest(_depId, alice), 0, "matched deposit filled");
         (, bytes4 why) = _sideFailed(vm.getRecordedLogs(), RequestKind.Redeem);
-        assertEq(why, IRobotMoneyFund.ProportionViolated.selector, "short pay refused by proportion check");
+        assertEq(
+            why,
+            IRobotMoneyFund.ProportionViolated.selector,
+            "short pay refused by proportion check"
+        );
         assertGt(queue.getRequest(_redId).remaining, 0, "net redemption remainder stayed pending");
         _assertBooks("short pay");
 
         vm.clearMockedCalls();
         mech.setMode(mech.HONEST(), 0);
         uint256 sid2 = _keeperSettle();
-        assertGt(queue.getSettlement(sid2).sharesBurned, 0, "next call settles remaining net redemption");
+        assertGt(
+            queue.getSettlement(sid2).sharesBurned, 0, "next call settles remaining net redemption"
+        );
         assertTrue(queue.getRequest(_redId).closed, "redemption closed");
         _assertBooks("short pay cleared");
     }
@@ -1906,7 +1932,9 @@ contract FlowQueueTest is FlowQueueBase {
         queue.freezeSettlement(sid);
         uint64 cooldownUntil = uint64(block.timestamp) + queue.flowParams().maxFreeze;
         vm.prank(emergency);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil)
+        );
         queue.freezeSettlement(sid);
 
         Claim memory c = queue.getClaim(claimId);
@@ -1984,7 +2012,9 @@ contract FlowQueueTest is FlowQueueBase {
         fund.redeemInKind(c.shares, alice, alice);
         assertEq(fund.balanceOf(alice), 0, "shares burned");
         assertGt(IERC20(USDC).balanceOf(alice), usdc0, "alice received assets in kind");
-        assertEq(fund.balanceOf(stranger) + IERC20(USDC).balanceOf(stranger), 0, "stranger got nothing");
+        assertEq(
+            fund.balanceOf(stranger) + IERC20(USDC).balanceOf(stranger), 0, "stranger got nothing"
+        );
     }
 
     /// @notice RB-18 (E49): a freeze ends by itself `maxFreeze` after the freeze call (not after the settlement),
@@ -2003,7 +2033,9 @@ contract FlowQueueTest is FlowQueueBase {
         refreshFeeds();
         assertEq(queue.maxMint(alice), 0, "still frozen one second before");
         vm.prank(emergency);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, uint64(until)));
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, uint64(until))
+        );
         queue.freezeSettlement(sid);
         vm.warp(until);
         refreshFeeds();
@@ -3141,7 +3173,11 @@ contract FlowQueueTest is FlowQueueBase {
             assertEq(st.matchedShares, 0, string.concat(label, ": zero match"));
             assertEq(st.sharesMinted, 0, string.concat(label, ": zero net deposit"));
         }
-        assertEq(queue.pendingDepositRequest(depId, owner), amount, string.concat(label, ": still pending"));
+        assertEq(
+            queue.pendingDepositRequest(depId, owner),
+            amount,
+            string.concat(label, ": still pending")
+        );
         vm.prank(owner);
         queue.cancel(depId);
         vm.prank(owner);
@@ -3305,7 +3341,11 @@ contract FlowQueueTest is FlowQueueBase {
             refreshFeeds();
             vm.prank(keeper);
             uint256 sidPush = queue.settle(1, 1);
-            assertEq(queue.getSettlement(sidPush).matchSharePrice, basePrice, "1-block push ignored by TWAP match");
+            assertEq(
+                queue.getSettlement(sidPush).matchSharePrice,
+                basePrice,
+                "1-block push ignored by TWAP match"
+            );
         }
 
         // 3. TWAP held past `refBandBps` from feed blocks the round.
@@ -3342,7 +3382,9 @@ contract FlowQueueTest is FlowQueueBase {
             vm.warp(block.timestamp + 2 hours);
             _expectBlocked(keeper, SettleCheck.Feed, IDX_WETH);
             uint256 sidOutage = _settleNow();
-            assertEq(queue.getSettlement(sidOutage).matchedShares, 0, "no second match after outage");
+            assertEq(
+                queue.getSettlement(sidOutage).matchedShares, 0, "no second match after outage"
+            );
 
             vm.revertToState(snapMid);
             (uint256 navNow,,) = fund.portfolioValues();
@@ -3407,8 +3449,14 @@ contract FlowQueueTest is FlowQueueBase {
             assertEq(targetRound, winEp, "notice targets active unsettled round");
             warpToSettleable(dWin);
             uint256 sidWin = _settleNow();
-            assertGt(queue.getSettlement(sidWin).sharesBurned + queue.getSettlement(sidWin).matchedShares, 0);
-            assertTrue(queue.getRequest(oldRed).closed, "old redemption still participated and closed");
+            assertGt(
+                queue.getSettlement(sidWin).sharesBurned
+                    + queue.getSettlement(sidWin).matchedShares,
+                0
+            );
+            assertTrue(
+                queue.getRequest(oldRed).closed, "old redemption still participated and closed"
+            );
         }
 
         // 4a. Deposit stop by `pauseDeposits` unlocks until close of epoch in which pause ends.
@@ -3511,7 +3559,10 @@ contract FlowQueueTest is FlowQueueBase {
 
     /// @notice RB-27: `shutdown` reverts for emergency, keeper, and stranger even with all feeds stale and keeper
     ///         silent past `maxRoll` epochs; timelock (Safe) executes it and holders exit in kind until `restore`.
-    function test_RB27_shutdownOnlyTimelockEvenWhenStaleAndSilent_untilRestore() public fixtureCovered {
+    function test_RB27_shutdownOnlyTimelockEvenWhenStaleAndSilent_untilRestore()
+        public
+        fixtureCovered
+    {
         _invest();
         uint256 bobShares = _holder(bob, 20_000e6);
         FlowParams memory p = queue.flowParams();
@@ -3635,7 +3686,9 @@ contract FlowQueueTest is FlowQueueBase {
             assertGt(queue.getSettlement(sid).matchedUsdc, 0, "matched");
             assertLe(du, cap, "depositUsed bounded by cap");
             assertEq(ru, queue.getSettlement(sid).matchedUsdc, "redeemUsed tracks match");
-            assertGt(queue.pendingDepositRequest(d2, carol), cap / 3, "carol bounded by remaining cap");
+            assertGt(
+                queue.pendingDepositRequest(d2, carol), cap / 3, "carol bounded by remaining cap"
+            );
         }
 
         // Symmetric check: matched redeem leaves only `cap - matchedUsdc` for a second net redemption.
@@ -3654,7 +3707,9 @@ contract FlowQueueTest is FlowQueueBase {
             _settleNow();
             (, uint256 ru) = queue.periodFlow(period);
             assertLe(ru, cap, "redeemUsed bounded by cap");
-            assertGt(queue.pendingRedeemRequest(rExtra, dave), 0, "second redeem capped by match use");
+            assertGt(
+                queue.pendingRedeemRequest(rExtra, dave), 0, "second redeem capped by match use"
+            );
             _assertBooks("RB-29");
         }
     }
@@ -3697,7 +3752,9 @@ contract FlowQueueTest is FlowQueueBase {
             vm.prank(keeper);
             (bool executed,) = rebalancer.step();
             assertTrue(executed, "lending-only step ran");
-            assertEq(rebalancer.lastBasketStepAt(), basketBefore, "lending step did not stamp basket");
+            assertEq(
+                rebalancer.lastBasketStepAt(), basketBefore, "lending step did not stamp basket"
+            );
             snapAfterLend = vm.snapshotState();
             vm.warp(dLendEnd + p.settleWindow);
             assertGt(_settleNow(), 0, "lending-only step inside window allowed round settle");
@@ -3709,8 +3766,7 @@ contract FlowQueueTest is FlowQueueBase {
             (uint256 navNow,, uint256[] memory valsNow) = fund.portfolioValues();
             uint16 aaveBps = uint16(valsNow[0].mulDiv(BPS, navNow));
             uint16 moonBps = uint16(valsNow[1].mulDiv(BPS, navNow));
-            uint16[5] memory basketVec =
-                [aaveBps, moonBps, 0, uint16(BPS - aaveBps - moonBps), 0];
+            uint16[5] memory basketVec = [aaveBps, moonBps, 0, uint16(BPS - aaveBps - moonBps), 0];
             setTargetViaTimelock(basketVec, PlanParams(1 days, COST_BUDGET_BPS));
             uint256 dBasket = openDepositRequest(alice, 5_000e6);
             uint256 dBasketEnd = (uint256(queue.getRequest(dBasket).epoch) + 1) * p.epochLength;
@@ -3730,7 +3786,9 @@ contract FlowQueueTest is FlowQueueBase {
                 refreshFeeds();
                 vm.prank(keeper);
                 vm.expectRevert(
-                    abi.encodeWithSelector(IFlowEvents.StepInWindow.selector, basketAt, p.settleWindow)
+                    abi.encodeWithSelector(
+                        IFlowEvents.StepInWindow.selector, basketAt, p.settleWindow
+                    )
                 );
                 queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
             }
@@ -3785,13 +3843,19 @@ contract FlowQueueTest is FlowQueueBase {
 
         // Wait past old `maxRoll` epochs while keeping keeper silent: redemption stays Pending and fills at old fee.
         vm.warp((uint256(ep) + oldMaxRoll + 2) * oldEpochLen + oldSettleWin);
-        assertEq(uint8(queue.requestStatus(red)), uint8(RequestStatus.Pending), "redemption never expires");
+        assertEq(
+            uint8(queue.requestStatus(red)),
+            uint8(RequestStatus.Pending),
+            "redemption never expires"
+        );
         assertEq(uint8(queue.requestStatus(dep)), uint8(RequestStatus.Expired), "deposit expired");
         uint256 sid = _settleNow();
         Settlement memory st = queue.getSettlement(sid);
         uint256 feeGross = st.usdcOut.mulDiv(EXIT_FEE_BPS, BPS - EXIT_FEE_BPS);
         // Gross = net + fee at 25 bps (not 100 bps).
-        assertLt(feeGross * 2, st.usdcOut.mulDiv(100, BPS - 100), "settled at snapshotted 25 bps fee");
+        assertLt(
+            feeGross * 2, st.usdcOut.mulDiv(100, BPS - 100), "settled at snapshotted 25 bps fee"
+        );
     }
 
     /// @notice RB-32 (A41): self-expiring `pauseQueue`, `pauseRebalance`, and `pauseDeposits` auto-expire after
@@ -3810,7 +3874,9 @@ contract FlowQueueTest is FlowQueueBase {
 
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.PauseOnCooldown.selector, cooldownEnd));
         queue.pauseQueue();
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PauseOnCooldown.selector, cooldownEnd));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.PauseOnCooldown.selector, cooldownEnd)
+        );
         fund.pauseRebalance();
         fund.pauseDeposits(); // renewable with no cooldown
         vm.stopPrank();
@@ -3829,7 +3895,9 @@ contract FlowQueueTest is FlowQueueBase {
         vm.startPrank(emergency);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.PauseOnCooldown.selector, cooldownEnd));
         queue.pauseQueue();
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PauseOnCooldown.selector, cooldownEnd));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.PauseOnCooldown.selector, cooldownEnd)
+        );
         fund.pauseRebalance();
         vm.warp(cooldownEnd);
         queue.pauseQueue();
@@ -3844,7 +3912,9 @@ contract FlowQueueTest is FlowQueueBase {
         (uint256 du, uint256 ru) = queue.periodFlow(period);
         assertLe(du, cap, string.concat(label, ": deposit within cap"));
         assertLe(ru, cap, string.concat(label, ": redeem within cap"));
-        assertLe(queue.getSettlement(sid).matchedUsdc, cap, string.concat(label, ": match within cap"));
+        assertLe(
+            queue.getSettlement(sid).matchedUsdc, cap, string.concat(label, ": match within cap")
+        );
         _assertBooks(label);
     }
 

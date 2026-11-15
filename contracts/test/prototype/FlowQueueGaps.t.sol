@@ -40,7 +40,11 @@ contract FlowQueueGapsTest is FlowQueueBase {
         uint256 bobBefore = queue.queuedSharesOf(bob);
         assertEq(bobBefore, bobShares / 2, "before the match bob has his half in escrow");
         assertEq(queue.queuedSharesOf(alice), 0, "before the match alice has no shares");
-        assertEq(queue.queuedSharesOfAt(bob, dep0, red0), bobBefore, "before the round: the unenrolled escrow counts at any index");
+        assertEq(
+            queue.queuedSharesOfAt(bob, dep0, red0),
+            bobBefore,
+            "before the round: the unenrolled escrow counts at any index"
+        );
 
         uint256 sid = _settleNow();
         Settlement memory st = queue.getSettlement(sid);
@@ -57,11 +61,17 @@ contract FlowQueueGapsTest is FlowQueueBase {
         // At the new indexes the view equals the current one. At the old indexes it still reads the time before.
         assertEq(queue.queuedSharesOfAt(alice, dep1, red1), aliceNow, "alice at the new index");
         assertEq(queue.queuedSharesOfAt(bob, dep1, red1), bobNow, "bob at the new index");
-        assertEq(queue.queuedSharesOfAt(alice, dep0, red0), 0, "alice at the old index: nothing yet");
+        assertEq(
+            queue.queuedSharesOfAt(alice, dep0, red0), 0, "alice at the old index: nothing yet"
+        );
         // The match moved exactly the booked shares to alice. Bob's side at the old index is not asserted here: his
         // request was not yet enrolled in a round at that index.
         assertApproxEqAbs(aliceNow, st.matchedShares, 2, "alice holds the shares the match booked");
-        assertLe(st.matchedShares, bobBefore - bobNow, "and they left bob's escrow (a match moves, it does not mint)");
+        assertLe(
+            st.matchedShares,
+            bobBefore - bobNow,
+            "and they left bob's escrow (a match moves, it does not mint)"
+        );
     }
 
     // ───────────────────────────── E40 ─────────────────────────────
@@ -86,12 +96,20 @@ contract FlowQueueGapsTest is FlowQueueBase {
         // Dave's redemption sits in the next epoch, so it is still live when alice's deposit expires.
         warpForward((uint256(dr.epoch) + 1) * p.epochLength + 1);
         uint256 dRed = openRedeemRequest(dave, daveShares / 2);
-        assertEq(uint256(queue.getRequest(dRed).expiresAt), type(uint64).max, "a redemption never expires");
+        assertEq(
+            uint256(queue.getRequest(dRed).expiresAt),
+            type(uint64).max,
+            "a redemption never expires"
+        );
         uint256 snap = vm.snapshotState();
 
         // One second before: the deposit still takes part and is matched against bob's redemption.
         vm.warp(uint256(dr.expiresAt) - 1);
-        assertEq(uint8(queue.requestStatus(d)), uint8(RequestStatus.Pending), "still pending one second before");
+        assertEq(
+            uint8(queue.requestStatus(d)),
+            uint8(RequestStatus.Pending),
+            "still pending one second before"
+        );
         uint256 sid = _settleNow();
         assertGt(sid, 0, "a round ran");
         assertGt(queue.getSettlement(sid).matchedUsdc, 0, "the live deposit was matched");
@@ -101,7 +119,9 @@ contract FlowQueueGapsTest is FlowQueueBase {
         // `settleWindow` after an epoch closes) does not touch the deposit.
         vm.revertToState(snap);
         vm.warp(uint256(dr.expiresAt));
-        assertEq(uint8(queue.requestStatus(d)), uint8(RequestStatus.Expired), "expired at the second");
+        assertEq(
+            uint8(queue.requestStatus(d)), uint8(RequestStatus.Expired), "expired at the second"
+        );
         vm.warp(uint256(dr.expiresAt) + p.settleWindow);
         sid = _settleNow();
         assertGt(sid, 0, "dave's live redemption settles");
@@ -149,7 +169,11 @@ contract FlowQueueGapsTest is FlowQueueBase {
             uint256 d = openDepositRequest(alice, 20_000e6);
             warpToSettleable(d);
             _settleNow();
-            assertEq(queue.pendingDepositRequest(d, alice), 20_000e6, "no room at the cap: the deposit waits");
+            assertEq(
+                queue.pendingDepositRequest(d, alice),
+                20_000e6,
+                "no room at the cap: the deposit waits"
+            );
             _assertBooks("E28 net");
         }
     }
@@ -174,7 +198,9 @@ contract FlowQueueGapsTest is FlowQueueBase {
         queue.pauseQueue();
         l = queue.liveness();
         assertTrue(l.queuePausedNow, "paused");
-        assertEq(uint256(l.queuePausedUntil), block.timestamp + p.maxPause, "ends maxPause from now");
+        assertEq(
+            uint256(l.queuePausedUntil), block.timestamp + p.maxPause, "ends maxPause from now"
+        );
         assertFalse(l.depositsStoppedNow, "deposits were not stopped by it");
         assertFalse(l.windDownActive, "not a wind-down");
         vm.warp(uint256(l.queuePausedUntil));
@@ -197,7 +223,9 @@ contract FlowQueueGapsTest is FlowQueueBase {
 
         // No keeper.
         vm.revertToState(snap);
-        timelockExecute(address(queue), abi.encodeCall(queue.revokeRole, (Roles.KEEPER_ROLE, keeper)));
+        timelockExecute(
+            address(queue), abi.encodeCall(queue.revokeRole, (Roles.KEEPER_ROLE, keeper))
+        );
         l = queue.liveness();
         assertFalse(l.keeperConfigured, "no keeper account holds the role");
         assertFalse(l.queuePausedNow, "and the queue is not paused by it");

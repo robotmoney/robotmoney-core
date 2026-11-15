@@ -670,7 +670,11 @@ abstract contract PrototypeHarness is BaseFixture {
     }
 
     /// @notice Compatibility overload for pre-Step 3f callers passing a retired price limit.
-    function openDepositRequest(address user, uint256 usdc, uint256 /*retiredLimit*/ )
+    function openDepositRequest(
+        address user,
+        uint256 usdc,
+        uint256 /*retiredLimit*/
+    )
         internal
         returns (uint256 id)
     {
@@ -686,7 +690,11 @@ abstract contract PrototypeHarness is BaseFixture {
     }
 
     /// @notice Compatibility overload for pre-Step 3f callers passing a retired price limit.
-    function openRedeemRequest(address user, uint256 shares, uint256 /*retiredLimit*/ )
+    function openRedeemRequest(
+        address user,
+        uint256 shares,
+        uint256 /*retiredLimit*/
+    )
         internal
         returns (uint256 id)
     {

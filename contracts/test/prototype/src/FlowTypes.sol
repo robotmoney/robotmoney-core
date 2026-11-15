@@ -393,9 +393,7 @@ interface IFlowEvents {
         uint256 indexed requestId, address indexed owner, uint256 shares
     );
     /// @notice Wind-down (`shutdown`) released queued escrows for `owner` into credits.
-    event WindDownReleased(
-        address indexed owner, uint256 usdcReleased, uint256 sharesReleased
-    );
+    event WindDownReleased(address indexed owner, uint256 usdcReleased, uint256 sharesReleased);
 
     // ── Settlement & Whole Match (§5.9.3, §5.11.4, E24, E35, E36) ──
     /// @notice A settle call recorded nothing while the per-call basket cap (`FlowLevers.basketCallBps`) left a side

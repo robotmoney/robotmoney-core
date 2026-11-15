@@ -436,10 +436,7 @@ contract Invariants is PrototypeHarness {
         _requestDeposit(h, amt);
     }
 
-    function _requestDeposit(address h, uint256 amt)
-        private
-        action(address(0), false, ACT_OTHER)
-    {
+    function _requestDeposit(address h, uint256 amt) private action(address(0), false, ACT_OTHER) {
         fundUsdc(h, amt);
         vm.prank(h);
         IERC20(USDC).approve(address(queue), amt);
@@ -449,8 +446,9 @@ contract Invariants is PrototypeHarness {
             ghostUsdcIn += amt;
         } catch (bytes memory err) {
             ++revertsCaught[H_REQUEST_DEPOSIT];
-            bool okRefusal = (queue.queuePaused() && bytes4(err) == IFlowEvents.QueueIsPaused.selector)
-                || (fund.isShutdown() && bytes4(err) == IFlowEvents.FundIsShutdown.selector);
+            bool okRefusal =
+                (queue.queuePaused() && bytes4(err) == IFlowEvents.QueueIsPaused.selector)
+                    || (fund.isShutdown() && bytes4(err) == IFlowEvents.FundIsShutdown.selector);
             if (!okRefusal) {
                 _violation("deposit request refused outside pause or wind-down", 0);
                 _mustSucceed(H_REQUEST_DEPOSIT, "a deposit request while open", err);
@@ -481,15 +479,14 @@ contract Invariants is PrototypeHarness {
             ghostSharesIn += shares;
         } catch (bytes memory err) {
             ++revertsCaught[H_REQUEST_REDEEM];
-            bool okRefusal = (queue.queuePaused() && bytes4(err) == IFlowEvents.QueueIsPaused.selector)
-                || (fund.isShutdown() && bytes4(err) == IFlowEvents.FundIsShutdown.selector)
-                || bytes4(err) == IFlowEventsSel.BELOW_MIN;
+            bool okRefusal =
+                (queue.queuePaused() && bytes4(err) == IFlowEvents.QueueIsPaused.selector)
+                    || (fund.isShutdown() && bytes4(err) == IFlowEvents.FundIsShutdown.selector)
+                    || bytes4(err) == IFlowEventsSel.BELOW_MIN;
             if (!okRefusal) {
                 ++ghostRequestRedeemReverts;
                 _mustSucceed(
-                    H_REQUEST_REDEEM,
-                    "a redemption request at or above the minimum while open",
-                    err
+                    H_REQUEST_REDEEM, "a redemption request at or above the minimum while open", err
                 );
             }
         }
@@ -523,8 +520,7 @@ contract Invariants is PrototypeHarness {
         private
         action(address(0), false, ACT_SETTLE)
     {
-        (sp.cfPrice, sp.cfMatched) =
-            c == keeper ? _counterfactualMatch() : (uint256(0), uint256(0));
+        (sp.cfPrice, sp.cfMatched) = c == keeper ? _counterfactualMatch() : (uint256(0), uint256(0));
         vm.prank(c);
         (sp.check,) = queue.checkSettle();
         sp.qUsdc = IERC20(USDC).balanceOf(address(queue));
@@ -678,7 +674,10 @@ contract Invariants is PrototypeHarness {
             ++callsWholeMatch;
             if (s.matchSharePrice == 0) _violation("RB-24: matched without share price", 24);
         }
-        if (sp.cfMatched != 0 && (s.matchedShares != sp.cfMatched || s.matchSharePrice != sp.cfPrice)) {
+        if (
+            sp.cfMatched != 0
+                && (s.matchedShares != sp.cfMatched || s.matchSharePrice != sp.cfPrice)
+        ) {
             _violation("RB-20: match depended on maxRequests/maxUsdc inputs", 20);
         }
         if (sp.cfMatched == 0 && s.matchedShares != 0) {
@@ -840,12 +839,11 @@ contract Invariants is PrototypeHarness {
             if (fund.isShutdown()) _violation("RB-25: notice given during shutdown", 25);
         } catch (bytes memory err) {
             ++revertsCaught[H_GIVE_NOTICE];
-            bool okRefusal = (
-                (fund.isShutdown() || r0.era < 1 + callsShutdown)
-                    && bytes4(err) == IFlowEvents.FundIsShutdown.selector
-            )
-                || (queue.currentEpoch() <= r0.expiryEpoch
-                    && bytes4(err) == IFlowEvents.NoticeNotReady.selector);
+            bool okRefusal =
+                ((fund.isShutdown() || r0.era < 1 + callsShutdown)
+                        && bytes4(err) == IFlowEvents.FundIsShutdown.selector)
+                    || (queue.currentEpoch() <= r0.expiryEpoch
+                        && bytes4(err) == IFlowEvents.NoticeNotReady.selector);
             if (!okRefusal) {
                 _mustSucceed(H_GIVE_NOTICE, "giveRedemptionNotice on eligible request", err);
             }
@@ -893,7 +891,10 @@ contract Invariants is PrototypeHarness {
         vm.prank(h);
         try queue.withdrawCredit() returns (uint256 pu, uint256 ps) {
             ++callsCredit;
-            if (pu < u || ps < s || IERC20(USDC).balanceOf(h) - u0 != pu || fund.balanceOf(h) - s0 != ps) {
+            if (
+                pu < u || ps < s || IERC20(USDC).balanceOf(h) - u0 != pu
+                    || fund.balanceOf(h) - s0 != ps
+            ) {
                 _violation("E22: credit paid differs from credit booked", 12);
             }
             ghostUsdcOut += pu;
@@ -922,7 +923,8 @@ contract Invariants is PrototypeHarness {
 
     function _freeze(uint256 id) private action(address(0), false, ACT_OTHER) {
         uint32 maxF = queue.flowParams().maxFreeze;
-        bool onCooldown = ghostLastFreezeAt != 0 && block.timestamp < uint256(ghostLastFreezeAt) + maxF;
+        bool onCooldown =
+            ghostLastFreezeAt != 0 && block.timestamp < uint256(ghostLastFreezeAt) + maxF;
         vm.prank(emergency);
         try queue.freezeSettlement(id) {
             ++callsFreeze;
@@ -992,7 +994,8 @@ contract Invariants is PrototypeHarness {
         } else if (which == 1) {
             if (on) {
                 vm.prank(emergency);
-                try fund.pauseDeposits() {} catch (bytes memory err) {
+                try fund.pauseDeposits() {}
+                catch (bytes memory err) {
                     ++revertsCaught[H_PAUSE];
                     _violation("RB-32: pauseDeposits must not have cooldown", 32);
                     _mustSucceed(H_PAUSE, "pauseDeposits renewable without cooldown", err);
@@ -1006,7 +1009,10 @@ contract Invariants is PrototypeHarness {
                 PlanStatus st = fund.planStatus();
                 uint64 cdUntil = fund.rebalancePauseCooldownUntil();
                 bool cd = cdUntil != 0 && block.timestamp < cdUntil;
-                if (st != PlanStatus.Open && st != PlanStatus.Halted && !(st == PlanStatus.Paused && cd)) {
+                if (
+                    st != PlanStatus.Open && st != PlanStatus.Halted
+                        && !(st == PlanStatus.Paused && cd)
+                ) {
                     return;
                 }
                 vm.prank(emergency);
@@ -1569,8 +1575,8 @@ contract Invariants is PrototypeHarness {
 
         act_requestDeposit(2, 1_500e6, 0);
         _memReset(mark);
-        uint256 depCutoff = uint256(queue.settleableAt(queue.currentEpoch())) - queue.flowParams().settleWindow
-            - queue.cancelBuffer();
+        uint256 depCutoff = uint256(queue.settleableAt(queue.currentEpoch()))
+            - queue.flowParams().settleWindow - queue.cancelBuffer();
         warpForward(depCutoff);
         refreshFeeds();
         act_cancel(2, 0);
@@ -1920,7 +1926,11 @@ contract Invariants is PrototypeHarness {
                 value += v;
             }
             assertLe(units, claimUnits, "RB-21: claim units exceed total");
-            assertLe(claimUnits, units + actors.length, "RB-21: claim units lost beyond claimant rounding");
+            assertLe(
+                claimUnits,
+                units + actors.length,
+                "RB-21: claim units lost beyond claimant rounding"
+            );
             uint256 position = IStrategyAdapter(a.adapter).totalAssets();
             assertLe(
                 held[i] + value,
@@ -2206,7 +2216,12 @@ contract Invariants is PrototypeHarness {
     function _independentBooks()
         private
         view
-        returns (uint256 pendingDepUsdc, uint256 pendingRedShares, uint256 matHeldShares, uint256 matOwedUsdc)
+        returns (
+            uint256 pendingDepUsdc,
+            uint256 pendingRedShares,
+            uint256 matHeldShares,
+            uint256 matOwedUsdc
+        )
     {
         uint256 n = queue.requestCount();
         for (uint256 id = 1; id <= n; ++id) {

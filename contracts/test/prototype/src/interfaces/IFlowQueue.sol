@@ -34,15 +34,11 @@ interface IFlowQueue is IFlowEvents {
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Pull `usdc` from the caller into escrow and open a forward-priced deposit request owned by `owner`.
-    function requestDeposit(uint256 usdc, address owner)
-        external
-        returns (uint256 requestId);
+    function requestDeposit(uint256 usdc, address owner) external returns (uint256 requestId);
 
     /// @notice Calls the fund's `ledgerCheckpoint(owner)` first (E13, RB-22), then pulls `shares` of the fund from
     ///         the caller into escrow and open a forward-priced redemption request owned by `owner`.
-    function requestRedeem(uint256 shares, address owner)
-        external
-        returns (uint256 requestId);
+    function requestRedeem(uint256 shares, address owner) external returns (uint256 requestId);
 
     /// @notice Owner cancels unfilled escrow before `endOf(epoch) - cancelBuffer`, during a deposit stop (deposits),
     ///         or during wind-down. Credited to `withdrawCredit`.
