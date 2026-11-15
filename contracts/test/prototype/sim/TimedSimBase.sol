@@ -16,7 +16,7 @@ import {PrototypeHarness} from "../PrototypeHarness.sol";
 import {MockAggregator} from "../mocks/MockAggregator.sol";
 import {TwapSlicesLib} from "../src/lib/TwapSlicesLib.sol";
 import {BPS, PRICE_SCALE, PlanParams, PlanStatus} from "../src/FundTypes.sol";
-import {FlowParams, IFlowEvents, Quote, Request, SettleCheck} from "../src/FlowTypes.sol";
+import {FlowParams, IFlowEvents, Quote, Request, RequestStatus, SettleCheck} from "../src/FlowTypes.sol";
 import {ILendingRateAdapter} from "../src/interfaces/IFlowAdapters.sol";
 import {SimMarket} from "./SimMarket.sol";
 
@@ -108,6 +108,9 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         uint256 redFairFeed;
         uint256 redFairRef;
         uint256 navFeed;
+        uint256 matchedShares;
+        uint256 matchedUsdc;
+        uint256 matchPrice;
     }
 
     /// @dev One request the sim made. Deposit: `amount` is USDC escrowed, `filled` USDC spent, `basis` the USDC
@@ -131,6 +134,7 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         uint64 unlockAt;
         uint256 fills;
         uint256 limitSkips;
+        uint256 matched;
     }
 
     // ─── State ──────────────────────────────────────────────────────────────────────────────────────────
@@ -160,6 +164,19 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     /// @dev Fills of the last attempt (read by `_onSettlePost`).
     uint256 internal lastAttemptDepFills;
     uint256 internal lastAttemptRedFills;
+    uint256 internal lastMatchPrice;
+    /// @dev Rounds whose first call stopped deposits and the match (`DepositStoppedForRound`).
+    uint256 internal depositStops;
+
+    // ─── Fault injection (E48; all off by default, so every earlier run is unchanged) ───────────────────
+
+    /// @dev The sequencer feed's answer (0 up, 1 down) and the time that status began (0: `sequencerUpSince`).
+    int256 internal seqAnswer;
+    uint256 internal seqStartedAt;
+    /// @dev A USDC / USD answer (8 decimals) the feed holds on every tick; 0: the daily round at 1.00000000.
+    uint256 internal usdcFaultPx8;
+    /// @dev The keeper sends no settle call while true.
+    bool internal keeperStopped;
 
     // ─── Hooks ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -220,11 +237,15 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             _pushFeed(b, _refPrice8(b), feedAt[b] + k * FEED_HEARTBEAT_SEC);
             ++feedRoundsHeartbeat[b];
         }
-        if (now_ >= usdcFeedAt + USDC_FEED_HEARTBEAT_SEC) {
+        if (usdcFaultPx8 != 0) {
+            usdcFeedAt = now_;
+            MockAggregator(FEED_USDC).setRound(8, int256(usdcFaultPx8), now_, now_);
+        } else if (now_ >= usdcFeedAt + USDC_FEED_HEARTBEAT_SEC) {
             usdcFeedAt += (now_ - usdcFeedAt) / USDC_FEED_HEARTBEAT_SEC * USDC_FEED_HEARTBEAT_SEC;
             MockAggregator(FEED_USDC).setRound(8, 1e8, usdcFeedAt, usdcFeedAt);
         }
-        MockAggregator(FEED_SEQUENCER).setRound(0, 0, sequencerUpSince, now_);
+        MockAggregator(FEED_SEQUENCER)
+            .setRound(0, seqAnswer, seqStartedAt == 0 ? sequencerUpSince : seqStartedAt, now_);
     }
 
     /// @notice Deviation rounds: right after a walk step, each feed whose answer is more than its threshold from the
@@ -303,6 +324,7 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
 
     /// @notice The keeper's call at the end of window k (epoch k − 1 closed an hour ago), if anything is settleable.
     function _scheduledSettle(uint256 k) internal {
+        if (keeperStopped) return;
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
         if (check == SettleCheck.Window) {
@@ -311,19 +333,33 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         }
         bool fresh = queue.epochRequests(uint64(k - 1)).length != 0;
         uint16 out = _settleAttempt(fresh ? ATT_FIRST : ATT_CONTINUE);
-        retryDue = !_settled(out);
+        retryDue = !_settled(out) && _pendingClosedEpoch();
     }
 
     /// @notice At a slot start: retry a call that failed, while something is settleable.
     function _retrySettle() internal {
-        if (!retryDue) return;
+        if (keeperStopped || !retryDue) return;
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
         if (check == SettleCheck.Window) {
             retryDue = false;
             return;
         }
-        retryDue = !_settled(_settleAttempt(ATT_RETRY));
+        retryDue = !_settled(_settleAttempt(ATT_RETRY)) && _pendingClosedEpoch();
+    }
+
+    /// @notice A sim request is open (Pending) in an epoch that has closed: a round has real work. `checkSettle` also
+    ///         reports work for an empty deposit bucket that has not yet expired (`FlowMatchLib.hasPendingForRound`
+    ///         tests `activeDepBuckets[i] >= cur` without `depPoolUsdc != 0`), so a call with no request behind it is
+    ///         sent at the window end but is not retried.
+    function _pendingClosedEpoch() internal view returns (bool) {
+        uint64 cur = queue.currentEpoch();
+        for (uint256 i; i < reqs.length; ++i) {
+            if (reqs[i].doneAt != 0) continue;
+            if (queue.requestStatus(reqs[i].id) != RequestStatus.Pending) continue;
+            if (queue.getRequest(reqs[i].id).epoch < cur) return true;
+        }
+        return false;
     }
 
     /// @notice No revert and no failed side.
@@ -480,10 +516,13 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
                 (bytes4 sel, uint256 w0,,) = _words(reason);
                 a.detail = uint256(uint32(sel));
                 a.index = w0;
+            } else if (t0 == IFlowEvents.DepositStoppedForRound.selector) {
+                ++depositStops;
             } else if (t0 == IFlowEvents.Settled.selector) {
                 _bookSettlement(sid, logs[i].data, v);
             }
         }
+        if (sid != 0) _bookMatched(lastMatchPrice, v);
         _markDone();
         if (depFailed && redFailed) return OUT_BOTH_FAILED;
         if (depFailed) return OUT_DEP_FAILED;
@@ -526,9 +565,15 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     }
 
     function _bookSettlement(uint256 sid, bytes memory data, Basis memory v) internal {
-        (,,, uint256 usdcIn, uint256 minted, uint256 burned, uint256 usdcOut) = abi.decode(
-            data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256)
-        );
+        (
+            uint256 matchPrice,
+            uint256 matchedShares,
+            uint256 matchedUsdc,
+            uint256 usdcIn,
+            uint256 minted,
+            uint256 burned,
+            uint256 usdcOut
+        ) = abi.decode(data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256));
         SettleRec memory s;
         s.at = uint64(vm.getBlockTimestamp());
         s.settlementId = sid;
@@ -539,20 +584,63 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         s.redFairFeed = burned.mulDiv(v.navFeed, v.supply);
         s.redFairRef = burned.mulDiv(v.navRef, v.supply);
         s.navFeed = v.navFeed;
+        s.matchedShares = matchedShares;
+        s.matchedUsdc = matchedUsdc;
+        s.matchPrice = matchPrice;
         settles.push(s);
+        lastMatchPrice = matchPrice;
         (uint256 nf,, uint256 sup) = _navFeedRef();
         lastSettlePx = sup == 0 ? 0 : nf.mulDiv(PRICE_SCALE, sup);
         lastSettleAt = vm.getBlockTimestamp();
         lastLendRate = _lendRates();
     }
 
-    /// @dev Mark every open sim request the queue now reports closed.
+    /// @dev Step 3f: a matched fill is booked in the queue's own books (E24, E52) and emits no per-request event. Read
+    ///      each open sim request's remainder through the queue's views (`pending*Request`: the remainder while
+    ///      Pending, 0 once Closed). What left the remainder and no `DepositFilled` / `RedeemFilled` covered was
+    ///      matched, at the match price: a deposit fill spent `u` USDC for `u / price` shares, a redemption fill burned
+    ///      `s` shares for `s x price` USDC (before the exit fee, which the cost leaves out as for net fills).
+    function _bookMatched(uint256 matchPrice, Basis memory v) internal {
+        uint256 n = reqs.length;
+        for (uint256 i; i < n; ++i) {
+            ReqRec storage r = reqs[i];
+            if (r.doneAt != 0) continue;
+            Request memory q = queue.getRequest(r.id);
+            uint256 rem = r.isDeposit
+                ? queue.pendingDepositRequest(r.id, q.owner)
+                : queue.pendingRedeemRequest(r.id, q.owner);
+            if (queue.requestStatus(r.id) == RequestStatus.Expired) continue;
+            uint256 total = r.amount > rem ? r.amount - rem : 0;
+            if (total <= r.filled + r.matched) continue;
+            uint256 extra = total - r.filled - r.matched;
+            r.matched += extra;
+            if (matchPrice == 0 || v.supply == 0) continue;
+            if (r.isDeposit) {
+                uint256 shares = extra.mulDiv(PRICE_SCALE, matchPrice);
+                r.basis += extra;
+                r.costFeed += int256(extra) - int256(shares.mulDiv(v.navFeed, v.supply));
+                r.costRef += int256(extra) - int256(shares.mulDiv(v.navRef, v.supply));
+                r.unlockAt = uint64(vm.getBlockTimestamp() + q.minHold);
+            } else {
+                uint256 gross = extra.mulDiv(matchPrice, PRICE_SCALE);
+                uint256 fairFeed = extra.mulDiv(v.navFeed, v.supply);
+                r.basis += fairFeed;
+                r.costFeed += int256(fairFeed) - int256(gross);
+                r.costRef += int256(extra.mulDiv(v.navRef, v.supply)) - int256(gross);
+            }
+            if (r.firstFillAt == 0) r.firstFillAt = uint64(vm.getBlockTimestamp());
+            ++r.fills;
+        }
+    }
+
+    /// @dev Mark every open sim request the queue now reports closed. A matched fill is read through the queue's
+    ///      views, so `requestStatus` (not the stored flag) is the test.
     function _markDone() internal {
         uint256 n = reqs.length;
         for (uint256 i; i < n; ++i) {
             ReqRec storage r = reqs[i];
             if (r.doneAt != 0 || r.fills == 0) continue;
-            if (queue.getRequest(r.id).closed) r.doneAt = uint64(vm.getBlockTimestamp());
+            if (queue.requestStatus(r.id) == RequestStatus.Closed) r.doneAt = uint64(vm.getBlockTimestamp());
         }
     }
 

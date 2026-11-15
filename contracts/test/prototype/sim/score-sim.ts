@@ -129,7 +129,6 @@ const timed = timedFiles > 0;
 // §5.9.5 FlowParams). A timed "default" run with no tag must read exactly these back.
 const DEFAULT_PARAMS_TIMED: Record<string, unknown> = {
   stepInterval: 1800,
-  keeperGrace: 21600,
   maxOverrun: 604800,
   maxStepCostBps: 50,
   toleranceBps: 50,
@@ -749,7 +748,7 @@ if (timed) {
       minRequestUsdc: { value: (fp.minRequestUsdc ?? NaN) / 1e6, observed: "normalRange.requestUsdc (low tail)" },
       maxRoll: { value: fp.maxRoll, observed: "requests.expired" },
       epochLength_settleWindow_minHold: { value: [fp.epochLength, fp.settleWindow, fp.minHold], observed: "g9.redeemWaitH, depositWaitH" },
-      notMeasured: "sequencerGrace, usdcPegBandBps, maxFeedAge, keeperGrace, maxFreeze, poolShareBps, minSeedUsdc: the sim models no outage, depeg, absent keeper or freeze",
+      notMeasured: "sequencerGrace, usdcPegBandBps, maxFeedAge, maxFreeze, maxPause, poolShareBps, minSeedUsdc: this scored run has no outage, depeg, stopped keeper, pause or freeze. TimedFlowFaultSimTest (E48) runs them and writes out/prototype/<run>-timed-e48/e48-*.json",
     },
   };
 }
