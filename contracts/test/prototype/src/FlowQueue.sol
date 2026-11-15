@@ -60,6 +60,7 @@ import {
     LEG_PRICE_FEED_ONLY
 } from "./FlowTypes.sol";
 import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
+import {IExactOutSwapAdapter} from "./interfaces/IFlowAdapters.sol";
 import {IRobotMoneyFundFull} from "./interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState, FlowStorage, WalkCursor} from "./lib/FlowStorage.sol";
 import {FlowCheckLib} from "./lib/FlowCheckLib.sol";
@@ -334,6 +335,7 @@ contract FlowQueue is
                 _hasActiveBasket(f)
                     && p.legBandBps <= f.maxPoolFeeBps() + f.feeMarginBps()
             ) revert FlowParamOutOfBounds(14);
+            _requireFundedPoolsFixedFee(f);
         }
         if (p.sequencerGrace > MAX_SEQUENCER_GRACE) revert FlowParamOutOfBounds(15);
         if (p.usdcPegBandBps == 0 || p.usdcPegBandBps > MAX_USDC_PEG_BAND_BPS) {
@@ -360,6 +362,22 @@ contract FlowQueue is
             if (cfgs[i].active && cfgs[i].kind == AssetKind.Basket) return true;
         }
         return false;
+    }
+
+    /// @dev Rule 6 (E43, plan section 3.3 item 4): every basket asset the plan funds must sit on a fixed-fee pool.
+    ///      An unfunded asset (target 0) is exempt, as it is at plan open.
+    function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view {
+        AssetConfig[] memory cfgs = f.assetConfigs();
+        uint16[] memory targets = f.targetBps();
+        for (uint256 i; i < cfgs.length; ++i) {
+            if (!cfgs[i].active || cfgs[i].kind != AssetKind.Basket) continue;
+            if (i >= targets.length || targets[i] == 0) continue;
+            bool fixedFee;
+            try IExactOutSwapAdapter(cfgs[i].adapter).isFixedFeePool(cfgs[i].pool) returns (bool b) {
+                fixedFee = b;
+            } catch {}
+            if (!fixedFee) revert FlowParamOutOfBounds(14);
+        }
     }
 
     function setFlowLevers(FlowLevers calldata l) external onlyRole(ADMIN_ROLE) nonReentrant {

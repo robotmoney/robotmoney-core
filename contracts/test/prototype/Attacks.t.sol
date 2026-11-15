@@ -3069,7 +3069,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         mech.setPoolFeeBps(5);
         setTargetViaTimelock(bucketVec(0, 10_000), PlanParams(1 days, 500));
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.closePlan, ()));
+        // The unwind is the Safe's own sale into the pool. Its cost (pool fee and impact against the reference
+        // price) is measured here, and G8 below allows exactly that much on top of the 1 bps bound.
+        uint256 unwindWeth = IERC20(WETH).balanceOf(address(fund));
+        uint256 unwindIdle = fund.idleUsdc();
         timelockExecute(address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH));
+        uint256 unwindRef = unwindWeth.mulDiv(refWeth, 1e18);
+        uint256 unwindGot = fund.idleUsdc() - unwindIdle;
+        uint256 unwindCost = unwindRef > unwindGot ? unwindRef - unwindGot : 0;
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.deactivateAsset, (IDX_WETH)));
         refreshFeeds();
 
@@ -3087,7 +3094,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         fund.addAsset(wethCfg);
         mech.setPoolFeeBps(5);
         AttackPnl memory r = _end("A35: unsafe pool fee refused at admission and funding", false);
-        _assertG8("A35: unsafe pool fee refused at admission and funding", r);
+        _assertG8AfterSale("A35: unsafe pool fee refused at admission and funding", r, unwindCost);
     }
 
     /// @notice A36: round cut in two — pause, sequencer outage, and 5% market move between two `settle` calls of

@@ -689,4 +689,61 @@ contract FundCoreTest is PrototypeHarness {
         vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PauseOnCooldown.selector, cd));
         fund.pauseRebalance();
     }
+
+    /// @notice `emergencyUnwind(asset)` sells a basket leg with a floor of the feed price times `1 - delistBandBps`
+    ///         (plan section 3.3). A feed far above the pool refuses the sale. A feed on the pool lets it run.
+    function test_step3f_emergencyUnwindAsset_floorsAtFeedLessDelistBand() public fixtureCovered {
+        _seedAndInvest();
+        uint256 wethBefore = IERC20(WETH).balanceOf(address(fund));
+        assertGt(wethBefore, 0, "weth held");
+        uint256 pool8 = poolPrice8(WETH_POOL, WETH);
+        // Feed 10% above the pool: the pool pays about 9% under the feed, past the 3% band.
+        setFeedPrice(IDX_WETH, pool8 * 110 / 100);
+        bytes memory data = abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH);
+        bytes32 salt = keccak256("floor-unwind");
+        timelock.schedule(address(fund), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        refreshFeeds();
+        vm.expectRevert();
+        timelock.execute(address(fund), 0, data, bytes32(0), salt);
+        assertEq(IERC20(WETH).balanceOf(address(fund)), wethBefore, "refused sale sold nothing");
+
+        // Feed on the pool: the same call sells the whole leg.
+        setFeedPrice(IDX_WETH, pool8);
+        timelock.execute(address(fund), 0, data, bytes32(0), salt);
+        assertEq(IERC20(WETH).balanceOf(address(fund)), 0, "weth unwound inside the floor");
+    }
+
+    /// @notice Rule 6 on `setFlowParams` (plan section 3.3 item 4): a funded basket pool that is not fixed-fee
+    ///         refuses new flow params, and so does a `legBandBps` at or under pool fee plus margin.
+    function test_step3f_setFlowParams_rechecksRule6() public fixtureCovered {
+        _seedAndInvest();
+        FlowParams memory p = defaultFlowParams();
+        uint256 floorBand = fund.maxPoolFeeBps() + fund.feeMarginBps();
+        p.legBandBps = uint16(floorBand + 1);
+        vm.prank(address(timelock));
+        queue.setFlowParams(p); // one above the floor is allowed
+        p.legBandBps = uint16(floorBand);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 14));
+        queue.setFlowParams(p);
+
+        MechSwapAdapter mech = new MechSwapAdapter(ROUTER);
+        vm.etch(address(swapAdapter), address(mech).code);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(swapAdapter).codehash, true)
+            )
+        );
+        MechSwapAdapter mocked = MechSwapAdapter(address(swapAdapter));
+        mocked.setFixedFeePool(false);
+        p.legBandBps = defaultFlowParams().legBandBps;
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 14));
+        queue.setFlowParams(p);
+        mocked.setFixedFeePool(true);
+        vm.prank(address(timelock));
+        queue.setFlowParams(p);
+    }
 }

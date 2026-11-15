@@ -7,6 +7,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../../../../interfaces/IStrategyAdapter.sol";
@@ -690,7 +691,15 @@ library FundFlowsLib {
             if (inSaleNow) FundDelistLib.closeDelistSale(s, index);
             return;
         }
-        (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, s.usdc, totalTok, 0);
+        // Floor: the feed price less `delistBandBps` (plan section 3.3). A stale feed leaves no floor, so the unwind
+        // can still run when the feeds are what failed.
+        uint256 floor;
+        (bool feedOk,, uint256 feedPx) = FundValuationLib.feedPricePerToken(s, index);
+        if (feedOk) {
+            floor = totalTok.mulDiv(feedPx, 10 ** IERC20Metadata(a.token).decimals())
+                .mulDiv(BPS - s.delistBandBps, BPS);
+        }
+        (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, s.usdc, totalTok, floor);
         if (inSaleNow) {
             FundDelistLib.finalizeDelistSale(s, index, sold, usdcGot, 0, fundTok, claimTok, false);
         }
