@@ -102,7 +102,8 @@
       "mapping(address owner => uint256[]) ownerActiveRedReqs;",
       "mapping(address owner => uint256) ownerUnenrolledRedShares;",
       "mapping(uint64 roundEpoch => uint256[]) noticeRequestsByRound;",
-      "uint64[] pendingNoticeRounds;"
+      "uint64[] pendingNoticeRounds;",
+      "uint32 maxDepositMinHold;"
     ],
     "robotmoney.storage.GovernedUUPS": [
       "address upgradeTimelock;",
