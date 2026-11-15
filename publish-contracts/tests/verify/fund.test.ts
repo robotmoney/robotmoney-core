@@ -251,15 +251,28 @@ class FakeFundChain implements ChainReader {
   overrides = new Map<string, (args: unknown[]) => unknown>();
 
   fundState: FundActiveState = {
-    requestCount: 12n,
-    claimCount: 7n,
-    settlementCount: 4n,
+    requestCount: 2n,
+    claimCount: 1n,
+    settlementCount: 1n,
     books: [100n, 200n, 300n, 4n, 500n, 600n, 700n, 8n],
     lastBasketStepAt: 1_700_000_123n,
     isShutdown: false,
     depositsPaused: false,
     queuePaused: false,
+    windDownActive: false,
+    depositsPausedUntil: 0n,
+    rebalancePausedUntil: 0n,
+    queuePausedUntil: 0n,
+    matchIndexes: { dep: [3n, 0n], red: [1n, 1_000_000_000_000_000_000n] },
+    freezes: [{ id: 1n, frozenUntil: 0n, freezeSetAt: 0n }],
+    requests: [],
+    claims: [],
   };
+  /** The contents getRequest / getClaim return, by id (1-based). */
+  requestBodies: Record<string, unknown>[] = [{ owner: A(0x71), amount: 5n, remaining: 5n, closed: false }, { owner: A(0x72), amount: 9n, remaining: 0n, closed: true }];
+  claimBodies: Record<string, unknown>[] = [{ owner: A(0x71), shares: 3n, usdc: 4n, claimed: 0n }];
+  /** Set false to model a build before Step 3f: the new getters revert. */
+  step3fGetters = true;
 
   constructor(private readonly sheet: VerifySheet) {
     this.codes.set(lc(USDC_ADDRESS), USDC_CODE);
@@ -398,6 +411,10 @@ class FakeFundChain implements ChainReader {
       if (fn === "maxBasketBps") return f.params.FUND_MAX_BASKET_BPS;
       if (fn === "isShutdown") return this.fundState.isShutdown;
       if (fn === "depositsPaused") return this.fundState.depositsPaused;
+      if (fn === "depositsPausedUntil" || fn === "rebalancePausedUntil") {
+        if (!this.step3fGetters) throw new Error("execution reverted");
+        return fn === "depositsPausedUntil" ? this.fundState.depositsPausedUntil : this.fundState.rebalancePausedUntil;
+      }
       if (fn === "lastBasketStepAt") {
         if (this.failFundLastBasketStepAt) throw new Error("execution reverted");
         return this.fundState.lastBasketStepAt;
@@ -436,6 +453,13 @@ class FakeFundChain implements ChainReader {
       if (fn === "settlementCount") return this.fundState.settlementCount;
       if (fn === "books") return this.fundState.books;
       if (fn === "queuePaused") return this.fundState.queuePaused;
+      if (["queuePausedUntil", "liveness", "currentMatchIndexes"].includes(fn) && !this.step3fGetters) throw new Error("execution reverted");
+      if (fn === "queuePausedUntil") return this.fundState.queuePausedUntil;
+      if (fn === "liveness") return { keeperConfigured: true, queuePausedNow: this.fundState.queuePaused, queuePausedUntil: this.fundState.queuePausedUntil, windDownActive: this.fundState.windDownActive };
+      if (fn === "currentMatchIndexes") return { depIdx: this.fundState.matchIndexes!.dep, redIdx: this.fundState.matchIndexes!.red };
+      if (fn === "getRequest") return this.requestBodies[Number(args[0]) - 1];
+      if (fn === "getClaim") return this.claimBodies[Number(args[0]) - 1];
+      if (fn === "getSettlement") return this.fundState.freezes![Number(args[0]) - 1];
     }
 
     throw new Error(`FakeFundChain: unhandled read ${fn} on ${address}`);
@@ -586,6 +610,30 @@ describe("verifyFundSystem negative coverage (DEP-01..03, E47)", () => {
     expect(safeFails).toContain("safe: fallback handler equals expected");
   });
 
+  test("rejects one extra holder of each exclusive role (E47, DEP-03): proposer, ADMIN, EMERGENCY, FLOW, REBALANCER, GOVERNANCE", async () => {
+    const intruder = A(0xe771);
+    const cases: [string, Address, Hex, Address[], string][] = [
+      ["timelock proposer", TIMELOCK, FUND_ROLES.PROPOSER, [SAFE, intruder], "timelock: PROPOSER_ROLE held exclusively by the Safe"],
+      ["fund ADMIN", FUND, ADMIN_ROLE, [TIMELOCK, intruder], "fund: ADMIN_ROLE held exclusively by the timelock"],
+      ["queue ADMIN", QUEUE, ADMIN_ROLE, [TIMELOCK, intruder], "queue: ADMIN_ROLE held exclusively by the timelock"],
+      ["fund EMERGENCY", FUND, FUND_ROLES.EMERGENCY, [EMERGENCY, intruder], "fund: EMERGENCY_ROLE held exclusively by the emergency key"],
+      ["queue EMERGENCY", QUEUE, FUND_ROLES.EMERGENCY, [EMERGENCY, intruder], "queue: EMERGENCY_ROLE held exclusively by the emergency key"],
+      ["fund FLOW", FUND, FUND_ROLES.FLOW, [QUEUE, intruder], "fund: FLOW_ROLE held exclusively by the queue"],
+      ["fund REBALANCER", FUND, FUND_ROLES.REBALANCER, [REBALANCER, intruder], "fund: REBALANCER_ROLE held exclusively by the rebalancer"],
+      ["fund GOVERNANCE", FUND, FUND_ROLES.GOVERNANCE, [GOVERNANCE, intruder], "fund: GOVERNANCE_ROLE held exclusively by governance"],
+    ];
+    // the clean fixture passes every one of these checks
+    const clean = await failedLabels(makeFixture().opts);
+    expect(clean).toEqual([]);
+    for (const [name, contract, role, holders, label] of cases) {
+      const f = makeFixture();
+      f.chain.setRole(contract, role, holders);
+      const fails = await failedLabels(f.opts);
+      expect(fails.some((x) => x.startsWith(label)), `${name} must fail '${label}'`).toBe(true);
+      expect(fails.some((x) => x.includes(lc(intruder))), `${name} detail names the intruder`).toBe(true);
+    }
+  });
+
   test("rejects keeper EOA/smart-account mismatches and Step 3f parameter drift", async () => {
     const fEoa = makeFixture({ keeperType: "eoa" });
     fEoa.chain.codes.set(lc(KEEPER), "0x6080");
@@ -668,7 +716,7 @@ describe("readFundActiveState and verifyFundUpgradeSafety (ARCH-08)", () => {
   test("reads active state from Fund or falls back to Rebalancer.lastBasketStepAt(), and passes identical pre/post upgrade checks", async () => {
     const { artifactsDir, chain } = makeFixture();
     const s1 = await readFundActiveState(chain, addresses);
-    expect(s1.requestCount).toBe(12n);
+    expect(s1.requestCount).toBe(2n);
     expect(s1.books).toEqual([100n, 200n, 300n, 4n, 500n, 600n, 700n, 8n]);
 
     // Fallback to rebalancer.lastBasketStepAt() when fund.lastBasketStepAt() reverts
@@ -726,5 +774,64 @@ describe("readFundActiveState and verifyFundUpgradeSafety (ARCH-08)", () => {
     expect(failed).toContain("fund upgrade: claimCount() preserved");
     expect(failed).toContain("fund upgrade: books() preserved");
     expect(failed).toContain("fund upgrade: depositsPaused() preserved");
+  });
+});
+
+describe("after-upgrade state comparison covers Step 3f state (E47, ARCH-08)", () => {
+  const addresses = { fund: FUND, queue: QUEUE, rebalancer: REBALANCER, governance: GOVERNANCE, receipt: RECEIPT };
+  const run = async (mutate: (chain: FakeFundChain) => void) => {
+    const { artifactsDir, chain } = makeFixture();
+    const pre = await readFundActiveState(chain, addresses);
+    mutate(chain);
+    const report = await verifyFundUpgradeSafety({ chain, timelock: TIMELOCK, addresses, preState: pre, artifactsDir });
+    return { pre, report, failed: report.checks.filter((c) => !c.ok).map((c) => c.label) };
+  };
+
+  test("reads match indexes, freezes, windDown, pause ends, and request and claim contents", async () => {
+    const { chain } = makeFixture();
+    const s = await readFundActiveState(chain, addresses);
+    expect(s.matchIndexes).toEqual({ dep: [3n, 0n], red: [1n, 1_000_000_000_000_000_000n] });
+    expect(s.freezes).toEqual([{ id: 1n, frozenUntil: 0n, freezeSetAt: 0n }]);
+    expect(s.windDownActive).toBe(false);
+    expect(s.depositsPausedUntil).toBe(0n);
+    expect(s.requests?.length).toBe(2);
+    expect(s.claims?.length).toBe(1);
+  });
+
+  test("an unchanged state passes", async () => {
+    expect((await run(() => {})).failed).toEqual([]);
+  });
+
+  for (const [name, label, mutate] of [
+    ["a match index", "currentMatchIndexes() preserved", (c: FakeFundChain) => { c.fundState.matchIndexes = { dep: [4n, 0n], red: [1n, 1_000_000_000_000_000_000n] }; }],
+    ["a redeem match factor", "currentMatchIndexes() preserved", (c: FakeFundChain) => { c.fundState.matchIndexes = { dep: [3n, 0n], red: [1n, 5n] }; }],
+    ["a freeze", "settlement freezes (frozenUntil, freezeSetAt) preserved", (c: FakeFundChain) => { c.fundState.freezes = [{ id: 1n, frozenUntil: 99n, freezeSetAt: 50n }]; }],
+    ["windDown", "windDown (queue liveness().windDownActive) preserved", (c: FakeFundChain) => { c.fundState.windDownActive = true; }],
+    ["isShutdown", "isShutdown() preserved", (c: FakeFundChain) => { c.fundState.isShutdown = true; }],
+    ["a deposits pause end", "depositsPausedUntil() preserved", (c: FakeFundChain) => { c.fundState.depositsPausedUntil = 123n; }],
+    ["a rebalance pause end", "rebalancePausedUntil() preserved", (c: FakeFundChain) => { c.fundState.rebalancePausedUntil = 123n; }],
+    ["a queue pause end", "queuePausedUntil() preserved", (c: FakeFundChain) => { c.fundState.queuePausedUntil = 123n; }],
+    ["a request's contents", "request contents preserved", (c: FakeFundChain) => { c.requestBodies[1] = { owner: A(0x72), amount: 9n, remaining: 9n, closed: false }; }],
+    ["a claim's contents", "claim contents preserved", (c: FakeFundChain) => { c.claimBodies[0] = { owner: A(0x71), shares: 3n, usdc: 4n, claimed: 4n }; }],
+  ] as const) {
+    test(`fails when ${name} changes across the upgrade`, async () => {
+      const { failed } = await run(mutate);
+      expect(failed.some((l) => l.includes(label)), failed.join(" | ")).toBe(true);
+    });
+  }
+
+  test("a field the deployed build cannot read is skipped, one the upgrade loses is a failure", async () => {
+    // before Step 3f: the getters revert, so only the old fields are compared
+    const old = makeFixture();
+    old.chain.step3fGetters = false;
+    const pre = await readFundActiveState(old.chain, addresses);
+    expect(pre.matchIndexes).toBeUndefined();
+    expect((await verifyFundUpgradeSafety({ chain: old.chain, timelock: TIMELOCK, addresses, preState: pre, artifactsDir: old.artifactsDir })).checks.filter((c) => !c.ok)).toEqual([]);
+    // after the upgrade the getter that worked before reverts: that fails
+    const lost = makeFixture();
+    const pre2 = await readFundActiveState(lost.chain, addresses);
+    lost.chain.step3fGetters = false;
+    const rep = await verifyFundUpgradeSafety({ chain: lost.chain, timelock: TIMELOCK, addresses, preState: pre2, artifactsDir: lost.artifactsDir });
+    expect(rep.checks.filter((c) => !c.ok).map((c) => c.label)).toContain("fund upgrade: currentMatchIndexes() preserved");
   });
 });

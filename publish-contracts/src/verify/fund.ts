@@ -408,6 +408,19 @@ export interface FundActiveState {
   isShutdown: boolean;
   depositsPaused: boolean;
   queuePaused: boolean;
+  /** `queue.liveness().windDownActive`: the queue's own view of WindDown (agrees with `isShutdown`). */
+  windDownActive?: boolean;
+  /** Pause end times (`depositsPausedUntil`, `rebalancePausedUntil`, `queuePausedUntil`). Undefined when the build lacks the getter (a build before Step 3f). */
+  depositsPausedUntil?: bigint;
+  rebalancePausedUntil?: bigint;
+  queuePausedUntil?: bigint;
+  /** `queue.currentMatchIndexes()`: the deposit and redeem match indexes. Undefined on a build without it. */
+  matchIndexes?: { dep: [bigint, bigint]; red: [bigint, bigint] };
+  /** Every settlement's freeze: `frozenUntil` and `freezeSetAt`, by settlement id (ids start at 1). */
+  freezes?: { id: bigint; frozenUntil: bigint; freezeSetAt: bigint }[];
+  /** Every request's and claim's full contents, canonical JSON, index `i` is id `i + 1` (ids start at 1). */
+  requests?: string[];
+  claims?: string[];
 }
 
 export interface FundLayoutPair {
@@ -445,6 +458,33 @@ const normalizeBooks = (raw: unknown): FundActiveState["books"] => {
   return BOOK_KEYS.map((k) => BigInt(obj[k]!)) as FundActiveState["books"];
 };
 
+/** Canonical JSON of a decoded struct: bigints as decimal strings, object keys sorted, so two reads of equal contents are equal strings. */
+export function canonicalJson(v: unknown): string {
+  if (typeof v === "bigint") return JSON.stringify(v.toString());
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    const keys = Object.keys(o).filter((k) => !/^\d+$/.test(k)).sort();
+    return keys.length === 0 ? "[]" : `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+/** One read that a build may not have: a revert is `undefined` (a build before Step 3f), an RPC failure still throws. */
+async function tryRead(chain: ChainReader, at: Address, sig: string, args: unknown[] = []): Promise<unknown | undefined> {
+  try {
+    return await chain.read(at, sig, args);
+  } catch (e) {
+    if (isRpcFailure(e)) throw e;
+    return undefined;
+  }
+}
+
+const REQUEST_SIG = "function getRequest(uint256 requestId) view returns ((address owner, uint8 kind, uint64 epoch, uint256 amount, uint256 remaining, bool closed, uint16 exitFeeBps, uint32 minHold, uint16 maxRoll, uint64 createdAt, uint64 expiryEpoch, uint64 expiresAt, uint64 noticeRound, uint64 era, bool enrolled, uint256 matchCycle, uint256 normBasis, uint256 entryCumScaled, uint256 entryUnmatchedFactor, uint256 nextMatchId))";
+const CLAIM_SIG = "function getClaim(uint256 claimId) view returns ((uint256 requestId, address owner, uint8 kind, uint64 settlementId, uint64 unlockAt, uint256 shares, uint256 usdc, uint256 claimed, uint256 sharesClaimed))";
+const SETTLEMENT_SIG = "function getSettlement(uint256 settlementId) view returns ((uint64 time, address settler, uint256 matchedShares, uint256 matchedUsdc, uint256 matchSharePrice, uint256 usdcIn, uint256 sharesMinted, uint256 sharesBurned, uint256 usdcOut, uint64 frozenUntil, uint64 freezeSetAt, uint64 holdEndsAt))";
+const bigOf = (x: unknown): bigint | undefined => (x === undefined ? undefined : BigInt(x as bigint | number));
+
 /** Read active on-chain queue and fund state before or after a governed UUPS upgrade (`ARCH-08`). */
 export async function readFundActiveState(
   chain: ChainReader,
@@ -466,6 +506,20 @@ export async function readFundActiveState(
     if (isRpcFailure(e) || !addresses.rebalancer) throw e;
     lastBasketStepAtRaw = await chain.read(addresses.rebalancer, "function lastBasketStepAt() view returns (uint256)");
   }
+  const [dUntil, rUntil, qUntil, liveness, idx] = await Promise.all([
+    tryRead(chain, addresses.fund, "function depositsPausedUntil() view returns (uint64)"),
+    tryRead(chain, addresses.fund, "function rebalancePausedUntil() view returns (uint64)"),
+    tryRead(chain, addresses.queue, "function queuePausedUntil() view returns (uint64)"),
+    tryRead(chain, addresses.queue, "function liveness() view returns ((bool keeperConfigured, bool queuePausedNow, uint64 queuePausedUntil, bool windDownActive))"),
+    tryRead(chain, addresses.queue, "function currentMatchIndexes() view returns (uint256[2] depIdx, uint256[2] redIdx)"),
+  ]);
+  const nReq = Number(requestCount as bigint | number), nClaim = Number(claimCount as bigint | number), nSet = Number(settlementCount as bigint | number);
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => BigInt(i + 1));
+  const requests = (await Promise.all(ids(nReq).map((id) => chain.read(addresses.queue, REQUEST_SIG, [id])))).map(canonicalJson);
+  const claims = (await Promise.all(ids(nClaim).map((id) => chain.read(addresses.queue, CLAIM_SIG, [id])))).map(canonicalJson);
+  const settlements = await Promise.all(ids(nSet).map(async (id) => [id, (await chain.read(addresses.queue, SETTLEMENT_SIG, [id])) as Record<string, bigint | number>] as const));
+  const pair = (x: unknown): [bigint, bigint] => [BigInt((x as (bigint | number)[])[0]!), BigInt((x as (bigint | number)[])[1]!)];
+  const idxObj = idx as { depIdx?: unknown; redIdx?: unknown } & unknown[] | undefined;
   return {
     requestCount: BigInt(requestCount as bigint | number),
     claimCount: BigInt(claimCount as bigint | number),
@@ -475,6 +529,14 @@ export async function readFundActiveState(
     isShutdown: Boolean(isShutdown),
     depositsPaused: Boolean(depositsPaused),
     queuePaused: Boolean(queuePaused),
+    windDownActive: liveness === undefined ? undefined : Boolean((liveness as { windDownActive: boolean }).windDownActive),
+    depositsPausedUntil: bigOf(dUntil),
+    rebalancePausedUntil: bigOf(rUntil),
+    queuePausedUntil: bigOf(qUntil),
+    matchIndexes: idxObj === undefined ? undefined : { dep: pair(idxObj.depIdx ?? idxObj[0]), red: pair(idxObj.redIdx ?? idxObj[1]) },
+    freezes: settlements.map(([id, st]) => ({ id, frozenUntil: BigInt(st.frozenUntil!), freezeSetAt: BigInt(st.freezeSetAt!) })),
+    requests,
+    claims,
   };
 }
 
@@ -533,5 +595,22 @@ export async function verifyFundUpgradeSafety(opts: FundUpgradeSafetyOptions): P
   c.eq("fund upgrade: isShutdown() preserved", post.isShutdown, pre.isShutdown);
   c.eq("fund upgrade: depositsPaused() preserved", post.depositsPaused, pre.depositsPaused);
   c.eq("fund upgrade: queuePaused() preserved", post.queuePaused, pre.queuePaused);
+  // Step 3f state (E47, ARCH-08). A field the deployed build cannot read is not compared; one the build could read and the upgrade lost is a failure.
+  const keep = (label: string, pre1: unknown, post1: unknown): void => {
+    if (pre1 === undefined) return;
+    c.eq(`fund upgrade: ${label} preserved`, post1 === undefined ? "unreadable after the upgrade" : canonicalJson(post1), canonicalJson(pre1));
+  };
+  keep("windDown (queue liveness().windDownActive)", pre.windDownActive, post.windDownActive);
+  keep("depositsPausedUntil()", pre.depositsPausedUntil, post.depositsPausedUntil);
+  keep("rebalancePausedUntil()", pre.rebalancePausedUntil, post.rebalancePausedUntil);
+  keep("queuePausedUntil()", pre.queuePausedUntil, post.queuePausedUntil);
+  keep("currentMatchIndexes()", pre.matchIndexes, post.matchIndexes);
+  keep("settlement freezes (frozenUntil, freezeSetAt)", pre.freezes, post.freezes);
+  for (const [label, a, b] of [["request", pre.requests, post.requests], ["claim", pre.claims, post.claims]] as const) {
+    if (a === undefined) continue;
+    const bad = a.map((x, i) => (b?.[i] === x ? null : `${label} ${i + 1}`)).filter((x): x is string => x !== null);
+    if (b !== undefined && b.length > a.length) bad.push(`${b.length - a.length} extra ${label}(s)`);
+    c.push(`fund upgrade: ${label} contents preserved`, bad.length === 0 && b !== undefined, bad.length ? `changed: ${bad.slice(0, 10).join(", ")}` : `${a.length} ${label}(s) identical`);
+  }
   return c.report();
 }
