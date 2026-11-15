@@ -196,7 +196,8 @@ library FundPositionLib {
         }
         uint256 holdersBurned;
         uint256 h0;
-        (gotHolder, holdersBurned, h0) = _takeWithdrawAndApply(s, i, wantHolder, u0, p0);
+        (gotHolder, holdersBurned, h0) =
+            _takeWithdrawAndApply(s, i, wantHolder, u0, p0, ctx.batch);
         if (h0 != 0 && gotHolder < wantHolder) {
             uint256 targetBurned = wantHolder.mulDiv(u0, p0);
             uint256 shortfallUnits = targetBurned > holdersBurned ? targetBurned - holdersBurned : 0;
@@ -241,7 +242,8 @@ library FundPositionLib {
         uint256 i,
         uint256 wantHolder,
         uint256 u0,
-        uint256 p0
+        uint256 p0,
+        bool strict
     ) private returns (uint256 gotHolder, uint256 holdersBurned, uint256 h0) {
         uint256 c0 = s.positionClaimTotal[i];
         h0 = u0 - c0;
@@ -254,9 +256,12 @@ library FundPositionLib {
             got = _tryWithdrawAvailable(s, i, wantTotal);
         }
         uint256 p1 = _valueAfter(s, i, p0, got);
-        // RB-34 / A34: the position may fall only by what arrived (plus venue rounding). A venue that takes more
-        // than it pays would book the exiter's slice as paid; refuse it so the net side fails (check 10).
-        if (p0 > p1 && p0 - p1 > got + LENDING_ROUNDING_UNITS) {
+        // RB-34 / A34, queue path only: one price covers many owners, so a venue that removes more from the position
+        // than it pays (a short pay without a revert) cannot be charged to anyone fairly. Refuse it, so the net side
+        // fails and the round stays open. A single direct seller (`sellForFlow`) books the USDC it received and
+        // carries the venue's shortfall itself: the stayers' units are untouched either way. The margin is the two
+        // units a venue may round against the fund plus the one unit Aave's own rounding adds on a withdrawal.
+        if (strict && p0 > p1 && p0 - p1 > got + LENDING_ROUNDING_UNITS + 1) {
             revert IRobotMoneyFund.ProportionViolated(i, p0, p1 + got, 1, 1);
         }
         {

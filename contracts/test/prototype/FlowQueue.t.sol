@@ -1467,8 +1467,10 @@ contract FlowQueueTest is FlowQueueBase {
         _assertBooks("deposit settled despite pool down");
     }
 
-    /// @notice Check 8: a venue that cannot pay (Aave refuses every withdrawal). Timed redemptions wait; deposits
-    ///         still settle (they only supply).
+    /// @notice Check 8 (step 3f, E36/E37): a venue that cannot pay (Aave refuses every withdrawal). A net redemption
+    ///         does not wait and does not fail: it records a position claim for that venue's part and pays the rest.
+    ///         Deposits still settle (they only supply). The step 3d version of this test expected the redemption
+    ///         side to fail and the request to stay untouched. That was the old semantics, which E37 replaces.
     function test_check8_aVenueThatCannotPay_depositsStillSettle() public fixtureCovered {
         investFund(bucketVec(6_500, 3_500));
         _bobShares = _holder(bob, 50_000e6);
@@ -1484,11 +1486,14 @@ contract FlowQueueTest is FlowQueueBase {
             abi.encodeWithSignature("Error(string)", "32")
         );
         vm.recordLogs();
-        assertEq(_keeperSettle(), 0, "failed redemption records no settlement");
+        uint256 sidRed = _keeperSettle();
         vm.clearMockedCalls();
         (uint256 fails,) = _sideFailed(vm.getRecordedLogs(), RequestKind.Redeem);
-        assertEq(fails, 1, "the redemption side failed");
-        assertEq(queue.getRequest(_redId).remaining, _bobShares / 2, "redemption untouched");
+        assertEq(fails, 0, "the redemption side did not fail");
+        assertGt(queue.getSettlement(sidRed).sharesBurned, 0, "the redemption settled");
+        assertEq(queue.getRequest(_redId).remaining, 0, "redemption filled");
+        (uint256 claimUnits,) = fund.positionClaimOf(IDX_AAVE, bob);
+        assertGt(claimUnits, 0, "bob holds a position claim for Aave's part");
         _assertBooks("venue cannot pay");
 
         vm.revertToState(base);
