@@ -44,6 +44,8 @@ uint32 constant TIMELOCK_DELAY_REFERENCE = 48 hours;
 uint32 constant MIN_MAX_PAUSE = 48 hours;
 uint32 constant MAX_PAUSE_DURATION = 14 days;
 uint32 constant DEFAULT_MAX_PAUSE = 72 hours;
+/// @dev Default match band (bps of NAV, plan 8.5): the whole match books only when TWAP NAV is this close to feed NAV.
+uint16 constant DEFAULT_MATCH_BAND_BPS = 10;
 uint16 constant MAX_EPOCH_FLOW_BPS = 10_000;
 uint128 constant MAX_EPOCH_FLOW_FLOOR_USDC = 100_000_000e6;
 uint16 constant MAX_SHARE_PRICE_MOVE_BPS = 5_000;
@@ -143,6 +145,9 @@ enum SettleCheck {
 /// @param maxLendRateGrowthBps Most growth per day of a venue's rate per unit (10, check 5).
 /// @param cancelBuffer         Seconds before epoch close when `cancel` locks (15 min default, D39).
 /// @param maxPause             Duration (and cooldown for `pauseQueue`/`pauseRebalance`) of self-expiring pauses (72 h, E39).
+/// @param matchBandBps         Match band (plan 8.5 fallback): the whole match books only when the TWAP NAV sits within
+///                             this many bps of the feed NAV. Tighter than `refBandBps`. Outside it the round nets at
+///                             the feed price with no match. Must be at most `refBandBps`.
 struct FlowParams {
     uint32 epochLength;
     uint32 settleWindow;
@@ -164,6 +169,7 @@ struct FlowParams {
     uint16 maxLendRateGrowthBps;
     uint32 cancelBuffer;
     uint32 maxPause;
+    uint16 matchBandBps;
 }
 
 /// @notice `FlowQueue.initialize` parameters.
@@ -408,6 +414,8 @@ interface IFlowEvents {
         uint256 feeUsdc,
         uint256 sharePrice
     );
+    /// @notice The match was not booked: TWAP NAV sat `devBps` from feed NAV, past `matchBandBps`. The round nets at feed.
+    event MatchSkipped(uint64 indexed roundEpoch, uint256 devBps);
     /// @notice Round's first `settle` stopped deposits/matching (`reason`: 1=state stop, 2=lend rate, 3=venue liquidity).
     event DepositStoppedForRound(uint64 indexed epoch, uint8 reason);
 

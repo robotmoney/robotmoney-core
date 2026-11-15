@@ -11,7 +11,8 @@ import {
     FlowParams,
     FlowQueueInit,
     DEFAULT_CANCEL_BUFFER,
-    DEFAULT_MAX_PAUSE
+    DEFAULT_MAX_PAUSE,
+    DEFAULT_MATCH_BAND_BPS
 } from "../test/prototype/src/FlowTypes.sol";
 import {Roles} from "../test/prototype/src/FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
@@ -109,6 +110,9 @@ contract DeployFlowQueue is FundSystemBase {
         );
         f.maxPause =
             uint32(_envUintMaxOrDefault("FLOW_MAX_PAUSE", DEFAULT_MAX_PAUSE, type(uint32).max));
+        f.matchBandBps = uint16(
+            _envUintMaxOrDefault("FLOW_MATCH_BAND_BPS", DEFAULT_MATCH_BAND_BPS, type(uint16).max)
+        );
     }
 
     function _envUintMaxOrDefault(string memory key, uint256 fallbackVal, uint256 max)

@@ -137,6 +137,13 @@ abstract contract FlowQueueBase is PrototypeHarness {
     }
 
     /// @notice Refresh the feeds, then `settle` as the keeper.
+    /// @dev `_settleNow` with the feeds put at the pools' spot first. The match books only when TWAP NAV is within
+    ///      `matchBandBps` of feed NAV, so a test about the match's bookkeeping must start from a world with no noise.
+    function _settleAligned() internal returns (uint256) {
+        alignFeedsToPools();
+        return _settleNow();
+    }
+
     function _settleNow() internal returns (uint256) {
         refreshFeeds();
         return _keeperSettle();
@@ -3681,7 +3688,7 @@ contract FlowQueueTest is FlowQueueBase {
             openRedeemRequest(bob, halfShares);
             warpToSettleable(d1);
             uint256 period = block.timestamp / queue.flowParams().epochLength;
-            uint256 sid = _settleNow();
+            uint256 sid = _settleAligned();
             (uint256 du, uint256 ru) = queue.periodFlow(period);
             assertGt(queue.getSettlement(sid).matchedUsdc, 0, "matched");
             assertLe(du, cap, "depositUsed bounded by cap");

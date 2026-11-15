@@ -5,6 +5,7 @@
 pragma solidity ^0.8.24;
 
 import {Roles} from "./src/FundTypes.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {
     FlowParams,
     IFlowEvents,
@@ -265,6 +266,74 @@ contract FlowQueueGapsTest is FlowQueueBase {
         p.quorum = 8;
         timelockExecute(address(queue), abi.encodeCall(queue.setFlowParams, (p)));
         assertEq(queue.flowParams().slices, 10, "a dividing slice count is accepted");
+    }
+
+    // ───────────────────────────── match band (plan 8.5) ─────────────────────────────
+
+    /// @notice `matchBandBps` is at least 1 and at most `refBandBps` (field 20): a match band wider than the net
+    ///         trade's band would defeat its purpose.
+    function test_matchBand_boundsAreExact() public fixtureCovered {
+        FlowParams memory p = defaultFlowParams();
+        p.matchBandBps = 0;
+        _timelockExpectRevert(
+            address(queue),
+            abi.encodeCall(queue.setFlowParams, (p)),
+            abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 20)
+        );
+        p.matchBandBps = p.refBandBps + 1;
+        _timelockExpectRevert(
+            address(queue),
+            abi.encodeCall(queue.setFlowParams, (p)),
+            abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 20)
+        );
+        p.matchBandBps = p.refBandBps;
+        timelockExecute(address(queue), abi.encodeCall(queue.setFlowParams, (p)));
+        assertEq(queue.flowParams().matchBandBps, p.refBandBps, "the edge is accepted");
+    }
+
+    /// @notice A deposit and a redemption in one round match at the TWAP only while TWAP NAV is within `matchBandBps`
+    ///         of feed NAV. With the feed 60 bps above the pools the round still settles (inside `refBandBps`), the
+    ///         match is skipped with `MatchSkipped`, and the round nets at the feed price. With the feeds at the pools
+    ///         the same round books the match.
+    function test_matchBand_skipsTheMatchWhenTwapLagsTheFeed() public fixtureCovered {
+        investFund(bucketVec(6_500, 3_500));
+        uint256 bobShares = _holder(bob, 120_000e6);
+        coverageCheckpoint();
+        uint256 snap = vm.snapshotState();
+
+        // The feed leads the pools by 60 bps on both basket assets.
+        uint256 d1 = openDepositRequest(alice, 20_000e6);
+        openRedeemRequest(bob, bobShares / 6);
+        warpToSettleable(d1);
+        alignFeedsToPools();
+        setFeedPrice(IDX_WETH, poolPrice8(WETH_POOL, WETH) * 10_060 / 10_000);
+        setFeedPrice(IDX_CBBTC, poolPrice8(CBBTC_POOL, CBBTC) * 10_060 / 10_000);
+        refreshFeeds();
+        vm.recordLogs();
+        uint256 sid = _keeperSettle();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool skipped;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] == IFlowEvents.MatchSkipped.selector) {
+                skipped = true;
+                (uint256 dev) = abi.decode(logs[i].data, (uint256));
+                assertGt(
+                    dev, queue.flowParams().matchBandBps, "the skip names a deviation past the band"
+                );
+            }
+        }
+        assertTrue(skipped, "MatchSkipped is emitted");
+        assertEq(queue.getSettlement(sid).matchedShares, 0, "no match books past the band");
+
+        // Same round, feeds at the pools: the match books.
+        vm.revertToState(snap);
+        uint256 d2 = openDepositRequest(alice, 20_000e6);
+        openRedeemRequest(bob, bobShares / 6);
+        warpToSettleable(d2);
+        alignFeedsToPools();
+        refreshFeeds();
+        sid = _keeperSettle();
+        assertGt(queue.getSettlement(sid).matchedShares, 0, "the match books inside the band");
     }
 
     // ───────────────────────────── E51 reference ─────────────────────────────

@@ -48,7 +48,8 @@ import {
     Request,
     SettleCheck,
     DEFAULT_CANCEL_BUFFER,
-    DEFAULT_MAX_PAUSE
+    DEFAULT_MAX_PAUSE,
+    DEFAULT_MATCH_BAND_BPS
 } from "./src/FlowTypes.sol";
 
 /// @notice The Slipstream pool and factory reads these tests make.
@@ -512,7 +513,8 @@ contract AdaptersTest is BaseFixture {
                                     usdcPegBandBps: 50,
                                     maxLendRateGrowthBps: 10,
                                     cancelBuffer: DEFAULT_CANCEL_BUFFER,
-                                    maxPause: DEFAULT_MAX_PAUSE
+                                    maxPause: DEFAULT_MAX_PAUSE,
+                                    matchBandBps: DEFAULT_MATCH_BAND_BPS
                                 })
                             }),
                             address(this),

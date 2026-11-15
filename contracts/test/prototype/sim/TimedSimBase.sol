@@ -805,6 +805,7 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         q.maxLendRateGrowthBps = uint16(_envU("MAX_LEND_RATE_GROWTH_BPS", q.maxLendRateGrowthBps));
         q.cancelBuffer = uint32(_envU("CANCEL_BUFFER", q.cancelBuffer));
         q.maxPause = uint32(_envU("MAX_PAUSE", q.maxPause));
+        q.matchBandBps = uint16(_envU("MATCH_BAND_BPS", q.matchBandBps));
         changed = keccak256(abi.encode(p)) != keccak256(abi.encode(q));
         if (changed) timelockExecute(address(queue), abi.encodeCall(queue.setFlowParams, (q)));
     }

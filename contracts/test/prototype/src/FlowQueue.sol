@@ -353,6 +353,7 @@ contract FlowQueue is
             p.maxPause < MIN_MAX_PAUSE || p.maxPause > MAX_PAUSE_DURATION
                 || p.maxPause < uint256(TIMELOCK_DELAY_REFERENCE) + p.epochLength
         ) revert FlowParamOutOfBounds(19);
+        if (p.matchBandBps == 0 || p.matchBandBps > p.refBandBps) revert FlowParamOutOfBounds(20);
         FlowSettleLib.applyParams(_s(), p);
         emit FlowParamsSet(p);
     }

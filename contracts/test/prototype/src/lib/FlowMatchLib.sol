@@ -312,6 +312,16 @@ library FlowMatchLib {
         uint256 R = s.redPoolShares;
         uint256 S = c.matchSharePrice;
         if (D == 0 || R == 0 || S == 0) return 0;
+        // Plan 8.5: the match prices at the lagging TWAP, so it books only while TWAP NAV is close to feed NAV.
+        {
+            uint256 nf = c.navFeed;
+            uint256 nt = c.navTwap;
+            uint256 dev = (nt > nf ? nt - nf : nf - nt).mulDiv(BPS, nf, Math.Rounding.Ceil);
+            if (dev > s.params.matchBandBps) {
+                emit IFlowEvents.MatchSkipped(roundEpoch, dev);
+                return 0;
+            }
+        }
 
         (uint256 M, uint256 matchedUsdc, uint256 matchDust) =
             _reserveMatchCap(s, c.navFeed, D, R, S);

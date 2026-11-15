@@ -218,7 +218,8 @@ contract FundExtrasTest is BaseFixture {
             usdcPegBandBps: 50,
             maxLendRateGrowthBps: 10,
             cancelBuffer: 15 minutes,
-            maxPause: 72 hours
+            maxPause: 72 hours,
+            matchBandBps: 20
         });
         _etchFeeds();
         fund = _deployFund();

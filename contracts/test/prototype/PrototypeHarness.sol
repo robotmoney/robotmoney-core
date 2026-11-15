@@ -43,6 +43,7 @@ import {
     Claim,
     DEFAULT_CANCEL_BUFFER,
     DEFAULT_MAX_PAUSE,
+    DEFAULT_MATCH_BAND_BPS,
     FlowParams,
     FlowQueueInit,
     Request,
@@ -541,7 +542,8 @@ abstract contract PrototypeHarness is BaseFixture {
             usdcPegBandBps: 50,
             maxLendRateGrowthBps: 10,
             cancelBuffer: DEFAULT_CANCEL_BUFFER,
-            maxPause: DEFAULT_MAX_PAUSE
+            maxPause: DEFAULT_MAX_PAUSE,
+            matchBandBps: DEFAULT_MATCH_BAND_BPS
         });
     }
 

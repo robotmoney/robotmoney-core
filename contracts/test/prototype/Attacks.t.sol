@@ -2371,39 +2371,57 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         return _shareValue(shares);
     }
 
-    /// @notice A21: lagging TWAP — an informed user joins the side the TWAP lag favors (within `refBandBps`)
-    ///         against an uninformed counterparty in a whole-match round. Logs matched loss and attacker net.
+    /// @notice A21: lagging TWAP. An informed user joins the side the TWAP lag favors, inside `refBandBps`, against an
+    ///         uninformed counterparty. The market moves +80 bps near the end of the window, so the TWAP trails the
+    ///         feed past `matchBandBps`. The match is not booked (plan 8.5 fallback), the round nets at the feed
+    ///         price, and the attacker's net after the exit fee is not positive.
     function test_A21_laggingTwap_informedJoinsFavoredSideInsideGuard() public fixtureCovered {
+        AttackPnl memory r = _a21(80, false);
+        _g8OrFinding("A21: lagging TWAP informed match", r);
+        assertLe(r.attackerNet, 0, "A21: attacker net is not positive");
+    }
+
+    /// @notice A21, small lag: the TWAP trails the feed by less than `matchBandBps`, so the match books at the TWAP.
+    ///         The edge is bounded by the band, which is below the exit fee, so the attacker still nets nothing.
+    function test_A21_smallLag_matchBooksInsideBand_attackerNetNotPositive() public fixtureCovered {
+        AttackPnl memory r = _a21(8, true);
+        _g8OrFinding("A21 small lag: match inside the band", r);
+        assertLe(r.attackerNet, 0, "A21 small lag: attacker net is not positive");
+    }
+
+    function _a21(uint256 moveBps, bool expectMatch) internal returns (AttackPnl memory r) {
         _world();
         uint256 vShares = fund.balanceOf(alice) / 2;
         uint64 ep = queue.currentEpoch();
         uint256 windowEnd = queue.settleableAt(ep);
         openRedeemRequest(alice, vShares);
 
-        // Move market +80 bps near the end of the settle window so 11/12 slices keep TWAP near pre-move price
-        // while the Chainlink feed jumps to spot: |TWAP - feed| < refBandBps (100 bps).
         _begin();
         fundUsdc(attacker, 60_000e6);
         _startAttacker();
 
-        // Informed attacker joins the deposit side to match alice's redemption at the lagging TWAP.
+        // The informed attacker joins the deposit side to match alice's redemption.
         uint256 vValueRef = _sharesRefUsdc(vShares);
         _reqDeposit(attacker, vValueRef, 0);
 
         vm.warp(windowEnd - 5 minutes);
         refreshFeeds();
-        _moveMarket(WETH_POOL, WETH, 80);
+        _moveMarket(WETH_POOL, WETH, int256(moveBps));
         setFeedPrice(IDX_WETH, poolPrice8(WETH_POOL, WETH));
 
         vm.warp(windowEnd);
         refreshFeeds();
         vm.prank(keeper);
         uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        assertGt(sid, 0, "A21: round settled inside feed guard");
+        assertGt(sid, 0, "A21: round settled inside the feed guard");
         Settlement memory st = queue.getSettlement(sid);
-        assertGt(st.matchedShares, 0, "A21: whole match executed");
+        if (expectMatch) {
+            assertGt(st.matchedShares, 0, "A21: the match books inside the band");
+        } else {
+            assertEq(st.matchedShares, 0, "A21: the match is not booked past the band");
+        }
 
-        // Matched redeemer loss against true current spot NAV at `_begin()` (before exit fee).
+        // Alice's loss against the fair value at `_begin()`, before the exit fee.
         uint256 aliceGot = _claimRedeemUsdc(alice);
         uint256 fairAfterFee = vValueRef - vValueRef.mulDiv(10, BPS);
         pending = fairAfterFee > aliceGot ? fairAfterFee - aliceGot : 0;
@@ -2413,15 +2431,24 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             "A21: matched user loss within refBandBps"
         );
 
-        // Wait until TWAP catches up, deliver shares, and redeem net back to USDC so exit + swap fees apply.
+        // After the hold, deliver the attacker's shares and sell them all back to USDC: the exit fee and the swap
+        // costs apply. A matched deposit sits at the match index, not in a claim record, so `deliverAfterHold` does
+        // not find it. `mint` delivers it.
         vm.warp(block.timestamp + queue.flowParams().minHold + queue.flowParams().epochLength);
         refreshFeeds();
         uint256 atkShares = deliverAfterHold(attacker);
+        uint256 deliverable = queue.maxMint(attacker);
+        if (deliverable != 0) {
+            vm.prank(attacker);
+            queue.mint(deliverable, attacker);
+            atkShares += deliverable;
+        }
         _takeCredit(attacker);
-        if (atkShares != 0) redeem(attacker, atkShares);
-        AttackPnl memory r = _end("A21: lagging TWAP informed match inside guard", false);
+        assertGt(fund.balanceOf(attacker), 0, "A21: attacker holds shares to sell");
+        redeem(attacker, fund.balanceOf(attacker));
+        r = _end("A21: lagging TWAP informed match inside guard", false);
         _assertPerShareNotLower("A21");
-        _g8OrFinding("A21: lagging TWAP informed match", r);
+        atkShares;
     }
 
     /// @notice A23: self-match — one owner on both sides pays the exit fee, gains nothing, uses epoch cap, and
@@ -2732,6 +2759,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 id3 = openRedeemRequest(r3, s3);
 
         warpToSettleable(depId);
+        alignFeedsToPools();
         refreshFeeds();
         vm.prank(keeper);
         uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
@@ -4758,7 +4786,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         for (uint256 id = 1; id <= n; ++id) {
             Request memory r = queue.getRequest(id);
             if (r.owner == who && !r.closed && r.kind == RequestKind.Deposit) {
-                v += queue.requestStatus(id) == RequestStatus.Pending
+                // A deposit the whole match filled is closed lazily (`r.closed` stays false until it is touched).
+                // Its USDC is already in `queuedSharesOf` as shares, so counting `r.remaining` too would count it twice.
+                RequestStatus st = queue.requestStatus(id);
+                if (st == RequestStatus.Closed) continue;
+                v += st == RequestStatus.Pending
                     ? queue.pendingDepositRequest(id, who)
                     : r.remaining;
             }
