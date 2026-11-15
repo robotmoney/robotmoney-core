@@ -118,7 +118,13 @@ abstract contract BaseFixture is Test {
     ///      call's own memory and is freed on return: forge's EVM memory limit then bounds one phase, not the
     ///      whole test.
     function _fixtureCheckpoint() internal {
-        if (fixtureCheck) this.checkFixtureCoverageNow();
+        if (!fixtureCheck) return;
+        // The self-call bumps this contract's nonce. The test contract creates every harness and test contract, so a
+        // bumped nonce moves their addresses, and a record run (no check, no bump) would then read state at other
+        // addresses than the replay reads. Restore the nonce so both runs create the same addresses.
+        uint64 nonce = vm.getNonce(address(this));
+        this.checkFixtureCoverageNow();
+        vm.setNonceUnsafe(address(this), nonce);
     }
 
     /// @dev Self-call target of `fixtureCovered` and `_fixtureCheckpoint`. Not a test.
