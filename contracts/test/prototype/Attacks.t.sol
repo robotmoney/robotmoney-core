@@ -205,6 +205,19 @@ abstract contract AttackBook is Test {
         );
     }
 
+    /// @notice G8 for an attack that includes a sale the Safe ordered (a delisting step or `emergencyUnwind`). A sale
+    ///         sells into a pool, so it pays the pool's fee and its price impact. The fund's own part of that cost is
+    ///         a known, budgeted spend (`delistBudgetBps`), not a leak. The holders' loss may exceed the 1 bps bound by
+    ///         at most that measured cost. Anything beyond it (a value leak in the split) still fails.
+    function _assertG8AfterSale(string memory id, AttackPnl memory r, uint256 saleCost) internal pure {
+        assertLe(r.attackerNet, 0, string.concat(id, ": G8 fail, the attacker's net is positive"));
+        assertLe(
+            r.holdersLoss,
+            r.navRef.mulDiv(G8_HOLDER_LOSS_BPS, BPS) + saleCost,
+            string.concat(id, ": G8 fail, holders lost more than 1 bps of NAV plus the sale's execution cost")
+        );
+    }
+
     /// @notice G8 where the measured result may be a design finding rather than a code defect: when the attacker's
     ///         net is positive (or a blocking way costs less than its floor), the test does not pass and does not
     ///         weaken the check. It logs `G8 FINDING` and is skipped with the measured number in the reason (scaffold
@@ -3476,6 +3489,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _startAttacker();
 
         // Delist WETH -> marks asset in sale, stops deposits.
+        vm.recordLogs();
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_WETH)));
         assertTrue(fund.isAssetInSale(IDX_WETH), "A42: WETH in sale");
 
@@ -3534,7 +3548,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, IDX_WETH, alice));
         fund.settleClaim(IDX_WETH, alice);
         AttackPnl memory r = _end("A42: interleaved delisting sale & claim settlement", false);
-        _assertG8("A42: interleaved delisting sale & claim settlement", r);
+        _assertG8AfterSale("A42: interleaved delisting sale & claim settlement", r, _fundSaleCost());
     }
 
     /// @notice A43: a basket rebalance step inside the window before a round's first call makes `settle` revert
@@ -4544,6 +4558,22 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         alignFeedsToPools();
         refreshFeeds();
         coverageCheckpoint();
+    }
+
+    /// @dev The fund's own part of every `DelistStepExecuted` since `vm.recordLogs()`, at the reference price: the
+    ///      tokens it sold at the reference, less the USDC it kept. Claim holders carry their own part of each sale.
+    function _fundSaleCost() internal returns (uint256 cost) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 sig = keccak256("DelistStepExecuted(uint256,uint256,uint256,uint256)");
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].emitter != address(fund) || logs[i].topics[0] != sig) continue;
+            (uint256 tokens, uint256 usdcIn, uint256 claimUsdc) = abi.decode(logs[i].data, (uint256, uint256, uint256));
+            if (usdcIn == 0) continue;
+            uint256 fundUsdc = usdcIn - claimUsdc;
+            uint256 fundTokens = tokens.mulDiv(fundUsdc, usdcIn);
+            uint256 ref = fundTokens.mulDiv(refWeth, 1e18);
+            if (ref > fundUsdc) cost += ref - fundUsdc;
+        }
     }
 
     /// @dev Fix the reference prices at the pools' spot now and snapshot the fund (`s0`). Resets the attack's
