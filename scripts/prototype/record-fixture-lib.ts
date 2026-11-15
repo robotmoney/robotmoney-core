@@ -239,7 +239,10 @@ const isLib = (cfg: ProjectConfig, p: string) => cfg.libs.some((l) => p === l ||
 
 const DYNAMIC_READ =
   /\b(vm\.(?:readFile|readFileBinary|readLine|readDir|fsMetadata|ffi|tryFfi|getCode|getDeployedCode|loadAllocs|exists|isFile|isDir|projectRoot)|deployCode(?:To)?)\s*\(/g;
-const ALWAYS_UNRESOLVABLE = /^(vm\.(ffi|tryFfi|getCode|getDeployedCode|projectRoot)|deployCode(To)?)$/;
+// vm.getCode / vm.getDeployedCode read a forge build artifact, not a repo file. The artifact follows from the sources,
+// foundry.toml and the forge version, and the unit key already hashes all three, so a computed artifact name is fine.
+const BUILD_ARTIFACT_READ = /^vm\.(getCode|getDeployedCode)$/;
+const ALWAYS_UNRESOLVABLE = /^(vm\.(ffi|tryFfi|projectRoot)|deployCode(To)?)$/;
 const STRING_CONST = /\bstring\s+((?:\w+\s+)+?)(\w+)\s*=\s*"([^"]*)"/g;
 
 /** What a unit's sources tell before any run. */
@@ -290,6 +293,7 @@ export function analyzeUnit(idx: SourceIndex, file: string): StaticInfo {
       const fn = m[1];
       const line = s.slice(0, m.index).split("\n").length;
       const arg = firstArg(s, m.index! + m[0].length);
+      if (BUILD_ARTIFACT_READ.test(fn)) continue;
       const resolved =
         !ALWAYS_UNRESOLVABLE.test(fn) &&
         (/^"[^"]*"$/.test(arg) || (/^[A-Za-z_]\w*$/.test(arg) && consts.has(arg)));
