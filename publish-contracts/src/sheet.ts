@@ -651,6 +651,13 @@ function fundSheet(v: Record<string, string>, opts: ParseSheetOpts): Sheet {
   }
   const keeperOwners = v.KEEPER_OWNERS !== undefined ? asList("KEEPER_OWNERS", v.KEEPER_OWNERS) : undefined;
   const keeperBotKeys = v.KEEPER_BOT_KEYS !== undefined ? (v.KEEPER_BOT_KEYS === "none" ? [] : asList("KEEPER_BOT_KEYS", v.KEEPER_BOT_KEYS)) : undefined;
+  // E56: the keeper is a team smart account. Naming it one without its owners and bot keys would leave the verifier
+  // nothing to compare, so the sheet refuses it (a silent skip is how an EOA keeper passes).
+  if (keeperTypeRaw === "smart-account") {
+    if (keeperOwners === undefined || keeperOwners.length === 0) throw err("KEEPER_TYPE smart-account needs KEEPER_OWNERS: the verifier compares the account's owners() with them", { name: "KEEPER_OWNERS" });
+    if (keeperBotKeys === undefined) throw err("KEEPER_TYPE smart-account needs KEEPER_BOT_KEYS (a list, or the word none): the verifier compares the account's botKeys() with it", { name: "KEEPER_BOT_KEYS" });
+    for (const o of keeperOwners) if (lc(o) === lc(keeper)) throw err(`KEEPER_OWNERS ${o} is the keeper account itself`, { name: "KEEPER_OWNERS" });
+  }
   const receiptSubmitters = v.RECEIPT_SUBMITTERS !== undefined ? (v.RECEIPT_SUBMITTERS === "none" ? [] : asList("RECEIPT_SUBMITTERS", v.RECEIPT_SUBMITTERS)) : undefined;
   if (params.FLOW_SETTLE_WINDOW! >= params.FLOW_EPOCH_LENGTH!) throw err("FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH", { name: "FLOW_SETTLE_WINDOW" });
   if (params.FLOW_QUORUM! > params.FLOW_SLICES!) throw err("FLOW_QUORUM exceeds FLOW_SLICES", { name: "FLOW_QUORUM" });

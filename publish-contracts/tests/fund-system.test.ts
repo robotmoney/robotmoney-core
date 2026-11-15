@@ -182,6 +182,9 @@ describe("Step 3f fund sheet fields and buildFundVerifySheet", () => {
 
   test("keeperType, keeperOwners, keeperBotKeys, and receiptSubmitters validate and allow 'none' as []", () => {
     expect(() => fundSheet(withExtras({ KEEPER_TYPE: "multisig" }))).toThrow("KEEPER_TYPE must be 'eoa' or 'smart-account'");
+    // E56: a smart-account keeper must name its owners and its bot keys.
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_BOT_KEYS: "none" }))).toThrow("needs KEEPER_OWNERS");
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_OWNERS: A1 }))).toThrow("needs KEEPER_BOT_KEYS");
     const eoa = fundSheet(withExtras({ KEEPER_TYPE: "eoa", KEEPER_BOT_KEYS: "none", RECEIPT_SUBMITTERS: "none" }));
     expect(eoa.fund!.keeperType).toBe("eoa");
     expect(eoa.fund!.keeperBotKeys).toEqual([]);

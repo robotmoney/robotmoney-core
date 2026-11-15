@@ -9,6 +9,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 
 import {RobotMoneyFund} from "../test/prototype/src/RobotMoneyFund.sol";
 import {Roles} from "../test/prototype/src/FundTypes.sol";
+import {KeeperAccount} from "../test/prototype/src/KeeperAccount.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFundWiring
@@ -54,6 +55,7 @@ contract DeployFundWiring is FundSystemBase {
         vm.stopBroadcast();
 
         _check(w);
+        _checkKeeperAccount(w.keeper);
         _writeDeploymentJson(w);
     }
 
@@ -92,6 +94,15 @@ contract DeployFundWiring is FundSystemBase {
         );
     }
 
+    /// @dev E56: a keeper with code is the smart account. Its `owners()` and `botKeys()` must answer and the account must
+    ///      have an owner, so the deploy tool can record them. A keeper without code is an EOA, recorded as such.
+    function _checkKeeperAccount(address keeper) internal view {
+        if (keeper.code.length == 0) return;
+        KeeperAccount k = KeeperAccount(keeper);
+        require(k.owners().length != 0, "wiring: keeper account has no owner");
+        k.botKeys();
+    }
+
     function _writeDeploymentJson(Wired memory w) internal {
         string memory outPath = _envStringRequired("DEPLOYMENT_OUT");
         string memory obj = "fund_wiring";
@@ -101,6 +112,15 @@ contract DeployFundWiring is FundSystemBase {
         vm.serializeAddress(obj, "governance", w.governance);
         vm.serializeAddress(obj, "queue", w.queue);
         vm.serializeAddress(obj, "consensus_receipt", w.receipts);
+        vm.serializeAddress(obj, "keeper", w.keeper);
+        // E56: what the deploy tool records of the keeper. The verifier reads the same views from the chain.
+        if (w.keeper.code.length == 0) {
+            vm.serializeString(obj, "keeper_type", "eoa");
+        } else {
+            vm.serializeString(obj, "keeper_type", "smart-account");
+            vm.serializeAddress(obj, "keeper_owners", KeeperAccount(w.keeper).owners());
+            vm.serializeAddress(obj, "keeper_bot_keys", KeeperAccount(w.keeper).botKeys());
+        }
         string memory json = vm.serializeAddress(obj, "keeper", w.keeper);
         vm.writeJson(json, outPath);
         console2.log("Wrote fund-wiring JSON to", outPath);
