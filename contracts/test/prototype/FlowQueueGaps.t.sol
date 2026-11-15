@@ -13,6 +13,7 @@ import {
     Request,
     RequestStatus,
     Settlement,
+    SettleCheck,
     TIMELOCK_DELAY_REFERENCE
 } from "./src/FlowTypes.sol";
 import {FlowQueueBase} from "./FlowQueue.t.sol";
@@ -23,6 +24,19 @@ import {FlowQueueBase} from "./FlowQueue.t.sol";
 ///         view (E31, E34, E38, E39), the `slices` divides `settleWindow` bound (field 10) and the two bounds built on
 ///         the timelock reference delay (E51, fields 7 and 19).
 contract FlowQueueGapsTest is FlowQueueBase {
+    function test_checkSettle_emptyPoolInLaterRoundIsNotWork() public fixtureCovered {
+        _invest();
+        uint256 id = openDepositRequest(alice, 1_000e6);
+        warpToSettleable(id);
+        settleAll();
+        assertEq(queue.pendingDepositRequest(id, alice), 0, "deposit filled");
+        vm.warp(block.timestamp + queue.flowParams().epochLength);
+        refreshFeeds();
+        vm.prank(keeper);
+        (SettleCheck check,) = queue.checkSettle();
+        assertEq(uint8(check), uint8(SettleCheck.Window), "empty later round has no work");
+    }
+
     // ───────────────────────────── E52 ─────────────────────────────
 
     /// @notice `queuedSharesOfAt(owner, depIdx, redIdx)` reads an owner's queued shares at the indexes it is given, not

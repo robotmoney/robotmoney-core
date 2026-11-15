@@ -90,8 +90,10 @@ library FlowMatchLib {
         returns (bool)
     {
         if (s.redPoolShares != 0) return true;
-        for (uint256 i; i < s.activeDepBuckets.length; ++i) {
-            if (s.activeDepBuckets[i] >= cur) return true;
+        if (s.depPoolUsdc != 0) {
+            for (uint256 i; i < s.activeDepBuckets.length; ++i) {
+                if (s.activeDepBuckets[i] >= cur) return true;
+            }
         }
         uint256 idx = s.enrollCursor;
         uint256 len = s.activeEpochs.length;
