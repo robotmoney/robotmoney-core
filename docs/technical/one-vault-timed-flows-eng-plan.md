@@ -15,7 +15,7 @@ History of the versions:
    settler's price and selection inputs and the entry premium are removed,
    because they protected nobody.
 
-5. Step 3f, decided by the owner 2026-11-13 and not built (§8 of this
+5. Step 3f, decided by the owner 2026-11-13 and built on the release branch (§8 of this
    plan, proposal §5.11 and §18). No per-request limit, a cancel cutoff, a
    match between the two sides of a settlement, and no instant in-kind
    exit from a running fund. §1 to §7 below are the step 3d plan as it was built. §8 says which
