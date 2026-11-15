@@ -35,9 +35,69 @@
 //! can still run `cargo test`.
 
 use alloy_primitives::{Address, U256};
+use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{
     addresses, scenarios, skip_if_no_devnet_fork, ForkFixture, IBasketVault, IERC20,
 };
+
+sol! {
+    /// The two pool reads the TWAP-distance check needs.
+    interface IUniswapV3PoolTwap {
+        function slot0() external view returns (
+            uint160 sqrtPriceX96,
+            int24 tick,
+            uint16 observationIndex,
+            uint16 observationCardinality,
+            uint16 observationCardinalityNext,
+            uint8 feeProtocol,
+            bool unlocked
+        );
+        function observe(uint32[] secondsAgos) external view
+            returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s);
+    }
+}
+
+/// The vault floors every swap at TWAP less 1 percent. The fork pin moves with every CI run. When a
+/// leg pool trades more than 50 ticks (about 0.5 percent) off its 30 minute TWAP at the pin, the
+/// floor reverts by design, so the round trip cannot execute and says nothing about the vault. Same
+/// rule as `_skipIfLegsOffTwap` in contracts/test/BasketVaultRedeemGas.t.sol. No bound is changed.
+fn pool_off_twap(fx: &ForkFixture, pool: Address) -> Option<i64> {
+    let caller: Address = "0x0000000000000000000000000000000000000001"
+        .parse()
+        .unwrap();
+    let ret = fx
+        .rpc()
+        .eth_call(
+            caller,
+            pool,
+            IUniswapV3PoolTwap::slot0Call {}.abi_encode().into(),
+        )
+        .expect("pool slot0");
+    let spot: i64 = IUniswapV3PoolTwap::slot0Call::abi_decode_returns(&ret, true)
+        .expect("decode slot0")
+        .tick
+        .as_i64();
+    let ret = fx
+        .rpc()
+        .eth_call(
+            caller,
+            pool,
+            IUniswapV3PoolTwap::observeCall {
+                secondsAgos: vec![1800, 0],
+            }
+            .abi_encode()
+            .into(),
+        )
+        .expect("pool observe");
+    let cums = IUniswapV3PoolTwap::observeCall::abi_decode_returns(&ret, true)
+        .expect("decode observe")
+        .tickCumulatives;
+    let delta = cums[1].as_i64() - cums[0].as_i64();
+    // Solidity rounds the mean tick toward negative infinity.
+    let twap = delta.div_euclid(1800);
+    let d = (spot - twap).abs();
+    (d > 50).then_some(d)
+}
 
 // 50 USDC (6 decimals).
 const DEPOSIT_USDC: u64 = 50_000_000;
@@ -296,6 +356,18 @@ fn basket_vault_round_trip() {
 
     let fx = ForkFixture::new().expect("boot fork");
     eprintln!("[basket_vault_round_trip] {}", fx.summary_line());
+
+    for (name, pool) in [
+        ("cbBTC/USDC", addresses::BASKET_PROTO_POOL_CBBTC),
+        ("wETH/USDC", addresses::POOL_WETH_USDC),
+    ] {
+        if let Some(d) = pool_off_twap(&fx, pool) {
+            eprintln!(
+                "[basket_vault_round_trip] SKIP market: {name} trades {d} ticks off its 30 min TWAP at the fork pin, so the 1 percent TWAP floor reverts by design"
+            );
+            return;
+        }
+    }
 
     // ── ProtocolAssetVault: single asset = cbBTC/USDC (0.05% fee) ─────
     // cbBTC is the highest-TVL ProtocolAssetVault basket asset and its

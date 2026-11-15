@@ -98,20 +98,22 @@ test.describe("demo user stories: first-visitor landing-page session", () => {
     await expect(tvlCells).toHaveCount(4, { timeout: 30_000 });
 
     // VaultCards re-fetches every 15 s and the indexer lags the chain, so poll until the
-    // rmUSDC seed shows: exactly one card with a non-empty TVL, the other two empty.
+    // rmUSDC seed shows: exactly one card with a non-empty TVL, the other three empty. Read every
+    // card: the indexer orders them and rmUSDC may sit in any slot, so a fixed prefix misses it.
     const isEmpty = (t: string) => t === "" || t === "—" || Number(t.replace(/[^0-9.]/g, "")) === 0;
     await expect
       .poll(
         async () => {
           const texts: string[] = [];
-          for (let i = 0; i < 3; i++) {
+          const n = await tvlCells.count();
+          for (let i = 0; i < n; i++) {
             texts.push(((await tvlCells.nth(i).textContent()) ?? "").trim());
           }
           return texts.filter((t) => !isEmpty(t)).length;
         },
         {
           message:
-            "exactly one vault card (rmUSDC, the 1 USDC seed) must show a non-zero TVL; the two empty basket vaults must show none",
+            "exactly one vault card (rmUSDC, the 1 USDC seed) must show a non-zero TVL; the empty basket vaults must show none",
           timeout: 120_000,
           intervals: [5_000],
         },
