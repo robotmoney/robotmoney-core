@@ -837,6 +837,8 @@ steps:
   - id: "P3.61-fund-register-submitter-schedule"
     standing: ["4.10"]
     description: "The governing Safe schedules ONE delayed call on the fund-system timelock, receipt.grantRole(RECEIPT_SUBMITTER_ROLE, the submitter Safe), after reading that the timelock holds the register's ADMIN_ROLE and the submitter does not hold the role yet: the Safe tool proposes, two owners sign, the deployer executes. The salt is derived from the run directory, so a rerun proposes the same operation"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 3
     cmds:
@@ -1665,6 +1667,8 @@ steps:
   - id: "P6.73-fund-apply-receipt-schedule"
     standing: ["4.9", "4.10"]
     description: "The governing Safe schedules ONE call on the fund-system timelock, RebalanceGovernance.applyReceipt(receiptId, payloadDigest, assets, bps) (TARGET_SETTER_ROLE is the timelock's): the receipt reads recorded and unreleased, the vector names as many assets as the fund has and its bps sum to 10000. The vector is the one check-receipt-assets derived from the recorded payload in P6.71 (fund-target-assets, fund-target-bps), so the applied vector is the receipt's"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 6
     cmds:
@@ -1883,6 +1887,8 @@ steps:
   - id: "P9.61-fund-unpause-schedule"
     standing: ["4.5"]
     description: "The Safe restores both through the fund-system timelock (ADMIN_ROLE is the timelock's): ONE batch operation, fund.unpauseDeposits() and queue.unpauseQueue(), scheduled through the Safe tool"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 9
     cmds:
@@ -1949,6 +1955,8 @@ steps:
   - id: "P9.70-fund-upgrade-schedule"
     standing: ["4.12"]
     description: "The upgrade lifecycle on the rebalancer proxy: the ERC-1967 slot reads the manifest's implementation, upgradesFrozen is false, upgradeTimelock is the fund-system timelock and the proxy answers no upgradeMarker(); the rebalancer's fund and step parameters are recorded; the Safe schedules ONE call, upgradeToAndCall(RebalancerV2 of P9.69, empty)"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 9
     cmds:
@@ -1973,6 +1981,8 @@ steps:
   - id: "P9.71-fund-upgrade-execute"
     standing: ["4.12"]
     description: "After the timelock delay the Safe executes the upgrade through the timelock: the operation reads done, the implementation slot reads RebalancerV2 (not the manifest's), the proxy answers upgradeMarker() 2 (the code changed) with its fund and step parameters unchanged, still unfrozen and still naming the fund-system timelock. Then the Safe schedules ONE call back, upgradeToAndCall(the manifest's implementation, empty), so the release build runs again before the final verify"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 9
     cmds:

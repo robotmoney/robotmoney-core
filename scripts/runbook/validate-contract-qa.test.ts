@@ -4,7 +4,7 @@ import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, fundPausePairingProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, fundPausePairingProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll, scheduledActionProblems, emergencyRevocationProblems } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -1077,4 +1077,40 @@ test("fund-upgrade: the order of the governed changes (code, then minHold, then 
   expect(runnableProblems(r, "twin")).toEqual([]);
   expect(runnableProblems(r, "rehearsal")).toEqual([]);
   expect(runnableProblems(r, "production").join("\n")).toContain("has no step that runs on production");
+});
+
+test("OPS-03: a scheduled Safe action names its signers on call and its execution window", () => {
+  const sched = (extra: Record<string, unknown> = {}) =>
+    ({ id: "P9.10-sched", cmds: [["bun", "publish-contracts/src/safe/cli.ts", "propose", "--action", "scheduleBatch"]], ...extra }) as never;
+  // failing: neither named, then one of the two
+  expect(scheduledActionProblems([sched()], "r").length).toBe(2);
+  expect(scheduledActionProblems([sched({ signersOnCall: "owners A and B" })], "r")).toEqual(["r P9.10-sched: schedules a Safe action without executionWindow, the window it may be executed in (OPS-03)"]);
+  expect(scheduledActionProblems([sched({ signersOnCall: "  ", executionWindow: "x" })], "r").length).toBe(1);
+  // passing
+  expect(scheduledActionProblems([sched({ signersOnCall: "owners A and B", executionWindow: "after the delay" })], "r")).toEqual([]);
+  // an execute step is not a schedule
+  expect(scheduledActionProblems([{ id: "P9.11-exec", cmds: [["x", "--action", "executeBatch"]] } as never], "r")).toEqual([]);
+});
+
+test("OPS-03: a release that drops signersOnCall from a scheduling step fails, and the committed one passes", () => {
+  const f = "releases/v0.8.0-onevault.yaml";
+  expect(problemsWith(f, (t) => t)).toEqual([]);
+  const bad = problemsWith(f, (t) => t.replace(/^    signersOnCall: .*\n/m, ""));
+  expect(bad.some((e) => e.includes("without signersOnCall"))).toBe(true);
+});
+
+test("OPS-03: emergency-key revocation is ONE scheduleBatch that lifts pauses and releases the freeze, then one executeBatch", () => {
+  const rev = (calls: string, action = "scheduleBatch") =>
+    ({ id: "P9.20-revoke", cmds: [["bash", "-c", `cast calldata "revokeRole(bytes32,address)" $(cast keccak EMERGENCY_ROLE) $K ${calls}`], ["bun", "cli.ts", "propose", "--action", action]] }) as never;
+  const lifts = "unpauseDeposits() unpauseQueue() resumePlan() releaseSettlement(uint256)";
+  const exec = { id: "P9.21-exec", cmds: [["bun", "cli.ts", "propose", "--action", "executeBatch"]] } as never;
+  // failing: a single schedule, a batch that lifts nothing, a batch missing the freeze release, no execute
+  expect(emergencyRevocationProblems([rev(lifts, "schedule"), exec], "r")[0]).toContain("outside ONE scheduleBatch");
+  expect(emergencyRevocationProblems([rev(""), exec], "r")[0]).toContain("does not also call unpauseDeposits, unpauseQueue, resumePlan, releaseSettlement");
+  expect(emergencyRevocationProblems([rev("unpauseDeposits() unpauseQueue() resumePlan()"), exec], "r")[0]).toContain("does not also call releaseSettlement");
+  expect(emergencyRevocationProblems([rev(lifts)], "r")[0]).toContain("no later executeBatch step");
+  // passing
+  expect(emergencyRevocationProblems([rev(lifts), exec], "r")).toEqual([]);
+  // a step that revokes some other role is not covered
+  expect(emergencyRevocationProblems([{ id: "P9.22-other", cmds: [["bash", "-c", "cast calldata 'revokeRole(bytes32,address)' $(cast keccak KEEPER_ROLE) $K"]] } as never], "r")).toEqual([]);
 });

@@ -123,7 +123,7 @@ const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
 export const HOSTS = ["control", "stage"] as const;
-const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises"]);
+const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises", "signersOnCall", "executionWindow"]);
 export const ID_PATTERN = /^P(\d{1,2})\.(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface RunbookStep {
@@ -132,6 +132,10 @@ export interface RunbookStep {
   irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; refresh?: boolean; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
   gateAbsent?: string | string[]; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
   exercises?: Exercise;
+  /** OPS-03: who signs a scheduled Safe action, named on the step that schedules it. */
+  signersOnCall?: string;
+  /** OPS-03: when the scheduled action may be executed, named on the step that schedules it. */
+  executionWindow?: string;
 }
 /**
  * Issue 1984: what a user-facing round step proves on the vaults, named on the step (`exercises:`): a direct vault deposit, a deposit through the router, or a redeem.
@@ -206,9 +210,10 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.writes !== undefined && !(isStringArray(raw.writes) && raw.writes.length > 0 && raw.writes.every((w) => /^[A-Za-z0-9][A-Za-z0-9.\-]*$/.test(w)))) errors.push(`${at}: writes is a list of state names`);
   if (raw.added !== undefined && (typeof raw.added !== "string" || raw.added === "")) errors.push(`${at}: added is a non-empty release name`);
   if (raw.exercises !== undefined && !(EXERCISES as readonly string[]).includes(raw.exercises as string)) errors.push(`${at}: exercises is ${EXERCISES.join(" | ")}`);
+  for (const k of ["signersOnCall", "executionWindow"]) if (raw[k] !== undefined && !(typeof raw[k] === "string" && (raw[k] as string).trim() !== "")) errors.push(`${at}: ${k} is a non-empty string`);
   if (errors.length > 0) return { errors };
   const step: Record<string, unknown> = {};
-  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises"]) if (raw[k] !== undefined) step[k] = raw[k];
+  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises", "signersOnCall", "executionWindow"]) if (raw[k] !== undefined) step[k] = raw[k];
   return { step: step as unknown as RunbookStep };
 }
 
@@ -985,6 +990,49 @@ export function fundPausePairingProblems(
   return [...new Set(out)];
 }
 
+// ─── OPS-03: scheduled Safe actions and emergency-key revocation ───────────────────────────────────────────────────
+const stepText = (s: Pick<RunbookStep, "cmds">): string => s.cmds.map((c) => c.join(" ")).join("\n");
+/** The Safe tool's `--action` of a command: "schedule", "scheduleBatch", "execute", "executeBatch" and so on. */
+const safeActionsOf = (s: Pick<RunbookStep, "cmds">): string[] =>
+  s.cmds.flatMap((c) => c.flatMap((a, i) => (a === "--action" && c[i + 1] !== undefined ? [c[i + 1]!] : [])));
+/** What the revoke batch must lift or release: both pauses the Safe lifts, the plan pause, and the freeze (FlowQueue.releaseSettlement). */
+export const REVOCATION_LIFTS = ["unpauseDeposits", "unpauseQueue", "resumePlan", "releaseSettlement"] as const;
+
+/**
+ * PURE (OPS-03). Every step that schedules a Safe action (`--action schedule` or `scheduleBatch`) names the signers on call (`signersOnCall`)
+ * and the execution window (`executionWindow`).
+ */
+export function scheduledActionProblems(steps: Pick<RunbookStep, "id" | "cmds" | "signersOnCall" | "executionWindow">[], where = "runbook"): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    if (!safeActionsOf(s).some((a) => a === "schedule" || a === "scheduleBatch")) continue;
+    if (!s.signersOnCall?.trim()) out.push(`${where} ${s.id}: schedules a Safe action without signersOnCall, the signers on call (OPS-03)`);
+    if (!s.executionWindow?.trim()) out.push(`${where} ${s.id}: schedules a Safe action without executionWindow, the window it may be executed in (OPS-03)`);
+  }
+  return out;
+}
+
+/**
+ * PURE (OPS-03). A step that revokes EMERGENCY_ROLE does it in ONE scheduleBatch whose calls also lift the active pauses (unpauseDeposits,
+ * unpauseQueue, resumePlan) and release the freeze (releaseSettlement), and a later step executes it with ONE executeBatch.
+ */
+export function emergencyRevocationProblems(steps: Pick<RunbookStep, "id" | "cmds">[], where = "runbook"): string[] {
+  const out: string[] = [];
+  steps.forEach((s, i) => {
+    const t = stepText(s);
+    if (!/\brevokeRole\b/.test(t) || !/\bEMERGENCY_ROLE\b/.test(t)) return;
+    const actions = safeActionsOf(s);
+    if (!actions.includes("scheduleBatch") || actions.includes("schedule")) {
+      out.push(`${where} ${s.id}: revokes EMERGENCY_ROLE outside ONE scheduleBatch (OPS-03)`);
+      return;
+    }
+    const missing = REVOCATION_LIFTS.filter((l) => !new RegExp(`\\b${l}\\b`).test(t));
+    if (missing.length > 0) out.push(`${where} ${s.id}: the emergency-key revocation batch does not also call ${missing.join(", ")} (lift every active pause, release the freeze; OPS-03)`);
+    if (!steps.slice(i + 1).some((e) => safeActionsOf(e).includes("executeBatch"))) out.push(`${where} ${s.id}: the emergency-key revocation batch has no later executeBatch step (OPS-03)`);
+  });
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -992,7 +1040,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   let template: { name: string; steps: RunbookStep[] } = { name: TEMPLATE_NAME, steps: [] };
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
-  problems.push(...commandProblems(template.steps, model, root), ...fundPausePairingProblems(template.steps, "template.yaml"));
+  problems.push(...commandProblems(template.steps, model, root), ...fundPausePairingProblems(template.steps, "template.yaml"), ...scheduledActionProblems(template.steps, "template.yaml"), ...emergencyRevocationProblems(template.steps, "template.yaml"));
   problems.push(...clearVectorProblems(template.steps, "template.yaml"));
   problems.push(...upgradeBuildGateProblems(template.steps, "template.yaml"));
   problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps), ...stateSelfReadProblems(template.steps));
@@ -1021,7 +1069,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
         continue;
       }
       problems.push(...checkAddOnly(template, r));
-      problems.push(...commandProblems(r.steps, model, root), ...fundPausePairingProblems(r.steps, `releases/${f}`));
+      problems.push(...commandProblems(r.steps, model, root), ...fundPausePairingProblems(r.steps, `releases/${f}`), ...scheduledActionProblems(r.steps, `releases/${f}`), ...emergencyRevocationProblems(r.steps, `releases/${f}`));
       problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps), ...stateSelfReadProblems(r.steps));
