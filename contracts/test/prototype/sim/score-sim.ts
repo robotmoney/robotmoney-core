@@ -148,7 +148,7 @@ const DEFAULT_PARAMS_TIMED: Record<string, unknown> = {
 const DEFAULT_STEP3F_FLOW_PARAMS: Record<string, unknown> = {
   cancelBuffer: 900,
   maxPause: 259200,
-  matchBandBps: 20,
+  matchBandBps: 10,
 };
 const DEFAULT_STEP3F_FUND_PARAMS: Record<string, unknown> = {
   minPoolDepthUsdc: 2000000000000,

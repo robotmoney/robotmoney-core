@@ -1129,7 +1129,8 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(k, "usdcPegBandBps", p.usdcPegBandBps);
         vm.serializeUint(k, "maxLendRateGrowthBps", p.maxLendRateGrowthBps);
         vm.serializeUint(k, "cancelBuffer", queue.cancelBuffer());
-        return vm.serializeUint(k, "maxPause", queue.maxPause());
+        vm.serializeUint(k, "maxPause", queue.maxPause());
+        return vm.serializeUint(k, "matchBandBps", p.matchBandBps);
     }
 
     /// @dev Every keeper attempt, as columns. Basket columns end in 0 (wETH) and 1 (cbBTC).
