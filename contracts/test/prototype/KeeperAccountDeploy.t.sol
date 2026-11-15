@@ -12,6 +12,8 @@ import {DeployKeeperAccount} from "../../script/DeployKeeperAccount.s.sol";
 /// @notice The keeper-account deploy script: the address is predictable before the sheet is final, a wrong
 ///         KEEPER_ADDRESS is refused, and the manifest records the owners and bot keys. No fork state is read.
 contract KeeperAccountDeployTest is Test {
+    /// @dev A constant, so the fixture recorder can key the read below.
+    string internal constant OUT = "deployments/keeper-account-deploy-test.json";
     address internal ownerA = makeAddr("ownerA");
     address internal ownerB = makeAddr("ownerB");
     address internal bot1 = makeAddr("bot1");
@@ -29,7 +31,7 @@ contract KeeperAccountDeployTest is Test {
     function test_E56_theScriptDeploysAtThePredictedAddressRecordsItAndRefusesAnotherKeeper()
         public
     {
-        string memory out = "deployments/keeper-account-deploy-test.json";
+        string memory out = OUT;
         _env(out);
         DeployKeeperAccount s = new DeployKeeperAccount();
 
@@ -46,7 +48,7 @@ contract KeeperAccountDeployTest is Test {
         assertEq(o.length, 2, "two owners");
         assertEq(KeeperAccount(account).botKeys()[0], bot1, "the bot key");
 
-        string memory json = vm.readFile(out);
+        string memory json = vm.readFile(OUT);
         assertEq(vm.parseJsonAddress(json, ".keeper_account"), account, "manifest: account");
         assertEq(vm.parseJsonAddressArray(json, ".owners").length, 2, "manifest: owners");
         assertEq(vm.parseJsonAddressArray(json, ".bot_keys")[0], bot1, "manifest: bot keys");
