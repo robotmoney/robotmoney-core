@@ -1029,6 +1029,7 @@ test("Step 3f OPS-03 and sheet model: scheduleBatch/executeBatch Safe actions an
   expect(safeCmd("approveBatch")).toEqual([
     "P9.90-batch: --action approveBatch is no safe/cli.ts action (schedule, execute, scheduleBatch, executeBatch, cancel, updateDelay)",
   ]);
+});
 
 // ─── the in-place upgrade of Deploy 4 (releases/v0.8.0-onevault-upgrade.yaml, flow fund-upgrade, owner 2026-11-14) ───
 const upgradeRelease = () => parseRelease(readFileSync(join(ROOT, QA_DIR, "releases", "v0.8.0-onevault-upgrade.yaml"), "utf8"), "v0.8.0-onevault-upgrade");
