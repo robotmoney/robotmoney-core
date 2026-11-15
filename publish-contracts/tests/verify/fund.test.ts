@@ -610,7 +610,7 @@ describe("verifyFundSystem negative coverage (DEP-01..03, E47)", () => {
     expect(safeFails).toContain("safe: fallback handler equals expected");
   });
 
-  test("rejects one extra holder of each exclusive role (E47, DEP-03): proposer, ADMIN, EMERGENCY, FLOW, REBALANCER, GOVERNANCE", async () => {
+  test("rejects one extra holder of each exclusive role (E47, DEP-03)", async () => {
     const intruder = A(0xe771);
     const cases: [string, Address, Hex, Address[], string][] = [
       ["timelock proposer", TIMELOCK, FUND_ROLES.PROPOSER, [SAFE, intruder], "timelock: PROPOSER_ROLE held exclusively by the Safe"],
@@ -618,6 +618,8 @@ describe("verifyFundSystem negative coverage (DEP-01..03, E47)", () => {
       ["queue ADMIN", QUEUE, ADMIN_ROLE, [TIMELOCK, intruder], "queue: ADMIN_ROLE held exclusively by the timelock"],
       ["fund EMERGENCY", FUND, FUND_ROLES.EMERGENCY, [EMERGENCY, intruder], "fund: EMERGENCY_ROLE held exclusively by the emergency key"],
       ["queue EMERGENCY", QUEUE, FUND_ROLES.EMERGENCY, [EMERGENCY, intruder], "queue: EMERGENCY_ROLE held exclusively by the emergency key"],
+      ["queue KEEPER", QUEUE, FUND_ROLES.KEEPER, [KEEPER, intruder], "queue: KEEPER_ROLE held exclusively by the keeper"],
+      ["rebalancer KEEPER", REBALANCER, FUND_ROLES.KEEPER, [KEEPER, intruder], "rebalancer: KEEPER_ROLE held exclusively by the keeper"],
       ["fund FLOW", FUND, FUND_ROLES.FLOW, [QUEUE, intruder], "fund: FLOW_ROLE held exclusively by the queue"],
       ["fund REBALANCER", FUND, FUND_ROLES.REBALANCER, [REBALANCER, intruder], "fund: REBALANCER_ROLE held exclusively by the rebalancer"],
       ["fund GOVERNANCE", FUND, FUND_ROLES.GOVERNANCE, [GOVERNANCE, intruder], "fund: GOVERNANCE_ROLE held exclusively by governance"],
