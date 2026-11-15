@@ -480,6 +480,102 @@ pub async fn dispatch_weight_setter_path_resolve(
 }
 
 #[derive(Debug, Serialize)]
+struct FlowQueueAlertPayload {
+    event_action: &'static str,
+    routing_key: &'static str,
+    dedup_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<FlowQueueAlertInner>,
+}
+
+#[derive(Debug, Serialize)]
+struct FlowQueueAlertInner {
+    summary: String,
+    severity: &'static str,
+    source: &'static str,
+    custom_details: FlowQueueDetails,
+}
+
+/// Details for the flow-queue page (OPS-07, FLOW-08).
+#[derive(Debug, Serialize)]
+pub struct FlowQueueDetails {
+    /// Always `"flow_queue_degraded"`.
+    pub alert_kind: &'static str,
+    /// Chain the queue lives on.
+    pub chain_id: i64,
+    /// Queue address.
+    pub queue_address: String,
+    /// Names of the conditions that hold.
+    pub conditions: Vec<&'static str>,
+    /// Cancel deadline for a deposit made now (Unix seconds).
+    pub cancel_cutoff: u64,
+    /// End of the queue pause (Unix seconds), zero when none.
+    pub queue_paused_until: u64,
+    /// TWAP against feed band.
+    pub ref_band_bps: u64,
+    /// Per-swap limit band.
+    pub leg_band_bps: u64,
+    /// A keeper holds `KEEPER_ROLE`.
+    pub keeper_configured: bool,
+}
+
+/// Page because the flow queue has a stop, a pause, a wind-down, no keeper, or a band off.
+pub async fn dispatch_flow_queue_alert(
+    client: &Client,
+    webhook_url: &str,
+    snap: &crate::flow_queue::FlowQueueSnapshot,
+    conditions: &[crate::flow_queue::FlowQueueCondition],
+) -> Result<(), WatchdogError> {
+    use crate::flow_queue::{describe_degraded, flow_queue_dedup_key, FlowQueueCondition};
+    let critical = conditions.contains(&FlowQueueCondition::NoKeeper);
+    post_event(
+        client,
+        webhook_url,
+        &FlowQueueAlertPayload {
+            event_action: "trigger",
+            routing_key: "watchdog",
+            dedup_key: flow_queue_dedup_key(snap.chain_id),
+            payload: Some(FlowQueueAlertInner {
+                summary: describe_degraded(snap, conditions),
+                severity: if critical { "critical" } else { "warning" },
+                source: "watchdog",
+                custom_details: FlowQueueDetails {
+                    alert_kind: "flow_queue_degraded",
+                    chain_id: snap.chain_id,
+                    queue_address: snap.queue_address.clone(),
+                    conditions: conditions.iter().map(|c| c.name()).collect(),
+                    cancel_cutoff: snap.quote.cancel_cutoff,
+                    queue_paused_until: snap.liveness.queue_paused_until,
+                    ref_band_bps: snap.quote.ref_band_bps,
+                    leg_band_bps: snap.quote.leg_band_bps,
+                    keeper_configured: snap.liveness.keeper_configured,
+                },
+            }),
+        },
+    )
+    .await
+}
+
+/// Resolve the flow-queue page once the queue is healthy again.
+pub async fn dispatch_flow_queue_resolve(
+    client: &Client,
+    webhook_url: &str,
+    chain_id: i64,
+) -> Result<(), WatchdogError> {
+    post_event(
+        client,
+        webhook_url,
+        &FlowQueueAlertPayload {
+            event_action: "resolve",
+            routing_key: "watchdog",
+            dedup_key: crate::flow_queue::flow_queue_dedup_key(chain_id),
+            payload: None,
+        },
+    )
+    .await
+}
+
+#[derive(Debug, Serialize)]
 struct MissingReceiptAlertInner {
     summary: String,
     severity: &'static str,

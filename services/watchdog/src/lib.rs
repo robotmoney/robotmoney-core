@@ -25,6 +25,8 @@
 //!   router's `WEIGHT_SETTER_ROLE` is held only by the weight setter, and the
 //!   weight setter's `WEIGHT_SETTER_ROLE` (`applyReceipt`) and `ADMIN_ROLE`
 //!   only by the timelock. Read-only; it never pauses the gateway.
+//! - [`flow_queue`] — standing check on the one fund's flow queue: deposit stops, cancel deadline,
+//!   guard bands, keeper and Safe liveness (OPS-07, FLOW-08). Read-only.
 //! - [`liveness`] — read-only `watchdog_cursor.updated_at` heartbeat check used
 //!   by the `watchdog-liveness` binary (issue #1378), and the explorer-indexer
 //!   lag budget that decides whether a quiet poll may refresh it (DI-5).
@@ -35,6 +37,7 @@
 
 pub mod alert;
 pub mod config;
+pub mod flow_queue;
 pub mod governance;
 pub mod liveness;
 pub mod pager_state;

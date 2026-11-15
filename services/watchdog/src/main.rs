@@ -46,14 +46,15 @@ use tracing::{error, info};
 
 use watchdog::{
     alert::{
-        dispatch_indexer_behind_alert, dispatch_indexer_behind_resolve,
-        dispatch_missing_receipt_alert, dispatch_missing_receipt_resolve,
-        dispatch_no_baseline_alert, dispatch_no_baseline_resolve,
+        dispatch_flow_queue_alert, dispatch_flow_queue_resolve, dispatch_indexer_behind_alert,
+        dispatch_indexer_behind_resolve, dispatch_missing_receipt_alert,
+        dispatch_missing_receipt_resolve, dispatch_no_baseline_alert, dispatch_no_baseline_resolve,
         dispatch_weight_setter_path_alert, dispatch_weight_setter_path_resolve,
         indexer_behind_dedup_key, missing_receipt_dedup_key, no_baseline_dedup_key,
         weight_setter_path_dedup_key,
     },
     config::Config,
+    flow_queue::{check_flow_queue, flow_queue_dedup_key, FlowQueueStatus},
     governance::{check_weight_setter_path, WeightSetterStatus},
     liveness::read_indexer_progress,
     pager_state::{commit_page, ensure_pager_state_table, load_pager_state},
@@ -240,6 +241,14 @@ async fn main() {
         chain_id,
         &weight_setter_key,
         config.governance.repage_secs,
+    )
+    .await;
+    let flow_queue_key = flow_queue_dedup_key(chain_id);
+    let mut flow_queue_pager = restore_pager(
+        &pool,
+        chain_id,
+        &flow_queue_key,
+        config.flow_queue.repage_secs,
     )
     .await;
     // DI-5: the indexer this daemon reads is behind its budget, so what the
@@ -602,6 +611,62 @@ async fn main() {
                     chain_id,
                     "weight-setter path check could not read the role sets: {e}"
                 ),
+            }
+        }
+
+        // Flow queue stops, cancel deadline, guard bands and keeper liveness (OPS-07, FLOW-08).
+        // Read-only; it never pauses.
+        if config.flow_queue.enabled {
+            match check_flow_queue(&client, &config.flow_queue, chain_id).await {
+                Ok(FlowQueueStatus::Degraded(snap, conditions)) => {
+                    error!(
+                        chain_id,
+                        conditions = ?conditions,
+                        cancel_cutoff = snap.quote.cancel_cutoff,
+                        ref_band_bps = snap.quote.ref_band_bps,
+                        leg_band_bps = snap.quote.leg_band_bps,
+                        keeper_configured = snap.liveness.keeper_configured,
+                        "flow queue is stopped, paused, winding down, keeperless or has a band off"
+                    );
+                    if let Some(url) = config.action.webhook_url.as_deref() {
+                        let action = flow_queue_pager.on_firing(now);
+                        if action == PageAction::Trigger {
+                            let sent =
+                                dispatch_flow_queue_alert(&client, url, &snap, &conditions).await;
+                            commit_page(
+                                &pool,
+                                &mut flow_queue_pager,
+                                chain_id,
+                                &flow_queue_key,
+                                now,
+                                action,
+                                sent,
+                            )
+                            .await;
+                        }
+                    } else {
+                        error!("the flow queue is degraded but action.webhook_url is unset");
+                    }
+                }
+                Ok(FlowQueueStatus::Ok(_)) => {
+                    if let Some(url) = config.action.webhook_url.as_deref() {
+                        let action = flow_queue_pager.on_clear(now);
+                        if action == PageAction::Resolve {
+                            let sent = dispatch_flow_queue_resolve(&client, url, chain_id).await;
+                            commit_page(
+                                &pool,
+                                &mut flow_queue_pager,
+                                chain_id,
+                                &flow_queue_key,
+                                now,
+                                action,
+                                sent,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                Err(e) => error!(chain_id, "flow queue check could not read the queue: {e}"),
             }
         }
 

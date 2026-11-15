@@ -72,3 +72,12 @@ max_cursor_lag_blocks = 150
 # each governed `Upgraded` or `UpgradesFrozen` event the indexer stored in
 # `admin_events` (contract_kind = 'proxy', migration 0019) once, through
 # `action.webhook_url`. Alert-only: it never pauses, upgrades or freezes.
+
+# Flow queue stops, cancel deadline, guard bands and keeper liveness (OPS-07, FLOW-08).
+# Read-only. Absent or enabled = false means the check does not run.
+# [flow_queue]
+# enabled = true
+# rpc_url = "https://base-rpc.example"
+# queue_address = "0x0000000000000000000000000000000000000000"
+# repage_secs = 3600
+# quote_probe_usdc = 1000000

@@ -197,6 +197,7 @@ fn alert_only_config(per_block_mint: u64, per_block_burn: u64, webhook_url: &str
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
+        flow_queue: Default::default(),
         indexer_lag: Default::default(),
     }
 }
@@ -238,6 +239,7 @@ fn per_vault_config(
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
+        flow_queue: Default::default(),
         indexer_lag: Default::default(),
     }
 }
@@ -950,6 +952,7 @@ async fn pause_rpc_timeout_does_not_starve_alert() {
         // volume-path fixtures are unaffected by it (issue #1247 task 4.13).
         consensus_receipts: ReceiptLivenessConfig::default(),
         governance: Default::default(),
+        flow_queue: Default::default(),
         indexer_lag: Default::default(),
     };
     // Derive the signing state the way the daemon does — once, at "startup" —
