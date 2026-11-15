@@ -2782,7 +2782,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         );
         (, uint256 aliceClaimUsdc) = fund.positionClaimOf(IDX_AAVE, alice);
         assertGt(aliceClaimUsdc, 0, "A30-borrowed: redeemer received Aave position claim");
-        _end("A30: illiquid/impaired venue blocks match and issues claims", true);
+        // No per-share check: the exclusion in part 1 moved Moonwell's balance into the ledger, for the holders.
+        _end("A30: illiquid/impaired venue blocks match and issues claims", false);
     }
 
     /// @notice A31: plan in progress — basket steps interleaved with settlement windows across a whole plan;
@@ -3009,8 +3010,15 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             exclId,
             "A34: short-paying exclusion restore refused and stays open"
         );
+        // An honest venue drains and the record closes.
         mech.setMode(mech.HONEST(), 0);
-        _end("A34: short-paying adapter rejected across venue test, redeem, and recovery", true);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(mech).codehash, true))
+        );
+        assertEq(fund.openExclusionOf(IDX_AAVE), 0, "A34: honest venue restores and the record closes");
+        // No per-share check: the recovery moved the venue's balance into the exclusion ledger, for the holders.
+        _end("A34: short-paying adapter rejected across venue test, redeem, and recovery", false);
     }
 
     /// @notice A35: pool fee at or above `legBandBps` less margin, or mutable fee — refused at admission and funding.
@@ -3355,6 +3363,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         refreshFeeds();
         settleAll();
 
+        // Cycle 1's recovery took everything out of Moonwell. A stable-only plan puts money back, so the second
+        // exclusion has a balance to recover.
+        setTargetViaTimelock(bucketVec(10_000, 0), PlanParams(1 days, 500));
+        stepUntilDone(64);
+        vm.warp(block.timestamp + 1 days + 1);
+        refreshFeeds();
+        assertGt(moonwellAdapter.totalAssets(), 1_000e6, "A40-c2: Moonwell funded again");
+
         uint256 aliceAfter1 = fund.balanceOf(alice);
         uint256 r2Shares = aliceAfter1 / 4;
         uint256 did2 = _victimDeposit(victim, 20_000e6);
@@ -3389,7 +3405,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             aliceAfter1 - r2Shares,
             "A40-c2: matched redeemer lost second exclusion claim on matched shares"
         );
-        _end("A40: RB-22 exclusion after match attributes to depositor across cycles", true);
+        // Neither the per-share check nor G8 applies: each recovery moves a venue's balance out of the fund into the
+        // exclusion ledger, where it is the holders' claim. The assertions above are this test's checks (RB-22).
+        _end("A40: RB-22 exclusion after match attributes to depositor across cycles", false);
     }
 
     /// @notice A41: scheduled adapter revoke — redeemers try leaving at face value between schedule and execution

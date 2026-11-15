@@ -342,8 +342,12 @@ library FundPositionLib {
         uint256 reserved = owed + claimsPart(s, i, p0) + LENDING_ROUNDING_UNITS;
         if (bal <= reserved) return true;
         uint256 got;
-        (ok, got) = _tryTake(s, i, bal - reserved, p0);
-        if (!ok || id == 0 || got == 0) return ok;
+        uint256 asked = bal - reserved;
+        (ok, got) = _tryTake(s, i, asked, p0);
+        // RB-34 / A34: a venue that pays less than it was asked for, without reverting, has not drained. Report it,
+        // so a restore reverts and the record stays open. What did arrive is still credited when `id != 0`.
+        if (ok && got + LENDING_ROUNDING_UNITS < asked) ok = false;
+        if (id == 0 || got == 0) return ok;
         IERC20(s.usdc).safeTransfer(address(ledger), got);
         ledger.credit(id, got, source);
     }
