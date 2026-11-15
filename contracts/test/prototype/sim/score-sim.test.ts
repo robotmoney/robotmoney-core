@@ -61,6 +61,7 @@ function defaultTimedParams() {
       maxLendRateGrowthBps: 10,
       cancelBuffer: 900,
       maxPause: 259200,
+      matchBandBps: 10,
     },
     step3f: {
       minPoolDepthUsdc: 2000000000000,
