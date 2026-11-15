@@ -5,7 +5,7 @@ description: "Fork test: for each basket vault (rmPROTO, rmAGENT, rmRWA) a redee
 
 # BasketVaultRedeemGasForkTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/test/BasketVaultRedeemGas.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e6001b21a0d5503778ce01c50c3505d7a3466426/contracts/test/BasketVaultRedeemGas.t.sol)
 
 **Inherits:** Test
 
@@ -273,6 +273,23 @@ function _holds(BasketVault v, address token) internal view returns (bool);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
+
+<a id="_skipiflegsofftwap"></a>
+
+### _skipIfLegsOffTwap
+
+<i>
+
+The rmPROTO redeem sells wETH and cbBTC with a floor of TWAP less 1 percent. The fork pin moves with every CI run. When a
+pool trades more than 50 ticks (about 0.5 percent, the floor less the 5 bp fee and margin) off its 30 minute TWAP at the pin,
+the floor reverts "Too little received" by design, so the redeem cannot execute and these tests say nothing about gas.
+Observed at Base block 57499667: the wETH/USDC spot sat about 1.4 percent under the TWAP. The test skips then. No bound is changed.
+
+</i>
+
+```solidity
+function _skipIfLegsOffTwap() internal;
+```
 
 <a id="test_fork_rmproto_redeemestimatethenincludelater"></a>
 
