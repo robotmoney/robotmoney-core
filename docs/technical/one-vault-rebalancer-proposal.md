@@ -1864,6 +1864,11 @@ of `allow-settlement-return` are removed with `allowReturn` (D18). Each
 scheduled Safe action that changes a share's value gets its paired pause row
 (E55).
 
+The dApp has a tested `FlowQueueTerms` component, but no one-vault request
+screen or queue reads to supply it. It is not mounted in the existing
+multi-vault deposit flow: that flow does not submit to this queue. Building
+the one-vault client and mounting the terms there remain open under G6.
+
 ## 9. Migration
 
 Out of the experiment's scope (owner, 2026-11-09). This section records the
