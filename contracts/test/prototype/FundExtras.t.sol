@@ -36,6 +36,7 @@ import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
 import {MechAaveAdapter} from "./mocks/MechAaveAdapter.sol";
 import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
 import {FlowParams} from "./src/FlowTypes.sol";
+import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -1089,6 +1090,25 @@ contract FundExtrasTest is BaseFixture {
             abi.encodeWithSelector(IRobotMoneyFund.PoolHistoryTooShort.selector, 0, uint32(1 hours))
         );
         f.addAsset(c);
+    }
+
+    /// @notice E44: a lending adapter that cannot answer `availableLiquidity()` is refused at admission, whether the
+    ///         call reverts or returns nothing. One that answers is admitted.
+    function test_E44_lendingWithoutLiquidityViewIsRefused() public fixtureCovered {
+        (IRobotMoneyFundFull f, address rate,) = _freshFundWithAdapters();
+        bytes memory call = abi.encodeCall(ILendingRateAdapter.availableLiquidity, ());
+        vm.mockCallRevert(rate, call, "NO VIEW");
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingLiquidityUnavailable.selector, rate)
+        );
+        f.addAsset(_lending(rate));
+        vm.mockCall(rate, call, hex"");
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingLiquidityUnavailable.selector, rate)
+        );
+        f.addAsset(_lending(rate));
+        vm.clearMockedCalls();
+        f.addAsset(_lending(rate));
     }
 
     function test_RB17_lendingWithoutVenueRateIsRefused() public fixtureCovered {

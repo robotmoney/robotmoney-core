@@ -100,7 +100,7 @@ library FundAdminLib {
     ///           window (`settleWindow`: the bound queue's, else `DEFAULT_SETTLE_WINDOW`), else
     ///           `PoolHistoryTooShort(index, window)` (rule 2).
     ///         - Lending: the adapter must answer `ratePerUnit()` with a non-zero rate (`LendingRateUnavailable`),
-    ///           the venue rate check 5 reads; and `feed`, `maxFeedAge` must be 0 (`InvalidParam`).
+    ///           the venue rate check 5 reads, and `availableLiquidity()` (`LendingLiquidityUnavailable`, E44); and `feed`, `maxFeedAge` must be 0 (`InvalidParam`).
     ///         `active` is forced true and `targetBps` grows by a 0. There is no sleeve to check (§4.1).
     function addAsset(FundState storage s, AssetConfig memory c) public returns (uint256 index) {
         requireNoLivePlan(s);
@@ -150,6 +150,11 @@ library FundAdminLib {
         if (!ok || ret.length < 32 || abi.decode(ret, (uint256)) == 0) {
             revert IRobotMoneyFund.LendingRateUnavailable(c.adapter);
         }
+        // E44: the venue-cash view must answer at admission. The settle's venue check and the match read it, and a
+        // missing view would read as an empty venue. Overstatement cannot be tested here (the view is the venue's
+        // live cash). It is bounded where it is used: a short pay is caught by the venue check (A34).
+        (ok, ret) = c.adapter.staticcall(abi.encodeCall(ILendingRateAdapter.availableLiquidity, ()));
+        if (!ok || ret.length < 32) revert IRobotMoneyFund.LendingLiquidityUnavailable(c.adapter);
         IFundLendingIdentity id = IFundLendingIdentity(c.adapter);
         address vault = id.VAULT();
         if (vault != address(this)) {

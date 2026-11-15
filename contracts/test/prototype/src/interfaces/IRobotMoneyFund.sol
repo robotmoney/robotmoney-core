@@ -181,6 +181,9 @@ interface IRobotMoneyFund is IFundEvents {
     error PoolHistoryTooShort(uint256 index, uint32 window);
     /// @notice `addAsset` (E15): a Lending adapter does not expose its venue's `ratePerUnit()`.
     error LendingRateUnavailable(address adapter);
+    /// @notice `addAsset` (E44): a Lending adapter does not answer `availableLiquidity()`, the venue-cash view the
+    ///         match and the settle's venue check read. An adapter that cannot report it would be read as empty.
+    error LendingLiquidityUnavailable(address adapter);
     /// @notice `setTargetAndOpenPlan` (§4.5 rule 3, E15): `targetBps × tvlCap` is over `poolShareBps` of the
     ///         pool's time-weighted active liquidity for asset `index`.
     error PoolShareExceeded(uint256 index, uint256 targetUsdc, uint256 limitUsdc);
