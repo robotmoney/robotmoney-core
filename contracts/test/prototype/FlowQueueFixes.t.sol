@@ -474,21 +474,26 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     function test_fix2_aFloodOfOneSideDoesNotHoldBackTheOther() public fixtureCovered {
         uint256 bobShares = _holder(bob, 20_000e6);
         address flooder = makeAddr("flooder");
-        uint256 n = 260;
+        // The flood stays larger than the settle call's request cap (40 against 32). Step 3f's settle walk
+        // checkpoints the exclusion ledger per request, so a 256-request call left a state diff too large for the
+        // fixture check to decode in forge's memory.
+        uint256 n = 40;
+        uint256 cap = 32;
         fundUsdc(flooder, n * 100e6);
-        vm.startPrank(flooder);
+        vm.prank(flooder);
         IERC20(USDC).approve(address(queue), n * 100e6);
         for (uint256 k; k < n; ++k) {
+            vm.prank(flooder);
             queue.requestDeposit(100e6, flooder);
         }
-        vm.stopPrank();
         uint256 red = openRedeemRequest(bob, bobShares / 2, 0);
         coverageCheckpoint();
         vm.prank(emergency);
         fund.pauseDeposits();
         warpToSettleable(red);
         refreshFeeds();
-        _keeperSettle();
+        vm.prank(keeper);
+        queue.settle(cap, type(uint256).max);
         assertTrue(queue.getRequest(red).closed, "fix 2: the redemption fills in the first call");
         assertEq(
             queue.getRequest(1 + queue.requestCount() - n - 1).remaining, 100e6, "the flood waits"

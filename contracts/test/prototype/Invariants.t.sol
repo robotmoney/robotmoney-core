@@ -2493,11 +2493,16 @@ contract Invariants is PrototypeHarness {
                 || x.kind == VmSafe.AccountAccessKind.DelegateCall;
             if (
                 isCall && x.data.length != 0 && !_cvAccount[x.account] && !_cvCreated[x.account]
-                    && uint160(x.account) > 0xffff && x.account.code.length == 0
+                    && !_created[x.account] && uint160(x.account) > 0xffff
+                    && x.account.code.length == 0
             ) _miss(x.account, bytes32(0));
             for (uint256 j; j < x.storageAccesses.length; ++j) {
                 VmSafe.StorageAccess memory s = x.storageAccesses[j];
-                if (!_cvAccount[s.account] || _cvCreated[s.account] || _cvSeen[s.account][s.slot]) {
+                // `_created` holds what `BaseFixture` saw in the checkpoints the harness's setUp ran before this diff.
+                if (
+                    !_cvAccount[s.account] || _cvCreated[s.account] || _created[s.account]
+                        || _cvSeen[s.account][s.slot]
+                ) {
                     continue;
                 }
                 _cvSeen[s.account][s.slot] = true;

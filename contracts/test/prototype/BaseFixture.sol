@@ -92,7 +92,14 @@ abstract contract BaseFixture is Test {
     /// @dev Put on every prototype test. Runs the coverage check after the test body in replay.
     modifier fixtureCovered() {
         _;
-        if (fixtureCheck) this.checkFixtureCoverageNow();
+        if (fixtureCheck) {
+            // The decode of the whole test's state diff is the fixture's own bookkeeping, not code under test. A long
+            // test (step 3f's heavy matches and floods) spent more than forge's 2^30 gas limit on it, so it runs
+            // unmetered, as `coverageCheckpoint` does mid-test.
+            vm.pauseGasMetering();
+            this.checkFixtureCoverageNow();
+            vm.resumeGasMetering();
+        }
         if (fixtureStrict) emit log_named_string("fixture-strict", "final");
     }
 
@@ -102,7 +109,12 @@ abstract contract BaseFixture is Test {
     ///      reason ends with `[fixture-strict: checked]`, which the recorder reads (forge keeps no logs of a skipped
     ///      test, only its reason).
     function _skipCovered(string memory reason) internal {
-        if (fixtureCheck) this.checkFixtureCoverageNow();
+        if (fixtureCheck) {
+            // Unmetered, as at the end of a passing test (see `fixtureCovered`).
+            vm.pauseGasMetering();
+            this.checkFixtureCoverageNow();
+            vm.resumeGasMetering();
+        }
         if (fixtureStrict) {
             reason =
                 bytes(reason).length == 0 ? SKIP_CHECKED : string.concat(reason, " ", SKIP_CHECKED);
