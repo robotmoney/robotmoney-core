@@ -167,6 +167,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     uint256 internal lastMatchPrice;
     /// @dev Rounds whose first call stopped deposits and the match (`DepositStoppedForRound`).
     uint256 internal depositStops;
+    /// @dev Of those, the rounds stopped by check 5 (a venue's rate grew faster than `maxLendRateGrowthBps`).
+    uint256 internal lendStops;
 
     // ─── Fault injection (E48; all off by default, so every earlier run is unchanged) ───────────────────
 
@@ -518,6 +520,7 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
                 a.index = w0;
             } else if (t0 == IFlowEvents.DepositStoppedForRound.selector) {
                 ++depositStops;
+                if (abi.decode(logs[i].data, (uint8)) == 2) ++lendStops;
             } else if (t0 == IFlowEvents.Settled.selector) {
                 _bookSettlement(sid, logs[i].data, v);
             }

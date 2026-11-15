@@ -1377,6 +1377,62 @@ contract TimedFlowFaultSimTest is TimedFlowSimTest {
         _fault(F_LEND, 0);
     }
 
+    /// @notice SAFE-09 calibration: 14 days of the SEQ market with the sim's own flows and no fault, under the
+    ///         `maxLendRateGrowthBps` the run is given (`PROTO_SIM_FLOW_MAX_LEND_RATE_GROWTH_BPS` and a
+    ///         `PROTO_SIM_TAG`). It counts the rounds check 5 stopped for deposits and the match, the fastest venue
+    ///         rate growth any call saw, and the longest request waits. Run once per candidate value.
+    function test_e48_lendRateCalibration_s0() public fixtureCovered {
+        if (!vm.envOr("PROTO_SIM", false)) {
+            _skipCovered("");
+            return;
+        }
+        if (keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync")))) != keccak256("timed")) {
+            _skipCovered("");
+            return;
+        }
+        _selectParams();
+        _initSim(SCN_SEQ, 1_000_000e6, 0);
+        this.simGenesis();
+        coverageCheckpoint();
+        _schedInit();
+        marketStartAt = vm.getBlockTimestamp();
+        lastPost = _snap();
+        uint256 t0 = vm.getBlockTimestamp();
+        for (uint256 s; s < 14 days / SLOT_S; ++s) {
+            vm.resetGasMetering();
+            this.simSlot(false);
+            coverageCheckpoint();
+        }
+        FaultStats memory st = _stats();
+        uint256 maxGrowth;
+        for (uint256 i; i < attempts.length; ++i) {
+            if (attempts[i].lendGrowthCentiBpsPerDay > maxGrowth) {
+                maxGrowth = attempts[i].lendGrowthCentiBpsPerDay;
+            }
+        }
+        string memory o = "safe09";
+        vm.serializeUint(o, "maxLendRateGrowthBps", queue.flowParams().maxLendRateGrowthBps);
+        vm.serializeUint(o, "days", (vm.getBlockTimestamp() - t0) / 1 days);
+        vm.serializeUint(o, "settlements", settles.length);
+        vm.serializeUint(o, "attempts", attempts.length);
+        vm.serializeUint(o, "roundsStoppedByLendRate", lendStops);
+        vm.serializeUint(o, "roundsStoppedAny", depositStops);
+        vm.serializeUint(o, "maxObservedGrowthCentiBpsPerDay", maxGrowth);
+        vm.serializeUint(o, "maxRedeemWaitS", st.maxRed);
+        vm.serializeUint(o, "maxDepositWaitS", st.maxDep);
+        vm.serializeUint(o, "depositsExpired", st.expiredDep);
+        string memory json = vm.serializeUint(o, "requests", reqs.length);
+        string memory dir = string.concat(
+            "out/prototype/", runName, "-timed-e48", bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
+        );
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/e48-lendRateCalibration-s0.json"), json);
+        emit log_named_uint("SAFE-09 maxLendRateGrowthBps", queue.flowParams().maxLendRateGrowthBps);
+        emit log_named_uint("SAFE-09 rounds stopped by check 5", lendStops);
+        emit log_named_uint("SAFE-09 settlements", settles.length);
+        emit log_named_uint("SAFE-09 max observed growth (centi-bps/day)", maxGrowth);
+    }
+
     // ─── The run ────────────────────────────────────────────────────────────────────────────────────────
 
     function _faultName(uint8 f) internal pure returns (string memory) {
