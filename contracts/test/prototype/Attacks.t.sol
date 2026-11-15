@@ -80,6 +80,10 @@ struct AttackPnl {
     uint256 navRef;
 }
 
+interface IAtkAdapterAssets {
+    function totalAssets() external view returns (uint256);
+}
+
 interface IAtkPool {
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -4592,6 +4596,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             if (i == IDX_WETH) nav += held[i].mulDiv(refWeth, 1e18);
             else if (i == IDX_CBBTC) nav += held[i].mulDiv(refCbbtc, 1e8);
             else nav += held[i];
+            // A venue under an open exclusion leaves the fund's NAV, but its balance still belongs to the holders
+            // through the exclusion ledger. It counts here so opening a record is not read as a loss.
+            if (!isBasketIndex(i) && fund.openExclusionOf(i) != 0) {
+                nav += IAtkAdapterAssets(fund.assetConfig(i).adapter).totalAssets();
+            }
         }
     }
 
