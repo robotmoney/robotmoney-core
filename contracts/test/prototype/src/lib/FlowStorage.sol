@@ -157,6 +157,9 @@ struct FlowState {
     mapping(address owner => uint256) ownerUnenrolledRedShares;
     mapping(uint64 roundEpoch => uint256[]) noticeRequestsByRound;
     uint64[] pendingNoticeRounds;
+    /// @dev Longest `minHold` stored on any deposit request created so far (E41). Settlement hold end uses it, not
+    ///      the live `params.minHold`, so a later param change never shortens a hold a request was promised.
+    uint32 maxDepositMinHold;
 }
 
 /// @notice Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means "start a new

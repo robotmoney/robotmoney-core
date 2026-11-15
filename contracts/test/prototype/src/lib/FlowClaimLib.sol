@@ -490,6 +490,7 @@ library FlowClaimLib {
         r.remaining = amount;
         r.exitFeeBps = exitFeeBps;
         r.minHold = p.minHold;
+        if (kind == RequestKind.Deposit && p.minHold > s.maxDepositMinHold) s.maxDepositMinHold = p.minHold;
         r.maxRoll = p.maxRoll;
         r.createdAt = uint64(block.timestamp);
         r.expiryEpoch = expiryEpoch;

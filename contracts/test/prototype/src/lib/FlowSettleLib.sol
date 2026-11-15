@@ -163,7 +163,7 @@ library FlowSettleLib {
         st.time = uint64(block.timestamp);
         st.settler = msg.sender;
         if (st.holdEndsAt == 0 && (st.matchedShares != 0 || st.sharesMinted != 0)) {
-            st.holdEndsAt = uint64(block.timestamp) + s.params.minHold;
+            st.holdEndsAt = uint64(block.timestamp) + s.maxDepositMinHold;
         }
         s.lastSettleAt = uint64(block.timestamp);
         s.lastSettleEpoch = w.cur;

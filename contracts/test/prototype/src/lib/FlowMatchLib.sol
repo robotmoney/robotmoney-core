@@ -328,7 +328,7 @@ library FlowMatchLib {
             st.matchedShares = M;
             st.matchedUsdc = matchedUsdc;
             st.matchSharePrice = S;
-            st.holdEndsAt = uint64(block.timestamp) + s.params.minHold;
+            st.holdEndsAt = uint64(block.timestamp) + s.maxDepositMinHold;
         }
 
         _advanceDepositMatchIndex(
