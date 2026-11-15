@@ -570,7 +570,9 @@ async function main(): Promise<number> {
       HOME: l.home,
       XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"),
     };
-    const r = await spawn(["forge", "test", "--json", ...batchFilters(b), ...l.outArgs, "--threads", String(o.threads)], env);
+    // A fork run caps one test (one forge transaction) at the forked block's gas limit, a replay with no fork does not. A long
+    // test then ran out of gas only in the record run. The flag makes the record run see what the replay sees.
+    const r = await spawn(["forge", "test", "--json", "--disable-block-gas-limit", ...batchFilters(b), ...l.outArgs, "--threads", String(o.threads)], env);
     const tag = `${Date.now()}-${lane}`;
     writeFileSync(join(logDir, `record-${tag}.err`), `${label}\n${r.err}`);
     let note = "";
