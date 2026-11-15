@@ -405,7 +405,7 @@ NAV method does not change. The outside feeds stay guards.
 | E30 | Not used | The first draft let redemption requests through a pause. The owner's correction removed the reason (proposal §18.4). | |
 | E31 | Terms views (replaces E21) | `quoteDeposit` and `quoteRedeem` return the fee, the cancel cutoff, the earliest settlement time and the end of the hold. No price. | D17. `lastGoodNav` is the value a client may show. |
 | E32 | Asset rule 4 and delisting (amends E15) | `setTargetAndOpenPlan`, a rise of the TVL cap and a fall of `poolShareBps` also check `minPoolDepthUsdc` against the pool's time-weighted depth. A failing asset can only take a target of 0. | D19. |
-| E34 | Keeper-only (amends E10) | `settle` on the queue and `step` on the rebalancer need `KEEPER_ROLE`. `keeperGrace` and the non-keeper cursor class go. The one holder is the keeper account of E56. | D20, RB-20. The keeper is team-operated and not an actor. |
+| E34 | Keeper-only (amends E10) | `settle` on the queue and `step` on the rebalancer need `KEEPER_ROLE`. `keeperGrace` and the non-keeper cursor class go. The one holder is the keeper account of E56 (`KeeperAccount.sol`, deployed by `DeployKeeperAccount.s.sol`). | D20, RB-20. The keeper is team-operated and not an actor. |
 | E35 | The match is booked whole | A round opens when an epoch closes and takes every locked request. Its first `settle` call computes `M` (E24) and moves the two match indexes (E52). That is the whole match: O(1) in the number of requests. Later calls of the round only trade the net side, each under its own checks 1 to 7. A net call that fails changes nothing and ends nothing, and the keeper may call again. The round ends when the net side is done or the next epoch closes. | D27, D35, RB-24. A match spread over calls could run at a stale price. A round that ended on one failed call made users wait an epoch. |
 | E36 | Venue test and the stop of deposits (check 5 folded in) | Deposits are stopped by four causes. Three are states: `pauseDeposits`, an excluded lending asset, an asset in a delisting sale. One is found by a round: before the match the queue asks each lending adapter what the venue can pay now, and if a venue cannot pay its part of the round's redemptions, or its rate grew faster than `maxLendRateGrowthBps` since the last round (check 5), the round's first call records the stop. Check 5 no longer gates a net redemption (RB-16, RB-28). One effect: no deposit in the round, no match, locked deposits may cancel (E40). Each lending adapter gains the view. | D21, D28, D37, RB-28. |
 | E37 | Net redemption on a venue that cannot pay (amends E4) | The pro-rata sale records a position claim for that venue's part, as E9 does, and pays the rest. It does not revert. | D23. |
@@ -750,6 +750,10 @@ Decisions recorded with this list (cluster 4):
   attacker with a positive net result, the stated fallback is a tighter
   `refBandBps` for the match than for the net trade. If that also fails,
   the match is removed again and D17 to D19 stand without it.
+  **Applied (2026-11-15).** The fallback was used. `matchBandBps` (10 bps of
+  NAV, at most `refBandBps`) gates `bookMatch`. G9 went from 39.25 to 16.94 bps
+  max and A21 nets less than zero. A10, A2 and A6 are not match results and
+  stay as measured (proposal section 14).
 - **The match index is new accounting in the place where money changes
   hands.** It is the staking-index pattern, and its failure mode is a
   position resolved at the wrong index. RB-36 and the exclusion test are
