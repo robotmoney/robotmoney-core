@@ -21,7 +21,7 @@ use std::process::Command;
 
 use alloy_primitives::{Address, U256};
 
-use crate::{ForkFixture, HarnessError};
+use crate::{ForkFixture, HarnessError, Rpc};
 
 /// anvil dev account 1: the vault fee recipient.
 pub const ANVIL_FEE_RECIPIENT: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
@@ -103,6 +103,7 @@ pub fn is_transient_upstream_failure(stderr: &str) -> bool {
         "failed to get storage",
         "Failed to send/recv",
         "operation timed out",
+        "lack of funds (0) for max fee",
     ]
     .iter()
     .any(|m| stderr.contains(m))
@@ -198,6 +199,31 @@ fn write_random_password(path: &std::path::Path) -> Result<(), HarnessError> {
     Ok(())
 }
 
+/// Fund `deployer` with at least `min_balance` wei and verify via `eth_getBalance`, retrying
+/// `anvil_setBalance` + `evm_mine` if the local fork transiently reports a lower balance.
+fn ensure_deployer_balance(
+    rpc: &Rpc,
+    deployer: Address,
+    min_balance: U256,
+) -> Result<(), HarnessError> {
+    let mut last_balance = U256::ZERO;
+    for attempt in 1..=5u32 {
+        rpc.set_balance(deployer, min_balance)?;
+        last_balance = rpc.eth_get_balance(deployer)?;
+        if last_balance >= min_balance {
+            return Ok(());
+        }
+        eprintln!(
+            "[deploy] deployer {deployer:#x} balance {last_balance} < {min_balance} after anvil_setBalance (attempt {attempt}/5); mining block and retrying"
+        );
+        let _: serde_json::Value = rpc.rpc_raw("evm_mine", serde_json::json!([]))?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(HarnessError::Rpc(format!(
+        "deployer {deployer:#x} balance {last_balance} wei is below required {min_balance} wei (100 ETH) after anvil_setBalance retries"
+    )))
+}
+
 /// Deploy this fixture's own vault through the one driver: `bun publish-contracts/src/cli.ts --stage vault`
 /// on the Twin chain, signed by a throwaway encrypted keystore. Then read the manifest the CLI wrote.
 /// Gas and USDC for the seed are the two allowed environment steps (anvil_setBalance and the FiatToken balance slot).
@@ -258,8 +284,7 @@ pub fn deploy_own_vault(fx: &ForkFixture) -> Result<DeployedVault, HarnessError>
     std::fs::write(&sheet, render_sheet(&stage_sheet, &replace))?;
 
     let one_eth = U256::from(10u64).pow(U256::from(18u64));
-    fx.rpc()
-        .set_balance(deployer, one_eth * U256::from(100u64))?;
+    ensure_deployer_balance(fx.rpc(), deployer, one_eth * U256::from(100u64))?;
     fx.fund_usdc(deployer, U256::from(SEED_DEPOSIT_USDC))?;
 
     let signer = format!(
@@ -414,6 +439,9 @@ mod tests {
     fn transient_upstream_failures_are_recognised() {
         assert!(is_transient_upstream_failure(
             "failed to get account for 0x86AB: HTTP error 502 with body: <title>502 Bad Gateway</title>"
+        ));
+        assert!(is_transient_upstream_failure(
+            "libs stage failed: Error: Failed to send transaction: lack of funds (0) for max fee"
         ));
         assert!(!is_transient_upstream_failure(
             "Error: revert: InsufficientGas(1, 2)"

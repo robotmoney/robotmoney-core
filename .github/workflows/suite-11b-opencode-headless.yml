@@ -354,6 +354,7 @@ jobs:
         with:
           share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
           govern: "true"
+          gateway: "true"
 
       # The deploy authorizes no agent (core 1527; architecture 5.2 and 6.3). Read the stage manifests, assert
       # on-chain that the generated key holds no authorization yet, then have the depositor (the share
@@ -634,6 +635,7 @@ jobs:
         uses: ./.github/actions/twin-publish
         with:
           share-receiver-address: ${{ env.SHARE_RECEIVER_ADDRESS }}
+          gateway: "true"
 
       # Issue 1656: RMPC_FORK_RPC_URL is the Twin chain started above. Unset, the test used to skip
       # and still pass. It now panics under CI.
