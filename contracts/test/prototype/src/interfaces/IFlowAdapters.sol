@@ -27,6 +27,12 @@ interface IExactOutSwapAdapter is IBasketSwapAdapter {
         address recipient,
         uint256 deadline
     ) external returns (uint256 amountIn);
+
+    /// @notice True when `pool` is a fixed-fee pool recognized by this adapter (e.g. Uniswap V3).
+    function isFixedFeePool(address pool) external view returns (bool);
+
+    /// @notice Fee of pool in bps rounded up (e.g. 100 pips = 1 bps, 500 pips = 5 bps).
+    function poolFeeBps(address pool) external view returns (uint24);
 }
 
 /// @title ILendingRateAdapter
@@ -37,6 +43,9 @@ interface IExactOutSwapAdapter is IBasketSwapAdapter {
 ///         move it.
 interface ILendingRateAdapter is IStrategyAdapter {
     function ratePerUnit() external view returns (uint256 rate1e18);
+
+    /// @notice Currently withdrawable underlying liquidity on the venue (may understate, never overstate).
+    function availableLiquidity() external view returns (uint256);
 }
 
 /// @title IChainlinkAggregator

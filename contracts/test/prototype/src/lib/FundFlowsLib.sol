@@ -35,6 +35,7 @@ import {IExactOutSwapAdapter} from "../interfaces/IFlowAdapters.sol";
 import {FundState} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
+import {FundDelistLib} from "./FundDelistLib.sol";
 import {FundStepLib} from "./FundStepLib.sol";
 
 /// @title FundFlowsLib
@@ -65,6 +66,13 @@ library FundFlowsLib {
     /// @dev Share units minted per USDC unit by `seed`: the fund's existing scale (`_decimalsOffset() == 18`), so the
     ///      first share costs par (`PRICE_SCALE / 1e18`).
     uint256 internal constant SEED_SHARES_PER_USDC = 1e18;
+
+    uint8 internal constant FLOW_CLAIM_DEFERRED = 0;
+    uint8 internal constant FLOW_CLAIM_POSITION = 1;
+    uint8 internal constant FLOW_SETTLE_CLAIM = 2;
+    uint8 internal constant FLOW_EMERGENCY_UNWIND = 3;
+    uint8 internal constant FLOW_EMERGENCY_UNWIND_ASSET = 4;
+    uint8 internal constant FLOW_SWEEP_FOREIGN = 5;
 
     /// @notice Body of `IRobotMoneyFund.seed` (E14). The fund checks ADMIN_ROLE, holds `nonReentrant` and mints the
     ///         returned shares to itself. Once, only at zero supply (`AlreadySeeded`), at least `minSeedUsdc`
@@ -112,7 +120,9 @@ library FundFlowsLib {
         uint256 supply
     ) public returns (uint256 spent) {
         if (supply == 0) revert IRobotMoneyFund.NotSeeded();
-        if (s.depositsPaused) revert IRobotMoneyFund.DepositsArePaused();
+        if (FundValuationLib.isDepositsPaused(s) || FundValuationLib.hasAssetInSale(s)) {
+            revert IRobotMoneyFund.DepositsArePaused();
+        }
         if (s.shutdown) revert IRobotMoneyFund.FundIsShutdown();
         if (FundValuationLib.anyExcluded(s)) {
             revert IRobotMoneyFund.DepositsClosedDuringExclusion();
@@ -143,53 +153,134 @@ library FundFlowsLib {
         FundValuationLib.recordNav(s);
     }
 
-    /// @notice Body of `IRobotMoneyFund.sellForFlow` (E4, proposal §5.9.3 step 8) after the burn. The fund checks
-    ///         FLOW_ROLE, holds `nonReentrant` and has already burned `shares` of `caller` (burn before any external
-    ///         call). Never gated by plan state, pause or shutdown (RB-6).
-    ///         1. `LegLimitsLength`. Check 7 snapshot (the burn moved no asset).
-    ///         2. Realize `shares / supplyBefore` of every counted holding, each rounded DOWN: the idle part; each
-    ///            Lending position withdraws its part less `LENDING_ROUNDING_UNITS` (nothing when that is ≤ 0),
-    ///            measured by the fund's USDC delta; each Basket token sells its part through the production
-    ///            exact-input `swap` with `minUsdcPerLeg[i]` as the floor (check 8, `FlowLegLimit` if the delta is
-    ///            below it). A venue that cannot pay reverts the call, so the queue leaves redemptions pending.
-    ///         3. `exitFeeBps` of the realized gross (rounded down) to `feeRecipient`, the rest to `caller`.
-    ///         4. Check 10 with `supplyAfter = supplyBefore − shares`. Emits `SoldForFlow`.
-    /// @param supplyBefore The fund's `totalSupply()` before the burn.
-    /// @return net USDC paid to `caller`.
+    /// @notice Body of `IRobotMoneyFund.sellForFlow`, `sellForFlowGross`, and `sellForFlowBatch` after the burn.
+    ///         The fund checks FLOW_ROLE, holds `nonReentrant`, and has already burned `shares` of `caller`.
+    ///         Net mode (`!ctx.grossOnly && !ctx.batch`) deducts `s.exitFeeBps`; gross mode transfers gross
+    ///         and tags `ctx.feeBps` onto emitted claims; batch mode splits any claims directly onto `ctx.owners`
+    ///         with linked fees at `ctx.ownerFeeBps`.
     function sellForFlow(
+        FundState storage s,
+        SellFlowCtx memory ctx,
+        uint256[] memory minUsdcPerLeg
+    ) public returns (uint256 payout) {
+        if (!ctx.grossOnly && !ctx.batch) ctx.feeBps = s.exitFeeBps;
+        ctx.usdc = s.usdc;
+        return _sellForFlow(s, ctx, minUsdcPerLeg);
+    }
+
+    function sellForFlowGross(
         FundState storage s,
         address caller,
         uint256 shares,
         uint256[] memory minUsdcPerLeg,
-        uint256 supplyBefore
-    ) public returns (uint256 net) {
+        uint256 supplyBefore,
+        uint256 claimFeeBps
+    ) public returns (uint256 payout) {
+        SellFlowCtx memory ctx;
+        ctx.caller = caller;
+        ctx.shares = shares;
+        ctx.supplyBefore = supplyBefore;
+        ctx.grossOnly = claimFeeBps != type(uint256).max;
+        ctx.feeBps = ctx.grossOnly ? claimFeeBps : s.exitFeeBps;
+        ctx.usdc = s.usdc;
+        return _sellForFlow(s, ctx, minUsdcPerLeg);
+    }
+
+    struct SellFlowCtx {
+        address caller;
+        uint256 shares;
+        uint256 supplyBefore;
+        uint256 feeBps;
+        address usdc;
+        bool grossOnly;
+        bool batch;
+        address[] owners;
+        uint256[] ownerShares;
+        uint16[] ownerFeeBps;
+    }
+
+    function _sellForFlow(
+        FundState storage s,
+        SellFlowCtx memory ctx,
+        uint256[] memory minUsdcPerLeg
+    ) private returns (uint256 payout) {
         uint256 n = s.assets.length;
         if (minUsdcPerLeg.length != n) {
             revert IRobotMoneyFund.LegLimitsLength(minUsdcPerLeg.length, n);
         }
         (uint256 idle0, uint256[] memory held0) = FundValuationLib.heldAmounts(s);
-        address usdc = s.usdc;
-        uint256 gross = idle0.mulDiv(shares, supplyBefore);
+        uint256 gross = idle0.mulDiv(ctx.shares, ctx.supplyBefore);
         for (uint256 i; i < n; ++i) {
-            uint256 amt = held0[i].mulDiv(shares, supplyBefore);
-            AssetConfig memory a = s.assets[i];
-            if (a.kind == AssetKind.Lending) {
-                if (amt <= LENDING_ROUNDING_UNITS) continue;
-                gross += FundPositionLib.take(s, i, amt - LENDING_ROUNDING_UNITS);
-            } else if (amt != 0) {
-                uint256 minOut = minUsdcPerLeg[i];
-                uint256 got = _swap(a, a.token, usdc, amt, minOut);
-                if (got < minOut) revert IRobotMoneyFund.FlowLegLimit(i, got, minOut);
-                gross += got;
+            uint256 amt = held0[i].mulDiv(ctx.shares, ctx.supplyBefore);
+            if (amt != 0) gross += _sellFlowLeg(s, ctx, i, amt, minUsdcPerLeg[i]);
+        }
+        uint256 fee = ctx.grossOnly ? 0 : gross.mulDiv(ctx.feeBps, BPS);
+        payout = gross - fee;
+        if (fee != 0) IERC20(ctx.usdc).safeTransfer(s.feeRecipient, fee);
+        if (payout != 0) IERC20(ctx.usdc).safeTransfer(ctx.caller, payout);
+        FundValuationLib.requireProportion(
+            s, idle0, held0, ctx.supplyBefore, ctx.supplyBefore - ctx.shares
+        );
+        emit IRobotMoneyFund.SoldForFlow(ctx.caller, ctx.shares, gross, fee, payout);
+        FundValuationLib.recordNav(s);
+    }
+
+    function _sellFlowLeg(
+        FundState storage s,
+        SellFlowCtx memory ctx,
+        uint256 i,
+        uint256 amt,
+        uint256 minOut
+    ) private returns (uint256) {
+        AssetConfig memory a = s.assets[i];
+        if (a.kind == AssetKind.Lending) {
+            if (ctx.batch) {
+                return FundPositionLib.takeForFlowBatch(
+                    s,
+                    i,
+                    amt,
+                    ctx.shares,
+                    ctx.supplyBefore,
+                    ctx.owners,
+                    ctx.ownerShares,
+                    ctx.ownerFeeBps
+                );
+            }
+            return FundPositionLib.takeForFlow(
+                s, i, amt, ctx.shares, ctx.supplyBefore, ctx.caller, ctx.feeBps, true
+            );
+        }
+        if (s.inSale[i]) {
+            if (ctx.batch) {
+                _recordDelistBatch(s, i, amt, ctx);
+            } else {
+                FundDelistLib.recordDelistClaim(s, i, ctx.caller, amt, ctx.feeBps);
+            }
+            return 0;
+        }
+        uint256 got = _swap(a, a.token, ctx.usdc, amt, minOut);
+        if (got < minOut) revert IRobotMoneyFund.FlowLegLimit(i, got, minOut);
+        return got;
+    }
+
+    function _recordDelistBatch(
+        FundState storage s,
+        uint256 i,
+        uint256 amt,
+        SellFlowCtx memory ctx
+    ) private {
+        uint256 remAmt = amt;
+        uint256 remShares = ctx.shares;
+        for (uint256 k; k < ctx.owners.length && remAmt != 0; ++k) {
+            uint256 os = ctx.ownerShares[k];
+            if (os == 0) continue;
+            uint256 slice = remShares == os ? remAmt : remAmt.mulDiv(os, remShares);
+            remAmt -= slice;
+            remShares -= os;
+            if (slice != 0) {
+                FundDelistLib.recordDelistClaim(s, i, ctx.owners[k], slice, ctx.ownerFeeBps[k]);
             }
         }
-        uint256 fee = gross.mulDiv(s.exitFeeBps, BPS);
-        net = gross - fee;
-        if (fee != 0) IERC20(usdc).safeTransfer(s.feeRecipient, fee);
-        if (net != 0) IERC20(usdc).safeTransfer(caller, net);
-        FundValuationLib.requireProportion(s, idle0, held0, supplyBefore, supplyBefore - shares);
-        emit IRobotMoneyFund.SoldForFlow(caller, shares, gross, fee, net);
-        FundValuationLib.recordNav(s);
     }
 
     /// @dev `mintInKind` lending leg (own frame for stack depth): supply `ask` to lending asset `i` for the holders
@@ -220,10 +311,8 @@ library FundFlowsLib {
         if (amountIn > limit) revert IRobotMoneyFund.FlowLegLimit(i, amountIn, limit);
     }
 
-    /// @notice Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2). Reverts
-    ///         `ProtectedToken` for USDC, the share token, every asset token (active or not) and every Lending
-    ///         adapter address. Emits `ForeignTokenSwept`.
-    function sweepForeign(FundState storage s, address token, address caller) public {
+    /// @notice Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2).
+    function _sweepForeign(FundState storage s, address token, address caller) private {
         if (token == s.usdc || token == address(this)) {
             revert IRobotMoneyFund.ProtectedToken(token);
         }
@@ -293,7 +382,7 @@ library FundFlowsLib {
         view
         returns (uint256 idle, uint256[] memory held, uint256[] memory pos)
     {
-        idle = IERC20(s.usdc).balanceOf(address(this));
+        idle = FundValuationLib.idleUsdc(s);
         uint256 n = s.assets.length;
         held = new uint256[](n);
         pos = new uint256[](n);
@@ -345,10 +434,11 @@ library FundFlowsLib {
     ///         `withdraw` exactly the owed USDC from the adapter (`DeferredShortfall` when it delivers less, so
     ///         the claim stays whole) and transfer it. Works whatever the asset's status (inactive, excluded):
     ///         the claim was fixed at exit time. Reverts `NothingDeferred` when nothing is owed.
-    function claimDeferred(FundState storage s, uint256 index, address account, address to)
-        public
+    function _claimDeferred(FundState storage s, uint256 index, address account, address to)
+        private
         returns (uint256 amount)
     {
+        if (to == address(0)) revert IFundEvents.ZeroAddress();
         amount = s.deferredOf[index][account];
         if (amount == 0) revert IRobotMoneyFund.NothingDeferred(index, account);
         s.deferredOf[index][account] = 0;
@@ -421,9 +511,42 @@ library FundFlowsLib {
     ///         zero floor is dust and is skipped; a leg whose TWAP read fails is skipped and stays held (there
     ///         is no configured-floor override here, see the fund's NatSpec). A swap below its floor reverts
     ///         the whole unwind, as on BasketVault. Returns the USDC that reached idle.
-    function emergencyUnwind(FundState storage s) public returns (uint256 recovered) {
+    /// @notice Consolidated non-reentrant claim / unwind / sweep dispatcher called via one `DELEGATECALL` site.
+    function flowAction(
+        FundState storage s,
+        uint8 op,
+        uint256 index,
+        address addr,
+        address caller
+    ) public returns (uint256) {
+        if (op == FLOW_CLAIM_DEFERRED) return _claimDeferred(s, index, caller, addr);
+        if (op == FLOW_CLAIM_POSITION) return FundPositionLib.claimPosition(s, index, caller, addr);
+        if (op == FLOW_SETTLE_CLAIM) return _settleClaim(s, index, addr);
+        if (op == FLOW_EMERGENCY_UNWIND) {
+            if (!s.depositsPaused) {
+                s.depositsPaused = true;
+                emit IRobotMoneyFund.DepositsPaused(caller);
+            }
+            uint256 recovered = _emergencyUnwind(s);
+            FundDelistLib.unwindPausePlan(s);
+            emit IRobotMoneyFund.EmergencyUnwound(recovered);
+            return recovered;
+        }
+        if (op == FLOW_EMERGENCY_UNWIND_ASSET) {
+            uint256 recovered = _emergencyUnwindAsset(s, index);
+            emit IRobotMoneyFund.EmergencyUnwound(recovered);
+            return recovered;
+        }
+        if (op == FLOW_SWEEP_FOREIGN) {
+            _sweepForeign(s, addr, caller);
+            return 0;
+        }
+        revert IFundEvents.InvalidParam();
+    }
+
+    function _emergencyUnwind(FundState storage s) private returns (uint256 recovered) {
         address usdc = s.usdc;
-        uint256 before = IERC20(usdc).balanceOf(address(this));
+        uint256 before = FundValuationLib.idleUsdc(s);
         RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
@@ -439,6 +562,10 @@ library FundFlowsLib {
                 );
                 continue;
             }
+            if (s.inSale[i]) {
+                _emergencyUnwindInSale(s, i, a, usdc);
+                continue;
+            }
             uint256 bal = FundValuationLib.heldBalance(s, i);
             if (bal == 0) continue;
             try IBasketSwapAdapter(a.adapter)
@@ -449,8 +576,150 @@ library FundFlowsLib {
                 if (floor != 0) _swap(a, a.token, usdc, bal, floor);
             } catch {}
         }
-        uint256 afterBal = IERC20(usdc).balanceOf(address(this));
+        uint256 afterBal = FundValuationLib.idleUsdc(s);
         recovered = afterBal > before ? afterBal - before : 0;
+    }
+
+    function _emergencyUnwindInSale(
+        FundState storage s,
+        uint256 i,
+        AssetConfig memory a,
+        address usdc
+    ) private {
+        uint256 fundTok = FundValuationLib.heldBalance(s, i);
+        uint256 claimTok = s.delistClaimedTokens[i];
+        uint256 totalTok = fundTok + claimTok;
+        if (totalTok == 0) {
+            FundDelistLib.closeDelistSale(s, i);
+            return;
+        }
+        uint256 floor;
+        try IBasketSwapAdapter(a.adapter)
+            .twapPrice(a.pool, a.token, usdc, totalTok, a.twapWindow) returns (
+            uint256 v
+        ) {
+            floor = _haircut(v, s.maxSlippageBps);
+        } catch {}
+        if (floor == 0) return;
+        (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, usdc, totalTok, floor);
+        FundDelistLib.finalizeDelistSale(s, i, sold, usdcGot, 0, fundTok, claimTok, false);
+    }
+
+    function _swapAndMeasureSold(
+        AssetConfig memory a,
+        address usdc,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 sold, uint256 usdcGot) {
+        uint256 tokBefore = IERC20(a.token).balanceOf(address(this));
+        usdcGot = _swap(a, a.token, usdc, amountIn, minOut);
+        uint256 tokAfter = IERC20(a.token).balanceOf(address(this));
+        sold = tokBefore > tokAfter ? tokBefore - tokAfter : 0;
+    }
+
+    /// @notice Step 3f (`IRobotMoneyFund.executeDelistStep`): execute one bounded delisting swap on `index`.
+    function executeDelistStep(FundState storage s, uint256 index, uint256 maxUsdcNotional)
+        public
+        returns (bool executed, uint256 tokensSold, uint256 usdcReceived)
+    {
+        (
+            bool shouldSell,
+            uint256 tokensToSell,
+            ,
+            uint256 expectedUsdc,
+            uint256 fundTokensBefore,
+            uint256 claimedBefore
+        ) = FundDelistLib.prepareDelistStep(s, index, maxUsdcNotional);
+        if (!shouldSell) return (false, 0, 0);
+
+        // Execute with minOut = 0 so `finalizeDelistSale` enforces and emits canonical `DelistBandExceeded`.
+        (tokensSold, usdcReceived) = _swapAndMeasureSold(s.assets[index], s.usdc, tokensToSell, 0);
+
+        FundDelistLib.finalizeDelistSale(
+            s, index, tokensSold, usdcReceived, expectedUsdc, fundTokensBefore, claimedBefore, true
+        );
+        FundValuationLib.recordNav(s);
+        executed = true;
+    }
+
+    /// @notice Step 3f (`IRobotMoneyFund.emergencyUnwind(uint256)`): single-asset unwind without halting other assets.
+    function _emergencyUnwindAsset(FundState storage s, uint256 index)
+        private
+        returns (uint256 recoveredUsdc)
+    {
+        if (index >= s.assets.length || !s.assets[index].active) {
+            revert IFundEvents.InvalidAssetIndex(index);
+        }
+        s.targetBps[index] = 0;
+        Plan storage p = s.plan;
+        if (
+            (
+                p.status == PlanStatus.Open || p.status == PlanStatus.Halted
+                    || p.status == PlanStatus.Paused
+            ) && index < p.endBps.length
+        ) {
+            p.endBps[index] = 0;
+        }
+
+        uint256 beforeIdle = FundValuationLib.idleUsdc(s);
+        AssetConfig memory a = s.assets[index];
+        if (a.kind == AssetKind.Lending) {
+            RobotMoneyVaultOps.Exclusions storage x = RobotMoneyVaultOps.exclusions();
+            FundPositionLib.drain(
+                s,
+                index,
+                x.ledger,
+                x.openExclusionOf[index],
+                ExclusionLedger.RecoverySource.EmergencyWithdraw
+            );
+        } else {
+            _emergencyUnwindSingleSwap(s, index, a);
+        }
+        uint256 afterIdle = FundValuationLib.idleUsdc(s);
+        recoveredUsdc = afterIdle > beforeIdle ? afterIdle - beforeIdle : 0;
+    }
+
+    function _emergencyUnwindSingleSwap(FundState storage s, uint256 index, AssetConfig memory a)
+        private
+    {
+        uint256 fundTok = FundValuationLib.heldBalance(s, index);
+        bool inSaleNow = s.inSale[index];
+        uint256 claimTok = inSaleNow ? s.delistClaimedTokens[index] : 0;
+        uint256 totalTok = fundTok + claimTok;
+        if (totalTok == 0) {
+            if (inSaleNow) FundDelistLib.closeDelistSale(s, index);
+            return;
+        }
+        (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, s.usdc, totalTok, 0);
+        if (inSaleNow) {
+            FundDelistLib.finalizeDelistSale(s, index, sold, usdcGot, 0, fundTok, claimTok, false);
+        }
+    }
+
+    /// @notice Step 3f (`IRobotMoneyFund.settleClaim`): permissionlessly settle `owner`'s lending or delisting claim.
+    function _settleClaim(FundState storage s, uint256 index, address owner)
+        private
+        returns (uint256 netUsdc)
+    {
+        if (owner == address(0)) revert IFundEvents.ZeroAddress();
+        if (index >= s.assets.length) revert IFundEvents.InvalidAssetIndex(index);
+
+        uint256 feeUsdc;
+        bool hasClaim;
+        if (s.assets[index].kind == AssetKind.Lending) {
+            (netUsdc, feeUsdc, hasClaim) = FundPositionLib.settleLendingClaim(s, index, owner);
+            if (!hasClaim) revert IRobotMoneyFund.NoClaimToSettle(index, owner);
+            return netUsdc;
+        }
+
+        (netUsdc, feeUsdc, hasClaim) = FundDelistLib.consumeDelistClaim(s, index, owner);
+        if (!hasClaim) revert IRobotMoneyFund.NoClaimToSettle(index, owner);
+        address usdc = s.usdc;
+        if (feeUsdc != 0) IERC20(usdc).safeTransfer(s.feeRecipient, feeUsdc);
+        if (netUsdc != 0) IERC20(usdc).safeTransfer(owner, netUsdc);
+        if (netUsdc != 0 || feeUsdc != 0) {
+            emit IRobotMoneyFund.ClaimSettled(index, owner, netUsdc, feeUsdc);
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

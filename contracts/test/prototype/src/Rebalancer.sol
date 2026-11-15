@@ -52,21 +52,19 @@ import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
 ///         measurement, the RB-7 guard, the per-step cost cap and the budget halt (RB-3, RB-4).
 ///
 ///         Authority:
-///         - `step()`: KEEPER_ROLE always; anyone once `keeperGrace` has passed with no step on an
-///           Open plan (§5.4). The caller chooses only WHEN (RB-2).
+///         - `step()`, `stepDelisted(index)`: `KEEPER_ROLE` only (§5.4, E34, E53). The caller chooses
+///           only WHEN (RB-2).
 ///         - Parameters (§5.6): ADMIN_ROLE (the timelock).
-///         On the fund this contract holds REBALANCER_ROLE (`executeStep`, `concludePlan`).
+///         On the fund this contract holds REBALANCER_ROLE (`executeStep`, `executeDelistStep`, `concludePlan`).
 ///
 ///         Runtime hardening beyond the pinned interface (prototype choices, see NatSpec below):
 ///         - The cooldown is `max(stepInterval, fund.maxTwapWindow())`, so an asset added later
 ///           with a longer TWAP window can never make the cooldown shorter than a window (§5.3.1).
 ///         - Each leg's slippage floor is clamped to `fund.maxSlippageBps()` at run time, so a
 ///           later lowering of the fund ceiling is honoured without re-setting every asset.
-///         - Per-asset backoff: when `executeStep` reverts on a KEEPER's call, both non-idle legs are
-///           excluded from leg picking for one cooldown, so a frozen venue stalls only its own asset
-///           while the rest of the plan keeps converging (§5.8 "A venue freezes"). Step 3e (§5.10): a
-///           stranger's failed call after `keeperGrace` backs nothing off, so nobody but the keeper
-///           can delay an asset's next step.
+///         - Per-asset backoff: when `executeStep` or `executeDelistStep` reverts, traded non-idle legs
+///           are excluded from leg picking for one cooldown, so a frozen venue stalls only its own asset
+///           while the rest of the plan keeps converging (§5.8 "A venue freezes").
 ///         - Gas starvation: `executeStep` is only called with at least `STEP_GAS_FLOOR` gas left
 ///           (else `StepGasStarved`), and a revert that left this frame with under 1/63 of the gas it
 ///           forwarded is re-thrown, so a permissionless caller cannot force a fake `StepFailed` and a
@@ -91,7 +89,7 @@ contract Rebalancer is
 
     /// @notice Sets step parameters and administers KEEPER_ROLE. Held by the timelock.
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
-    /// @notice May call `step()` before `keeperGrace` has passed (§5.4).
+    /// @notice May call `step()` and `stepDelisted()` (§5.4, E34, E53).
     bytes32 public constant KEEPER_ROLE = Roles.KEEPER_ROLE;
 
     /// @notice Gas that must remain when `step()` calls `fund.executeStep` (RB-2, §5.8 row 5). A measured
@@ -119,6 +117,11 @@ contract Rebalancer is
     mapping(uint256 index => uint64) private _backoffUntil;
     /// @dev Depth cap on basket legs, in bps of the pool's time-weighted USDC depth (`assetStepCap`).
     uint16 private _stepDepthBps;
+    /// @dev Timestamp of the most recent executed normal `step()` that traded a Basket leg (E42, RB-30).
+    ///      Lending-only steps and `stepDelisted()` do not update it.
+    uint64 private _lastBasketStepAt;
+    /// @dev Per-asset timestamp of the last executed `stepDelisted()` for cooldown spacing.
+    mapping(uint256 index => uint64) private _lastDelistStepAt;
 
     // ─── Internal decision record ────────────────────────────────────────────
 
@@ -134,6 +137,7 @@ contract Rebalancer is
         StepFeedCheck feedCheck;
         uint256 feedIndex;
         StepPrices px;
+        bool hasBasketLeg;
     }
 
     // ─── Step 3e events (§5.10) ──────────────────────────────────────────────
@@ -151,7 +155,7 @@ contract Rebalancer is
     /// @notice Atomic proxy initialization.
     /// @param fund_    The fund this rebalancer drives. Set once, no setter.
     /// @param admin    Receives ADMIN_ROLE (deployer first, then the timelock).
-    /// @param keeper   Receives KEEPER_ROLE. address(0) grants none (grace path only).
+    /// @param keeper   Receives KEEPER_ROLE. address(0) grants none.
     /// @param params   Initial global step parameters, bounded as in `setStepParams` (§5.6).
     /// @param upgradeTimelock_ The only upgrade and freeze authority.
     /// @param upgradeMode_ Release mode; `Undeclared` reverts.
@@ -183,19 +187,18 @@ contract Rebalancer is
 
     /// @inheritdoc IRebalancer
     /// @dev Implements §5.3 steps 1 to 9 in order, plus the §5.5 Converged and Expired transitions.
-    ///      Takes no input (RB-2). Skips return and emit `RebalanceStepSkipped`; only the access
-    ///      check (`NotKeeperBeforeGrace`) and gas starvation (`StepGasStarved`) revert.
+    ///      Takes no input (RB-2). Skips return and emit `RebalanceStepSkipped`; only `KEEPER_ROLE`
+    ///      access enforcement and gas starvation (`StepGasStarved`) revert.
     ///      A concluded plan (Converged or Expired) returns `(false, Concluded)` with the fund's
     ///      `PlanStatusChanged` as its only event.
-    function step() external nonReentrant returns (bool executed, SkipReason reason) {
+    function step()
+        external
+        nonReentrant
+        onlyRole(KEEPER_ROLE)
+        returns (bool executed, SkipReason reason)
+    {
         IRobotMoneyFund f = _fund;
         Plan memory p = f.plan();
-
-        // §5.4: keeper first, anyone after grace while the plan is Open.
-        if (!hasRole(KEEPER_ROLE, msg.sender)) {
-            uint256 openAt = _permissionlessAt(f, p);
-            if (block.timestamp < openAt) revert NotKeeperBeforeGrace(msg.sender, openAt);
-        }
 
         Decision memory d = _decide(f, p);
 
@@ -215,6 +218,35 @@ contract Rebalancer is
         return _execute(f, p, d);
     }
 
+    /// @inheritdoc IRebalancer
+    function stepDelisted(uint256 index)
+        external
+        nonReentrant
+        onlyRole(KEEPER_ROLE)
+        returns (bool executed)
+    {
+        IRobotMoneyFund f = _fund;
+        AssetConfig[] memory cfgs = f.assetConfigs();
+        if (index >= cfgs.length) revert InvalidAssetIndex(index);
+        if (!cfgs[index].active || !f.isAssetInSale(index)) return false;
+        if (
+            _backoffUntil[index] >= block.timestamp
+                || (_lastDelistStepAt[index] != 0
+                    && block.timestamp < uint256(_lastDelistStepAt[index]) + _stepParams.stepInterval)
+        ) return false;
+        uint256 cap = _stepCap(f, cfgs, index);
+        if (cap == 0) return false;
+        uint256 gasBefore = gasleft();
+        try f.executeDelistStep(index, cap) returns (bool ok, uint256, uint256) {
+            if (ok) _lastDelistStepAt[index] = uint64(block.timestamp);
+            return ok;
+        } catch {
+            if (gasleft() <= gasBefore / 63) revert StepGasStarved();
+            _backoff(f, index);
+            return false;
+        }
+    }
+
     /// @dev §5.3 steps 5 to 9: build the TWAP floors, call the fund, report.
     function _execute(IRobotMoneyFund f, Plan memory p, Decision memory d)
         internal
@@ -224,6 +256,7 @@ contract Rebalancer is
         uint256 gasBefore = gasleft();
         if (gasBefore < STEP_GAS_FLOOR) revert StepGasStarved();
         try f.executeStep(order) returns (StepResult memory r) {
+            if (d.hasBasketLeg) _lastBasketStepAt = uint64(block.timestamp);
             (uint256 sellPath, uint256 buyPath) = _legPathBps(p, d.sellIndex, d.buyIndex);
             emit RebalanceStep(
                 p.id,
@@ -243,13 +276,8 @@ contract Rebalancer is
             if (gasleft() <= gasBefore / 63) revert StepGasStarved();
             uint256 selector;
             if (err.length >= 4) selector = uint256(uint32(bytes4(err)));
-            // Step 3e (§5.10): back off only on the keeper's own failed call. A stranger's failed call after
-            // keeperGrace must not delay an asset's next step (it could fail a step on purpose, e.g. by pushing
-            // a pool past the floor in the same transaction, to keep an asset out of leg picking).
-            if (hasRole(KEEPER_ROLE, msg.sender)) {
-                _backoff(f, d.sellIndex);
-                _backoff(f, d.buyIndex);
-            }
+            _backoff(f, d.sellIndex);
+            _backoff(f, d.buyIndex);
             emit RebalanceStepSkipped(
                 p.id, SkipReason.StepFailed, d.sellIndex, d.buyIndex, selector
             );
@@ -415,15 +443,24 @@ contract Rebalancer is
         }
         d.sellIndex = legs.sellIndex;
         d.buyIndex = legs.buyIndex;
+        d.hasBasketLeg = (
+                legs.sellIndex != IDLE_INDEX && cfgs[legs.sellIndex].kind == AssetKind.Basket
+            )
+            || (legs.buyIndex != IDLE_INDEX && cfgs[legs.buyIndex].kind == AssetKind.Basket);
 
         // 4. Size: min(over, under, the cap of each non-idle leg). Never past path (RB-7). A basket leg's cap is
         //    also `stepDepthBps` of its pool's time-weighted USDC depth (`_stepCap`): a step is small against the
         //    pool, so a keeper's sandwich of it gains little (A20), as the per-call cap does for a settlement.
+        //    SAFE-05 (§5.3 step 4, §5.5): dust below `minStepUsdc` is ignored except for the last dust after
+        //    `endTime` when the smaller deviation fits within both legs' caps (`notional == min(over, under)`).
         uint256 notional = _size(f, cfgs, legs);
         d.notional = notional;
         if (notional < sp.minStepUsdc) {
-            d.reason = SkipReason.BelowMinStep;
-            d.detail = notional;
+            uint256 minDev = Math.min(legs.over, legs.under);
+            if (block.timestamp < p.endTime || notional < minDev) {
+                d.reason = SkipReason.BelowMinStep;
+                d.detail = notional;
+            }
         }
     }
 
@@ -446,7 +483,10 @@ contract Rebalancer is
         m.oraFail = IDLE_INDEX;
         m.depthCapped = IDLE_INDEX;
         for (uint256 i; i < n; ++i) {
-            if (!cfgs[i].active || _assetStepParams[i].maxStepUsdc == 0) continue;
+            if (!cfgs[i].active || _assetStepParams[i].maxStepUsdc == 0 || f.isAssetInSale(i)) {
+                continue;
+            }
+            if (cfgs[i].kind == AssetKind.Lending && f.positionClaimTotal(i) > 0) continue;
             // Inclusive end: a keeper stepping on the cooldown cadence lands exactly on `until`, and must
             // see the frozen asset still masked there, or it retries it forever and starves the others (§5.8).
             uint256 until = _backoffUntil[i];
@@ -512,13 +552,6 @@ contract Rebalancer is
         return Math.max(_stepParams.stepInterval, f.maxTwapWindow());
     }
 
-    /// @dev §5.4: `max(lastStepAt, startTime) + keeperGrace` while Open, else never.
-    function _permissionlessAt(IRobotMoneyFund f, Plan memory p) internal view returns (uint256) {
-        if (p.status != PlanStatus.Open) return type(uint256).max;
-        uint256 base = Math.max(f.lastStepAt(), p.startTime);
-        return base + _stepParams.keeperGrace;
-    }
-
     // ═════════════════════════════════════════════════════════════════════════
     //  Previews (§5.7)
     // ═════════════════════════════════════════════════════════════════════════
@@ -529,7 +562,8 @@ contract Rebalancer is
     ///      pool fee only. It ignores price impact and the slippage allowance, so it is a lower
     ///      bound; the realized cost is bounded above by `maxStepCostBps` per step and by
     ///      `costBudgetBps` per plan. Reverts on a refused vector with the same `PlanMath.assetTargets`
-    ///      errors the fund would raise at plan open (§4.1, RB-9), including `TargetExceedsCap`.
+    ///      errors the fund would raise at plan open (§4.1, RB-9; §4.5 rule 7, E57), including
+    ///      `TargetExceedsCap` and `BasketCapExceeded`.
     function previewPlan(address[] calldata assets, uint256[] calldata bps)
         external
         view
@@ -537,7 +571,7 @@ contract Rebalancer is
     {
         IRobotMoneyFund f = _fund;
         AssetConfig[] memory cfgs = f.assetConfigs();
-        uint16[] memory targets = PlanMath.assetTargets(assets, bps, cfgs);
+        uint16[] memory targets = PlanMath.assetTargets(assets, bps, cfgs, f.maxBasketBps());
         (uint256 nav,, uint256[] memory values) = f.portfolioValues();
         uint256 n = cfgs.length;
         rows = new PlanPreviewRow[](n);
@@ -580,10 +614,9 @@ contract Rebalancer is
     }
 
     /// @inheritdoc IRebalancer
-    /// @dev `type(uint256).max` when the plan is not Open (§5.4).
-    function permissionlessAt() external view returns (uint256) {
-        IRobotMoneyFund f = _fund;
-        return _permissionlessAt(f, f.plan());
+    /// @dev Retired in Step 3f (`step()` is `KEEPER_ROLE`-only, E34). Always returns `type(uint256).max`.
+    function permissionlessAt() external pure returns (uint256) {
+        return type(uint256).max;
     }
 
     /// @inheritdoc IRebalancer
@@ -596,6 +629,11 @@ contract Rebalancer is
         return _effectiveInterval(_fund);
     }
 
+    /// @inheritdoc IRebalancer
+    function lastBasketStepAt() external view returns (uint64) {
+        return _lastBasketStepAt;
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  Parameters (§5.6), ADMIN_ROLE
     // ═════════════════════════════════════════════════════════════════════════
@@ -606,7 +644,7 @@ contract Rebalancer is
     }
 
     /// @dev §5.6 bounds. `stepInterval ≥ max(MIN_STEP_INTERVAL, fund.maxTwapWindow())`;
-    ///      `keeperGrace ∈ [stepInterval, MAX_KEEPER_GRACE]`; `maxOverrun ≤ MAX_OVERRUN`;
+    ///      `keeperGrace ≤ MAX_KEEPER_GRACE` (retired in Step 3f, E34); `maxOverrun ≤ MAX_OVERRUN`;
     ///      `maxStepCostBps ∈ (fee1 + fee2, MAX_STEP_COST_BPS]` where fee1, fee2 are the two largest
     ///      active basket pool fees: leg picking pairs the most-over with the most-under asset, so a
     ///      basket-to-basket step pays both fees, and a cap at or below their sum would make every such
@@ -618,7 +656,7 @@ contract Rebalancer is
         uint256 minInterval = Math.max(MIN_STEP_INTERVAL, f.maxTwapWindow());
         if (
             params.stepInterval < minInterval || params.stepInterval > MAX_STEP_INTERVAL
-                || params.keeperGrace < params.stepInterval || params.keeperGrace > MAX_KEEPER_GRACE
+                || params.keeperGrace > MAX_KEEPER_GRACE
                 || params.maxOverrun > MAX_OVERRUN || params.maxStepCostBps > MAX_STEP_COST_BPS
                 || params.toleranceBps == 0 || params.toleranceBps > MAX_TOLERANCE_BPS
         ) revert StepParamOutOfBounds();

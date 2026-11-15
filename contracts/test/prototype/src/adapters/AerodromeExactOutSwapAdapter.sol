@@ -36,6 +36,9 @@ interface IAerodromeSlipstreamRouterExactOut {
 contract AerodromeExactOutSwapAdapter is AerodromeSwapAdapter, IExactOutSwapAdapter {
     using SafeERC20 for IERC20;
 
+    /// @notice Pool did not return a valid `uint24` `fee()` reading.
+    error InvalidPoolFee(address pool);
+
     constructor(address router_, address factory_) AerodromeSwapAdapter(router_, factory_) {}
 
     /// @inheritdoc IExactOutSwapAdapter
@@ -78,5 +81,22 @@ contract AerodromeExactOutSwapAdapter is AerodromeSwapAdapter, IExactOutSwapAdap
         if (amountIn < maxAmountIn) {
             IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
         }
+    }
+
+    /// @inheritdoc IExactOutSwapAdapter
+    /// @dev Aerodrome Slipstream `CLPool` fees can be changed by the factory / fee module (`E43`, §4.5 rule 6),
+    ///      so Slipstream pools are never fixed-fee pools.
+    function isFixedFeePool(address) external pure returns (bool) {
+        return false;
+    }
+
+    /// @inheritdoc IExactOutSwapAdapter
+    function poolFeeBps(address pool) external view returns (uint24) {
+        if (pool == address(0)) revert ZeroAddress();
+        (bool ok, bytes memory data) = pool.staticcall(abi.encodeWithSignature("fee()"));
+        if (!ok || data.length != 32) revert InvalidPoolFee(pool);
+        uint256 feePips = abi.decode(data, (uint256));
+        if (feePips > type(uint24).max) revert InvalidPoolFee(pool);
+        return uint24((feePips + 99) / 100);
     }
 }

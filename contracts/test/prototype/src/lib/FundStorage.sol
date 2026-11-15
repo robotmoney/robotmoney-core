@@ -52,6 +52,27 @@ import {AssetConfig, Plan} from "../FundTypes.sol";
 /// @param inKindPeriod       Period length in seconds; `inKindUsed` is keyed by `block.timestamp / inKindPeriod`.
 ///                           The fund holds these three itself (coordinator ruling 6, proposal §5.9.5), so
 ///                           `inKindUsed` is keyed by this period, not by the queue's `epochLength`.
+/// @notice Accumulator state for one claim owner (or linked fee share) on a delisting sale.
+struct DelistClaimAccount {
+    uint256 scaled;
+    uint256 usdcDebt;
+    uint256 pendingUsdc;
+}
+
+/// @notice One epoch of a lending position's claim pool (resets cleanly whenever all claim units clear).
+struct LendingClaimEpoch {
+    uint256 totalScaled;
+    uint256 usdcPerScaled;
+}
+
+/// @notice Accumulator state for one claim owner (or linked fee share) on a lending position.
+struct LendingClaimAccount {
+    uint256 epoch;
+    uint256 scaled;
+    uint256 usdcDebt;
+    uint256 pendingUsdc;
+}
+
 /// @custom:storage-location erc7201:robotmoney.storage.RobotMoneyFund
 struct FundState {
     AssetConfig[] assets;
@@ -91,6 +112,41 @@ struct FundState {
     ///      reopened it). A plan is over budget while its budget left is below it (review B-F5: `costSpent` never
     ///      passes `costBudget` any more, so "spent > budget" can no longer say so).
     uint256 haltCost;
+
+    // ── step-3f (append-only strictly below `haltCost`) ─────────────────────
+    uint64 depositsPausedUntil;
+    uint64 lastStateStopEndedAt;
+    uint64 rebalancePausedUntil;
+    uint64 rebalancePauseCooldownUntil;
+
+    uint256 minPoolDepthUsdc;
+    uint16 feeMarginBps;
+    uint16 delistBandBps;
+    uint16 delistBudgetBps;
+    uint16 maxBasketBps;
+
+    uint256 reservedClaimUsdc;
+
+    mapping(uint256 index => bool) inSale;
+    mapping(uint256 index => uint256) saleStartValue;
+    mapping(uint256 index => uint256) saleFallbackPrice;
+    mapping(uint256 index => uint256) delistLossSpent;
+    mapping(uint256 index => uint256) delistClaimedTokens;
+    mapping(uint256 index => uint256) delistUsdcPot;
+    mapping(uint256 index => uint256) delistTotalScaled;
+    mapping(uint256 index => uint256) delistUsdcPerScaled;
+    mapping(uint256 index => mapping(address owner => DelistClaimAccount)) delistClaims;
+    mapping(uint256 index => mapping(address owner => DelistClaimAccount)) delistFeeLinked;
+
+    mapping(uint256 index => uint256) lastGoodAssetPrice;
+
+    mapping(uint256 index => uint256) lendingClaimEpoch;
+    mapping(uint256 index => uint256) lendingUsdcPot;
+    mapping(uint256 index => mapping(uint256 epoch => LendingClaimEpoch)) lendingEpochs;
+    mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingClaims;
+    mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingFeeLinked;
+
+    address rebalancer;
 }
 
 /// @title FundStorage
@@ -110,6 +166,18 @@ library FundStorage {
     uint256 internal constant MAX_EXIT_FEE_BPS = 100;
     uint256 internal constant MAX_SLIPPAGE_BPS = 500;
     uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+
+    /// @dev Step 3f Gate 0 / §4.5 working defaults & claim accumulator precision scales.
+    uint256 internal constant DEFAULT_MIN_POOL_DEPTH_USDC = 2_000_000e6;
+    uint16 internal constant DEFAULT_FEE_MARGIN_BPS = 20;
+    uint16 internal constant DEFAULT_DELIST_BAND_BPS = 300;
+    uint16 internal constant DEFAULT_DELIST_BUDGET_BPS = 300;
+    uint16 internal constant DEFAULT_MAX_BASKET_BPS = 10_000;
+    uint32 internal constant DEFAULT_MAX_PAUSE = 72 hours;
+    uint256 internal constant DELIST_UNIT_SCALE = 1e12;
+    uint256 internal constant DELIST_ACC_SCALE = 1e30;
+    uint256 internal constant LENDING_ACC_NORM = 1e24;
+    uint256 internal constant LENDING_ACC_SCALE = 1e36;
 
     /// @dev The fund's state.
     function layout() internal pure returns (FundState storage $) {

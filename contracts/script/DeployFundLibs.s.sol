@@ -16,8 +16,10 @@ import {FundValuationLib} from "../test/prototype/src/lib/FundValuationLib.sol";
 import {FundAdminLib} from "../test/prototype/src/lib/FundAdminLib.sol";
 import {FundFlowsLib} from "../test/prototype/src/lib/FundFlowsLib.sol";
 import {FundStepLib} from "../test/prototype/src/lib/FundStepLib.sol";
+import {FundDelistLib} from "../test/prototype/src/lib/FundDelistLib.sol";
 import {StepFeedLib} from "../test/prototype/src/lib/StepFeedLib.sol";
 import {FlowCheckLib} from "../test/prototype/src/lib/FlowCheckLib.sol";
+import {FlowMatchLib} from "../test/prototype/src/lib/FlowMatchLib.sol";
 import {FlowSettleLib} from "../test/prototype/src/lib/FlowSettleLib.sol";
 import {FlowClaimLib} from "../test/prototype/src/lib/FlowClaimLib.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
@@ -51,8 +53,10 @@ contract DeployFundLibs is ExpectedChainGuard {
         address fundAdminLib;
         address fundFlowsLib;
         address fundStepLib;
+        address fundDelistLib;
         address stepFeedLib;
         address flowCheckLib;
+        address flowMatchLib;
         address flowSettleLib;
         address flowClaimLib;
     }
@@ -84,15 +88,17 @@ contract DeployFundLibs is ExpectedChainGuard {
         d.fundAdminLib = address(FundAdminLib);
         d.fundFlowsLib = address(FundFlowsLib);
         d.fundStepLib = address(FundStepLib);
+        d.fundDelistLib = address(FundDelistLib);
         d.stepFeedLib = address(StepFeedLib);
         d.flowCheckLib = address(FlowCheckLib);
+        d.flowMatchLib = address(FlowMatchLib);
         d.flowSettleLib = address(FlowSettleLib);
         d.flowClaimLib = address(FlowClaimLib);
         // The call proves TickMath is linked to working code, not only to an address (finding L3-D1).
         require(
             TickMath.getSqrtRatioAtTick(0) == SQRT_RATIO_AT_TICK_ZERO, "TickMath: tick 0 mismatch"
         );
-        address[14] memory all = [
+        address[16] memory all = [
             d.tickMath,
             d.twapTickMath,
             d.basketSwaps,
@@ -103,8 +109,10 @@ contract DeployFundLibs is ExpectedChainGuard {
             d.fundAdminLib,
             d.fundFlowsLib,
             d.fundStepLib,
+            d.fundDelistLib,
             d.stepFeedLib,
             d.flowCheckLib,
+            d.flowMatchLib,
             d.flowSettleLib,
             d.flowClaimLib
         ];
@@ -127,8 +135,10 @@ contract DeployFundLibs is ExpectedChainGuard {
         vm.serializeAddress(obj, "fund_admin_lib", d.fundAdminLib);
         vm.serializeAddress(obj, "fund_flows_lib", d.fundFlowsLib);
         vm.serializeAddress(obj, "fund_step_lib", d.fundStepLib);
+        vm.serializeAddress(obj, "fund_delist_lib", d.fundDelistLib);
         vm.serializeAddress(obj, "step_feed_lib", d.stepFeedLib);
         vm.serializeAddress(obj, "flow_check_lib", d.flowCheckLib);
+        vm.serializeAddress(obj, "flow_match_lib", d.flowMatchLib);
         vm.serializeAddress(obj, "flow_settle_lib", d.flowSettleLib);
         string memory json = vm.serializeAddress(obj, "flow_claim_lib", d.flowClaimLib);
         vm.writeJson(json, outPath);

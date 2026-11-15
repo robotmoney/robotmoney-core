@@ -109,9 +109,11 @@ describe("stage-table.json", () => {
     expect(c2.map((l) => l.artifact)).toEqual([
       "BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows",
       // Deploy 4: the fund system's libraries, TickMath included (the fund system links no --libraries address)
-      "TickMath", "FundPositionLib", "FundValuationLib", "FundAdminLib", "FundFlowsLib", "FundStepLib", "StepFeedLib", "FlowCheckLib", "FlowSettleLib", "FlowClaimLib",
+      "TickMath", "FundPositionLib", "FundValuationLib", "FundAdminLib", "FundFlowsLib", "FundStepLib", "FundDelistLib", "StepFeedLib", "FlowCheckLib", "FlowMatchLib", "FlowSettleLib", "FlowClaimLib",
     ]);
     for (const l of c2) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
+    const queueStage = table.stages.find((s) => s.name === "queue");
+    expect(queueStage?.optionalEnv).toEqual(["EXPECTED_CHAIN_ID", "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE"]);
     // The sources of the proxied contracts each stage deploys. A library is linked when one of them imports from its file
     // (GovernedUpgrade is linked through the GovernedUUPS base, declared in the same file).
     const sources: Record<string, string[]> = {

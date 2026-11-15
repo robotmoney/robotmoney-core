@@ -56,17 +56,34 @@ library PlanMath {
     ///           sells an asset. Forgetting it never does.
     ///         The per-entry checks run in list order, then the sum, then the missing-asset scan.
     /// @dev Reverts `InvalidParam` when `ids` and `bps` differ in length. Ids are `assetId`.
+    /// @notice Validate and expand a target vector (`ids`, `bps`) against the fund's asset list,
+    ///         enforcing no basket weight cap (`maxBasketBps == BPS`). Kept for callers that do not
+    ///         pass a basket ceiling directly.
     function assetTargets(address[] memory ids, uint256[] memory bps, AssetConfig[] memory cfgs)
         internal
         pure
         returns (uint16[] memory targets)
     {
+        return assetTargets(ids, bps, cfgs, BPS);
+    }
+
+    /// @notice Validate and expand a target vector (`ids`, `bps`) against the fund's asset list,
+    ///         and check the cumulative basket target weight ceiling `maxBasketBps` (§4.5 rule 7, E57).
+    ///         Reverts `InvalidParam`, `TargetAssetNotActive`, `TargetAssetDuplicate`,
+    ///         `TargetSumInvalid`, `TargetExceedsCap`, `TargetAssetMissing`, or `BasketCapExceeded`.
+    function assetTargets(
+        address[] memory ids,
+        uint256[] memory bps,
+        AssetConfig[] memory cfgs,
+        uint256 maxBasketBps
+    ) internal pure returns (uint16[] memory targets) {
         uint256 m = ids.length;
         if (m != bps.length) revert IFundEvents.InvalidParam();
         uint256 n = cfgs.length;
         targets = new uint16[](n);
         bool[] memory listed = new bool[](n);
         uint256 sum;
+        uint256 basketSum;
         for (uint256 k; k < m; ++k) {
             uint256 i = _activeIndexOf(cfgs, ids[k]);
             if (listed[i]) revert IFundEvents.TargetAssetDuplicate(ids[k]);
@@ -76,6 +93,7 @@ library PlanMath {
             if (cfgs[i].kind == AssetKind.Lending && b > cfgs[i].capBps) {
                 revert IFundEvents.TargetExceedsCap(i, b, cfgs[i].capBps);
             }
+            if (cfgs[i].kind == AssetKind.Basket) basketSum += b;
             targets[i] = uint16(b);
             sum += b;
         }
@@ -85,6 +103,7 @@ library PlanMath {
                 revert IFundEvents.TargetAssetMissing(assetId(cfgs[i]));
             }
         }
+        if (basketSum > maxBasketBps) revert IFundEvents.BasketCapExceeded(basketSum, maxBasketBps);
     }
 
     /// @dev Index of the ACTIVE entry whose `assetId` is `id`. `addAsset` keeps that entry unique.

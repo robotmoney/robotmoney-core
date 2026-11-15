@@ -7,6 +7,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../../../../interfaces/IStrategyAdapter.sol";
@@ -31,7 +32,7 @@ import {FlowParams} from "../FlowTypes.sol";
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
 import {IFlowQueue} from "../interfaces/IFlowQueue.sol";
-import {FundState} from "./FundStorage.sol";
+import {FundState, FundStorage} from "./FundStorage.sol";
 import {FeedLib} from "./FeedLib.sol";
 
 /// @title FundValuationLib
@@ -79,11 +80,18 @@ library FundValuationLib {
     ///         position, `positionValue × (positionUnits − positionClaimTotal) / positionUnits`, rounded DOWN; the
     ///         whole `positionValue` while the position has no units yet (no claim can exist then). Every NAV read
     ///         and every pro-rata leg uses this, never the raw balance, so position claims are never counted.
+    /// @notice Fund-owned idle USDC (excludes USDC reserved for delisting & lending claims).
+    function idleUsdc(FundState storage s) internal view returns (uint256) {
+        uint256 raw = IERC20(s.usdc).balanceOf(address(this));
+        uint256 res = s.reservedClaimUsdc;
+        return raw > res ? raw - res : 0;
+    }
+
     function heldBalance(FundState storage s, uint256 i) internal view returns (uint256 bal) {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending) return holdersPart(s, i, positionValue(s, i));
         bal = IERC20(a.token).balanceOf(address(this));
-        uint256 owed = s.deferredTotal[i];
+        uint256 owed = s.deferredTotal[i] + s.delistClaimedTokens[i];
         bal = bal > owed ? bal - owed : 0;
     }
 
@@ -117,7 +125,7 @@ library FundValuationLib {
         view
         returns (uint256 idle, uint256[] memory held)
     {
-        idle = IERC20(s.usdc).balanceOf(address(this));
+        idle = idleUsdc(s);
         uint256 n = s.assets.length;
         held = new uint256[](n);
         for (uint256 i; i < n; ++i) {
@@ -152,7 +160,7 @@ library FundValuationLib {
         uint256 supplyBefore,
         uint256 supplyAfter
     ) internal view {
-        uint256 idleAfter = IERC20(s.usdc).balanceOf(address(this));
+        uint256 idleAfter = idleUsdc(s);
         if (idleAfter * supplyBefore < idleBefore * supplyAfter) {
             revert IRobotMoneyFund.ProportionViolated(
                 IDLE_INDEX, idleBefore, idleAfter, supplyBefore, supplyAfter
@@ -169,18 +177,66 @@ library FundValuationLib {
         }
     }
 
-    /// @notice USDC value of asset `i` at TWAP (Lending: `heldBalance`, 1:1). 0 when not counted.
+    /// @notice USDC / USD feed read (8 decimals) matching settlement check 2.
+    function usdcFeed8(FundState storage s)
+        internal
+        view
+        returns (bool ok, FeedStatus st, uint256 px8)
+    {
+        address q = s.flowQueue;
+        if (q == address(0)) return (true, FeedStatus.Ok, FeedLib.ONE_USD);
+        FlowParams memory fp = IFlowQueue(q).flowParams();
+        (address usdcFeed, uint32 usdcMaxAge,) = IFlowQueue(q).feeds();
+        if (usdcFeed == address(0)) return (true, FeedStatus.Ok, FeedLib.ONE_USD);
+        (bool pegged, FeedStatus uSt, uint256 u8) =
+            FeedLib.usdcPeg(usdcFeed, usdcMaxAge, fp.usdcPegBandBps);
+        if (!pegged) return (false, uSt, 0);
+        if (u8 == 0) return (false, FeedStatus.NonPositive, 0);
+        return (true, FeedStatus.Ok, u8);
+    }
+
+    /// @notice Healthy Chainlink price for asset `i` expressed in USDC base units per whole token (`10**decimals`).
+    function feedPricePerToken(FundState storage s, uint256 i)
+        internal
+        view
+        returns (bool ok, FeedStatus st, uint256 pxPerToken)
+    {
+        AssetConfig storage a = s.assets[i];
+        uint256 price8;
+        (st, price8) = FeedLib.read(a.feed, a.maxFeedAge);
+        if (st != FeedStatus.Ok || price8 == 0) return (false, st, 0);
+        (bool uOk, FeedStatus uSt, uint256 u8) = usdcFeed8(s);
+        if (!uOk || u8 == 0) return (false, uSt, 0);
+        uint256 usdcUnit = 10 ** IERC20Metadata(s.usdc).decimals();
+        pxPerToken = price8.mulDiv(usdcUnit, u8);
+        return (true, FeedStatus.Ok, pxPerToken);
+    }
+
+    /// @notice Current NAV price per whole token (`10**decimals`) for an `inSale` asset: live feed if healthy,
+    ///         else `saleFallbackPrice`.
+    function inSalePricePerToken(FundState storage s, uint256 i) internal view returns (uint256) {
+        (bool ok,, uint256 px) = feedPricePerToken(s, i);
+        return ok ? px : s.saleFallbackPrice[i];
+    }
+
+    /// @notice USDC value of asset `i` at TWAP (or live/fallback feed when `inSale`; Lending: `heldBalance`, 1:1).
     function assetValue(FundState storage s, uint256 i) public view returns (uint256) {
         if (!isCounted(s, i)) return 0;
         AssetConfig storage a = s.assets[i];
         uint256 bal = heldBalance(s, i);
         if (a.kind == AssetKind.Lending || bal == 0) return bal;
+        if (s.inSale[i]) {
+            uint256 px = inSalePricePerToken(s, i);
+            if (px == 0) return 0;
+            uint256 unit = 10 ** IERC20Metadata(a.token).decimals();
+            return bal.mulDiv(px, unit);
+        }
         return IBasketSwapAdapter(a.adapter).twapPrice(a.pool, a.token, s.usdc, bal, a.twapWindow);
     }
 
-    /// @notice `totalAssets()`: idle plus every counted asset's value.
+    /// @notice `totalAssets()`: fund-owned idle USDC plus every counted asset's value.
     function nav(FundState storage s) public view returns (uint256 sum) {
-        sum = IERC20(s.usdc).balanceOf(address(this));
+        sum = idleUsdc(s);
         uint256 n = s.assets.length;
         for (uint256 i; i < n; ++i) {
             sum += assetValue(s, i);
@@ -209,6 +265,12 @@ library FundValuationLib {
             AssetConfig storage a = s.assets[i];
             if (!a.active || a.kind != AssetKind.Basket) continue;
             (FeedStatus st,) = FeedLib.read(a.feed, a.maxFeedAge);
+            if (s.inSale[i]) {
+                if (st != FeedStatus.Ok && s.saleFallbackPrice[i] == 0) {
+                    revert IRobotMoneyFund.FeedUnhealthy(i, st);
+                }
+                continue;
+            }
             if (st != FeedStatus.Ok) revert IRobotMoneyFund.FeedUnhealthy(i, st);
         }
         address q = s.flowQueue;
@@ -239,6 +301,16 @@ library FundValuationLib {
     ///         and TWAP read succeeds). Never reverts and changes nothing else, so a bad feed can never stop the
     ///         flow or step that calls it.
     function recordNav(FundState storage s) public {
+        uint256 n = s.assets.length;
+        for (uint256 i; i < n; ++i) {
+            AssetConfig storage a = s.assets[i];
+            if (!a.active || a.kind != AssetKind.Basket) continue;
+            (bool ok,, uint256 px) = feedPricePerToken(s, i);
+            if (ok && px != 0) {
+                s.lastGoodAssetPrice[i] = px;
+                if (s.inSale[i]) s.saleFallbackPrice[i] = px;
+            }
+        }
         try IERC4626(address(this)).totalAssets() returns (uint256 v) {
             s.lastGoodNav = v;
             s.lastGoodNavAt = uint64(block.timestamp);
@@ -251,7 +323,7 @@ library FundValuationLib {
         view
         returns (uint256 total, uint256 idle, uint256[] memory values)
     {
-        idle = IERC20(s.usdc).balanceOf(address(this));
+        idle = idleUsdc(s);
         total = idle;
         uint256 n = s.assets.length;
         values = new uint256[](n);
@@ -300,6 +372,7 @@ library FundValuationLib {
         returns (bool ok, uint256 deviationBps)
     {
         if (i >= s.assets.length) return (false, 0);
+        if (s.inSale[i]) return (false, 0);
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending) return (isCounted(s, i) || !a.active, 0);
         uint256 guard = s.navDeviationGuardBps;
@@ -430,6 +503,9 @@ library FundValuationLib {
             uint256 targetUsdc = cap.mulDiv(endBps[i], BPS, Math.Rounding.Ceil);
             (bool ok, uint256 depth) = poolUsdcDepth(a.pool, s.usdc, w);
             if (!ok) revert IRobotMoneyFund.PoolHistoryTooShort(i, w);
+            if (depth < s.minPoolDepthUsdc) {
+                revert IRobotMoneyFund.PoolDepthTooLow(i, depth, s.minPoolDepthUsdc);
+            }
             uint256 limitUsdc = depth.mulDiv(share, BPS);
             if (targetUsdc > limitUsdc) {
                 revert IRobotMoneyFund.PoolShareExceeded(i, targetUsdc, limitUsdc);
@@ -546,5 +622,75 @@ library FundValuationLib {
     {
         (uint256 total, uint256 idle, uint256[] memory values) = portfolio(s);
         return PlanMath.weightsBps(values, idle, total);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Consolidated scalar views (EIP-170 DELEGATECALL consolidation)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    uint8 internal constant VIEW_IDLE_USDC = 0;
+    uint8 internal constant VIEW_ASSET_VALUE = 1;
+    uint8 internal constant VIEW_POOL_FEE_BPS = 2;
+    uint8 internal constant VIEW_MAX_TWAP_WINDOW = 3;
+    uint8 internal constant VIEW_MAX_POOL_FEE_BPS = 4;
+    uint8 internal constant VIEW_PLAN_STATUS = 5;
+    uint8 internal constant VIEW_HAS_ASSET_IN_SALE = 6;
+    uint8 internal constant VIEW_MAX_PAUSE = 7;
+
+    /// @notice True while deposits are paused via legacy bool or active self-expiring deadline.
+    function isDepositsPaused(FundState storage s) internal view returns (bool) {
+        return s.depositsPaused
+            || (s.depositsPausedUntil != 0 && block.timestamp < s.depositsPausedUntil);
+    }
+
+    /// @notice Effective plan status accounting for self-expired emergency rebalance pause (E39).
+    function effectivePlanStatus(FundState storage s) internal view returns (PlanStatus) {
+        Plan storage p = s.plan;
+        if (
+            p.status == PlanStatus.Paused && !s.shutdown && s.rebalancePausedUntil != 0
+                && block.timestamp >= s.rebalancePausedUntil
+        ) {
+            if (p.costSpent >= p.costBudget || p.costBudget - p.costSpent < s.haltCost) {
+                return PlanStatus.Halted;
+            }
+            return PlanStatus.Open;
+        }
+        return p.status;
+    }
+
+    /// @notice True while any active asset is in a delisting sale (`inSale`).
+    function hasAssetInSale(FundState storage s) internal view returns (bool) {
+        uint256 n = s.assets.length;
+        for (uint256 i; i < n; ++i) {
+            if (s.assets[i].active && s.inSale[i]) return true;
+        }
+        return false;
+    }
+
+    /// @notice Effective `maxPause` duration: bound queue's `maxPause`, or `DEFAULT_MAX_PAUSE` before binding.
+    function maxPause(FundState storage s) internal view returns (uint32) {
+        address q = s.flowQueue;
+        if (q == address(0)) return FundStorage.DEFAULT_MAX_PAUSE;
+        return IFlowQueue(q).flowParams().maxPause;
+    }
+
+    /// @notice Consolidated scalar view entrypoint called via one `DELEGATECALL` site on `RobotMoneyFund`.
+    function viewUint(FundState storage s, uint8 op, uint256 index)
+        public
+        view
+        returns (uint256)
+    {
+        if (op == VIEW_IDLE_USDC) return idleUsdc(s);
+        if (op == VIEW_ASSET_VALUE) return assetValue(s, index);
+        if (op == VIEW_POOL_FEE_BPS) return poolFeeBps(s, index);
+        if (op == VIEW_MAX_TWAP_WINDOW) return maxTwapWindow(s);
+        if (op == VIEW_MAX_POOL_FEE_BPS) {
+            (uint256 m,) = maxPoolFeeBps(s);
+            return m;
+        }
+        if (op == VIEW_PLAN_STATUS) return uint256(effectivePlanStatus(s));
+        if (op == VIEW_HAS_ASSET_IN_SALE) return hasAssetInSale(s) ? 1 : 0;
+        if (op == VIEW_MAX_PAUSE) return maxPause(s);
+        revert IFundEvents.InvalidParam();
     }
 }

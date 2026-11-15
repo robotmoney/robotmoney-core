@@ -48,6 +48,12 @@ contract MechAaveAdapter is MechReentry, ILendingRateAdapter {
     /// @notice The last supply: what the fund asked to place and what the position grew by.
     uint256 public lastSupplyAsked;
     uint256 public lastSupplyCredited;
+    /// @notice Explicit override for `availableLiquidity()` (`E36` / `A34` venue-check tests).
+    bool public liquidityOverridden;
+    uint256 public liquidityOverride;
+    /// @notice Independent short-pay controls appended for `A34` tests (bps and/or fixed units).
+    uint16 public shortfallBps;
+    uint256 public shortPayAmount;
 
     error OnlyVault();
 
@@ -67,6 +73,28 @@ contract MechAaveAdapter is MechReentry, ILendingRateAdapter {
     function setMode(uint8 mode_, uint256 param_) external {
         mode = mode_;
         param = param_;
+    }
+
+    /// @notice Override `availableLiquidity()` for pre-match liquidity tests (`E36`) or `A34` overstatement.
+    function setAvailableLiquidity(uint256 amount) external {
+        liquidityOverridden = true;
+        liquidityOverride = amount;
+    }
+
+    /// @notice Clear the `availableLiquidity()` override and revert to real Aave pool cash reads.
+    function clearAvailableLiquidity() external {
+        liquidityOverridden = false;
+        liquidityOverride = 0;
+    }
+
+    /// @notice Set an explicit withdrawal shortfall in basis points (`A34`, composable with any `mode`).
+    function setShortfallBps(uint16 bps) external {
+        shortfallBps = bps;
+    }
+
+    /// @notice Set a fixed-unit withdrawal shortfall in USDC units (`A34`, composable with any `mode`).
+    function setShortPayAmount(uint256 amount) external {
+        shortPayAmount = amount;
     }
 
     function deploy(uint256 amount) external onlyVault {
@@ -94,6 +122,10 @@ contract MechAaveAdapter is MechReentry, ILendingRateAdapter {
         paid = got;
         if (mode == ROUND_AGAINST) paid = got > param ? got - param : 0;
         else if (mode == SHORT_PAY) paid = got - got * param / 10_000;
+        if (shortfallBps != 0) {
+            paid = shortfallBps >= 10_000 ? 0 : paid - paid * shortfallBps / 10_000;
+        }
+        if (shortPayAmount != 0) paid = paid > shortPayAmount ? paid - shortPayAmount : 0;
         IERC20(USDC).safeTransfer(VAULT, paid);
     }
 
@@ -113,6 +145,16 @@ contract MechAaveAdapter is MechReentry, ILendingRateAdapter {
 
     function ratePerUnit() external view returns (uint256) {
         return IAavePoolRate(POOL).getReserveNormalizedIncome(USDC) / RAY_TO_WAD;
+    }
+
+    /// @inheritdoc ILendingRateAdapter
+    function availableLiquidity() external view returns (uint256) {
+        if (liquidityOverridden) return liquidityOverride;
+        uint256 config = IAavePool(POOL).getConfiguration(USDC);
+        if ((config >> 56) & 1 == 0 || (config >> 60) & 1 != 0) return 0;
+        uint256 cash = IERC20(USDC).balanceOf(address(A_TOKEN));
+        uint256 bal = _reported();
+        return cash < bal ? cash : bal;
     }
 
     function venueWithdrawable() external pure returns (bool) {

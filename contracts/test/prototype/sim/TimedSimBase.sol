@@ -157,9 +157,6 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     uint256 internal lastSettlePx;
     uint256 internal lastSettleAt;
     uint256[3] internal lastLendRate;
-    /// @dev Bound prices of the last quotes that answered, for a client whose quote reverts now.
-    uint256 internal lastDepBound;
-    uint256 internal lastRedBound;
     /// @dev Fills of the last attempt (read by `_onSettlePost`).
     uint256 internal lastAttemptDepFills;
     uint256 internal lastAttemptRedFills;
@@ -476,10 +473,6 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
                 _bookRedeemFill(logs[i], v);
                 ++a.fills;
                 ++lastAttemptRedFills;
-            } else if (t0 == IFlowEvents.RequestSkipped.selector) {
-                ++a.limitSkips;
-                uint256 k = reqIndex[uint256(logs[i].topics[1])];
-                if (k != 0) ++reqs[k - 1].limitSkips;
             } else if (t0 == IFlowEvents.SideFailed.selector) {
                 (uint8 kind, bytes memory reason) = abi.decode(logs[i].data, (uint8, bytes));
                 if (kind == 0) depFailed = true;
@@ -533,8 +526,9 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     }
 
     function _bookSettlement(uint256 sid, bytes memory data, Basis memory v) internal {
-        (,, uint256 usdcIn, uint256 minted, uint256 burned, uint256 usdcOut) =
-            abi.decode(data, (uint256, uint256, uint256, uint256, uint256, uint256));
+        (,,, uint256 usdcIn, uint256 minted, uint256 burned, uint256 usdcOut) = abi.decode(
+            data, (uint256, uint256, uint256, uint256, uint256, uint256, uint256)
+        );
         SettleRec memory s;
         s.at = uint64(vm.getBlockTimestamp());
         s.settlementId = sid;
@@ -601,67 +595,49 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
-    //  Requests with limits (§5.9.2 steps 1 and 2: a client sets the limit from the quote)
+    //  Requests (Step 3f limit-free forward-priced flows)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice Fund `who` with `usdc` and request a deposit with the limit `quote × (1 + slackBps)`. A quote that
-    ///         reverts now (checks 2 to 5 fail) leaves the client with the last quote that answered (or the TWAP NAV
-    ///         per share plus twice `legBandBps` when none did). Returns false when the request reverts.
-    function _reqDeposit(address who, uint256 usdc, uint256 slackBps)
+    /// @notice Fund `who` with `usdc` and request a limit-free deposit. Returns false when the request reverts.
+    function _reqDeposit(address who, uint256 usdc, uint256 /*retiredSlackBps*/ )
         internal
         returns (bool ok, uint256 id, bytes memory err)
     {
         fundUsdc(who, usdc);
-        uint256 bound;
         bool quoteFailed;
-        try queue.quoteDeposit(usdc) returns (Quote memory q) {
-            bound = q.boundPrice;
-            lastDepBound = bound;
-        } catch {
+        try queue.quoteDeposit(usdc) returns (Quote memory) {} catch {
             quoteFailed = true;
-            bound = lastDepBound != 0
-                ? lastDepBound
-                : _twapPx().mulDiv(BPS + 2 * queue.flowParams().legBandBps, BPS);
         }
-        uint256 limit = bound.mulDiv(BPS + slackBps, BPS);
         vm.startPrank(who);
         IERC20(USDC).approve(address(queue), usdc);
-        try queue.requestDeposit(usdc, limit, who) returns (uint256 rid) {
+        try queue.requestDeposit(usdc, who) returns (uint256 rid) {
             (ok, id) = (true, rid);
         } catch (bytes memory e) {
             err = e;
         }
         vm.stopPrank();
-        if (ok) _recordReq(id, true, quoteFailed, usdc, usdc, limit);
+        if (ok) _recordReq(id, true, quoteFailed, usdc, usdc, 0);
     }
 
-    /// @notice `who` requests a redemption of `shares` with the limit `quote × (1 − slackBps)` (same fallback).
-    function _reqRedeem(address who, uint256 shares, uint256 slackBps)
+    /// @notice `who` requests a limit-free redemption of `shares`. Returns false when the request reverts.
+    function _reqRedeem(address who, uint256 shares, uint256 /*retiredSlackBps*/ )
         internal
         returns (bool ok, uint256 id, bytes memory err)
     {
-        uint256 bound;
         bool quoteFailed;
-        try queue.quoteRedeem(shares) returns (Quote memory q) {
-            bound = q.boundPrice;
-            lastRedBound = bound;
-        } catch {
+        try queue.quoteRedeem(shares) returns (Quote memory) {} catch {
             quoteFailed = true;
-            bound = lastRedBound != 0
-                ? lastRedBound
-                : _twapPx().mulDiv(BPS - 2 * queue.flowParams().legBandBps - _exitFeeBps(), BPS);
         }
-        uint256 limit = bound.mulDiv(BPS - slackBps, BPS);
         vm.startPrank(who);
         IERC20(address(fund)).approve(address(queue), shares);
-        try queue.requestRedeem(shares, limit, who) returns (uint256 rid) {
+        try queue.requestRedeem(shares, who) returns (uint256 rid) {
             (ok, id) = (true, rid);
         } catch (bytes memory e) {
             err = e;
         }
         vm.stopPrank();
         if (ok) {
-            _recordReq(id, false, quoteFailed, shares, shares.mulDiv(_twapPx(), PRICE_SCALE), limit);
+            _recordReq(id, false, quoteFailed, shares, shares.mulDiv(_twapPx(), PRICE_SCALE), 0);
         }
     }
 
@@ -717,6 +693,8 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
         q.refBandBps = uint16(_envU("REF_BAND_BPS", q.refBandBps));
         q.legBandBps = uint16(_envU("LEG_BAND_BPS", q.legBandBps));
         q.maxLendRateGrowthBps = uint16(_envU("MAX_LEND_RATE_GROWTH_BPS", q.maxLendRateGrowthBps));
+        q.cancelBuffer = uint32(_envU("CANCEL_BUFFER", q.cancelBuffer));
+        q.maxPause = uint32(_envU("MAX_PAUSE", q.maxPause));
         changed = keccak256(abi.encode(p)) != keccak256(abi.encode(q));
         if (changed) timelockExecute(address(queue), abi.encodeCall(queue.setFlowParams, (q)));
     }
@@ -761,7 +739,7 @@ abstract contract TimedSimBase is PrototypeHarness, SimMarket {
             uint256 amt = left < chunk ? left : chunk;
             left -= amt;
             address h = holders[k % holders.length];
-            uint256 id = openDepositRequest(h, amt, type(uint256).max);
+            uint256 id = openDepositRequest(h, amt);
             uint256 at = queue.settleableAt(queue.getRequest(id).epoch);
             vm.roll(vm.getBlockNumber() + (at - vm.getBlockTimestamp()) / 2);
             vm.warp(at);

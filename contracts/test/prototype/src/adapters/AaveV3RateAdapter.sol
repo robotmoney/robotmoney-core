@@ -4,6 +4,7 @@
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AaveV3Adapter} from "../../../../adapters/AaveV3Adapter.sol";
 import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
 
@@ -31,5 +32,15 @@ contract AaveV3RateAdapter is AaveV3Adapter, ILendingRateAdapter {
     ///      accrual does (check 5).
     function ratePerUnit() external view returns (uint256 rate1e18) {
         rate1e18 = IAavePoolRate(address(POOL)).getReserveNormalizedIncome(USDC) / RAY_TO_WAD;
+    }
+
+    /// @inheritdoc ILendingRateAdapter
+    /// @dev Underlying USDC held by the aToken contract, capped at this adapter's aToken balance,
+    ///      or 0 when the reserve is inactive or paused (`venueWithdrawable()`).
+    function availableLiquidity() external view returns (uint256) {
+        if (!venueWithdrawable()) return 0;
+        uint256 cash = IERC20(USDC).balanceOf(address(A_TOKEN));
+        uint256 bal = A_TOKEN.balanceOf(address(this));
+        return cash < bal ? cash : bal;
     }
 }

@@ -4,6 +4,7 @@
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {CompoundV3Adapter} from "../../../../adapters/CompoundV3Adapter.sol";
 import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
@@ -48,5 +49,15 @@ contract CompoundV3RateAdapter is CompoundV3Adapter, ILendingRateAdapter {
         uint256 base = ICometRate(address(COMET)).totalsBasic().totalSupplyBase;
         if (base == 0) revert NoSupplyBase();
         rate1e18 = Math.mulDiv(ICometRate(address(COMET)).totalSupply(), 1e18, base);
+    }
+
+    /// @inheritdoc ILendingRateAdapter
+    /// @dev Underlying USDC held by Comet, capped at this adapter's Comet supply balance,
+    ///      or 0 when withdrawals are paused (`venueWithdrawable()`).
+    function availableLiquidity() external view returns (uint256) {
+        if (!venueWithdrawable()) return 0;
+        uint256 cash = IERC20(USDC).balanceOf(address(COMET));
+        uint256 bal = COMET.balanceOf(address(this));
+        return cash < bal ? cash : bal;
     }
 }

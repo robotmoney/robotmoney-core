@@ -473,8 +473,10 @@
         "BasketSwaps",
         "FlowCheckLib",
         "FlowClaimLib",
+        "FlowMatchLib",
         "FlowSettleLib",
         "FundAdminLib",
+        "FundDelistLib",
         "FundFlowsLib",
         "FundPositionLib",
         "FundStepLib",
@@ -550,6 +552,7 @@
         "BasketAssetConfigGuard",
         "BasketSwaps",
         "FundAdminLib",
+        "FundDelistLib",
         "FundFlowsLib",
         "FundPositionLib",
         "FundStepLib",
@@ -683,7 +686,9 @@
         "DEPLOYMENT_OUT"
       ],
       "optionalEnv": [
-        "EXPECTED_CHAIN_ID"
+        "EXPECTED_CHAIN_ID",
+        "FLOW_CANCEL_BUFFER",
+        "FLOW_MAX_PAUSE"
       ],
       "manifest": "deployments/<chain>/queue.json",
       "libraries": [],
@@ -691,6 +696,7 @@
       "create2Libraries": [
         "FlowCheckLib",
         "FlowClaimLib",
+        "FlowMatchLib",
         "FlowSettleLib",
         "FundValuationLib",
         "GovernedUpgrade",
@@ -994,6 +1000,11 @@
       "path": "contracts/test/prototype/src/lib/FundStepLib.sol"
     },
     {
+      "name": "FundDelistLib",
+      "artifact": "FundDelistLib",
+      "path": "contracts/test/prototype/src/lib/FundDelistLib.sol"
+    },
+    {
       "name": "StepFeedLib",
       "artifact": "StepFeedLib",
       "path": "contracts/test/prototype/src/lib/StepFeedLib.sol"
@@ -1002,6 +1013,11 @@
       "name": "FlowCheckLib",
       "artifact": "FlowCheckLib",
       "path": "contracts/test/prototype/src/lib/FlowCheckLib.sol"
+    },
+    {
+      "name": "FlowMatchLib",
+      "artifact": "FlowMatchLib",
+      "path": "contracts/test/prototype/src/lib/FlowMatchLib.sol"
     },
     {
       "name": "FlowSettleLib",

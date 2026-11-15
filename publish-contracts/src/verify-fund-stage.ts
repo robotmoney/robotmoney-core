@@ -6,6 +6,7 @@ import { PublishError } from "./errors.ts";
 import { effectiveCounts } from "./counts.ts";
 import { adoptedTxs, manifestDir, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
 import { DEPLOYER_STAGES, getStageTable, handoverStage, type StageRow } from "./stages.ts";
+import { runAdoptedContracts, runDeployTxs } from "./verify/manifests.ts";
 import { RPC_REFUSED_DETAIL, type VerifyOptions, type VerifyReport, type VerifySheet } from "./verify/index.ts";
 
 /** The verifier's sheet of the fund run: the shared fields and the fund's own values. No vault of the vaults system, no router vector. */
@@ -16,7 +17,14 @@ export function buildFundVerifySheet(ctx: Pick<RunContext, "sheet" | "chainId">)
   return {
     chainId: ctx.chainId, deployer: s.admin, pauser: s.pauser, emergency: s.emergency, safeOwners: s.safeOwners, safeThreshold: s.safeThreshold, timelockDelay: Number(s.timelockMinDelay),
     deploymentKind: s.kind, upgradeMode: s.upgrade.mode, ...(s.upgrade.freezeDeadline ? { freezeDeadline: s.upgrade.freezeDeadline } : {}), vaults: {}, defaultWeights: [],
-    fund: { keeper: f.keeper, tvlCap: f.tvlCap, perDepositCap: f.perDepositCap, exitFeeBps: f.exitFeeBps, maxSlippageBps: f.maxSlippageBps, navDeviationBps: f.navDeviationBps, minSeedUsdc: f.minSeedUsdc, params: f.params },
+    fund: {
+      keeper: f.keeper, tvlCap: f.tvlCap, perDepositCap: f.perDepositCap, exitFeeBps: f.exitFeeBps, maxSlippageBps: f.maxSlippageBps, navDeviationBps: f.navDeviationBps, minSeedUsdc: f.minSeedUsdc, params: f.params,
+      feeRecipient: s.feeRecipient,
+      ...(f.receiptSubmitters !== undefined ? { receiptSubmitters: f.receiptSubmitters } : {}),
+      ...(f.keeperType !== undefined ? { keeperType: f.keeperType } : {}),
+      ...(f.keeperOwners !== undefined ? { keeperOwners: f.keeperOwners } : {}),
+      ...(f.keeperBotKeys !== undefined ? { keeperBotKeys: f.keeperBotKeys } : {}),
+    },
   };
 }
 
@@ -33,6 +41,7 @@ export async function runFundVerifyStage(ctx: RunContext, row: StageRow, manifes
   const report = await deps.verifyDeployment({
     system: "fund", chain: deps.chain, manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildFundVerifySheet(ctx), fromBlock: BigInt(manifest.firstBlock),
     frozenCounts: effectiveCounts(frozenFile, adoptedTxs(manifest)), artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
+    deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
     deployerStartNonce: manifest.deployerStartNonce, ...(handover?.status === "done" && handover.endNonce !== undefined ? { deployerNonceAtDeployEnd: handover.endNonce } : {}),
   });
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "verify.check", { label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });

@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { concatHex, decodeAbiParameters, keccak256, toFunctionSelector, toHex } from "viem";
 import type { Collector } from "./collector.ts";
-import { ERC1967_IMPLEMENTATION_SLOT, ERC1967_PROXY_ARTIFACT, compareCode, isProxyCode, linkedLibraries, loadArtifact, tryLoadArtifact } from "./codehash.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, ERC1967_PROXY_ARTIFACT, isProxyCode, tryLoadArtifact, verifyLinkedLibraries } from "./codehash.ts";
 import { coreContractRefs } from "../core-wiring.ts";
 import { MAINNET_CHAIN_ID } from "../chains.ts";
 import { vaultDisplayName, type UpgradeMode } from "../sheet.ts";
@@ -244,26 +244,9 @@ export async function upgradeabilityChecks(
       return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `implementation ${r.implementation}, code hash ${r.implementation_code_hash}` };
     });
     await c.run(`${p}: ${PROXY_LABELS[2]}`, async () => {
-      if (implCode.length <= 2) return { ok: false, detail: "no implementation code to read the library links from" };
-      const problems: string[] = [];
-      let n = 0;
-      const seen = new Set<string>();
       // the implementation's link offsets come from the build it was made from (issue 1859: a governed upgrade's own build); the libraries it links are the release's
-      const visit = async (code: Hex, artifact: string, dir: string): Promise<void> => {
-        for (const l of linkedLibraries(dir, artifact)) {
-          const at = (`0x${code.replace(/^0x/, "").slice(l.start * 2, (l.start + 20) * 2)}`) as Address;
-          const key = `${l.name}:${lc(at)}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          n++;
-          const libCode = await chain.getCode(at);
-          const res = compareCode(libCode, loadArtifact(ctx.artifactsDir, l.name));
-          if (!res.ok) { problems.push(`${l.name} at ${at}: ${res.detail}`); continue; }
-          await visit(libCode, l.name, ctx.artifactsDir);
-        }
-      };
-      await visit(implCode, s.contract, ctx.proxyBuildDirs?.[p] ?? ctx.artifactsDir);
-      return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${n} linked librar${n === 1 ? "y" : "ies"} equal the build` };
+      const res = await verifyLinkedLibraries(chain, implCode, s.contract, ctx.artifactsDir, ctx.proxyBuildDirs?.[p] ?? ctx.artifactsDir);
+      return { ok: res.ok, detail: res.detail };
     });
     await c.run(`${p}: ${PROXY_LABELS[3]}`, async () => {
       if (!isAddress(proxy)) return { ok: false, detail: `the manifest has no ${s.field}` };

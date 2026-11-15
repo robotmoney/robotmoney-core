@@ -11,7 +11,7 @@ import {PlanParams, PlanStatus, SkipReason, IDLE_INDEX} from "./src/FundTypes.so
 import {IObservablePool} from "../../interfaces/IObservablePool.sol";
 import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
 import {FlowQueueFixesBase} from "./FlowQueueFixes.t.sol";
-import {FlowLevers, FlowParams, IFlowEvents} from "./src/FlowTypes.sol";
+import {Claim, FlowLevers, FlowParams, IFlowEvents, RequestKind, Settlement} from "./src/FlowTypes.sol";
 import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
 
 /// @title ReviewFixesRebalancerTest
@@ -255,13 +255,13 @@ contract ReviewFixesQueueTest is FlowQueueFixesBase {
         assertTrue(queue.getRequest(red).closed, "the redemption settled");
     }
 
-    /// @notice Q-F4: an allowed early return does not outlive a freeze that ran out by itself (RB-11).
+    /// @notice Q-F4 (Step 3f E49, RB-18): `allowReturn` / `takeReturn` are retired; a freeze ends by itself at
+    ///         `maxFreeze` even when `maxFreeze > minHold`, with cooldown preventing back-to-back freezes and
+    ///         normal FIFO share delivery resuming automatically once `frozenUntil` passes.
     function test_QF4_anAllowedReturnEndsWithTheFreeze() public fixtureCovered {
         FlowParams memory p = queue.flowParams();
-        p.maxFreeze = 1 hours;
-        // The freeze must run out INSIDE the hold, after the timelock's allowReturn: a hold longer than maxFreeze plus
-        // the timelock delay (the 1 h default of decision D4-11 is not; 24 h is inside the hold bounds).
-        p.minHold = 24 hours;
+        p.minHold = 1 hours;
+        p.maxFreeze = 2 hours;
         _setParams(p);
         uint256 id = openDepositRequest(alice, 5_000e6, type(uint256).max);
         warpToSettleable(id);
@@ -270,12 +270,32 @@ contract ReviewFixesQueueTest is FlowQueueFixesBase {
         uint256 claimId = queue.claimCount();
         vm.prank(emergency);
         queue.freezeSettlement(sid);
-        timelockExecute(address(queue), abi.encodeCall(queue.allowReturn, (sid)));
-        vm.warp(queue.getSettlement(sid).frozenUntil + 1);
-        assertLt(block.timestamp, queue.getSettlement(sid).holdEndsAt, "still inside the hold");
+        Settlement memory st = queue.getSettlement(sid);
+        assertEq(st.frozenUntil, uint64(block.timestamp) + p.maxFreeze, "frozenUntil = now + maxFreeze");
+
+        // At holdEndsAt (< frozenUntil), the hold has passed but the freeze still withholds delivery,
+        // and a second freeze is refused by cooldown.
+        vm.warp(st.holdEndsAt);
+        assertEq(queue.claimableDepositRequest(id, alice), 0, "still frozen past hold");
+        assertEq(queue.maxDeposit(alice), 0, "maxDeposit is 0 while frozen");
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.ReturnNotAllowed.selector, sid));
-        queue.takeReturn(claimId);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotEnoughClaimable.selector, 1e6, 0));
+        queue.deposit(1e6, alice);
+        vm.prank(emergency);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, st.frozenUntil));
+        queue.freezeSettlement(sid);
+
+        // Once frozenUntil arrives, the freeze ends by itself without admin intervention and shares deliver cleanly.
+        vm.warp(st.frozenUntil);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.SettlementNotFrozen.selector, sid));
+        queue.releaseSettlement(sid);
+        uint256 avail = queue.claimableDepositRequest(id, alice);
+        assertGt(avail, 0, "claimable once maxFreeze elapses");
+        Claim memory c = queue.getClaim(claimId);
+        vm.prank(alice);
+        uint256 shares = queue.deposit(avail, alice);
+        assertEq(shares, c.shares, "full settled shares delivered after freeze ends");
     }
 
     /// @notice Q-F5: a per-call basket cap below the minimum fill holds every request; the call says so.

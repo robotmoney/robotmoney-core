@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.9 (hardened flows), §5.9.6 (the vault interface), §6
-//            (FlowQueue row), §6.1 (size), §7 (RB-10 to RB-18, RB-20 to RB-22);
-//            docs/technical/one-vault-timed-flows-eng-plan.md E1, E2, E7, E8, E10 to E13, E17, E18, E20 to E22, §3.1
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.9 (hardened flows), §5.11 (Step 3f whole match & timed flows);
+//            docs/technical/one-vault-timed-flows-eng-plan.md E1, E2, E7, E8, E10-E13, E17, E18, E20-E22, E24-E42, E49, E51-E55
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -10,11 +9,12 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {AdminFloorAccessControl} from "../../../lib/AdminFloorAccessControl.sol";
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
-import {Roles} from "./FundTypes.sol";
+import {AssetConfig, AssetKind, Roles} from "./FundTypes.sol";
 import {
     FlowBooks,
     FlowParams,
     FlowQueueInit,
+    QueueLiveness,
     Quote,
     Request,
     RequestStatus,
@@ -30,8 +30,13 @@ import {
     MAX_SETTLE_WINDOW,
     MIN_HOLD,
     MAX_HOLD,
-    MIN_FLOW_KEEPER_GRACE,
-    MAX_FLOW_KEEPER_GRACE,
+    MIN_CANCEL_BUFFER,
+    MAX_CANCEL_BUFFER,
+    DEFAULT_CANCEL_BUFFER,
+    TIMELOCK_DELAY_REFERENCE,
+    MIN_MAX_PAUSE,
+    MAX_PAUSE_DURATION,
+    DEFAULT_MAX_PAUSE,
     MAX_EPOCH_FLOW_BPS,
     MAX_EPOCH_FLOW_FLOOR_USDC,
     MAX_SHARE_PRICE_MOVE_BPS,
@@ -59,21 +64,14 @@ import {IRobotMoneyFundFull} from "./interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState, FlowStorage, WalkCursor} from "./lib/FlowStorage.sol";
 import {FlowCheckLib} from "./lib/FlowCheckLib.sol";
 import {FlowClaimLib} from "./lib/FlowClaimLib.sol";
+import {FlowMatchLib} from "./lib/FlowMatchLib.sol";
 import {FlowSettleLib} from "./lib/FlowSettleLib.sol";
 
 /// @title FlowQueue
-/// @notice The entry point for timed deposits and redemptions of the one fund (E1, E2). See `IFlowQueue`.
+/// @notice The entry point for timed, netted, forward-priced deposits and redemptions of the one fund (Step 3f).
 ///
-///         Built by the `queue` agent (scaffold plan §7.3, 2026-11-11). This contract holds roles, the reentrancy
-///         lock, the parameters and the getters; the logic lives in three linked libraries so the queue stays
-///         under EIP-170, 24,576 bytes (G1):
-///         - `FlowCheckLib`: checks 1 to 7 of §5.9.3, the bound prices (E12), `checkSettle`, the quotes (E21).
-///         - `FlowSettleLib`: `settle` (walk, caps, eligibility) and the two sides (checks 8 to 12), each side in
-///           its own self-call (`settleRedeemSide`, `settleDepositSide`) so a failed side changes no state.
-///         - `FlowClaimLib`: requests, cancel, in-kind exit, expiry, credits, claims, the freeze, the sweep.
-///         Every function here and in those libraries is implemented, and so is every fund function they call
-///         (scaffold report §8.1).
-///
+///         Holds roles, reentrancy lock, governance parameters, and getters; delegates logic across four linked
+///         libraries (`FlowMatchLib`, `FlowCheckLib`, `FlowSettleLib`, `FlowClaimLib`) to stay strictly below EIP-170.
 ///         Runs behind its own ERC-1967 proxy (`GovernedUUPS`), under the same upgrade timelock as the fund (E1).
 contract FlowQueue is
     AdminFloorAccessControl,
@@ -113,15 +111,17 @@ contract FlowQueue is
         s.usdcFeed = p.usdcFeed;
         s.usdcFeedMaxAge = p.usdcFeedMaxAge;
         s.sequencerFeed = p.sequencerFeed;
+        FlowMatchLib.ensureInitialized(s);
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
         _setRoleAdmin(KEEPER_ROLE, ADMIN_ROLE);
         _grantRole(ADMIN_ROLE, p.admin);
         _grantRole(EMERGENCY_ROLE, p.emergency);
         if (p.keeper != address(0)) _grantRole(KEEPER_ROLE, p.keeper);
-        _setFlowParams(p.params);
-        // The owner's decided default levers (2026-11-12): the 5 bps per-call basket cap, limits from the stricter
-        // of TWAP and feed. ADMIN may change them later through `setFlowLevers`.
+        FlowParams memory fp = p.params;
+        if (fp.cancelBuffer == 0) fp.cancelBuffer = DEFAULT_CANCEL_BUFFER;
+        if (fp.maxPause == 0) fp.maxPause = DEFAULT_MAX_PAUSE;
+        _setFlowParams(fp);
         FlowLevers memory l =
             FlowLevers({basketCallBps: DEFAULT_BASKET_CALL_BPS, legPriceMode: LEG_PRICE_STRICTER});
         s.levers = l;
@@ -129,25 +129,17 @@ contract FlowQueue is
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Requests and price-free exits (FlowClaimLib)
+    //  Requests and exits (FlowClaimLib, FlowMatchLib)
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IFlowQueue
-    function requestDeposit(uint256 usdc, uint256 maxUsdcPerShare, address owner)
-        external
-        nonReentrant
-        returns (uint256)
-    {
-        return FlowClaimLib.requestDeposit(_s(), usdc, maxUsdcPerShare, owner);
+    function requestDeposit(uint256 usdc, address owner) external nonReentrant returns (uint256) {
+        return FlowClaimLib.requestDeposit(_s(), usdc, owner);
     }
 
     /// @inheritdoc IFlowQueue
-    function requestRedeem(uint256 shares, uint256 minUsdcPerShare, address owner)
-        external
-        nonReentrant
-        returns (uint256)
-    {
-        return FlowClaimLib.requestRedeem(_s(), shares, minUsdcPerShare, owner);
+    function requestRedeem(uint256 shares, address owner) external nonReentrant returns (uint256) {
+        return FlowClaimLib.requestRedeem(_s(), shares, owner);
     }
 
     /// @inheritdoc IFlowQueue
@@ -156,13 +148,30 @@ contract FlowQueue is
     }
 
     /// @inheritdoc IFlowQueue
-    function exitInKind(uint256 requestId) external nonReentrant {
-        FlowClaimLib.exitInKind(_s(), requestId);
+    function withdrawExpired(uint256 requestId) external nonReentrant returns (uint256) {
+        return FlowClaimLib.withdrawExpired(_s(), requestId);
     }
 
     /// @inheritdoc IFlowQueue
-    function withdrawExpired(uint256 requestId) external nonReentrant returns (uint256) {
-        return FlowClaimLib.withdrawExpired(_s(), requestId);
+    function giveRedemptionNotice(uint256 requestId) external nonReentrant returns (uint64) {
+        return FlowClaimLib.giveRedemptionNotice(_s(), requestId);
+    }
+
+    /// @inheritdoc IFlowQueue
+    function claimNoticeReturn(uint256 requestId) external nonReentrant returns (uint256) {
+        return FlowMatchLib.claimNoticeReturn(_s(), requestId);
+    }
+
+    /// @inheritdoc IFlowQueue
+    function onShutdown() external nonReentrant {
+        FlowState storage s = _s();
+        if (msg.sender != s.fund) revert OnlyFund();
+        FlowMatchLib.onShutdown(s);
+    }
+
+    /// @inheritdoc IFlowQueue
+    function releaseWindDown(address owner) external nonReentrant returns (uint256, uint256) {
+        return FlowMatchLib.releaseWindDown(_s(), owner);
     }
 
     /// @inheritdoc IFlowQueue
@@ -180,7 +189,6 @@ contract FlowQueue is
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IFlowQueue
-    /// @dev `maxUsdc` limits each side separately: the deposit USDC and the redemption value at the feeds.
     function settle(uint256 maxRequests, uint256 maxUsdc) external nonReentrant returns (uint256) {
         return FlowSettleLib.settle(_s(), maxRequests, maxUsdc, hasRole(KEEPER_ROLE, msg.sender));
     }
@@ -190,7 +198,7 @@ contract FlowQueue is
         (check, index,,) = FlowCheckLib.preTrade(_s(), msg.sender, hasRole(KEEPER_ROLE, msg.sender));
     }
 
-    /// @notice Self-call of `settle` for the redemption side (FlowSettleLib note). Only the queue may call it.
+    /// @notice Self-call of `settle` for the redemption side. Only the queue may call it.
     function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c)
         external
     {
@@ -241,7 +249,7 @@ contract FlowQueue is
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Emergency powers
+    //  Emergency powers & Governance
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IFlowQueue
@@ -255,47 +263,35 @@ contract FlowQueue is
     }
 
     /// @inheritdoc IFlowQueue
-    function allowReturn(uint256 id) external onlyRole(ADMIN_ROLE) nonReentrant {
-        FlowClaimLib.allowReturn(_s(), id);
+    /// @notice Self-expiring pause (`now + maxPause`); reverts `PauseOnCooldown` before `end + maxPause` (E39).
+    function pauseQueue() external onlyRole(EMERGENCY_ROLE) nonReentrant {
+        FlowState storage s = _s();
+        if (
+            s.queuePauseLastEnd != 0
+                && block.timestamp < uint256(s.queuePauseLastEnd) + s.params.maxPause
+        ) {
+            revert PauseOnCooldown(uint64(uint256(s.queuePauseLastEnd) + s.params.maxPause));
+        }
+        uint64 until = uint64(block.timestamp) + s.params.maxPause;
+        s.queuePausedUntil = until;
+        s.queuePauseLastEnd = until;
+        emit QueuePaused(msg.sender, until);
     }
 
     /// @inheritdoc IFlowQueue
-    function takeReturn(uint256 claimId) external nonReentrant {
-        FlowClaimLib.takeReturn(_s(), claimId);
-    }
-
-    /// @notice EMERGENCY_ROLE. Pause requests and settlement (cancel, in-kind exit and withdrawals stay open).
-    /// @dev Under the one reentrancy lock like every other entry point (eng plan §3.1).
-    function pauseQueue() external onlyRole(EMERGENCY_ROLE) nonReentrant {
-        FlowState storage s = _s();
-        if (s.paused) return;
-        s.paused = true;
-        emit QueuePaused(msg.sender);
-    }
-
-    /// @notice ADMIN_ROLE.
     function unpauseQueue() external onlyRole(ADMIN_ROLE) nonReentrant {
         FlowState storage s = _s();
-        if (!s.paused) return;
+        if (!s.paused && (s.queuePausedUntil == 0 || block.timestamp >= s.queuePausedUntil)) return;
         s.paused = false;
+        s.queuePausedUntil = 0;
         emit QueueUnpaused(msg.sender);
     }
 
-    /// @notice ADMIN_ROLE (timelock), inside the hard bounds of FlowTypes. Under the reentrancy lock, so no callback
-    ///         inside a settlement can change the parameters that settlement reads.
-    /// @dev No change can stall settlement or orphan a request (step 3 finish plan §3.1 item 3). A new `epochLength`
-    ///      applies from the end of the epoch in progress; every open epoch keeps its own end and its index
-    ///      (`FlowEpochs`), so open requests settle at the end of their own windows and expire after `maxRoll`
-    ///      epochs as before. Any change also resets the walk (the oldest-epoch hint and every cursor), so a larger
-    ///      `maxRoll` cannot leave a revived request behind a stale position (`FlowSettleLib.applyParams`).
+    /// @inheritdoc IFlowQueue
     function setFlowParams(FlowParams calldata params) external onlyRole(ADMIN_ROLE) nonReentrant {
         _setFlowParams(params);
     }
 
-    /// @dev Hard bounds (eng plan §2). `field` in `FlowParamOutOfBounds` is the struct position, 0-based. The
-    ///      combination rules refuse values that would stop every settlement: `quorum` above `slices`, a window
-    ///      that does not split into whole slices of at least `MIN_SLICE_SECONDS`, and a window plus grace that
-    ///      ends after a request expires (field 7, see below).
     function _setFlowParams(FlowParams memory p) private {
         if (p.epochLength < MIN_EPOCH_LENGTH || p.epochLength > MAX_EPOCH_LENGTH) {
             revert FlowParamOutOfBounds(0);
@@ -304,9 +300,7 @@ contract FlowQueue is
             revert FlowParamOutOfBounds(1);
         }
         if (p.minHold < MIN_HOLD || p.minHold > MAX_HOLD) revert FlowParamOutOfBounds(2);
-        if (p.keeperGrace < MIN_FLOW_KEEPER_GRACE || p.keeperGrace > MAX_FLOW_KEEPER_GRACE) {
-            revert FlowParamOutOfBounds(3);
-        }
+        // Field 3 (`keeperGrace`) is retired in Step 3f (E34) and kept unconstrained for tuple compatibility.
         if (p.maxEpochFlowBps == 0 || p.maxEpochFlowBps > MAX_EPOCH_FLOW_BPS) {
             revert FlowParamOutOfBounds(4);
         }
@@ -314,12 +308,10 @@ contract FlowQueue is
         if (p.maxSharePriceMoveBps == 0 || p.maxSharePriceMoveBps > MAX_SHARE_PRICE_MOVE_BPS) {
             revert FlowParamOutOfBounds(6);
         }
-        // A request of epoch e can settle from `(e + 1) × L + W` (anyone from `+ keeperGrace`) and expires at
-        // `(e + maxRoll + 1) × L`. Unless `W + keeperGrace < maxRoll × L`, a queue with no keeper would let every
-        // request expire before anyone may settle it.
         if (
             p.maxRoll == 0 || p.maxRoll > MAX_ROLL
-                || uint256(p.settleWindow) + p.keeperGrace >= uint256(p.maxRoll) * p.epochLength
+                || p.settleWindow >= uint256(p.maxRoll) * p.epochLength
+                || uint256(p.maxRoll) * p.epochLength > TIMELOCK_DELAY_REFERENCE
         ) revert FlowParamOutOfBounds(7);
         if (p.minRequestUsdc == 0 || p.minRequestUsdc > MAX_MIN_REQUEST_USDC) {
             revert FlowParamOutOfBounds(8);
@@ -334,12 +326,15 @@ contract FlowQueue is
             revert FlowParamOutOfBounds(12);
         }
         if (p.refBandBps == 0 || p.refBandBps > MAX_REF_BAND_BPS) revert FlowParamOutOfBounds(13);
-        // `legBandBps` must also be above every basket pool fee (§5.9.5), read from the fund now. An asset added
-        // later with a higher fee is not re-checked here (scaffold gap, noted in the queue agent's notes).
-        if (
-            p.legBandBps == 0 || p.legBandBps > MAX_LEG_BAND_BPS
-                || p.legBandBps <= IRobotMoneyFundFull(_s().fund).maxPoolFeeBps()
-        ) revert FlowParamOutOfBounds(14);
+        if (p.legBandBps == 0 || p.legBandBps > MAX_LEG_BAND_BPS) revert FlowParamOutOfBounds(14);
+        address fundAddr = _s().fund;
+        if (fundAddr != address(0)) {
+            IRobotMoneyFundFull f = IRobotMoneyFundFull(fundAddr);
+            if (
+                _hasActiveBasket(f)
+                    && p.legBandBps <= f.maxPoolFeeBps() + f.feeMarginBps()
+            ) revert FlowParamOutOfBounds(14);
+        }
         if (p.sequencerGrace > MAX_SEQUENCER_GRACE) revert FlowParamOutOfBounds(15);
         if (p.usdcPegBandBps == 0 || p.usdcPegBandBps > MAX_USDC_PEG_BAND_BPS) {
             revert FlowParamOutOfBounds(16);
@@ -347,14 +342,26 @@ contract FlowQueue is
         if (p.maxLendRateGrowthBps == 0 || p.maxLendRateGrowthBps > MAX_LEND_RATE_GROWTH_BPS) {
             revert FlowParamOutOfBounds(17);
         }
+        if (
+            p.cancelBuffer < MIN_CANCEL_BUFFER || p.cancelBuffer > MAX_CANCEL_BUFFER
+                || p.cancelBuffer >= p.epochLength
+        ) revert FlowParamOutOfBounds(18);
+        if (
+            p.maxPause < MIN_MAX_PAUSE || p.maxPause > MAX_PAUSE_DURATION
+                || p.maxPause < uint256(TIMELOCK_DELAY_REFERENCE) + p.epochLength
+        ) revert FlowParamOutOfBounds(19);
         FlowSettleLib.applyParams(_s(), p);
         emit FlowParamsSet(p);
     }
 
-    /// @notice ADMIN_ROLE (timelock). The attack-finding levers of step 3 finish plan §3.2 (`FlowLevers`), appended
-    ///         by `levers` 2026-11-12. `initialize` sets the decided defaults (`DEFAULT_BASKET_CALL_BPS`, stricter-of-both);
-    ///         all zero is the design as §5.9 first wrote it. Under the reentrancy lock like
-    ///         `setFlowParams`. Changes nothing else: no cursor, epoch or reference moves.
+    function _hasActiveBasket(IRobotMoneyFundFull f) private view returns (bool) {
+        AssetConfig[] memory cfgs = f.assetConfigs();
+        for (uint256 i; i < cfgs.length; ++i) {
+            if (cfgs[i].active && cfgs[i].kind == AssetKind.Basket) return true;
+        }
+        return false;
+    }
+
     function setFlowLevers(FlowLevers calldata l) external onlyRole(ADMIN_ROLE) nonReentrant {
         if (l.basketCallBps > MAX_BASKET_CALL_BPS) revert FlowLeverOutOfBounds(0);
         if (l.legPriceMode > LEG_PRICE_FEED_ONLY) revert FlowLeverOutOfBounds(1);
@@ -362,7 +369,6 @@ contract FlowQueue is
         emit FlowLeversSet(l);
     }
 
-    /// @notice The attack-finding levers in force (from `initialize`: the 5 bps per-call cap, stricter-of-both).
     function flowLevers() external view returns (FlowLevers memory) {
         return _s().levers;
     }
@@ -383,6 +389,14 @@ contract FlowQueue is
         return _s().params;
     }
 
+    function cancelBuffer() external view returns (uint32) {
+        return _s().params.cancelBuffer;
+    }
+
+    function maxPause() external view returns (uint32) {
+        return _s().params.maxPause;
+    }
+
     function feeds()
         external
         view
@@ -393,15 +407,30 @@ contract FlowQueue is
     }
 
     function queuePaused() external view returns (bool) {
-        return _s().paused;
+        FlowState storage s = _s();
+        return s.paused || (s.queuePausedUntil != 0 && block.timestamp < s.queuePausedUntil);
     }
 
-    /// @notice The epoch in progress (`FlowEpochs.current`: indices only grow, also across a new `epochLength`).
+    function queuePausedUntil() external view returns (uint64) {
+        return _s().queuePausedUntil;
+    }
+
+    function liveness() external view returns (QueueLiveness memory l) {
+        FlowState storage s = _s();
+        l.keeperConfigured = getRoleMemberCount(KEEPER_ROLE) != 0;
+        l.queuePausedNow =
+            s.paused || (s.queuePausedUntil != 0 && block.timestamp < s.queuePausedUntil);
+        l.queuePausedUntil = s.queuePausedUntil;
+        l.depositsStoppedNow = !FlowCheckLib.depositsOpen(s);
+        l.windDownActive = IRobotMoneyFundFull(s.fund).isShutdown();
+        l.cancelBuffer = s.params.cancelBuffer;
+        l.maxPause = s.params.maxPause;
+    }
+
     function currentEpoch() external view returns (uint64) {
         return FlowEpochs.current(_s());
     }
 
-    /// @notice When `epoch`'s settlement window ends: its own end (`FlowEpochs.endOf`) plus `settleWindow`.
     function settleableAt(uint64 epoch) external view returns (uint64) {
         FlowState storage s = _s();
         return uint64(FlowEpochs.endOf(s, epoch) + s.params.settleWindow);
@@ -453,19 +482,36 @@ contract FlowQueue is
         return (s.depositUsed[period], s.redeemUsed[period]);
     }
 
-    /// @notice Reads `queuedShares`, which every change of an owner's escrowed or held shares must keep exact
-    ///         (E13, RB-22). The fund's `ledgerBalanceOf` reads this.
+    /// @inheritdoc IFlowQueue
     function queuedSharesOf(address account) external view returns (uint256) {
-        return _s().queuedShares[account];
+        return FlowMatchLib.queuedSharesOf(_s(), account);
     }
 
     /// @inheritdoc IFlowQueue
-    function settleCursor(bool keeperClass, RequestKind kind)
+    function currentMatchIndexes()
+        external
+        view
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx)
+    {
+        return FlowMatchLib.currentMatchIndexes(_s());
+    }
+
+    /// @inheritdoc IFlowQueue
+    function queuedSharesOfAt(
+        address account,
+        uint256[2] calldata depIdx,
+        uint256[2] calldata redIdx
+    ) external view returns (uint256) {
+        return FlowMatchLib.queuedSharesOfAt(_s(), account, depIdx, redIdx);
+    }
+
+    /// @inheritdoc IFlowQueue
+    function settleCursor(bool, RequestKind kind)
         external
         view
         returns (uint64 epoch, uint256 index)
     {
-        WalkCursor storage at = _s().cursors[keeperClass ? 0 : 1][uint8(kind)];
+        WalkCursor storage at = _s().cursors[0][uint8(kind)];
         return (at.epoch, at.index);
     }
 

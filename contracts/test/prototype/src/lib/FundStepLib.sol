@@ -27,6 +27,7 @@ import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
 import {FundState} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
+import {FundDelistLib} from "./FundDelistLib.sol";
 import {StepFeedLib} from "./StepFeedLib.sol";
 
 /// @title FundStepLib
@@ -72,6 +73,7 @@ library FundStepLib {
         public
         returns (StepResult memory r)
     {
+        FundDelistLib.syncExpiredPause(s);
         Plan storage p = s.plan;
         if (p.status != PlanStatus.Open) {
             revert IRobotMoneyFund.InvalidPlanTransition(p.id, p.status, PlanStatus.Open);
@@ -88,8 +90,8 @@ library FundStepLib {
             uint256 left = p.costBudget > p.costSpent ? p.costBudget - p.costSpent : 0;
             if (o.maxCostUsdc > left) o.maxCostUsdc = left;
         }
-        _checkLeg(s, o.sellIndex);
-        _checkLeg(s, o.buyIndex);
+        _checkLeg(s, o.sellIndex, true);
+        _checkLeg(s, o.buyIndex, false);
         StepPrices memory px = _stepFeeds(s);
         r.navBefore = _pathGuard(s, o);
         StepSnap memory b;
@@ -102,9 +104,10 @@ library FundStepLib {
         p.costSpent += r.cost;
         p.stepCount += 1;
         s.lastStepAt = uint64(block.timestamp);
-        // Halt once the budget left is below this step's own cost: the next step like it could not fit, and only
-        // the Safe extends a budget (§5.5). Never past the budget (the cap above), so `costSpent ≤ costBudget`.
-        if (r.cost != 0 && p.costBudget - p.costSpent < r.cost) {
+        // Halt once the budget left is below this step's own cost (or exhausted at 0, SAFE-06): the next step
+        // could not fit, and only the Safe extends a budget (§5.5). Never past the budget, so `costSpent ≤ costBudget`.
+        uint256 leftAfter = p.costBudget - p.costSpent;
+        if (leftAfter == 0 || (r.cost != 0 && leftAfter < r.cost)) {
             s.haltCost = r.cost;
             p.status = PlanStatus.Halted;
             emit IFundEvents.PlanStatusChanged(p.id, PlanStatus.Open, PlanStatus.Halted);
@@ -113,23 +116,33 @@ library FundStepLib {
         FundValuationLib.recordNav(s);
     }
 
-    /// @dev A non-idle leg must name a counted (active, not excluded) asset, and a Basket leg must pass ORA-4
+    /// @dev A non-idle leg must name a counted (active, not excluded, not inSale) asset, and a Basket leg must pass ORA-4
     ///      (RB-5 defence in depth: the Rebalancer already masks failing assets).
-    function _checkLeg(FundState storage s, uint256 i) private view {
+    function _checkLeg(FundState storage s, uint256 i, bool isSell) private view {
         if (i == IDLE_INDEX) return;
         if (i >= s.assets.length || !FundValuationLib.isCounted(s, i)) {
             revert IFundEvents.InvalidAssetIndex(i);
+        }
+        if (s.inSale[i]) revert IRobotMoneyFund.AssetInSale(i);
+        if (isSell && s.assets[i].kind == AssetKind.Lending && s.positionClaimTotal[i] != 0) {
+            revert IRobotMoneyFund.LendingHasClaims(i, s.positionClaimTotal[i]);
         }
         if (s.assets[i].kind == AssetKind.Basket) FundValuationLib.requireMarket(s, i);
     }
 
     /// @dev Step 3e: checks 2 and 4 of §5.9.3 on the step (`StepFeedLib.check`), else `StepFeedCheckFailed`. Returns
-    ///      every basket asset's feed and TWAP price for the cost at the feeds.
+    ///      every basket asset's feed and TWAP price for the cost at the feeds (skipping `inSale` assets).
     function _stepFeeds(FundState storage s) private view returns (StepPrices memory px) {
+        uint256 n = s.assets.length;
+        AssetConfig[] memory cfg = new AssetConfig[](n);
+        for (uint256 i; i < n; ++i) {
+            cfg[i] = s.assets[i];
+            if (s.inSale[i]) cfg[i].active = false;
+        }
         StepFeedCheck c;
         uint256 index;
         uint256 detail;
-        (c, index, detail, px) = StepFeedLib.check(s.assets, s.usdc, s.flowQueue);
+        (c, index, detail, px) = StepFeedLib.check(cfg, s.usdc, s.flowQueue);
         if (c != StepFeedCheck.Ok) revert IRobotMoneyFund.StepFeedCheckFailed(c, index, detail);
     }
 
@@ -203,7 +216,7 @@ library FundStepLib {
         uint256 n = o.notionalUsdc;
         uint256 got;
         if (o.sellIndex == IDLE_INDEX) {
-            uint256 idle = IERC20(usdc).balanceOf(address(this));
+            uint256 idle = FundValuationLib.idleUsdc(s);
             if (idle < n) revert IRobotMoneyFund.InsufficientIdle(n, idle);
             r.amountIn = n;
             got = n;

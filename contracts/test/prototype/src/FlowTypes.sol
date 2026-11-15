@@ -32,8 +32,13 @@ uint32 constant MAX_SETTLE_WINDOW = 1 days;
 // manipulations the hold guards against cannot be sustained for an hour on assets with large pools.
 uint32 constant MIN_HOLD = 1 hours;
 uint32 constant MAX_HOLD = 7 days;
-uint32 constant MIN_FLOW_KEEPER_GRACE = 1 hours;
-uint32 constant MAX_FLOW_KEEPER_GRACE = 7 days;
+uint32 constant MIN_CANCEL_BUFFER = 1 minutes;
+uint32 constant MAX_CANCEL_BUFFER = 6 hours;
+uint32 constant DEFAULT_CANCEL_BUFFER = 15 minutes;
+uint32 constant TIMELOCK_DELAY_REFERENCE = 48 hours;
+uint32 constant MIN_MAX_PAUSE = 48 hours;
+uint32 constant MAX_PAUSE_DURATION = 14 days;
+uint32 constant DEFAULT_MAX_PAUSE = 72 hours;
 uint16 constant MAX_EPOCH_FLOW_BPS = 10_000;
 uint128 constant MAX_EPOCH_FLOW_FLOOR_USDC = 100_000_000e6;
 uint16 constant MAX_SHARE_PRICE_MOVE_BPS = 5_000;
@@ -59,10 +64,11 @@ enum RequestKind {
     Redeem
 }
 
-/// @notice Life of a request (§5.9.2). A request may fill in parts (each fill is a claim, E8). `Pending` covers a
-///         partly filled request. `Expired` is reported by views once `maxRoll` epochs passed with an unfilled part;
-///         the escrow then waits for `withdrawExpired`. `Closed` means nothing is left in escrow for it: filled
-///         completely, cancelled, exited in kind, or its expired escrow withdrawn.
+/// @notice Life of a request (§5.9.2, E40). A request may fill in parts (match and/or net, each fill is a claim, E8).
+///         `Pending` covers a partly filled request (redemptions never expire by time). `Expired` is reported for an
+///         unfilled deposit once `maxRoll` epochs passed; the escrow waits for `withdrawExpired`. `Closed` means
+///         nothing is left in escrow for it: filled completely, cancelled, notice returned, wind-down released, or
+///         expired deposit withdrawn.
 enum RequestStatus {
     None,
     Pending,
@@ -70,27 +76,28 @@ enum RequestStatus {
     Closed
 }
 
-/// @notice The checks of proposal §5.9.3, in order (E7). `checkSettle` returns the first that fails; `settle`
-///         reverts `SettleBlocked` with it. `Ok` means every check that can be evaluated before trading passes.
-///         RedeemLeg, DepositLeg, Proportion and RealizedPrice can only fail inside a settlement.
+/// @notice The checks of proposal §5.9.3 and §5.11.4, in order (E7, E33, E34, E36). `checkSettle` returns the first
+///         that fails; `settle` reverts `SettleBlocked` with it. `Ok` means every pre-trade check passes.
+///         `LendRate` no longer gates `settle` (E36/SAFE-09: it closes deposits/match for the round while redemptions
+///         still settle); `market()` and `checkSettle()` keep `SettleCheck.LendRate` informational for quotes/views.
 enum SettleCheck {
     /// @dev Every pre-trade check passes.
     Ok,
     /// @dev Check 1: no epoch with a pending request has its settlement window ended.
     Window,
-    /// @dev Check 1: the caller is not the keeper and `keeperGrace` has not passed.
+    /// @dev Check 1: caller does not hold `KEEPER_ROLE` (E34).
     Caller,
-    /// @dev Check 1: the queue is paused.
+    /// @dev Check 1: the queue is paused or the fund is in wind-down.
     Paused,
     /// @dev Check 2: the sequencer feed reports down or is inside `sequencerGrace`.
     Sequencer,
-    /// @dev Check 2: a basket asset's feed is stale, not positive, incomplete or unreadable. `index` names it.
+    /// @dev Check 2: a non-`inSale` basket asset's feed is stale, not positive, incomplete or unreadable.
     Feed,
     /// @dev Check 2: the USDC / USD feed is unhealthy or outside `usdcPegBandBps`.
     UsdcPeg,
     /// @dev Check 3: fewer than `quorum` slices sit within `dispersionBps` of the median. `index` names the asset.
     TwapQuorum,
-    /// @dev Check 4: a TWAP is more than `refBandBps` from its feed. `index` names the asset.
+    /// @dev Check 4: a non-`inSale` TWAP is more than `refBandBps` from its feed. `index` names the asset.
     TwapVsFeed,
     /// @dev Check 5: a lending venue's rate per unit grew more than `maxLendRateGrowthBps` per day.
     LendRate,
@@ -102,34 +109,35 @@ enum SettleCheck {
     DepositLeg,
     /// @dev Check 10: the fund's proportion check failed (raised by the fund as `ProportionViolated`).
     Proportion,
-    /// @dev Check 11: the realized price is outside a bound price.
+    /// @dev Check 11: the net-side realized price is outside the per-swap limits (E33).
     RealizedPrice
 }
 
 // ─── Structs ────────────────────────────────────────────────────────────────
 
-/// @notice Every queue parameter of proposal §5.9.5 except `poolShareBps` and `minSeedUsdc` (the fund holds those)
-///         and `maxFeedAge` (per feed, in the fund's `AssetConfig`; the USDC feed's in `FlowQueueInit`).
+/// @notice Every queue parameter of proposal §5.9.5 and §5.11 (D39, E39, E51).
 ///         `ADMIN_ROLE` sets it through the timelock inside the hard bounds above.
 /// @param epochLength          Epoch length and the clock-time period of each flow cap (§5.9.5: 6 h).
 /// @param settleWindow         Wait after an epoch closes before it may settle; also the TWAP window (1 h).
-/// @param minHold              Hold of deposit shares after their settlement (24 h, E8).
-/// @param keeperGrace          After the window ends, anyone may settle once this passed (6 h, E10).
+/// @param minHold              Hold of deposit shares after their settlement (1 h, D4-11).
+/// @param keeperGrace          Retired in Step 3f (`settle()` is KEEPER_ROLE-only, E34); kept at index 3
+///                             for storage and tuple compatibility.
 /// @param maxEpochFlowBps      Each side's cap per period, in bps of NAV at the feeds (500, E20).
 /// @param epochFlowFloorUsdc   Each side's cap is at least this (250 000 USDC, E20).
 /// @param maxSharePriceMoveBps Share-price breaker per epoch passed since the last settlement (1 000, check 6).
-/// @param maxRoll              Epochs after which an unfilled request expires (8, E18).
+/// @param maxRoll              Epochs after which an unfilled deposit expires / redemption notice unlocks (8, E18/E40).
 /// @param minRequestUsdc       Least request size (100 USDC, E11); a whole-balance redemption is exempt.
 /// @param maxFreeze            Longest freeze of one settlement's deposit shares (7 days, E17).
 /// @param slices               Equal slices of `settleWindow` for the TWAP median (12, E6).
 /// @param quorum               Slices that must sit within `dispersionBps` of the median (9, check 3).
 /// @param dispersionBps        Slice band around the median (100, check 3).
-/// @param refBandBps           TWAP against feed band (90, check 4; owner default 2026-11-12, lever L10).
+/// @param refBandBps           TWAP against feed band (90, check 4).
 /// @param legBandBps           Per-swap limit band around the stricter of feed and TWAP (100, checks 8 and 9).
-///                             Must be above every basket pool fee.
 /// @param sequencerGrace       Time the sequencer must have been up (1 h, check 2).
 /// @param usdcPegBandBps       USDC / USD band around 1 (50, check 2).
 /// @param maxLendRateGrowthBps Most growth per day of a venue's rate per unit (10, check 5).
+/// @param cancelBuffer         Seconds before epoch close when `cancel` locks (15 min default, D39).
+/// @param maxPause             Duration (and cooldown for `pauseQueue`/`pauseRebalance`) of self-expiring pauses (72 h, E39).
 struct FlowParams {
     uint32 epochLength;
     uint32 settleWindow;
@@ -149,18 +157,11 @@ struct FlowParams {
     uint32 sequencerGrace;
     uint16 usdcPegBandBps;
     uint16 maxLendRateGrowthBps;
+    uint32 cancelBuffer;
+    uint32 maxPause;
 }
 
 /// @notice `FlowQueue.initialize` parameters.
-/// @param fund            The RobotMoneyFund (the share token, ERC-7575 `share()`).
-/// @param usdc            The fund's asset (ERC-7575 `asset()`).
-/// @param admin           Receives ADMIN_ROLE (deployer, then the timelock).
-/// @param emergency       Receives EMERGENCY_ROLE.
-/// @param keeper          Receives KEEPER_ROLE (address(0): none, grace path only).
-/// @param usdcFeed        Chainlink USDC / USD (check 2 peg, and USD → USDC conversion of feed prices).
-/// @param usdcFeedMaxAge  Its maximum age in seconds.
-/// @param sequencerFeed   Chainlink L2 sequencer uptime feed (check 2).
-/// @param params          Initial FlowParams, inside the hard bounds.
 struct FlowQueueInit {
     address fund;
     address usdc;
@@ -173,23 +174,48 @@ struct FlowQueueInit {
     FlowParams params;
 }
 
-/// @notice One request (E12, E18; eng plan §3.1 "state per request").
-/// @param owner     Owns the request and every claim from it. Named by the caller; never changed.
-/// @param kind      Deposit or Redeem.
-/// @param epoch     Epoch index the request was made in (`block.timestamp / epochLength` at the request).
-/// @param amount    Escrowed at the request: USDC (Deposit) or shares (Redeem).
-/// @param remaining Still unfilled and still in escrow: USDC (Deposit) or shares (Redeem).
-/// @param limit     Deposit: the most USDC per share (`maxUsdcPerShare`); Redeem: the least USDC per share after the
-///                  exit fee (`minUsdcPerShare`). In PRICE_SCALE units.
-/// @param closed    Nothing is left in escrow for this request (see `RequestStatus.Closed`).
+/// @notice One forward-priced request (E25, E40, E41, E52).
+/// @param owner                Owns the request and every claim from it. Named by the caller; never changed.
+/// @param kind                 Deposit or Redeem.
+/// @param epoch                Epoch index the request was made in.
+/// @param amount               Escrowed at the request: USDC (Deposit) or shares (Redeem).
+/// @param remaining            Last synced unfilled escrow (views compute current live remaining from match index).
+/// @param closed               Nothing is left in escrow for this request.
+/// @param exitFeeBps           Redeem only: Fund `exitFeeBps` snapshotted at creation (E41).
+/// @param minHold              Deposit only: Queue `minHold` snapshotted at creation (E41).
+/// @param maxRoll              Queue `maxRoll` snapshotted at creation (E41).
+/// @param createdAt            Timestamp at creation (for deposit-stop cancel window check).
+/// @param expiryEpoch          `epoch + maxRoll` at creation.
+/// @param expiresAt            Deposit: end of `expiryEpoch`; Redeem: `type(uint64).max` (never expires).
+/// @param noticeRound          Redeem only: target round epoch when `giveRedemptionNotice` was given (0 = none).
+/// @param era                  Queue wind-down era when created (`windDownEra`).
+/// @param enrolled             True once enrolled into the active match pool.
+/// @param matchCycle           Cycle in which this request enrolled (`depCycle` or `redCycle`).
+/// @param normBasis            Factor-normalized escrow basis in `matchCycle`.
+/// @param entryCumScaled       Redeem only: tier cumulative USDC per normBasis at last sync/enroll.
+/// @param entryUnmatchedFactor Unmatched factor at creation/enroll/last sync (Redeem).
+/// @param nextMatchId          Deposit only: next `depMatches` index to materialize for this request.
 struct Request {
     address owner;
     RequestKind kind;
     uint64 epoch;
     uint256 amount;
     uint256 remaining;
-    uint256 limit;
     bool closed;
+    uint16 exitFeeBps;
+    uint32 minHold;
+    uint16 maxRoll;
+    uint64 createdAt;
+    uint64 expiryEpoch;
+    uint64 expiresAt;
+    uint64 noticeRound;
+    uint64 era;
+    bool enrolled;
+    uint256 matchCycle;
+    uint256 normBasis;
+    uint256 entryCumScaled;
+    uint256 entryUnmatchedFactor;
+    uint256 nextMatchId;
 }
 
 /// @notice One fill of one request (E8: each fill is its own claim with its own unlock time).
@@ -216,116 +242,85 @@ struct Claim {
     uint256 sharesClaimed;
 }
 
-/// @notice One `settle` call that traded (proposal §5.9.3 check 12 "record").
-/// @param time              `block.timestamp` of the settlement.
-/// @param settler           The caller.
-/// @param depositBoundPrice The most a depositor could pay per share (PRICE_SCALE, rounded UP), from the per-swap
-///                          limits (E12). 0 when no deposit took part.
-/// @param redeemBoundPrice  The least a redeemer could receive per share (PRICE_SCALE, rounded DOWN). 0 when no
-///                          redemption took part.
-/// @param usdcIn            USDC spent by the deposits (sum of fills).
-/// @param sharesMinted      Shares minted to the queue for the deposits.
-/// @param sharesBurned      Shares burned for the redemptions.
-/// @param usdcOut           USDC paid to the queue for the redemptions, net of the exit fee.
-/// @param frozenUntil       0 when not frozen; else the freeze ends by itself at this time (E17, RB-18).
-/// @param returnAllowed     ADMIN let each depositor of this settlement pull its slice in kind (`takeReturn`).
-/// @param holdEndsAt        Appended by `queue`: `time + minHold` at the settlement, the unlock time of every deposit
-///                          claim it made. `freezeSettlement` is allowed only before it (shares in their hold).
+/// @notice One round settlement or match record (proposal §5.9.3 check 12, §5.11.4, E24, E49).
 struct Settlement {
     uint64 time;
     address settler;
-    uint256 depositBoundPrice;
-    uint256 redeemBoundPrice;
+    uint256 matchedShares;
+    uint256 matchedUsdc;
+    uint256 matchSharePrice;
     uint256 usdcIn;
     uint256 sharesMinted;
     uint256 sharesBurned;
     uint256 usdcOut;
     uint64 frozenUntil;
-    bool returnAllowed;
+    uint64 freezeSetAt;
     uint64 holdEndsAt;
 }
 
-/// @notice `quoteDeposit` / `quoteRedeem` (E21): the worst case the protocol's own limits allow right now.
-/// @param boundPrice     Deposit: the most USDC per share (rounded UP); Redeem: the least USDC per share after the
-///                       exit fee (rounded DOWN). PRICE_SCALE units.
-/// @param worstAmount    Deposit: the fewest shares the USDC would buy at `boundPrice` (rounded DOWN). Redeem: the
-///                       least USDC the shares would pay (rounded DOWN).
-/// @param feeBps         Deposit: 0 (the users of a settlement pay the purchase cost, there is no fee class).
-///                       Redeem: the fund's `exitFeeBps`.
-/// @param earliestSettle Earliest time a request made now can settle (its epoch's end plus `settleWindow`).
-/// @param holdEnds       Deposit: `earliestSettle + minHold`. Redeem: `earliestSettle` (USDC claimable at once).
+/// @notice Terms returned by `quoteDeposit` / `quoteRedeem` (E31, FLOW-08): fee, cutoff, timing, and guard bands. No price.
 struct Quote {
-    uint256 boundPrice;
-    uint256 worstAmount;
     uint256 feeBps;
+    uint64 cancelCutoff;
     uint64 earliestSettle;
     uint64 holdEnds;
+    uint16 refBandBps;
+    uint16 legBandBps;
+}
+
+/// @notice Keeper & Safe liveness disclosures surfaced alongside terms (E31, E34, E38, E39, FLOW-08).
+struct QueueLiveness {
+    bool keeperConfigured;
+    bool queuePausedNow;
+    uint64 queuePausedUntil;
+    bool depositsStoppedNow;
+    bool windDownActive;
+    uint32 cancelBuffer;
+    uint32 maxPause;
 }
 
 // ─── Settlement internals (appended by `queue`) ────────────────────────────
 //
-// Used between `FlowQueue` and its linked libraries (`FlowCheckLib`, `FlowSettleLib`). ABI-visible only on the
-// queue's self-call entry points, which nobody but the queue itself can call.
+// Used between `FlowQueue` and its linked libraries (`FlowCheckLib`, `FlowSettleLib`, `FlowMatchLib`).
 
 /// @dev `AssetPrice.kind` values.
 uint8 constant PRICE_KIND_NONE = 0;
 uint8 constant PRICE_KIND_LENDING = 1;
 uint8 constant PRICE_KIND_BASKET = 2;
 
-/// @notice Per-swap price limits of one basket asset for one settlement (E12, checks 8 and 9), in USDC units per
-///         whole token (`unit` base units). Computed before any trade from the feed (check 2) and the slice-median
-///         TWAP (check 3) only.
-/// @param kind         PRICE_KIND_NONE (inactive), PRICE_KIND_LENDING or PRICE_KIND_BASKET.
-/// @param unit         `10 ** decimals()` of the basket token (0 otherwise).
-/// @param buyPerToken  The most a purchase may pay: `min(feed, TWAP) × (1 + legBandBps)`, rounded UP.
-/// @param sellPerToken The least a sale must receive: `max(feed, TWAP) × (1 − legBandBps)`, rounded DOWN.
-/// @param feedPerToken At the feed (USD feed / USDC feed), rounded DOWN. NAV at the feeds (checks 6, caps).
+/// @notice Per-swap price limits and NAV prices of one asset (E12, checks 8 and 9, E53), in USDC units per whole token.
 struct AssetPrice {
     uint8 kind;
+    bool inSale;
     uint256 unit;
     uint256 buyPerToken;
     uint256 sellPerToken;
     uint256 feedPerToken;
+    uint256 twapPerToken;
 }
 
-/// @notice Everything `settle` decides before trading (checks 1 to 7 of proposal §5.9.3).
-/// @param supply        Fund share supply (check 7 snapshot).
-/// @param idle          Idle USDC (`heldBalances`).
-/// @param held          Held amount per asset index (`heldBalances`).
-/// @param prices        Per asset index.
-/// @param navFeed       NAV at the feeds, USDC, rounded DOWN.
-/// @param sharePrice    `navFeed × PRICE_SCALE / supply` (check 6).
-/// @param exitFeeBps    The fund's exit fee.
-/// @param depositBound  The most a depositor can pay per share (PRICE_SCALE, UP), batch rounding included.
-/// @param redeemBound   The least a redeemer receives per share after the fee (PRICE_SCALE, DOWN); 0 = the
-///                      redemption side cannot be bounded and does not trade.
-/// @param tvlCap        The fund's TVL cap (deposits must leave `navFeed + usdc ≤ tvlCap`).
-/// @param depositsOpen  False while the fund pauses deposits, is shut down or excludes a lending asset (check 1):
-///                      deposit requests are then not processed and redemptions settle alone.
-/// @param firstEpoch    The oldest epoch that can still hold a live (unexpired) request.
-/// @param lastEpoch     The newest epoch this caller may settle: its settlement window has ended, and for a caller
-///                      without KEEPER_ROLE also its `keeperGrace` (step 3 finish plan §3.1 item 1).
-/// @param lendRates     Appended by `fix-queue`: per asset index, the lending venue's rate per unit that check 5 read
-///                      and accepted (0 for other assets). The settlement records one of these when its read after
-///                      the trades fails, never a stale reference (item 5).
-/// @param excludedMask  Appended by `fix-queue`: bit `i` set when asset `i` has an open exclusion record now (check 1;
-///                      check 6's reference, item 9).
+/// @notice Everything `settle` decides before trading (checks 1 to 7 of proposal §5.9.3 & §5.11.4).
 struct SettleContext {
     uint256 supply;
     uint256 idle;
     uint256[] held;
     AssetPrice[] prices;
     uint256 navFeed;
+    uint256 navTwap;
     uint256 sharePrice;
+    uint256 matchSharePrice;
     uint256 exitFeeBps;
-    uint256 depositBound;
-    uint256 redeemBound;
     uint256 tvlCap;
     bool depositsOpen;
+    bool lendRateOk;
+    uint256 lendRateFailIdx;
+    uint256 lendRateFailDetail;
+    uint64 roundEpoch;
     uint64 firstEpoch;
     uint64 lastEpoch;
     uint256[] lendRates;
     uint256 excludedMask;
+    uint256 saleMask;
 }
 
 /// @notice One fill handed to a side of a settlement: `amount` of request `requestId` (USDC for a deposit, shares for
@@ -365,13 +360,12 @@ struct FlowBooks {
 /// @notice Events and errors of the FlowQueue. `IFlowQueue` inherits this, so tests can `emit IFlowEvents.X(...)`.
 ///         `NotImplemented(string)` is the file-level error of FundTypes.sol.
 interface IFlowEvents {
-    // ── Requests (§5.9.2) ──
+    // ── Requests (§5.9.2, §5.11.3, E25, E40) ──
     event DepositRequested(
         uint256 indexed requestId,
         address indexed owner,
         address indexed sender,
         uint256 usdc,
-        uint256 maxUsdcPerShare,
         uint64 epoch
     );
     event RedeemRequested(
@@ -379,27 +373,47 @@ interface IFlowEvents {
         address indexed owner,
         address indexed sender,
         uint256 shares,
-        uint256 minUsdcPerShare,
         uint64 epoch
     );
     /// @notice The unfilled part went to the owner's credit (`withdrawCredit`).
     event RequestCancelled(uint256 indexed requestId, address indexed owner, uint256 unfilled);
-    /// @notice The unfilled redemption shares left through the fund's `redeemInKind`, paid to the owner.
-    event RequestExitedInKind(uint256 indexed requestId, address indexed owner, uint256 shares);
-    /// @notice The owner withdrew the escrow of an expired request.
+    /// @notice The owner withdrew the escrow of an expired deposit request.
     event ExpiredWithdrawn(uint256 indexed requestId, address indexed owner, uint256 amount);
+    /// @notice Owner gave post-`maxRoll` redemption notice for `requestId`, targeting `noticeRound`.
+    event RedemptionNoticeGiven(
+        uint256 indexed requestId, address indexed owner, uint64 noticeRound
+    );
+    /// @notice Unfilled shares of a noticed redemption moved to credit at round end.
+    event RedemptionNoticeReturned(
+        uint256 indexed requestId, address indexed owner, uint256 shares
+    );
+    /// @notice Wind-down (`shutdown`) released queued escrows for `owner` into credits.
+    event WindDownReleased(
+        address indexed owner, uint256 usdcReleased, uint256 sharesReleased
+    );
 
-    // ── Settlement (§5.9.3) ──
+    // ── Settlement & Whole Match (§5.9.3, §5.11.4, E24, E35, E36) ──
     /// @notice A settle call recorded nothing while the per-call basket cap (`FlowLevers.basketCallBps`) left a side
-    ///         less room than its minimum fill: a thin basket pool holds every request (review Q-F5). The rooms the
-    ///         call had, in USDC.
+    ///         less room than its minimum fill.
     event SettleCallRoomBelowMinimum(uint256 depositRoom, uint256 redeemRoom);
+
+    event Matched(
+        uint64 indexed roundEpoch,
+        uint256 indexed settlementId,
+        uint256 matchedShares,
+        uint256 matchedUsdc,
+        uint256 feeUsdc,
+        uint256 sharePrice
+    );
+    /// @notice Round's first `settle` stopped deposits/matching (`reason`: 1=state stop, 2=lend rate, 3=venue liquidity).
+    event DepositStoppedForRound(uint64 indexed epoch, uint8 reason);
 
     event Settled(
         uint256 indexed settlementId,
         address indexed settler,
-        uint256 depositBoundPrice,
-        uint256 redeemBoundPrice,
+        uint256 sharePrice,
+        uint256 matchedShares,
+        uint256 matchedUsdc,
         uint256 usdcIn,
         uint256 sharesMinted,
         uint256 sharesBurned,
@@ -420,12 +434,8 @@ interface IFlowEvents {
         uint256 shares,
         uint256 usdc
     );
-    /// @notice A pending request did not take part because its limit does not admit the bound price (E12, RB-14).
-    event RequestSkipped(
-        uint256 indexed requestId, uint256 indexed settlementId, uint256 boundPrice, uint256 limit
-    );
 
-    // ── Claims and returns (§5.9.2 steps 6 and 7, E8, E22) ──
+    // ── Claims and credits (§5.9.2 steps 6 and 7, E8, E22) ──
     /// @notice Unlocked deposit shares went to their owner. `caller` may be anyone (E8).
     event SharesDelivered(
         address indexed owner, address indexed caller, uint256 shares, uint256 usdc
@@ -437,13 +447,10 @@ interface IFlowEvents {
     event CreditAdded(address indexed owner, uint256 usdc, uint256 shares);
     event CreditWithdrawn(address indexed owner, uint256 usdc, uint256 shares);
 
-    // ── Emergency (§5.9.4, E17) ──
+    // ── Emergency (§5.9.4, §5.11.5, E17, E39, E49) ──
     event SettlementFrozen(uint256 indexed settlementId, uint64 until);
     event SettlementReleased(uint256 indexed settlementId);
-    event SettlementReturnAllowed(uint256 indexed settlementId);
-    /// @notice A depositor took its frozen slice back in kind after `allowReturn`.
-    event ReturnTaken(uint256 indexed claimId, address indexed owner, uint256 shares);
-    event QueuePaused(address indexed account);
+    event QueuePaused(address indexed account, uint64 until);
     event QueueUnpaused(address indexed account);
     event FlowParamsSet(FlowParams params);
 
@@ -460,25 +467,31 @@ interface IFlowEvents {
     /// @notice The request has nothing left in escrow, or is expired where a live one is needed.
     error RequestNotPending(uint256 requestId);
     error RequestNotExpired(uint256 requestId);
+    error RequestLocked(uint256 requestId);
+    error InKindClosed();
+    error NoticeNotReady(uint256 requestId, uint64 readyEpoch);
+    error NoticeAlreadyGiven(uint256 requestId);
     error UnknownClaim(uint256 claimId);
     error ClaimLocked(uint256 claimId, uint64 unlockAt);
     error ClaimFrozen(uint256 claimId, uint64 frozenUntil);
     /// @notice `deposit` / `mint` / `redeem`: less is claimable than asked.
     error NotEnoughClaimable(uint256 asked, uint256 claimable);
     error NothingToWithdraw(address owner);
-    /// @notice A request or a settlement while paused (cancel, in-kind exit and withdrawals stay open).
+    /// @notice A request or settlement while paused or while fund is in wind-down.
     error QueueIsPaused();
+    error FundIsShutdown();
+    error PauseOnCooldown(uint64 availableAt);
+    error StepInWindow(uint64 lastBasketStepAt, uint32 settleWindow);
     /// @notice `settle` failed check `check` of §5.9.3 for asset `index` (IDLE_INDEX when not asset-specific).
-    ///         A failed check reverts the whole call and changes no state (RB-12, RB-15).
     error SettleBlocked(SettleCheck check, uint256 index, uint256 detail);
     /// @notice A FlowParams field is outside its hard bound. `field` is its position in the struct (0-based).
     error FlowParamOutOfBounds(uint256 field);
     error UnknownSettlement(uint256 settlementId);
     error SettlementNotFrozen(uint256 settlementId);
     error SettlementAlreadyFrozen(uint256 settlementId);
+    error FreezeOnCooldown(uint64 availableAt);
     /// @notice `freezeSettlement` after every claim of the settlement unlocked (only shares in their hold freeze).
     error FreezeOutsideHold(uint256 settlementId);
-    error ReturnNotAllowed(uint256 settlementId);
     /// @notice ERC-7540: previews revert for asynchronous flows. Use `quoteDeposit` / `quoteRedeem` (E21).
     error PreviewNotSupported();
     /// @notice `withdraw` is not offered (§5.9.6); use `redeem`.
@@ -490,23 +503,17 @@ interface IFlowEvents {
     event SideFailed(uint256 indexed settlementId, RequestKind kind, bytes reason);
     /// @notice A queue entry point that only the queue itself may call (the per-side self-calls of `settle`).
     error OnlySelf();
+    /// @notice Caller is not the fund contract.
+    error OnlyFund();
     /// @notice The fund returned or moved something other than what it was asked (defensive; a fund defect).
     error FundResultMismatch(uint256 expected, uint256 actual);
-    /// @notice `settle` has too little gas left to give side `kind` its whole fixed gas budget
-    ///         (`FlowSettleLib.sideGas`). The whole `settle` reverts, so the gas a caller sends cannot choose which side
-    ///         settles (RB-20). Call again with more gas. (Until `fix-queue`, 2026-11-12, it fired after a failed side
-    ///         that left less than a third of the gas; that also reverted the other side when a venue burned its gas.)
     error SettleSideOutOfGas(RequestKind kind);
 
     // ── Appended by `fix-queue` (2026-11-12) ──
-    /// @notice USDC and shares above the queue's obligations (gifts and rounding dust) went to the fund
-    ///         (`sweep`, step 3 finish plan §3.1 item 7).
     event Swept(address indexed caller, uint256 usdc, uint256 shares);
 
     // ── Appended by `levers` (2026-11-12, step 3 finish plan §3.2) ──
-    /// @notice ADMIN_ROLE set the attack-finding levers (`FlowLevers`).
     event FlowLeversSet(FlowLevers levers);
-    /// @notice A FlowLevers field is outside its hard bound. `field` is its position in the struct (0-based).
     error FlowLeverOutOfBounds(uint256 field);
 }
 

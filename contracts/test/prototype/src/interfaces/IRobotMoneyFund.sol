@@ -191,6 +191,35 @@ interface IRobotMoneyFund is IFundEvents {
     error LendingSupplyRefused(uint256 index, uint256 placed, uint256 asked);
     /// @notice E14: the seed shares the fund holds for itself never move (no transfer, burn or in-kind exit).
     error SeedSharesLocked();
+    /// @notice E29: non-queue direct ERC-4626 in-kind exit paths (`withdraw`) remain closed.
+    error InKindClosed();
+
+    // ─── Step 3f (wind-down, self-expiring pauses, rules 4/6/7, delisting sale, claims). Appended. ──────────
+
+    event AssetDelisted(uint256 indexed index, uint256 startValueUsdc, uint256 fallbackPrice);
+    event DelistStepExecuted(
+        uint256 indexed index, uint256 tokensSold, uint256 usdcReceived, uint256 claimUsdc
+    );
+    event DelistClaimRecorded(uint256 indexed index, address indexed owner, uint256 tokensReserved);
+    event ClaimSettled(
+        uint256 indexed index, address indexed owner, uint256 netUsdc, uint256 feeUsdc
+    );
+    event MinPoolDepthUsdcSet(uint256 minPoolDepthUsdc);
+    event FeeMarginBpsSet(uint16 feeMarginBps);
+    event DelistBandBpsSet(uint16 delistBandBps);
+    event DelistBudgetBpsSet(uint16 delistBudgetBps);
+    event MaxBasketBpsSet(uint16 maxBasketBps);
+
+    error PauseOnCooldown(uint64 availableAt);
+    error PoolDepthTooLow(uint256 index, uint256 depthUsdc, uint256 minDepthUsdc);
+    error PoolNotFixedFee(address pool);
+    error PoolFeeMarginTooSmall(uint256 poolFeeBps, uint256 marginBps, uint256 legBandBps);
+    error AssetInSale(uint256 index);
+    error AssetNotInSale(uint256 index);
+    error DelistBandExceeded(uint256 index, uint256 receivedUsdc, uint256 minUsdc);
+    error DelistBudgetExceeded(uint256 index, uint256 lossUsdc, uint256 budgetUsdc);
+    error LendingHasClaims(uint256 index, uint256 claimUnits);
+    error NoClaimToSettle(uint256 index, address owner);
 
     // ─── Step 3d, fund-extras (E9, E15, E19, E20, E23; scaffold plan §7.4). Appended. ─────────────────
 
@@ -347,6 +376,30 @@ interface IRobotMoneyFund is IFundEvents {
     function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg)
         external
         returns (uint256 usdcOut);
+
+    /// @notice FLOW_ROLE only (E41, RB-31). Variant of `sellForFlow` used by Step 3f `FlowQueue` when net redemptions
+    ///         blend multiple creation-time `exitFeeBps` snapshots: realizes `shares` and transfers the full
+    ///         gross USDC to `msg.sender` (the queue collects fees per fill; claims for `inSale`/lending assets still
+    ///         receive pro-rata claims). Reverts `NotSeeded`, `LegLimitsLength`, `FlowLegLimit`, `ProportionViolated`.
+    /// @param claimFeeBps Weighted exit fee bps recorded onto any `inSale`/lending claims emitted for this batch.
+    /// @return grossUsdcOut Gross USDC transferred to the queue before exit fees.
+    function sellForFlowGross(uint256 shares, uint256[] calldata minUsdcPerLeg, uint256 claimFeeBps)
+        external
+        returns (uint256 grossUsdcOut);
+
+    /// @notice FLOW_ROLE only (Step 3f, RB-35). Batch variant of `sellForFlowGross` used by `FlowQueue`: realizes
+    ///         `shares` across `owners[k]` (`ownerShares[k]`, `ownerFeeBps[k]`), transfers full gross USDC to
+    ///         `msg.sender`, and records any `inSale` delisting or lending shortfall claims directly onto each
+    ///         `owners[k]` (with linked exit fees at `ownerFeeBps[k]`). Zero-dust conservation keeps total claim
+    ///         tokens/units exact. Reverts `InvalidParam`, `ZeroAddress`, `NotSeeded`, `LegLimitsLength`,
+    ///         `FlowLegLimit`, `ProportionViolated`.
+    function sellForFlowBatch(
+        uint256 shares,
+        uint256[] calldata minUsdcPerLeg,
+        address[] calldata owners,
+        uint256[] calldata ownerShares,
+        uint16[] calldata ownerFeeBps
+    ) external returns (uint256 grossUsdcOut);
 
     /// @notice Lending position `index` claim of `account` (E9, RB-21): its units and their USDC value today
     ///         (`units × adapter.totalAssets() / positionUnits`, rounded down).
@@ -575,8 +628,26 @@ interface IRobotMoneyFund is IFundEvents {
     /// @notice Whether deposits are paused.
     function depositsPaused() external view returns (bool);
 
-    /// @notice Whether the fund is shut down.
+    /// @notice Timestamp when the current self-expiring `pauseDeposits()` expires (0 if inactive).
+    function depositsPausedUntil() external view returns (uint64);
+
+    /// @notice Timestamp of the most recent state deposit-stop end (unpause/expiry, exclusion closed, or delist sale ended).
+    function lastStateStopEndedAt() external view returns (uint64);
+
+    /// @notice Whether the fund is shut down (wind-down mode).
     function isShutdown() external view returns (bool);
+
+    /// @notice Whether any asset is currently in delisting sale (`inSale`).
+    function hasAssetInSale() external view returns (bool);
+
+    /// @notice Whether asset `index` is currently in delisting sale (`inSale`).
+    function isAssetInSale(uint256 index) external view returns (bool);
+
+    /// @notice Fallback USDC price per whole token (`10**decimals`) for an `inSale` asset when its feed fails.
+    function saleFallbackPrice(uint256 index) external view returns (uint256);
+
+    /// @notice The bound Rebalancer address (`address(0)` before `bindRebalanceRoles`).
+    function rebalancer() external view returns (address);
 
     /// @notice TVL cap, per-deposit cap, exit fee and its recipient.
     function config()
@@ -661,6 +732,31 @@ interface IRobotMoneyFund is IFundEvents {
     ///         address (INV-1/INV-2). Protected: USDC, every asset token (active or not), and every
     ///         lending adapter's share token (`ProtectedToken`).
     function sweepForeignToken(address token) external;
+
+    // ─── Step 3f external surface ────────────────────────────────────────────
+
+    function minPoolDepthUsdc() external view returns (uint256);
+    function feeMarginBps() external view returns (uint256);
+    function delistBandBps() external view returns (uint256);
+    function delistBudgetBps() external view returns (uint256);
+    function maxBasketBps() external view returns (uint256);
+    function maxPause() external view returns (uint32);
+    function rebalancePausedUntil() external view returns (uint64);
+    function rebalancePauseCooldownUntil() external view returns (uint64);
+    function positionClaimTotal(uint256 index) external view returns (uint256);
+
+    function setMinPoolDepthUsdc(uint256 newMin) external;
+    function setFeeMarginBps(uint256 newBps) external;
+    function setDelistBandBps(uint256 newBps) external;
+    function setDelistBudgetBps(uint256 newBps) external;
+    function setMaxBasketBps(uint256 newBps) external;
+
+    function delistAsset(uint256 index) external;
+    function executeDelistStep(uint256 index, uint256 maxUsdcNotional)
+        external
+        returns (bool executed, uint256 tokensSold, uint256 usdcReceived);
+    function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc);
+    function settleClaim(uint256 index, address owner) external returns (uint256 netUsdc);
 }
 
 /// @title IRobotMoneyFundFull

@@ -8,7 +8,7 @@ import { keccak256, toHex } from "viem";
 const a = (n: number): string => `0x${n.toString(16).padStart(40, "0")}`;
 const h = (n: number): string => `0x${n.toString(16).padStart(64, "0")}`;
 const SHA = "b".repeat(40);
-const COUNTS: Record<string, number> = { safe: 1, "fund-libs": 14, "fund-receipt": 2, fund: 18, rebalancer: 7, "fund-governance": 2, queue: 2, "fund-wiring": 3, "fund-timelock": 15 };
+const COUNTS: Record<string, number> = { safe: 1, "fund-libs": 16, "fund-receipt": 2, fund: 18, rebalancer: 7, "fund-governance": 2, queue: 2, "fund-wiring": 3, "fund-timelock": 15 };
 const SUM = Object.values(COUNTS).reduce((x, y) => x + y, 0);
 const TL = a(0x71), SAFE = a(0x5a);
 

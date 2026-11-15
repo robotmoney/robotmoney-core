@@ -126,6 +126,37 @@ struct FlowState {
     uint128 leverBlockRed;
     /// @dev The exclusion ledger's record count at the last settlement (check 6, review Q-F3).
     uint256 lastExclusionCount;
+    // ── Step 3f (v0.9.0-onevault) ──
+    uint64 queuePausedUntil;
+    uint64 queuePauseLastEnd;
+    uint64 lastFreezeAt;
+    uint64 lastDepositStopEpoch;
+    uint64 openStopCancelUntilEpoch;
+    uint256 lastSaleMask;
+    mapping(uint256 index => uint256) lastAssetPerShare;
+    uint64 windDownEra;
+    mapping(uint64 roundEpoch => RoundState) rounds;
+    uint64[] activeEpochs;
+    uint256 enrollCursor;
+    mapping(uint64 epoch => bool) epochSeen;
+    uint256 depCycle;
+    uint256 depTotalNormBasis;
+    uint256 depPoolUsdc;
+    mapping(uint256 cycle => uint256) depCycleFactor;
+    mapping(uint256 cycle => mapping(uint64 expiryEpoch => DepBucket)) depBuckets;
+    uint64[] activeDepBuckets;
+    DepMatchRecord[] depMatches;
+    mapping(address owner => OwnerDepCohort[]) ownerDepCohorts;
+    mapping(address owner => uint256[]) ownerActiveDepReqs;
+    mapping(address owner => uint256) ownerHeldShares;
+    uint256 redCycle;
+    uint256 redPoolShares;
+    mapping(uint256 cycle => RedCycleState) redCycles;
+    mapping(address owner => OwnerRedState) ownerRedStates;
+    mapping(address owner => uint256[]) ownerActiveRedReqs;
+    mapping(address owner => uint256) ownerUnenrolledRedShares;
+    mapping(uint64 roundEpoch => uint256[]) noticeRequestsByRound;
+    uint64[] pendingNoticeRounds;
 }
 
 /// @notice Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means "start a new
@@ -133,6 +164,66 @@ struct FlowState {
 struct WalkCursor {
     uint64 epoch;
     uint192 index;
+}
+
+/// @notice State of round `roundEpoch` (E35, E36, RB-24).
+struct RoundState {
+    bool opened;
+    bool depositsOpen;
+    bool done;
+    uint64 matchTime;
+    uint64 settlementId;
+}
+
+/// @notice Active or evicted deposit expiry cohort bucket in a deposit cycle.
+struct DepBucket {
+    uint256 totalNormBasis;
+    uint256 remainingNormBasis;
+    uint256 evictedUnmatchedUsdc;
+    uint256 finalUnmatchedFactor;
+    uint256 endMatchId;
+    bool evicted;
+    bool activeListed;
+}
+
+/// @notice Immutable record of one whole-match booking for deposits (E24, E52).
+struct DepMatchRecord {
+    uint64 roundEpoch;
+    uint64 settlementId;
+    uint64 matchTime;
+    uint256 matchCycle;
+    uint256 matchedShares;
+    uint256 matchedUsdc;
+    uint256 totalNormBasis;
+    uint256 remainingNormBasis;
+    uint256 remainingShares;
+}
+
+/// @notice Coalesced per-owner active deposit cohort in `matchCycle` & `expiryEpoch` (at most `maxRoll + 1`).
+struct OwnerDepCohort {
+    uint64 expiryEpoch;
+    uint256 matchCycle;
+    uint256 startMatchId;
+    uint256 normBasis;
+}
+
+/// @notice Running match cycle accumulators for redemptions (O(1) per owner, multi-fee-tier exact).
+struct RedCycleState {
+    uint256 unmatchedFactor;
+    uint256 totalNormBasis;
+    uint64 lastMatchTime;
+    uint64 lastSettlementId;
+    uint16[] feeTiers;
+    mapping(uint16 feeBps => bool) tierActive;
+    mapping(uint16 feeBps => uint256) tierNormBasis;
+    mapping(uint16 feeBps => uint256) cumNetPerBasisScaled;
+    mapping(uint16 feeBps => uint256) tierOwedTracked;
+}
+
+/// @notice O(1) per-owner enrolled redemption position in `matchCycle`.
+struct OwnerRedState {
+    uint256 matchCycle;
+    uint256 normBasis;
 }
 
 /// @title FlowStorage
@@ -165,6 +256,11 @@ library FlowEpochs {
         uint256 t0 = s.epochAnchorTime;
         if (block.timestamp < t0) return s.epochAnchorIndex - 1;
         return uint64(s.epochAnchorIndex + (block.timestamp - t0) / s.params.epochLength);
+    }
+
+    /// @notice Start time of epoch `e`.
+    function startOf(FlowState storage s, uint64 e) internal view returns (uint256) {
+        return e == 0 ? 0 : endOf(s, e - 1);
     }
 
     /// @notice When epoch `e` ends; its requests may settle from `endOf(e) + settleWindow`. For an epoch older than the

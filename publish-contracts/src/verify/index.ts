@@ -23,10 +23,12 @@ import { CODE_LABEL, SCANNED_TOPIC0S as UPGRADE_TOPIC0S, finishUpgradeability, m
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
 import type { Address, ChainReader, DeployReceipt, ExpectedAsset, Hex, VaultSheet, VerifyOptions, VerifyReport, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 
-export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ChainReader, WeightSetterGating, WeightSetterHolder } from "./types.ts";
+export type { VerifyOptions, VerifyReport, Check, VerifySheet, VaultSheet, ExpectedFundAsset, ChainReader, WeightSetterGating, WeightSetterHolder } from "./types.ts";
 export { viemReader } from "./reader.ts";
 export { loadFrozenCounts, sumFrozenCounts } from "./frozen.ts";
 export { verifySources } from "./sources.ts";
+export { verifyLinkedLibraries, type LinkedLibraryCheck, type LinkedLibraryResult } from "./codehash.ts";
+export { readFundActiveState, verifyFundUpgradeSafety, type FundActiveState, type FundLayoutPair, type FundUpgradeSafetyOptions } from "./fund.ts";
 
 const HAS_ROLE = "function hasRole(bytes32 role, address account) view returns (bool)";
 const hasRole = async (ch: ChainReader, at: Address, r: Hex, who: Address): Promise<boolean> =>

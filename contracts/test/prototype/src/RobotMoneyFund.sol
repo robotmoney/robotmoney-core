@@ -14,24 +14,20 @@ import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
 import {AdminFloorAccessControlCounter} from "../../../lib/AdminFloorAccessControlCounter.sol";
 import {ForeignTokenQuarantine} from "../../../lib/ForeignTokenQuarantine.sol";
 import {RobotMoneyVaultOps} from "../../../lib/RobotMoneyVaultOps.sol";
 import {
     AssetConfig,
+    BPS,
     FundInitParams,
     Plan,
     PlanParams,
     PlanStatus,
     Roles,
     StepOrder,
-    StepResult,
-    BPS,
-    MIN_MIN_SEED_USDC,
-    MAX_MIN_SEED_USDC,
-    MAX_POOL_SHARE_BPS
+    StepResult
 } from "./FundTypes.sol";
 import {IRobotMoneyFund} from "./interfaces/IRobotMoneyFund.sol";
 import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
@@ -40,6 +36,7 @@ import {FundValuationLib} from "./lib/FundValuationLib.sol";
 import {FundFlowsLib} from "./lib/FundFlowsLib.sol";
 import {FundAdminLib} from "./lib/FundAdminLib.sol";
 import {FundPositionLib} from "./lib/FundPositionLib.sol";
+import {FundDelistLib} from "./lib/FundDelistLib.sol";
 
 /// @title RobotMoneyFund
 /// @notice The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind `GovernedUUPS` (ADR-0014). It holds
@@ -78,8 +75,6 @@ contract RobotMoneyFund is
     GovernedUUPS,
     IRobotMoneyFund
 {
-    using Math for uint256;
-
     // ─── Roles (FundTypes.Roles) ─────────────────────────────────────────────
 
     bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
@@ -103,31 +98,12 @@ contract RobotMoneyFund is
         address upgradeTimelock,
         GovernedUUPS.UpgradeMode mode
     ) external initializer {
-        if (
-            p.usdc == address(0) || p.feeRecipient == address(0) || p.admin == address(0)
-                || p.emergency == address(0)
-        ) {
-            revert ZeroAddress();
-        }
-        if (
-            p.exitFeeBps > FundStorage.MAX_EXIT_FEE_BPS
-                || p.maxSlippageBps > FundStorage.MAX_SLIPPAGE_BPS || p.maxSlippageBps == 0
-                || p.navDeviationGuardBps > FundStorage.MAX_NAV_DEVIATION_BPS
-        ) revert InvalidParam();
+        FundDelistLib.initFlows(_s(), p);
         __ERC20_init(p.name, p.symbol);
         __ERC4626_init(IERC20(p.usdc));
         __AccessControl_init();
         __ReentrancyGuard_init();
         __GovernedUUPS_init(upgradeTimelock, mode);
-
-        FundState storage s = _s();
-        s.usdc = p.usdc;
-        s.tvlCap = p.tvlCap;
-        s.perDepositCap = p.perDepositCap;
-        s.exitFeeBps = p.exitFeeBps;
-        s.feeRecipient = p.feeRecipient;
-        s.maxSlippageBps = p.maxSlippageBps;
-        s.navDeviationGuardBps = p.navDeviationGuardBps;
 
         _setRoleAdmin(ADMIN_ROLE, ADMIN_ROLE);
         _setRoleAdmin(EMERGENCY_ROLE, ADMIN_ROLE);
@@ -136,9 +112,6 @@ contract RobotMoneyFund is
         _setRoleAdmin(FLOW_ROLE, FLOW_ROLE);
         _grantRole(ADMIN_ROLE, p.admin);
         _grantRole(EMERGENCY_ROLE, p.emergency);
-
-        // Step 3d defaults the fund holds (minSeedUsdc, poolShareBps, the in-kind allowance), then the ledger.
-        FundAdminLib.initFlows(s, p.usdc);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -236,6 +209,7 @@ contract RobotMoneyFund is
     ///         with `owner == queue` and `receiver` = the request's owner for escrowed shares (`exitInKind`,
     ///         `takeReturn`); then `caller == owner`, so no allowance is spent, and claims are keyed to `receiver`.
     function redeemInKind(uint256 shares, address receiver, address owner) external nonReentrant {
+        if (!_s().shutdown) revert InKindClosed();
         if (shares == 0) return;
         address caller = _msgSender();
         if (caller != owner) _spendAllowance(owner, caller, shares);
@@ -247,9 +221,8 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     /// @dev Pays only `msg.sender`'s own claim, to the address it names (as an ERC-4626 receiver, INV-1).
-    function claimDeferred(uint256 index, address to) external nonReentrant returns (uint256) {
-        if (to == address(0)) revert ZeroAddress();
-        return FundFlowsLib.claimDeferred(_s(), index, _msgSender(), to);
+    function claimDeferred(uint256 index, address to) external returns (uint256) {
+        return _flowAction(FundFlowsLib.FLOW_CLAIM_DEFERRED, index, to);
     }
 
     function deferredOf(uint256 index, address account) external view returns (uint256) {
@@ -344,15 +317,69 @@ contract RobotMoneyFund is
     ///      asserts check 10 against `supplyBefore − shares`.
     function sellForFlow(uint256 shares, uint256[] calldata minUsdcPerLeg)
         external
-        onlyRole(FLOW_ROLE)
-        nonReentrant
         returns (uint256 usdcOut)
     {
-        address caller = _msgSender();
+        FundFlowsLib.SellFlowCtx memory ctx;
+        ctx.shares = shares;
+        return _sellForFlow(ctx, minUsdcPerLeg);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function sellForFlowGross(
+        uint256 shares,
+        uint256[] calldata minUsdcPerLeg,
+        uint256 claimFeeBps
+    ) external returns (uint256 grossUsdcOut) {
+        FundFlowsLib.SellFlowCtx memory ctx;
+        ctx.shares = shares;
+        ctx.feeBps = claimFeeBps;
+        ctx.grossOnly = claimFeeBps != type(uint256).max;
+        return _sellForFlow(ctx, minUsdcPerLeg);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function sellForFlowBatch(
+        uint256 shares,
+        uint256[] calldata minUsdcPerLeg,
+        address[] calldata owners,
+        uint256[] calldata ownerShares,
+        uint16[] calldata ownerFeeBps
+    ) external returns (uint256 grossUsdcOut) {
+        FundFlowsLib.SellFlowCtx memory ctx;
+        ctx.shares = shares;
+        ctx.grossOnly = true;
+        ctx.batch = true;
+        ctx.owners = owners;
+        ctx.ownerShares = ownerShares;
+        ctx.ownerFeeBps = ownerFeeBps;
+        return _sellForFlow(ctx, minUsdcPerLeg);
+    }
+
+    function _sellForFlow(
+        FundFlowsLib.SellFlowCtx memory ctx,
+        uint256[] calldata minUsdcPerLeg
+    ) private onlyRole(FLOW_ROLE) nonReentrant returns (uint256) {
+        if (ctx.batch) _validateSellBatch(ctx);
+        ctx.caller = _msgSender();
         uint256 supplyBefore = totalSupply();
         if (supplyBefore == 0) revert NotSeeded();
-        _burn(caller, shares);
-        return FundFlowsLib.sellForFlow(_s(), caller, shares, minUsdcPerLeg, supplyBefore);
+        ctx.supplyBefore = supplyBefore;
+        _burn(ctx.caller, ctx.shares);
+        return FundFlowsLib.sellForFlow(_s(), ctx, minUsdcPerLeg);
+    }
+
+    function _validateSellBatch(FundFlowsLib.SellFlowCtx memory ctx) private pure {
+        uint256 len = ctx.owners.length;
+        if (len == 0 || ctx.ownerShares.length != len || ctx.ownerFeeBps.length != len) {
+            revert InvalidParam();
+        }
+        uint256 sum;
+        for (uint256 k; k < len; ++k) {
+            if (ctx.owners[k] == address(0)) revert ZeroAddress();
+            if (ctx.ownerFeeBps[k] > BPS) revert InvalidParam();
+            sum += ctx.ownerShares[k];
+        }
+        if (sum != ctx.shares) revert InvalidParam();
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -376,8 +403,8 @@ contract RobotMoneyFund is
 
     /// @inheritdoc IRobotMoneyFund
     /// @dev Pays only `msg.sender`'s own claim, to the address it names (as `claimDeferred`, INV-1).
-    function claimPosition(uint256 index, address to) external nonReentrant returns (uint256) {
-        return FundPositionLib.claimPosition(_s(), index, _msgSender(), to);
+    function claimPosition(uint256 index, address to) external returns (uint256) {
+        return _flowAction(FundFlowsLib.FLOW_CLAIM_POSITION, index, to);
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -428,15 +455,13 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function setMinSeedUsdc(uint256 newMin) external onlyRole(ADMIN_ROLE) {
-        if (newMin < MIN_MIN_SEED_USDC || newMin > MAX_MIN_SEED_USDC) revert InvalidParam();
-        _s().minSeedUsdc = newMin;
-        emit MinSeedUsdcSet(newMin);
+    function setMinSeedUsdc(uint256 newMin) external {
+        _adminOp(FundAdminLib.ADMIN_SET_MIN_SEED_USDC, newMin, address(0));
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function setPoolShareBps(uint16 newBps) external onlyRole(ADMIN_ROLE) {
-        FundAdminLib.setLimit(_s(), true, newBps);
+    function setPoolShareBps(uint16 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_POOL_SHARE_BPS, newBps, address(0));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -487,6 +512,7 @@ contract RobotMoneyFund is
         if (s.rolesBound) revert RolesAlreadyBound();
         if (governance == address(0) || rebalancer == address(0)) revert ZeroAddress();
         s.rolesBound = true;
+        s.rebalancer = rebalancer;
         _grantRole(GOVERNANCE_ROLE, governance);
         _grantRole(REBALANCER_ROLE, rebalancer);
         emit RebalanceRolesBound(governance, rebalancer);
@@ -525,11 +551,11 @@ contract RobotMoneyFund is
     }
 
     function idleUsdc() external view returns (uint256) {
-        return IERC20(_s().usdc).balanceOf(address(this));
+        return _viewUint(FundValuationLib.VIEW_IDLE_USDC, 0);
     }
 
     function assetValue(uint256 index) external view returns (uint256) {
-        return FundValuationLib.assetValue(_s(), index);
+        return _viewUint(FundValuationLib.VIEW_ASSET_VALUE, index);
     }
 
     function portfolioValues()
@@ -555,15 +581,15 @@ contract RobotMoneyFund is
     }
 
     function poolFeeBps(uint256 index) external view returns (uint256) {
-        return FundValuationLib.poolFeeBps(_s(), index);
+        return _viewUint(FundValuationLib.VIEW_POOL_FEE_BPS, index);
     }
 
     function maxTwapWindow() external view returns (uint32) {
-        return FundValuationLib.maxTwapWindow(_s());
+        return uint32(_viewUint(FundValuationLib.VIEW_MAX_TWAP_WINDOW, 0));
     }
 
     function maxPoolFeeBps() public view returns (uint256 maxBps) {
-        (maxBps,) = FundValuationLib.maxPoolFeeBps(_s());
+        return _viewUint(FundValuationLib.VIEW_MAX_POOL_FEE_BPS, 0);
     }
 
     function navDeviationGuardBps() external view returns (uint256) {
@@ -574,8 +600,9 @@ contract RobotMoneyFund is
         return _s().maxSlippageBps;
     }
 
-    function plan() external view returns (Plan memory) {
-        return _s().plan;
+    function plan() external view returns (Plan memory p) {
+        p = _s().plan;
+        p.status = PlanStatus(_viewUint(FundValuationLib.VIEW_PLAN_STATUS, 0));
     }
 
     function currentPlanId() external view returns (uint256) {
@@ -583,7 +610,7 @@ contract RobotMoneyFund is
     }
 
     function planStatus() external view returns (PlanStatus) {
-        return _s().plan.status;
+        return PlanStatus(_viewUint(FundValuationLib.VIEW_PLAN_STATUS, 0));
     }
 
     function lastStepAt() external view returns (uint64) {
@@ -603,11 +630,73 @@ contract RobotMoneyFund is
     }
 
     function depositsPaused() external view returns (bool) {
-        return _s().depositsPaused;
+        FundState storage s = _s();
+        return s.depositsPaused
+            || (s.depositsPausedUntil != 0 && block.timestamp < s.depositsPausedUntil);
+    }
+
+    function depositsPausedUntil() external view returns (uint64) {
+        return _s().depositsPausedUntil;
+    }
+
+    function lastStateStopEndedAt() external view returns (uint64) {
+        return _s().lastStateStopEndedAt;
     }
 
     function isShutdown() external view returns (bool) {
         return _s().shutdown;
+    }
+
+    function hasAssetInSale() external view returns (bool) {
+        return _viewUint(FundValuationLib.VIEW_HAS_ASSET_IN_SALE, 0) != 0;
+    }
+
+    function isAssetInSale(uint256 index) external view returns (bool) {
+        return _s().inSale[index];
+    }
+
+    function saleFallbackPrice(uint256 index) external view returns (uint256) {
+        return _s().saleFallbackPrice[index];
+    }
+
+    function rebalancer() external view returns (address) {
+        return _s().rebalancer;
+    }
+
+    function minPoolDepthUsdc() external view returns (uint256) {
+        return _s().minPoolDepthUsdc;
+    }
+
+    function feeMarginBps() external view returns (uint256) {
+        return _s().feeMarginBps;
+    }
+
+    function delistBandBps() external view returns (uint256) {
+        return _s().delistBandBps;
+    }
+
+    function delistBudgetBps() external view returns (uint256) {
+        return _s().delistBudgetBps;
+    }
+
+    function maxBasketBps() external view returns (uint256) {
+        return _s().maxBasketBps;
+    }
+
+    function maxPause() external view returns (uint32) {
+        return uint32(_viewUint(FundValuationLib.VIEW_MAX_PAUSE, 0));
+    }
+
+    function rebalancePausedUntil() external view returns (uint64) {
+        return _s().rebalancePausedUntil;
+    }
+
+    function rebalancePauseCooldownUntil() external view returns (uint64) {
+        return _s().rebalancePauseCooldownUntil;
+    }
+
+    function positionClaimTotal(uint256 index) external view returns (uint256) {
+        return _s().positionClaimTotal[index];
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -674,110 +763,147 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function deactivateAsset(uint256 index) external onlyRole(ADMIN_ROLE) {
-        FundAdminLib.deactivateAsset(_s(), index);
+    function deactivateAsset(uint256 index) external {
+        _adminOp(FundAdminLib.ADMIN_DEACTIVATE_ASSET, index, address(0));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Admin: caps, fees, guards
     // ═════════════════════════════════════════════════════════════════════════
 
-    function setTvlCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
-        FundAdminLib.setLimit(_s(), false, newCap);
+    function setTvlCap(uint256 newCap) external {
+        _adminOp(FundAdminLib.ADMIN_SET_TVL_CAP, newCap, address(0));
     }
 
-    function setPerDepositCap(uint256 newCap) external onlyRole(ADMIN_ROLE) {
-        _s().perDepositCap = newCap;
+    function setPerDepositCap(uint256 newCap) external {
+        _adminOp(FundAdminLib.ADMIN_SET_PER_DEPOSIT_CAP, newCap, address(0));
     }
 
-    function setExitFeeBps(uint256 newBps) external onlyRole(ADMIN_ROLE) {
-        if (newBps > FundStorage.MAX_EXIT_FEE_BPS) revert InvalidParam();
-        _s().exitFeeBps = newBps;
+    function setExitFeeBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_EXIT_FEE_BPS, newBps, address(0));
     }
 
-    function setFeeRecipient(address newRecipient) external onlyRole(ADMIN_ROLE) {
-        if (newRecipient == address(0)) revert ZeroAddress();
-        _s().feeRecipient = newRecipient;
+    function setFeeRecipient(address newRecipient) external {
+        _adminOp(FundAdminLib.ADMIN_SET_FEE_RECIPIENT, 0, newRecipient);
     }
 
     /// @notice ≤ 500 and strictly above every active Basket pool fee (§5.6: a floor at or below the pool fee
     ///         would fail every swap; BasketVault L-17).
-    function setMaxSlippageBps(uint256 newBps) external onlyRole(ADMIN_ROLE) {
-        if (newBps > FundStorage.MAX_SLIPPAGE_BPS) revert InvalidParam();
-        FundValuationLib.requireAboveFees(_s(), newBps);
-        _s().maxSlippageBps = newBps;
+    function setMaxSlippageBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_MAX_SLIPPAGE_BPS, newBps, address(0));
     }
 
     /// @notice 0 (ORA-4 off), or strictly above every active Basket pool fee and ≤ 2 000.
-    function setNavDeviationGuardBps(uint256 newBps) external onlyRole(ADMIN_ROLE) {
-        if (newBps > FundStorage.MAX_NAV_DEVIATION_BPS) revert InvalidParam();
-        if (newBps != 0) FundValuationLib.requireAboveFees(_s(), newBps);
-        _s().navDeviationGuardBps = newBps;
+    function setNavDeviationGuardBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_NAV_DEV_GUARD_BPS, newBps, address(0));
+    }
+
+    function setMinPoolDepthUsdc(uint256 newMin) external {
+        _adminOp(FundAdminLib.ADMIN_SET_MIN_POOL_DEPTH_USDC, newMin, address(0));
+    }
+
+    function setFeeMarginBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_FEE_MARGIN_BPS, newBps, address(0));
+    }
+
+    function setDelistBandBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_DELIST_BAND_BPS, newBps, address(0));
+    }
+
+    function setDelistBudgetBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_DELIST_BUDGET_BPS, newBps, address(0));
+    }
+
+    function setMaxBasketBps(uint256 newBps) external {
+        _adminOp(FundAdminLib.ADMIN_SET_MAX_BASKET_BPS, newBps, address(0));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Lifecycle (§6: both vault families)
+    //  Lifecycle & Delisting (§6, §5.11.5, E29, E38, E39, E50, E53, E54)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Block deposit and mint. Redeems stay open (core 1494, RB-6).
-    function pauseDeposits() external onlyRole(EMERGENCY_ROLE) {
-        _setDepositsPaused(true);
+    /// @notice Block deposit and mint via self-expiring emergency pause (renewable, no cooldown, E39).
+    function pauseDeposits() external {
+        _adminOp(FundAdminLib.ADMIN_PAUSE_DEPOSITS, 0, address(0));
     }
 
-    function unpauseDeposits() external onlyRole(ADMIN_ROLE) {
-        _setDepositsPaused(false);
+    function unpauseDeposits() external {
+        _adminOp(FundAdminLib.ADMIN_UNPAUSE_DEPOSITS, 0, address(0));
     }
 
-    /// @notice Deposits closed and `tvlCap` 0 until ADMIN `restore`. Redeems stay open. ADMIN_ROLE (the timelock: the
-    ///         Safe and the delay), not EMERGENCY_ROLE: the hot key pauses deposits at once instead (owner, 2026-11-13).
-    function shutdown() external onlyRole(ADMIN_ROLE) {
-        FundState storage s = _s();
-        s.shutdown = true;
-        s.tvlCap = 0;
-        emit Shutdown();
+    /// @notice Enter WindDown (`shutdown = true`, `tvlCap = 0`), pause live plan, and notify queue to checkpoint &
+    ///         release escrow. Redeems stay open (`redeemInKind` unlocks). ADMIN_ROLE only.
+    function shutdown() external {
+        _adminOp(FundAdminLib.ADMIN_SHUTDOWN, 0, address(0));
     }
 
     /// @notice Reverse `shutdown` with a fresh non-zero cap at or above `perDepositCap` (BasketVault.restoreVault).
-    function restore(uint256 newTvlCap) external onlyRole(ADMIN_ROLE) {
-        FundState storage s = _s();
-        if (!s.shutdown || newTvlCap == 0 || s.perDepositCap > newTvlCap) revert InvalidParam();
-        s.shutdown = false;
-        s.tvlCap = newTvlCap;
-        emit Restored(newTvlCap);
+    function restore(uint256 newTvlCap) external {
+        _adminOp(FundAdminLib.ADMIN_RESTORE, newTvlCap, address(0));
     }
 
-    /// @notice Pause deposits, move every holding to idle USDC (`FundFlowsLib.emergencyUnwind`: Lending drained
-    ///         tolerant of failure, excluded adapters drained into their exclusion record, Basket sold under the
-    ///         TWAP floor), and pause an Open or Halted plan so the Rebalancer stops (it would otherwise buy
-    ///         back, including after a queued `extendBudget` lands).
-    ///         ADMIN_ROLE (the timelock: the Safe and the delay), not EMERGENCY_ROLE: it sells every holding, so one hot
-    ///         key does not hold it; the hot key's `pauseDeposits` and `pauseRebalance` stop flows at once (owner, 2026-11-13).
-    /// @dev Differs from BasketVault: there is no configured per-token floor or override path. A Basket leg
-    ///      whose TWAP read fails is skipped and stays held; holders still exit it through `redeemInKind`.
-    function emergencyUnwind() external onlyRole(ADMIN_ROLE) nonReentrant {
-        _setDepositsPaused(true);
-        uint256 recovered = FundFlowsLib.emergencyUnwind(_s());
-        _plan(FundAdminLib.PlanOp.UnwindPause, 0);
-        emit EmergencyUnwound(recovered);
+    /// @notice Pause deposits, move every holding to idle USDC (`FundFlowsLib.flowAction`), and pause live plan.
+    function emergencyUnwind() external {
+        _flowAction(FundFlowsLib.FLOW_EMERGENCY_UNWIND, 0, address(0));
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc) {
+        return _flowAction(FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET, index, address(0));
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function delistAsset(uint256 index) external {
+        _adminOp(FundAdminLib.ADMIN_DELIST_ASSET, index, address(0));
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function executeDelistStep(uint256 index, uint256 maxUsdcNotional)
+        external
+        onlyRole(REBALANCER_ROLE)
+        nonReentrant
+        returns (bool executed, uint256 tokensSold, uint256 usdcReceived)
+    {
+        return FundFlowsLib.executeDelistStep(_s(), index, maxUsdcNotional);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function settleClaim(uint256 index, address owner) external returns (uint256 netUsdc) {
+        return _flowAction(FundFlowsLib.FLOW_SETTLE_CLAIM, index, owner);
     }
 
     /// @notice Permissionless: send a non-protected token's whole balance to the fixed quarantine address
     ///         (INV-1/INV-2; no caller-chosen destination). Protected (`ProtectedToken`): USDC, the share token,
     ///         every asset token (active or not), and every Lending adapter address (an adapter that is itself
     ///         a share token).
-    function sweepForeignToken(address token) external nonReentrant {
-        FundFlowsLib.sweepForeign(_s(), token, _msgSender());
+    function sweepForeignToken(address token) external {
+        _flowAction(FundFlowsLib.FLOW_SWEEP_FOREIGN, 0, token);
     }
 
-    function _setDepositsPaused(bool paused) private {
-        FundState storage s = _s();
-        if (s.depositsPaused == paused) return;
-        s.depositsPaused = paused;
-        if (paused) emit DepositsPaused(_msgSender());
-        else emit DepositsUnpaused(_msgSender());
+    // ─── Consolidated DELEGATECALL dispatchers & Storage ─────────────────────
+
+    function _viewUint(uint8 op, uint256 index) private view returns (uint256) {
+        return FundValuationLib.viewUint(_s(), op, index);
     }
 
-    // ─── Storage ─────────────────────────────────────────────────────────────
+    function _adminOp(uint8 op, uint256 val, address addr) private nonReentrant {
+        _checkRole(op == FundAdminLib.ADMIN_PAUSE_DEPOSITS ? EMERGENCY_ROLE : ADMIN_ROLE);
+        FundAdminLib.adminOp(_s(), op, val, addr, _msgSender());
+    }
+
+    function _flowAction(uint8 op, uint256 index, address addr)
+        private
+        nonReentrant
+        returns (uint256)
+    {
+        if (
+            op == FundFlowsLib.FLOW_EMERGENCY_UNWIND
+                || op == FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET
+        ) {
+            _checkRole(ADMIN_ROLE);
+        }
+        return FundFlowsLib.flowAction(_s(), op, index, addr, _msgSender());
+    }
 
     function _s() private pure returns (FundState storage) {
         return FundStorage.layout();

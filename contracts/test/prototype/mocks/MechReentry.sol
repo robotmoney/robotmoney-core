@@ -78,16 +78,17 @@ abstract contract MechReentry {
             abi.encodeWithSignature("redeem(uint256,address,address)", uint256(1), address(this), v)
         );
         _try(hook, q, abi.encodeWithSignature("cancel(uint256)", id));
-        _try(hook, q, abi.encodeWithSignature("exitInKind(uint256)", id));
+        _try(hook, q, abi.encodeWithSignature("giveRedemptionNotice(uint256)", id));
+        _try(hook, q, abi.encodeWithSignature("claimNoticeReturn(uint256)", id));
         _try(hook, q, abi.encodeWithSignature("withdrawExpired(uint256)", id));
-        _try(hook, q, abi.encodeWithSignature("takeReturn(uint256)", uint256(1)));
+        _try(hook, q, abi.encodeWithSignature("releaseWindDown(address)", v));
+        _try(hook, q, abi.encodeWithSignature("sweep()"));
         _try(
             hook,
             q,
-            abi.encodeWithSignature(
-                "requestDeposit(uint256,uint256,address)", uint256(100e6), type(uint256).max, v
-            )
+            abi.encodeWithSignature("requestDeposit(uint256,address)", uint256(100e6), v)
         );
+        _try(hook, q, abi.encodeWithSignature("requestRedeem(uint256,address)", uint256(1), v));
         _try(
             hook,
             f,
@@ -110,8 +111,19 @@ abstract contract MechReentry {
         _try(
             hook,
             f,
+            abi.encodeWithSignature(
+                "sellForFlowGross(uint256,uint256[],uint256)",
+                uint256(1),
+                new uint256[](0),
+                uint256(0)
+            )
+        );
+        _try(
+            hook,
+            f,
             abi.encodeWithSignature("claimPosition(uint256,address)", uint256(0), address(this))
         );
+        _try(hook, f, abi.encodeWithSignature("settleClaim(uint256,address)", uint256(0), v));
     }
 
     function _try(bytes4 hook, address target, bytes memory data) private {

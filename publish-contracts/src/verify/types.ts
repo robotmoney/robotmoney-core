@@ -117,8 +117,41 @@ export interface VerifySheet {
   defaultWeights: { vault: string; bps: number }[];
   /** Issue 1892, the gateway system only: the explicit governance inputs of the gateway sheet (GATEWAY_ADMIN_ADDRESS, GATEWAY_UPGRADE_TIMELOCK). */
   gateway?: { admin: Address; upgradeTimelock: Address };
+  /** Expected asset config read back from `RobotMoneyFund.assetConfigs()` (DEP-01). */
   /** Deploy 4, the fund system only: what the fund sheet decided (the keeper, the fund's caps and guards, every FLOW_*, REBALANCER_* and PLAN_* value by sheet name). */
-  fund?: { keeper: Address; tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint; maxSlippageBps: bigint; navDeviationBps: bigint; minSeedUsdc: bigint; params: Record<string, bigint> };
+  fund?: {
+    keeper: Address;
+    tvlCap: bigint;
+    perDepositCap: bigint;
+    exitFeeBps: bigint;
+    maxSlippageBps: bigint;
+    navDeviationBps: bigint;
+    minSeedUsdc: bigint;
+    params: Record<string, bigint>;
+    feeRecipient?: Address | "@safe";
+    receiptSubmitters?: Address[];
+    assets?: ExpectedFundAsset[];
+    safeModules?: Address[];
+    safeGuard?: Address;
+    safeFallbackHandler?: Address;
+    keeperType?: "eoa" | "smart-account";
+    keeperOwners?: Address[];
+    keeperBotKeys?: Address[];
+  };
+}
+
+export interface ExpectedFundAsset {
+  kind: number;
+  active: boolean;
+  capBps: bigint;
+  adapter: Address;
+  token: Address;
+  pool: Address;
+  poolFee: bigint;
+  twapWindow: bigint;
+  venue: number;
+  feed: Address;
+  maxFeedAge: bigint;
 }
 
 export interface VerifyOptions {

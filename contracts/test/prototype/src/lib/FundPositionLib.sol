@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../../../../interfaces/IStrategyAdapter.sol";
+import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
 import {ExclusionLedger} from "../../../../ExclusionLedger.sol";
 import {
     AssetKind,
@@ -21,7 +22,12 @@ import {
     MAX_IN_KIND_PERIOD
 } from "../FundTypes.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
-import {FundState} from "./FundStorage.sol";
+import {
+    FundState,
+    FundStorage,
+    LendingClaimAccount,
+    LendingClaimEpoch
+} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 
 /// @title FundPositionLib
@@ -87,6 +93,227 @@ library FundPositionLib {
         IStrategyAdapter(s.assets[i].adapter).withdraw(amount);
         got = usdc.balanceOf(address(this)) - before;
         _burnUnits(s, i, p0, FundValuationLib.positionValue(s, i));
+    }
+
+    /// @notice Step 3f (E37, E44, E54): withdraw `holderSliceUsdc` (less `LENDING_ROUNDING_UNITS`) from lending
+    ///         asset `i` for a net redemption (`shares / supplyBefore`), withdrawing pro rata for any outstanding
+    ///         claims (`positionClaimTotal[i]`) in the same call. On shortfall, mints claim units for `claimant`
+    ///         with exit fee `claimFeeBps` (linked when `linkedFee`, else credited directly to `feeRecipient`).
+    struct TakeClaimCtx {
+        uint256 shares;
+        uint256 supplyBefore;
+        address claimant;
+        uint256 claimFeeBps;
+        bool linkedFee;
+        bool batch;
+        address[] owners;
+        uint256[] ownerShares;
+        uint16[] ownerFeeBps;
+    }
+
+    function takeForFlow(
+        FundState storage s,
+        uint256 i,
+        uint256 holderSliceUsdc,
+        uint256 shares,
+        uint256 supplyBefore,
+        address claimant,
+        uint256 claimFeeBps,
+        bool linkedFee
+    ) public returns (uint256) {
+        address[] memory emptyOwners;
+        uint256[] memory emptyShares;
+        uint16[] memory emptyFees;
+        return _takeForFlow(
+            s,
+            i,
+            holderSliceUsdc,
+            TakeClaimCtx({
+                shares: shares,
+                supplyBefore: supplyBefore,
+                claimant: claimant,
+                claimFeeBps: claimFeeBps,
+                linkedFee: linkedFee,
+                batch: false,
+                owners: emptyOwners,
+                ownerShares: emptyShares,
+                ownerFeeBps: emptyFees
+            })
+        );
+    }
+
+    /// @notice Step 3f (RB-35): batch variant of `takeForFlow` distributing any shortfall claim units pro rata across
+    ///         `owners` with exact zero-dust conservation and linked fees at each owner's `ownerFeeBps[k]`.
+    function takeForFlowBatch(
+        FundState storage s,
+        uint256 i,
+        uint256 holderSliceUsdc,
+        uint256 shares,
+        uint256 supplyBefore,
+        address[] memory owners,
+        uint256[] memory ownerShares,
+        uint16[] memory ownerFeeBps
+    ) public returns (uint256) {
+        return _takeForFlow(
+            s,
+            i,
+            holderSliceUsdc,
+            TakeClaimCtx({
+                shares: shares,
+                supplyBefore: supplyBefore,
+                claimant: address(0),
+                claimFeeBps: 0,
+                linkedFee: true,
+                batch: true,
+                owners: owners,
+                ownerShares: ownerShares,
+                ownerFeeBps: ownerFeeBps
+            })
+        );
+    }
+
+    function _takeForFlow(
+        FundState storage s,
+        uint256 i,
+        uint256 holderSliceUsdc,
+        TakeClaimCtx memory ctx
+    ) private returns (uint256 gotHolder) {
+        if (holderSliceUsdc <= LENDING_ROUNDING_UNITS) return 0;
+        uint256 wantHolder = holderSliceUsdc - LENDING_ROUNDING_UNITS;
+        uint256 u0 = s.positionUnits[i];
+        uint256 p0 = _readTakeValue(s, i);
+        if (p0 == 0) {
+            if (u0 != 0) {
+                uint256 failUnits =
+                    (u0 - s.positionClaimTotal[i]).mulDiv(ctx.shares, ctx.supplyBefore);
+                _claimShortfall(s, i, failUnits, ctx);
+            }
+            return 0;
+        }
+        if (u0 == 0) {
+            u0 = p0 * POSITION_UNITS_PER_USDC;
+            s.positionUnits[i] = u0;
+        }
+        uint256 holdersBurned;
+        uint256 h0;
+        (gotHolder, holdersBurned, h0) = _takeWithdrawAndApply(s, i, wantHolder, u0, p0);
+        if (h0 != 0 && gotHolder < wantHolder) {
+            uint256 targetBurned = wantHolder.mulDiv(u0, p0);
+            uint256 shortfallUnits = targetBurned > holdersBurned ? targetBurned - holdersBurned : 0;
+            _claimShortfall(s, i, shortfallUnits, ctx);
+        }
+    }
+
+    function _claimShortfall(
+        FundState storage s,
+        uint256 i,
+        uint256 units,
+        TakeClaimCtx memory ctx
+    ) private {
+        if (units == 0) return;
+        if (!ctx.batch) {
+            _claimWithFee(s, i, ctx.claimant, units, ctx.claimFeeBps, ctx.linkedFee);
+            return;
+        }
+        uint256 remUnits = units;
+        uint256 remShares = ctx.shares;
+        for (uint256 k; k < ctx.owners.length && remUnits != 0; ++k) {
+            uint256 os = ctx.ownerShares[k];
+            if (os == 0) continue;
+            uint256 slice = remShares == os ? remUnits : remUnits.mulDiv(os, remShares);
+            remUnits -= slice;
+            remShares -= os;
+            if (slice != 0) {
+                _claimWithFee(s, i, ctx.owners[k], slice, ctx.ownerFeeBps[k], true);
+            }
+        }
+    }
+
+    function _readTakeValue(FundState storage s, uint256 i) private view returns (uint256 p0) {
+        try IStrategyAdapter(s.assets[i].adapter).totalAssets() returns (uint256 bal) {
+            uint256 owed = s.deferredTotal[i];
+            p0 = bal > owed ? bal - owed : 0;
+        } catch {}
+    }
+
+    function _takeWithdrawAndApply(
+        FundState storage s,
+        uint256 i,
+        uint256 wantHolder,
+        uint256 u0,
+        uint256 p0
+    ) private returns (uint256 gotHolder, uint256 holdersBurned, uint256 h0) {
+        uint256 c0 = s.positionClaimTotal[i];
+        h0 = u0 - c0;
+        if (h0 == 0) return (0, 0, 0);
+        uint256 got;
+        {
+            uint256 wantClaims = c0 == 0 ? 0 : wantHolder.mulDiv(c0, h0);
+            uint256 wantTotal = wantHolder + wantClaims;
+            if (wantTotal > p0) wantTotal = p0;
+            got = _tryWithdrawAvailable(s, i, wantTotal);
+        }
+        uint256 p1 = _valueAfter(s, i, p0, got);
+        // RB-34 / A34: the position may fall only by what arrived (plus venue rounding). A venue that takes more
+        // than it pays would book the exiter's slice as paid; refuse it so the net side fails (check 10).
+        if (p0 > p1 && p0 - p1 > got + LENDING_ROUNDING_UNITS) {
+            revert IRobotMoneyFund.ProportionViolated(i, p0, p1 + got, 1, 1);
+        }
+        {
+            uint256 gotClaims = c0 == 0 ? 0 : got.mulDiv(c0, u0);
+            gotHolder = got - gotClaims;
+            if (gotClaims != 0) _creditLendingPot(s, i, gotClaims);
+        }
+        holdersBurned = _applyTakeUnits(s, i, p0, p1, u0, c0, h0);
+    }
+
+    function _applyTakeUnits(
+        FundState storage s,
+        uint256 i,
+        uint256 p0,
+        uint256 p1,
+        uint256 u0,
+        uint256 c0,
+        uint256 h0
+    ) private returns (uint256 holdersBurned) {
+        uint256 totalBurned = p1 >= p0 ? 0 : (p0 - p1).mulDiv(u0, p0, Math.Rounding.Ceil);
+        if (totalBurned > u0) totalBurned = u0;
+        uint256 claimsBurned = c0 == 0 ? 0 : totalBurned.mulDiv(c0, u0, Math.Rounding.Ceil);
+        if (claimsBurned > c0) claimsBurned = c0;
+        holdersBurned = totalBurned - claimsBurned;
+        if (holdersBurned > h0) {
+            holdersBurned = h0;
+            claimsBurned = totalBurned - h0;
+        }
+        s.positionUnits[i] = u0 - totalBurned;
+        uint256 c1 = c0 - claimsBurned;
+        s.positionClaimTotal[i] = c1;
+        if (c0 != 0 && c1 == 0) _rollLendingEpoch(s, i);
+    }
+
+    function _tryWithdrawAvailable(FundState storage s, uint256 i, uint256 wantTotal)
+        private
+        returns (uint256 got)
+    {
+        if (wantTotal == 0) return 0;
+        address adapter = s.assets[i].adapter;
+        IERC20 usdc = IERC20(s.usdc);
+        uint256 before = usdc.balanceOf(address(this));
+        try IStrategyAdapter(adapter).withdraw(wantTotal) returns (uint256) {
+            return usdc.balanceOf(address(this)) - before;
+        } catch {}
+        uint256 avail;
+        try ILendingRateAdapter(adapter).availableLiquidity() returns (uint256 a) {
+            avail = a;
+        } catch {
+            return 0;
+        }
+        if (avail == 0) return 0;
+        uint256 ask = avail < wantTotal ? avail : wantTotal;
+        before = usdc.balanceOf(address(this));
+        try IStrategyAdapter(adapter).withdraw(ask) returns (uint256) {
+            got = usdc.balanceOf(address(this)) - before;
+        } catch {}
     }
 
     /// @notice Withdraw the holders' whole part of lending asset `i`, tolerant of a failing adapter. What stays in
@@ -275,64 +502,370 @@ library FundPositionLib {
     /// @dev Move `units` of lending position `i` from the holders to claims: the exit fee's share to the fee
     ///      recipient, the rest to `claimant`.
     function _claim(FundState storage s, uint256 i, address claimant, uint256 units) private {
-        if (units == 0) return;
-        uint256 feeUnits = units.mulDiv(s.exitFeeBps, BPS);
-        s.positionClaimTotal[i] += units;
-        _credit(s, i, claimant, units - feeUnits);
-        _credit(s, i, s.feeRecipient, feeUnits);
+        _claimWithFee(s, i, claimant, units, s.exitFeeBps, false);
     }
 
-    function _credit(FundState storage s, uint256 i, address account, uint256 units) private {
+    function _claimWithFee(
+        FundState storage s,
+        uint256 i,
+        address claimant,
+        uint256 units,
+        uint256 feeBps,
+        bool linkedFee
+    ) private {
         if (units == 0) return;
-        s.positionClaimOf[i][account] += units;
-        emit IRobotMoneyFund.PositionClaimRecorded(i, account, units);
+        uint256 feeUnits = units.mulDiv(feeBps, BPS);
+        uint256 addScaled = _allocateLendingEpochScaled(s, i, units);
+        uint256 feeScaled = addScaled.mulDiv(feeUnits, units);
+        uint256 netScaled = addScaled - feeScaled;
+        uint256 netUnits = units - feeUnits;
+        if (netScaled != 0) {
+            _addLendingScaled(
+                s, i, s.lendingClaims[i][claimant], claimant, netScaled, netUnits, true
+            );
+        } else if (netUnits != 0) {
+            emit IRobotMoneyFund.PositionClaimRecorded(i, claimant, netUnits);
+        }
+        if (feeScaled != 0) {
+            address rec = s.feeRecipient;
+            LendingClaimAccount storage feeAccount =
+                linkedFee ? s.lendingFeeLinked[i][claimant] : s.lendingClaims[i][rec];
+            _addLendingScaled(s, i, feeAccount, rec, feeScaled, feeUnits, !linkedFee);
+        }
+    }
+
+    function _allocateLendingEpochScaled(FundState storage s, uint256 i, uint256 units)
+        private
+        returns (uint256 addScaled)
+    {
+        uint256 claimTotalBefore = s.positionClaimTotal[i];
+        s.positionClaimTotal[i] = claimTotalBefore + units;
+
+        LendingClaimEpoch storage ep = s.lendingEpochs[i][s.lendingClaimEpoch[i]];
+        uint256 totalScaledBefore = ep.totalScaled;
+        if (totalScaledBefore == 0) {
+            addScaled = claimTotalBefore == 0 ? FundStorage.LENDING_ACC_NORM : units;
+            if (claimTotalBefore != 0) ep.totalScaled = claimTotalBefore;
+            ep.totalScaled += addScaled;
+        } else {
+            addScaled = units.mulDiv(totalScaledBefore, claimTotalBefore);
+            ep.totalScaled = totalScaledBefore + addScaled;
+        }
+    }
+
+    function _addLendingScaled(
+        FundState storage s,
+        uint256 i,
+        LendingClaimAccount storage entry,
+        address account,
+        uint256 addScaled,
+        uint256 emitUnits,
+        bool emitEvent
+    ) private {
+        _harvestLendingEntry(s, i, entry);
+        entry.scaled += addScaled;
+        if (emitEvent && emitUnits != 0) {
+            emit IRobotMoneyFund.PositionClaimRecorded(i, account, emitUnits);
+        }
+    }
+
+    function _harvestLendingEntry(
+        FundState storage s,
+        uint256 i,
+        LendingClaimAccount storage entry
+    ) private {
+        uint256 cur = s.lendingClaimEpoch[i];
+        if (entry.scaled != 0) {
+            LendingClaimEpoch storage ep = s.lendingEpochs[i][entry.epoch];
+            uint256 delta = ep.usdcPerScaled - entry.usdcDebt;
+            if (delta != 0) {
+                entry.pendingUsdc += entry.scaled.mulDiv(delta, FundStorage.LENDING_ACC_SCALE);
+            }
+            if (entry.epoch != cur) {
+                entry.scaled = 0;
+            }
+        }
+        entry.epoch = cur;
+        entry.usdcDebt = s.lendingEpochs[i][cur].usdcPerScaled;
+    }
+
+    function _migrateLegacyLending(FundState storage s, uint256 i, address account) private {
+        uint256 leg = s.positionClaimOf[i][account];
+        if (leg == 0) return;
+        s.positionClaimOf[i][account] = 0;
+        uint256 cur = s.lendingClaimEpoch[i];
+        LendingClaimEpoch storage ep = s.lendingEpochs[i][cur];
+        uint256 c0 = s.positionClaimTotal[i];
+        uint256 addScaled;
+        if (ep.totalScaled == 0) {
+            ep.totalScaled = c0;
+            addScaled = leg;
+        } else {
+            addScaled = leg.mulDiv(ep.totalScaled, c0);
+        }
+        _harvestLendingEntry(s, i, s.lendingClaims[i][account]);
+        s.lendingClaims[i][account].scaled += addScaled;
+    }
+
+    function _creditLendingPot(FundState storage s, uint256 i, uint256 gotClaims) private {
+        uint256 cur = s.lendingClaimEpoch[i];
+        LendingClaimEpoch storage ep = s.lendingEpochs[i][cur];
+        if (ep.totalScaled == 0) {
+            // Legacy storage path before accumulator existed: fall back to 1:1 on remaining claims.
+            if (s.positionClaimTotal[i] == 0) return;
+            ep.totalScaled = s.positionClaimTotal[i];
+        }
+        ep.usdcPerScaled += gotClaims.mulDiv(FundStorage.LENDING_ACC_SCALE, ep.totalScaled);
+        s.lendingUsdcPot[i] += gotClaims;
+        s.reservedClaimUsdc += gotClaims;
+    }
+
+    function _rollLendingEpoch(FundState storage s, uint256 i) private {
+        uint256 next = s.lendingClaimEpoch[i] + 1;
+        s.lendingClaimEpoch[i] = next;
+    }
+
+    function _lendingEntryUnits(
+        FundState storage s,
+        uint256 i,
+        LendingClaimAccount storage entry
+    ) private view returns (uint256 units, uint256 pending) {
+        uint256 cur = s.lendingClaimEpoch[i];
+        uint256 c0 = s.positionClaimTotal[i];
+        pending = entry.pendingUsdc;
+        if (entry.scaled != 0) {
+            LendingClaimEpoch storage ep = s.lendingEpochs[i][entry.epoch];
+            uint256 delta = ep.usdcPerScaled - entry.usdcDebt;
+            if (delta != 0) {
+                pending += entry.scaled.mulDiv(delta, FundStorage.LENDING_ACC_SCALE);
+            }
+            if (entry.epoch == cur && c0 != 0 && ep.totalScaled != 0) {
+                units = entry.scaled.mulDiv(c0, ep.totalScaled);
+            }
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Position claims (E9, RB-21)
+    //  Position claims (E9, E54, RB-21, RB-35)
     // ═════════════════════════════════════════════════════════════════════════
 
     /// @notice Body of `IRobotMoneyFund.claimPosition`: pay `account`'s whole claim on lending position `i` at
-    ///         today's value, less `LENDING_ROUNDING_UNITS` (venue rounding falls on the claim, never on the holders),
-    ///         to `to`, and burn its units. Works whatever the asset's status (inactive, excluded): the claim is a
-    ///         share of what is in the venue. Reverts `ZeroAddress`, `NoPositionClaim`, or `DeferredShortfall` while
-    ///         the venue cannot pay; the claim then stays whole. A value read that reverts reverts the call.
-    /// @return usdc USDC paid to `to`.
+    ///         today's value (plus any accrued pot USDC), less `LENDING_ROUNDING_UNITS`, to `to`. Reverts
+    ///         `ZeroAddress`, `NoPositionClaim`, or `DeferredShortfall` while the venue cannot pay.
     function claimPosition(FundState storage s, uint256 i, address account, address to)
         public
         returns (uint256 usdc)
     {
         if (to == address(0)) revert IFundEvents.ZeroAddress();
-        uint256 units = s.positionClaimOf[i][account];
-        if (units == 0) revert IRobotMoneyFund.NoPositionClaim(i, account);
-        uint256 total = s.positionUnits[i];
-        uint256 value = FundValuationLib.positionValue(s, i).mulDiv(units, total);
-        s.positionClaimOf[i][account] = 0;
-        s.positionClaimTotal[i] -= units;
-        s.positionUnits[i] = total - units;
-        usdc = value > LENDING_ROUNDING_UNITS ? value - LENDING_ROUNDING_UNITS : 0;
-        if (usdc != 0) {
-            IERC20 t = IERC20(s.usdc);
-            uint256 before = t.balanceOf(address(this));
-            IStrategyAdapter(s.assets[i].adapter).withdraw(usdc);
-            uint256 got = t.balanceOf(address(this)) - before;
-            if (got < usdc) revert IRobotMoneyFund.DeferredShortfall(i, got, usdc);
-            t.safeTransfer(to, usdc);
-        }
+        _migrateLegacyLending(s, i, account);
+        LendingClaimAccount storage entry = s.lendingClaims[i][account];
+        _harvestLendingEntry(s, i, entry);
+        uint256 cur = s.lendingClaimEpoch[i];
+        uint256 c0 = s.positionClaimTotal[i];
+        LendingClaimEpoch storage ep = s.lendingEpochs[i][cur];
+        uint256 units = (entry.epoch == cur && c0 != 0 && ep.totalScaled != 0)
+            ? entry.scaled.mulDiv(c0, ep.totalScaled)
+            : 0;
+        uint256 potOwed = entry.pendingUsdc;
+        if (units == 0 && potOwed == 0) revert IRobotMoneyFund.NoPositionClaim(i, account);
+
+        uint256 adapterUsdc = units != 0
+            ? _withdrawClaimUnits(s, i, entry, cur, c0, units)
+            : 0;
+        uint256 potPaid = _takeLendingPot(s, i, potOwed);
+        entry.pendingUsdc = 0;
+        usdc = adapterUsdc + potPaid;
+        if (usdc != 0) IERC20(s.usdc).safeTransfer(to, usdc);
         emit IRobotMoneyFund.PositionClaimed(i, account, to, units, usdc);
     }
 
+    function _withdrawClaimUnits(
+        FundState storage s,
+        uint256 i,
+        LendingClaimAccount storage entry,
+        uint256 cur,
+        uint256 c0,
+        uint256 units
+    ) private returns (uint256 adapterUsdc) {
+        LendingClaimEpoch storage ep = s.lendingEpochs[i][cur];
+        uint256 total = s.positionUnits[i];
+        uint256 value = FundValuationLib.positionValue(s, i).mulDiv(units, total);
+        ep.totalScaled -= entry.scaled;
+        entry.scaled = 0;
+        s.positionClaimTotal[i] = c0 - units;
+        s.positionUnits[i] = total - units;
+        if (s.positionClaimTotal[i] == 0) _rollLendingEpoch(s, i);
+        adapterUsdc = value > LENDING_ROUNDING_UNITS ? value - LENDING_ROUNDING_UNITS : 0;
+        if (adapterUsdc != 0) {
+            IERC20 t = IERC20(s.usdc);
+            uint256 before = t.balanceOf(address(this));
+            IStrategyAdapter(s.assets[i].adapter).withdraw(adapterUsdc);
+            uint256 got = t.balanceOf(address(this)) - before;
+            if (got < adapterUsdc) revert IRobotMoneyFund.DeferredShortfall(i, got, adapterUsdc);
+        }
+    }
+
+    struct SettleBurnCtx {
+        address owner;
+        uint256 cur;
+        uint256 c0;
+        uint256 u0;
+        uint256 combUnits;
+        uint256 burned;
+        uint256 ownerScaled;
+        uint256 feeScaled;
+        uint256 totalScaled;
+        uint256 got;
+    }
+
+    /// @notice Step 3f (E54, RB-35, A45): permissionless settlement of `owner`'s lending position claim (and any
+    ///         linked exit fee) on asset `i`. Withdraws whatever the venue can pay without reverting on partial
+    ///         liquidity, pays any accrued pot USDC, transfers `feeUsdc` to `feeRecipient` and `netUsdc` to `owner`.
+    function settleLendingClaim(FundState storage s, uint256 i, address owner)
+        public
+        returns (uint256 netUsdc, uint256 feeUsdc, bool hasClaim)
+    {
+        if (owner == address(0)) revert IFundEvents.ZeroAddress();
+        _migrateLegacyLending(s, i, owner);
+        LendingClaimAccount storage ownerEntry = s.lendingClaims[i][owner];
+        LendingClaimAccount storage feeEntry = s.lendingFeeLinked[i][owner];
+        _harvestLendingEntry(s, i, ownerEntry);
+        _harvestLendingEntry(s, i, feeEntry);
+
+        {
+            uint256 cur = s.lendingClaimEpoch[i];
+            uint256 c0 = s.positionClaimTotal[i];
+            uint256 ownerScaled = (ownerEntry.epoch == cur && c0 != 0) ? ownerEntry.scaled : 0;
+            uint256 feeScaled = (feeEntry.epoch == cur && c0 != 0) ? feeEntry.scaled : 0;
+            if (
+                ownerScaled == 0 && feeScaled == 0 && ownerEntry.pendingUsdc == 0
+                    && feeEntry.pendingUsdc == 0
+            ) {
+                return (0, 0, false);
+            }
+            hasClaim = true;
+            SettleBurnCtx memory b;
+            b.owner = owner;
+            b.cur = cur;
+            b.c0 = c0;
+            b.ownerScaled = ownerScaled;
+            b.feeScaled = feeScaled;
+            (netUsdc, feeUsdc) = _settleClaimUnits(s, i, b);
+        }
+
+        netUsdc += _takeLendingPot(s, i, ownerEntry.pendingUsdc);
+        feeUsdc += _takeLendingPot(s, i, feeEntry.pendingUsdc);
+        ownerEntry.pendingUsdc = 0;
+        feeEntry.pendingUsdc = 0;
+
+        if (feeUsdc != 0) IERC20(s.usdc).safeTransfer(s.feeRecipient, feeUsdc);
+        if (netUsdc != 0) IERC20(s.usdc).safeTransfer(owner, netUsdc);
+        if (netUsdc != 0 || feeUsdc != 0) {
+            emit IRobotMoneyFund.ClaimSettled(i, owner, netUsdc, feeUsdc);
+        }
+    }
+
+    function _settleClaimUnits(FundState storage s, uint256 i, SettleBurnCtx memory b)
+        private
+        returns (uint256 gotOwner, uint256 gotFee)
+    {
+        b.totalScaled = s.lendingEpochs[i][b.cur].totalScaled;
+        uint256 combScaled = b.ownerScaled + b.feeScaled;
+        if (combScaled == 0 || b.totalScaled == 0) return (0, 0);
+        b.combUnits = combScaled.mulDiv(b.c0, b.totalScaled);
+        b.u0 = s.positionUnits[i];
+        if (b.combUnits == 0 || b.u0 == 0) return (0, 0);
+        (b.got, b.burned) = _withdrawForSettle(s, i, b.combUnits, b.u0, b.c0);
+        if (b.burned != 0) _applySettleBurn(s, i, b);
+        gotFee = b.got.mulDiv(b.feeScaled, combScaled);
+        gotOwner = b.got - gotFee;
+    }
+
+    function _applySettleBurn(FundState storage s, uint256 i, SettleBurnCtx memory b) private {
+        uint256 oBurn = b.ownerScaled.mulDiv(b.burned, b.combUnits);
+        if (oBurn > b.ownerScaled) oBurn = b.ownerScaled;
+        uint256 fBurn = b.feeScaled.mulDiv(b.burned, b.combUnits);
+        if (fBurn > b.feeScaled) fBurn = b.feeScaled;
+        if (b.burned == b.combUnits) {
+            oBurn = b.ownerScaled;
+            fBurn = b.feeScaled;
+        }
+        s.lendingClaims[i][b.owner].scaled = b.ownerScaled - oBurn;
+        s.lendingFeeLinked[i][b.owner].scaled = b.feeScaled - fBurn;
+        s.lendingEpochs[i][b.cur].totalScaled = b.totalScaled - (oBurn + fBurn);
+        uint256 c1 = b.c0 - b.burned;
+        s.positionClaimTotal[i] = c1;
+        s.positionUnits[i] = b.u0 - b.burned;
+        if (c1 == 0) _rollLendingEpoch(s, i);
+        uint256 ownerUnitsBurn = b.burned.mulDiv(b.ownerScaled, b.ownerScaled + b.feeScaled);
+        emit IRobotMoneyFund.PositionClaimed(i, b.owner, b.owner, ownerUnitsBurn, b.got);
+    }
+
+    function _withdrawForSettle(
+        FundState storage s,
+        uint256 i,
+        uint256 combUnits,
+        uint256 u0,
+        uint256 c0
+    ) private returns (uint256 got, uint256 burned) {
+        uint256 p0;
+        try IStrategyAdapter(s.assets[i].adapter).totalAssets() returns (uint256 bal) {
+            uint256 owed = s.deferredTotal[i];
+            p0 = bal > owed ? bal - owed : 0;
+        } catch {
+            return (0, 0);
+        }
+        if (p0 == 0) return (0, 0);
+        uint256 claimVal = p0.mulDiv(combUnits, u0);
+        uint256 fullAsk = claimVal > LENDING_ROUNDING_UNITS ? claimVal - LENDING_ROUNDING_UNITS : 0;
+        if (fullAsk == 0) return (0, 0);
+        uint256 want = fullAsk;
+        try ILendingRateAdapter(s.assets[i].adapter).availableLiquidity() returns (uint256 avail) {
+            if (avail < want) want = avail;
+        } catch {}
+        if (want == 0) return (0, 0);
+        got = _tryWithdrawAvailable(s, i, want);
+        if (got == 0) return (0, 0);
+        if (got >= fullAsk) {
+            burned = combUnits <= c0 ? combUnits : c0;
+        } else {
+            uint256 p1 = _valueAfter(s, i, p0, got);
+        // RB-34 / A34: the position may fall only by what arrived (plus venue rounding). A venue that takes more
+        // than it pays would book the exiter's slice as paid; refuse it so the net side fails (check 10).
+        if (p0 > p1 && p0 - p1 > got + LENDING_ROUNDING_UNITS) {
+            revert IRobotMoneyFund.ProportionViolated(i, p0, p1 + got, 1, 1);
+        }
+            burned = p1 >= p0 ? 0 : (p0 - p1).mulDiv(u0, p0, Math.Rounding.Ceil);
+            if (burned > combUnits) burned = combUnits;
+        }
+    }
+
+    function _takeLendingPot(FundState storage s, uint256 i, uint256 amount)
+        private
+        returns (uint256 paid)
+    {
+        if (amount == 0) return 0;
+        uint256 pot = s.lendingUsdcPot[i];
+        paid = amount <= pot ? amount : pot;
+        s.lendingUsdcPot[i] = pot - paid;
+        s.reservedClaimUsdc -= paid;
+    }
+
     /// @notice Body of `IRobotMoneyFund.positionClaimOf`: `account`'s claim units on lending position `i` and their
-    ///         value today, `units × positionValue / positionUnits`, rounded DOWN.
+    ///         value today (`units × positionValue / positionUnits` + any already-withdrawn pot USDC), rounded DOWN.
     function claimOf(FundState storage s, uint256 i, address account)
         public
         view
         returns (uint256 units, uint256 usdcValue)
     {
-        units = s.positionClaimOf[i][account];
+        uint256 legacy = s.positionClaimOf[i][account];
+        (uint256 accUnits, uint256 pending) = _lendingEntryUnits(s, i, s.lendingClaims[i][account]);
+        units = legacy + accUnits;
         uint256 total = s.positionUnits[i];
-        if (units == 0 || total == 0) return (units, 0);
-        usdcValue = FundValuationLib.positionValue(s, i).mulDiv(units, total);
+        if (units != 0 && total != 0) {
+            usdcValue = FundValuationLib.positionValue(s, i).mulDiv(units, total);
+        }
+        usdcValue += pending;
     }
 
     /// @notice The claims' part of lending position `i` worth `p`, rounded UP (what an emergency must leave).

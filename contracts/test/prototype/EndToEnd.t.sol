@@ -23,6 +23,7 @@ import {
     PlanParams,
     PlanStatus,
     SkipReason,
+    StepOrder,
     IFundEvents,
     BPS,
     IDLE_INDEX,
@@ -32,6 +33,7 @@ import {
     Claim,
     FlowBooks,
     IFlowEvents,
+    QueueLiveness,
     Quote,
     Request,
     RequestKind,
@@ -142,22 +144,19 @@ contract EndToEndTest is PrototypeHarness {
     /// @dev §5.9.2 steps 1 and 2: the quote, then the request with a limit from it. The USDC sits in the queue.
     function _hpDepositRequest(uint256 usdc) private {
         Quote memory q = queue.quoteDeposit(usdc);
-        assertGt(q.boundPrice, 0, "quote: bound price");
         assertEq(q.feeBps, 0, "quote: no deposit fee class");
+        assertLt(q.cancelCutoff, q.earliestSettle, "quote: cancel cutoff before earliest settle");
         assertEq(
             q.holdEnds,
             q.earliestSettle + 1 hours,
             "quote: hold ends minHold after the earliest settle"
         );
-        assertEq(
-            q.worstAmount,
-            usdc.mulDiv(PRICE_SCALE, q.boundPrice),
-            "quote: worst shares at the bound"
-        );
-        _hpDepositLimit = q.boundPrice.mulDiv(BPS + LIMIT_MARGIN_BPS, BPS);
+        assertGt(q.refBandBps, 0, "quote: ref band");
+        assertGt(q.legBandBps, 0, "quote: leg band");
+        _hpDepositLimit = type(uint256).max;
 
         uint256 queueUsdc = IERC20(USDC).balanceOf(address(queue));
-        _hpDepositId = openDepositRequest(alice, usdc, _hpDepositLimit);
+        _hpDepositId = openDepositRequest(alice, usdc);
         assertEq(IERC20(USDC).balanceOf(address(queue)), queueUsdc + usdc, "escrow in the queue");
         assertEq(IERC20(USDC).balanceOf(alice), 0, "pulled from the caller");
         assertEq(queue.pendingDepositRequest(_hpDepositId, alice), usdc, "pending");
@@ -185,17 +184,20 @@ contract EndToEndTest is PrototypeHarness {
         );
     }
 
-    /// @dev §5.9.2 step 4 and §5.9.3: after the window, the keeper settles. One claim for alice with its unlock
-    ///      time; its price is inside alice's limit and at or below the bound plus its own rounding allowance (RB-14).
-    ///      The unused USDC is alice's credit (E22). Check 10 from outside: no held amount per share fell.
+    /// @dev §5.9.2 step 4 and §5.9.3: only the keeper settles in Step 3f (E34). One claim for alice with its
+    ///      unlock time; unused USDC becomes alice's credit (E22). Check 10 from outside: no held amount per share fell.
     function _hpDepositSettle() private {
         uint256 usdc = queue.getRequest(_hpDepositId).amount;
         warpToSettleable(_hpDepositId);
         refreshFeeds();
-        // Only the keeper settles inside keeperGrace (E10).
+        // Step 3f (E34): only the keeper settles; `checkSettle()` previews readiness, while `settle()` enforces Caller.
         vm.prank(alice);
-        (SettleCheck callerCheck,) = queue.checkSettle();
-        assertEq(uint8(callerCheck), uint8(SettleCheck.Caller), "a stranger waits for keeperGrace");
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0
+            )
+        );
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         vm.prank(keeper);
         (SettleCheck check, uint256 index) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Ok), "every pre-trade check passes");
@@ -213,11 +215,6 @@ contract EndToEndTest is PrototypeHarness {
         assertGt(st.sharesMinted, 0, "shares minted to the queue");
         assertLe(st.usdcIn, usdc, "spent at most the request");
         assertEq(st.holdEndsAt, block.timestamp + 1 hours, "hold ends minHold later");
-        assertLe(
-            st.usdcIn * PRICE_SCALE,
-            st.depositBoundPrice * st.sharesMinted,
-            "check 11: realized <= bound"
-        );
         assertEq(fund.totalSupply(), supply0 + st.sharesMinted, "the fund minted exactly sharesOut");
         assertEq(
             fund.balanceOf(address(queue)),
@@ -255,7 +252,6 @@ contract EndToEndTest is PrototypeHarness {
         emit log_named_uint("deposit: USDC requested", usdc);
         emit log_named_uint("deposit: USDC spent (usdcIn)", st.usdcIn);
         emit log_named_uint("deposit: shares minted", st.sharesMinted);
-        emit log_named_uint("deposit: bound price (PRICE_SCALE)", st.depositBoundPrice);
         emit log_named_uint("deposit: alice's limit", _hpDepositLimit);
         _assertBooks("after the deposit settlement");
     }
@@ -333,11 +329,12 @@ contract EndToEndTest is PrototypeHarness {
     /// @dev The redemption request from the quote, then its settlement. Returns alice's limit.
     function _hpRedeemSettle(uint256 shares) private returns (uint256 minLimit) {
         Quote memory q = queue.quoteRedeem(shares);
-        assertGt(q.boundPrice, 0, "quote: redemption bound");
         assertEq(q.feeBps, EXIT_FEE_BPS, "quote: the exit fee");
-        minLimit = q.boundPrice.mulDiv(BPS - LIMIT_MARGIN_BPS, BPS);
+        assertLt(q.cancelCutoff, q.earliestSettle, "quote: cancel cutoff before earliest settle");
+        assertGt(q.legBandBps, 0, "quote: leg band");
+        minLimit = 0;
 
-        uint256 id = openRedeemRequest(alice, shares, minLimit);
+        uint256 id = openRedeemRequest(alice, shares);
         assertEq(fund.balanceOf(alice), 0, "shares pulled from the caller");
         assertEq(fund.balanceOf(address(queue)), shares, "escrow in the queue");
         assertEq(queue.queuedSharesOf(alice), shares, "E13: escrowed shares count for alice");
@@ -357,14 +354,10 @@ contract EndToEndTest is PrototypeHarness {
         Settlement memory st = queue.getSettlement(sid);
         assertEq(st.sharesBurned, shares, "burned alice's shares");
         assertEq(fund.totalSupply(), supply0 - shares, "supply fell by the shares");
-        assertGe(
-            st.usdcOut * PRICE_SCALE, st.redeemBoundPrice * shares, "check 11: realized >= bound"
-        );
         assertGt(IERC20(USDC).balanceOf(feeRecipient), feeBefore, "exit fee charged");
         _assertPerShareNotLower(idle0, held0, supply0, "redemption");
         emit log_named_uint("redeem: shares burned", st.sharesBurned);
         emit log_named_uint("redeem: USDC out, net of fee", st.usdcOut);
-        emit log_named_uint("redeem: bound price (PRICE_SCALE)", st.redeemBoundPrice);
         emit log_named_uint("redeem: alice's limit", minLimit);
     }
 
@@ -386,9 +379,9 @@ contract EndToEndTest is PrototypeHarness {
         }
         coverageCheckpoint();
         _seamCancel(shares);
-        _seamExitInKind(shares / 4);
-        coverageCheckpoint();
         _seamFreezeAndReturn();
+        coverageCheckpoint();
+        _seamExitInKind(shares / 4);
     }
 
     function _seamCancel(uint256 shares) private {
@@ -423,20 +416,33 @@ contract EndToEndTest is PrototypeHarness {
             IERC20(WETH).balanceOf(alice),
             IERC20(CBBTC).balanceOf(alice)
         ];
+        // Step 3f (E29): direct in-kind exit is closed while live.
         vm.prank(alice);
-        queue.exitInKind(id);
-        assertEq(fund.totalSupply(), supply0 - q, "the queue's escrowed shares were burned");
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(q, alice, alice);
+
+        // Wind-down (E29, E38, E52): shutdown -> releaseWindDown -> withdrawCredit -> redeemInKind -> restore.
+        timelockExecute(address(fund), abi.encodeCall(fund.shutdown, ()));
+        (, uint256 sharesReleased) = queue.releaseWindDown(alice);
+        assertEq(sharesReleased, q, "E38/E52: wind-down released escrowed shares to credit");
+        vm.prank(alice);
+        queue.withdrawCredit();
+        assertEq(queue.queuedSharesOf(alice), 0, "nothing queued after credit withdrawal");
+
+        vm.prank(alice);
+        fund.redeemInKind(q, alice, alice);
+        assertEq(fund.totalSupply(), supply0 - q, "alice's shares burned in wind-down");
         assertGt(IERC20(USDC).balanceOf(alice), before[0], "USDC leg to the owner");
         assertGt(IERC20(WETH).balanceOf(alice), before[1], "wETH leg to the owner");
         assertGt(IERC20(CBBTC).balanceOf(alice), before[2], "cbBTC leg to the owner");
-        assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "exited");
-        assertEq(queue.queuedSharesOf(alice), 0, "nothing queued");
+        assertEq(uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "wind-down closed request");
         for (uint256 i; i < listedAssets(); ++i) {
             (uint256 units,) = fund.positionClaimOf(i, address(queue));
             assertEq(units, 0, "E23: no position claim keyed to the queue");
             assertEq(fund.deferredOf(i, address(queue)), 0, "E23: no deferral keyed to the queue");
         }
-        _assertBooks("after exitInKind");
+        _assertBooks("after wind-down redeemInKind");
+        timelockExecute(address(fund), abi.encodeCall(fund.restore, (TVL_CAP)));
     }
 
     function _seamFreezeAndReturn() private {
@@ -453,27 +459,15 @@ contract EndToEndTest is PrototypeHarness {
         warpForward(c.unlockAt);
         refreshFeeds();
         assertEq(queue.maxMint(bob), 0, "frozen: nothing deliverable after the hold");
-        vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, c.requestId, alice)
-        );
-        queue.takeReturn(claimId);
-        vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.ReturnNotAllowed.selector, sid));
-        queue.takeReturn(claimId);
 
-        timelockExecute(address(queue), abi.encodeCall(queue.allowReturn, (sid)));
-        uint256 supply0 = fund.totalSupply();
-        uint256 usdcBefore = IERC20(USDC).balanceOf(bob);
+        // Step 3f (E49): Safe timelock releases frozen settlement so bob can claim his minted shares.
+        timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid)));
+        assertEq(queue.maxMint(bob), c.shares, "released: claim shares deliverable");
         vm.prank(bob);
-        queue.takeReturn(claimId);
-        assertEq(fund.totalSupply(), supply0 - c.shares, "the held shares were burned");
-        assertGt(IERC20(USDC).balanceOf(bob), usdcBefore, "USDC leg to the depositor");
-        assertGt(IERC20(WETH).balanceOf(bob), 0, "wETH leg to the depositor");
-        assertGt(IERC20(CBBTC).balanceOf(bob), 0, "cbBTC leg to the depositor");
-        assertEq(fund.balanceOf(bob), 0, "no share was delivered");
-        assertEq(queue.queuedSharesOf(bob), 0, "nothing held for bob");
-        _assertBooks("after takeReturn");
+        uint256 usdcDelivered = queue.mint(c.shares, bob);
+        assertEq(usdcDelivered, c.usdc, "mint returns settlement USDC paid");
+        assertEq(fund.balanceOf(bob), c.shares, "bob receives full settlement shares");
+        _assertBooks("after releaseSettlement and delivery");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -874,9 +868,12 @@ contract EndToEndTest is PrototypeHarness {
         emit log_named_uint("wETH pool vs pin feed after the plan, bps", diff * BPS / feedEth);
         alignFeedsToPools();
 
-        // After convergence: a quarter of alice through the queue, then a quarter of bob in kind.
+        // After convergence: direct redeemInKind is closed while live (E29); alice redeems a quarter through the queue.
+        uint256 bobQuarter = fund.balanceOf(bob) / 4;
+        vm.prank(bob);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(bobQuarter, carol, bob);
         _checkedRedeem(alice, fund.balanceOf(alice) / 4);
-        _checkedRedeemInKind(bob, carol, fund.balanceOf(bob) / 4);
 
         // A new plan back toward the initial vector, paused at once by the emergency key.
         uint256 planId = setTargetViaTimelock(initial, PlanParams(PLAN_DURATION, COST_BUDGET_BPS));
@@ -888,15 +885,23 @@ contract EndToEndTest is PrototypeHarness {
         assertFalse(did, "paused plan does not trade");
         assertEq(uint8(why), uint8(SkipReason.PlanNotOpen), "paused: PlanNotOpen");
 
-        // RB-6: both exits work while Paused, and they leave the plan as it was.
+        // RB-6: queue exits work while Paused, and leave the plan as it was.
         _checkedRedeem(alice, fund.balanceOf(alice) / 2);
+        assertEq(fund.currentPlanId(), planId, "same plan");
+        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after queue exit");
+
+        // Alice exits the rest through the queue while still Paused.
+        _checkedRedeem(alice, fund.balanceOf(alice));
+        assertEq(fund.balanceOf(alice), 0, "alice fully out through the queue");
+        _assertBooks("after alice queue exits");
+
+        // Step 3f (E29): shutdown opens wind-down redeemInKind while preserving Paused plan state.
+        timelockExecute(address(fund), abi.encodeCall(fund.shutdown, ()));
+        _checkedRedeemInKind(bob, carol, bobQuarter);
         _checkedRedeemInKind(bob, bob, fund.balanceOf(bob));
         assertEq(fund.balanceOf(bob), 0, "bob fully out in kind");
-        assertEq(fund.currentPlanId(), planId, "same plan");
-        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after exits");
-
-        // Alice exits the rest through the queue: everyone but the seed can leave.
-        _checkedRedeem(alice, fund.balanceOf(alice));
+        assertEq(fund.currentPlanId(), planId, "same plan after wind-down exit");
+        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Paused), "still paused after wind-down exit");
         assertEq(fund.totalSupply(), SEED_USDC * 1e18, "everyone out but the seed");
         _assertBooks("after every exit");
     }
@@ -906,7 +911,6 @@ contract EndToEndTest is PrototypeHarness {
     ///      and never lowers the remaining holders' NAV per share.
     function _checkedRedeem(address who, uint256 shares) private {
         refreshFeeds();
-        Quote memory q = queue.quoteRedeem(shares);
         uint256 gross = fund.convertToAssets(shares);
         uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
         uint256 balBefore = fund.balanceOf(who);
@@ -917,8 +921,8 @@ contract EndToEndTest is PrototypeHarness {
         assertEq(fund.balanceOf(who), balBefore - shares, "shares burned");
         assertGe(
             net,
-            q.worstAmount.mulDiv(BPS - LIMIT_MARGIN_BPS, BPS),
-            "redeem >= the quote's worst case"
+            gross.mulDiv(BPS - EXIT_FEE_BPS, BPS).mulDiv(BPS - MAX_SLIPPAGE_BPS, BPS),
+            "redeem >= fee-net worst slippage floor"
         );
         assertLe(
             net,
@@ -1014,5 +1018,223 @@ contract EndToEndTest is PrototypeHarness {
             b.escrowShares + b.heldShares + b.creditShares + b.dustShares,
             string.concat(label, ": queue shares = books")
         );
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    //  Step 3f: Queue-originated delisting & lending claims, permissionless settleClaim, E54 skip
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+    function _settleAndClaimAllRedeemProceeds(uint256 idA, uint256 idB, address uA, address uB)
+        private
+        returns (uint256 cashA, uint256 cashB)
+    {
+        settleUntilFilled(idA);
+        if (!queue.getRequest(idB).closed) settleUntilFilled(idB);
+        cashA = _claimQueuedUsdc(uA);
+        cashB = _claimQueuedUsdc(uB);
+    }
+
+    function _claimQueuedUsdc(address user) private returns (uint256 got) {
+        uint256 maxR = queue.maxRedeem(user);
+        if (maxR == 0) return 0;
+        uint256 before = IERC20(USDC).balanceOf(user);
+        vm.prank(user);
+        queue.redeem(maxR, user, user);
+        got = IERC20(USDC).balanceOf(user) - before;
+    }
+
+    function _assertSettledMultiUserClaims(
+        uint256 index,
+        uint256 aRedeem,
+        uint256 bRedeem,
+        bool checkEmptyAfter
+    ) private returns (uint256 netA, uint256 netB) {
+        uint256 aBefore = IERC20(USDC).balanceOf(alice);
+        uint256 bBefore = IERC20(USDC).balanceOf(bob);
+        vm.prank(carol);
+        netA = fund.settleClaim(index, alice);
+        vm.prank(carol);
+        netB = fund.settleClaim(index, bob);
+        assertGt(netA, 0, "alice claim settled in USDC");
+        assertGt(netB, 0, "bob claim settled in USDC");
+        assertEq(IERC20(USDC).balanceOf(alice) - aBefore, netA, "alice balance delta = netA");
+        assertEq(IERC20(USDC).balanceOf(bob) - bBefore, netB, "bob balance delta = netB");
+        assertApproxEqRel(
+            netA * bRedeem, netB * aRedeem, 0.01e18, "pro-rata claim payout across users"
+        );
+        if (checkEmptyAfter) {
+            vm.expectRevert(
+                abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, index, alice)
+            );
+            fund.settleClaim(index, alice);
+            vm.expectRevert(
+                abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, index, bob)
+            );
+            fund.settleClaim(index, bob);
+        }
+    }
+
+    /// @notice Step 3f (E53, D19/D30): multi-user queue redemptions through `FlowQueue.settle()` ->
+    ///         `sellForFlowBatch` split delist claims pro-rata, keep deposits blocked while inSale, liquidate
+    ///         via `rebalancer.stepDelisted()`, and let anyone call `settleClaim` per owner.
+    function test_step3f_queueOriginatedDelistClaimsMultiUser() public fixtureCovered {
+        _hpSeedAndInvest();
+        uint256 aShares = deposit(alice, 40_000e6);
+        uint256 bShares = deposit(bob, 20_000e6);
+        coverageCheckpoint();
+
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_WETH)));
+        assertTrue(fund.isAssetInSale(IDX_WETH), "E53: WETH in sale");
+        assertTrue(fund.hasAssetInSale(), "E53: fund reports asset in sale");
+        assertTrue(queue.liveness().depositsStoppedNow, "E53: queue stops deposits during delisting");
+
+        uint256 aRedeem = aShares / 2;
+        uint256 bRedeem = bShares / 2;
+        {
+            (, uint256[] memory heldBefore) = fund.heldBalances();
+            uint256 idA = openRedeemRequest(alice, aRedeem);
+            uint256 idB = openRedeemRequest(bob, bRedeem);
+            uint256 idC = openDepositRequest(carol, 5_000e6);
+
+            (uint256 cashA, uint256 cashB) = _settleAndClaimAllRedeemProceeds(idA, idB, alice, bob);
+            assertGt(cashA, 0, "alice received non-WETH proceeds via queue");
+            assertGt(cashB, 0, "bob received non-WETH proceeds via queue");
+            assertEq(fund.balanceOf(carol), 0, "E53: queued deposit not minted while inSale");
+            assertFalse(queue.getRequest(idC).closed, "E53: queued deposit stays pending during delist");
+
+            (, uint256[] memory heldAfter) = fund.heldBalances();
+            assertLt(
+                heldAfter[IDX_WETH],
+                IERC20(WETH).balanceOf(address(fund)),
+                "E53: queue batch reserved claimed WETH"
+            );
+            assertLe(heldAfter[IDX_WETH], heldBefore[IDX_WETH], "held WETH not drained");
+        }
+
+        {
+            uint256 interval = rebalancer.effectiveStepInterval();
+            for (uint256 k; k < 16 && fund.isAssetInSale(IDX_WETH); ++k) {
+                vm.warp(block.timestamp + interval + 2);
+                refreshFeeds();
+                vm.prank(keeper);
+                rebalancer.stepDelisted(IDX_WETH);
+            }
+            assertFalse(fund.isAssetInSale(IDX_WETH), "E53: rebalancer completed delist sale");
+            assertFalse(fund.assetConfig(IDX_WETH).active, "E53: delisted asset deactivated");
+        }
+
+        uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
+        _assertSettledMultiUserClaims(IDX_WETH, aRedeem, bRedeem, true);
+        assertGt(IERC20(USDC).balanceOf(feeRecipient) - feeBefore, 0, "E53: linked exit fee paid");
+        _assertBooks("step3f queue delist claims");
+    }
+
+    /// @notice Step 3f (E37, E54, RB-37): multi-user queue redemptions under Aave shortfall record pro-rata
+    ///         lending claims (`positionClaimOf`) without blocking healthy proceeds, block `Rebalancer` and
+    ///         `executeStep` from selling Aave (`E54`), and unblock immediately after permissionless `settleClaim`.
+    function test_step3f_queueOriginatedLendingClaimsRebalancerSkipAndSettleClaim()
+        public
+        fixtureCovered
+    {
+        _hpSeedAndInvest();
+        uint256 aShares = deposit(alice, 30_000e6);
+        uint256 bShares = deposit(bob, 15_000e6);
+        coverageCheckpoint();
+
+        vm.mockCall(
+            address(aaveAdapter),
+            abi.encodeWithSignature("availableLiquidity()"),
+            abi.encode(uint256(0))
+        );
+        vm.mockCallRevert(
+            address(aaveAdapter), abi.encodeWithSignature("withdraw(uint256)"), "paused"
+        );
+
+        uint256 aRedeem = aShares / 2;
+        uint256 bRedeem;
+        {
+            uint256 snap = vm.snapshotState();
+            uint256 probeId = openRedeemRequest(alice, aRedeem);
+            warpToSettleable(probeId);
+            uint256 p0 = aaveAdapter.totalAssets();
+            uint256 sup0 = fund.totalSupply();
+            (uint256 u0,) = fund.positionUnits(0);
+            vm.revertToState(snap);
+
+            // Pick a target `exactAfter` whose `targetBurned = u0 * shares / sup0` satisfies
+            // `holdersPart(p0) * sup0 >= p0 * exactAfter` (`FundPositionLib._takeForFlow` omits LENDING_ROUNDING_UNITS).
+            uint256 k0 = (sup0 - aRedeem - (bShares / 2)).mulDiv(p0, sup0, Math.Rounding.Ceil);
+            uint256 exactAfter = k0.mulDiv(sup0, p0, Math.Rounding.Floor);
+            for (uint256 j; j < 64; ++j) {
+                uint256 cand = (k0 + j).mulDiv(sup0, p0, Math.Rounding.Floor);
+                if (cand >= sup0 - aRedeem) continue;
+                uint256 burned = u0.mulDiv(sup0 - cand, sup0);
+                if (p0.mulDiv(u0 - burned, u0) * sup0 >= p0 * cand) {
+                    exactAfter = cand;
+                    break;
+                }
+            }
+            bRedeem = (sup0 - exactAfter) - aRedeem;
+        }
+        {
+            uint256 idA = openRedeemRequest(alice, aRedeem);
+            uint256 idB = openRedeemRequest(bob, bRedeem);
+            (uint256 cashA, uint256 cashB) = _settleAndClaimAllRedeemProceeds(idA, idB, alice, bob);
+            assertGt(cashA, 0, "alice received healthy-venue proceeds");
+            assertGt(cashB, 0, "bob received healthy-venue proceeds");
+        }
+
+        uint256 totalClaims = fund.positionClaimTotal(IDX_AAVE);
+        {
+            (uint256 unitsA, uint256 valA) = fund.positionClaimOf(IDX_AAVE, alice);
+            (uint256 unitsB, uint256 valB) = fund.positionClaimOf(IDX_AAVE, bob);
+            assertGt(unitsA, 0, "E37: alice Aave claim units via queue");
+            assertGt(unitsB, 0, "E37: bob Aave claim units via queue");
+            assertGt(valA, 0, "alice claim valuation");
+            assertGt(valB, 0, "bob claim valuation");
+            assertGt(totalClaims, unitsA + unitsB, "E37: total claims include linked exit fee");
+            assertApproxEqRel(
+                unitsA + unitsB,
+                totalClaims.mulDiv(9_990, 10_000),
+                0.001e18,
+                "E37: net user claims plus 10 bps linked exit fee = positionClaimTotal"
+            );
+            assertApproxEqRel(
+                unitsA * bRedeem,
+                unitsB * aRedeem,
+                0.01e18,
+                "E37: pro-rata lending claims across queue batch"
+            );
+        }
+
+        vm.clearMockedCalls();
+
+        setTargetViaTimelock(assetVec(0, 4_000, 3_000, 3_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        vm.warp(block.timestamp + Math.max(1 days, rebalancer.effectiveStepInterval()) + 2);
+        refreshFeeds();
+
+        {
+            (SkipReason rBefore, uint256 sellBefore,,) = rebalancer.previewStep();
+            if (rBefore == SkipReason.None) {
+                assertTrue(sellBefore != IDX_AAVE, "E54: rebalancer skips Aave while claims exist");
+            }
+            vm.prank(address(rebalancer));
+            vm.expectRevert(
+                abi.encodeWithSelector(IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, totalClaims)
+            );
+            fund.executeStep(StepOrder(IDX_AAVE, IDX_MOONWELL, 1_000e6, 0, 0, 10e6));
+        }
+
+        _assertSettledMultiUserClaims(IDX_AAVE, aRedeem, bRedeem, false);
+        assertEq(fund.positionClaimTotal(IDX_AAVE), 0, "E54: Aave claim total cleared");
+
+        (SkipReason rAfter, uint256 sellAfter,, uint256 notAfter) = rebalancer.previewStep();
+        assertEq(uint8(rAfter), uint8(SkipReason.None), "rebalancer unblocked once claims cleared");
+        assertEq(sellAfter, IDX_AAVE, "E54: rebalancer now selects Aave");
+        assertGt(notAfter, 0, "positive rebalance notional");
+        vm.prank(keeper);
+        (bool stepped,) = rebalancer.step();
+        assertTrue(stepped, "E54: rebalancer executes Aave sell step");
+        _assertBooks("step3f queue lending claims");
     }
 }

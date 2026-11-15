@@ -15,7 +15,7 @@ import {PlanParams as BaselinePlanParams} from "../baseline/src/FundTypes.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {AttackBook, AttackPnl} from "../Attacks.t.sol";
 import {BPS} from "../src/FundTypes.sol";
-import {FlowLevers, FlowParams} from "../src/FlowTypes.sol";
+import {FlowLevers, FlowParams, Request} from "../src/FlowTypes.sol";
 import {FlowQueue} from "../src/FlowQueue.sol";
 import {SimLib} from "./SimLib.sol";
 import {SimMarket} from "./SimMarket.sol";
@@ -878,6 +878,11 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
             vm.prank(who);
             queue.redeem(m, who, who);
         }
+        (uint256 cu, uint256 cs) = queue.creditOf(who);
+        if (cu != 0 || cs != 0) {
+            vm.prank(who);
+            queue.withdrawCredit();
+        }
     }
 
     /// @notice USDC, tokens and every share `who` holds or has queued or credited, at the reference walk.
@@ -985,9 +990,10 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
     // ─── A9: a run ──────────────────────────────────────────────────────────────────────────────────────
 
     /// @notice Self-call: when `run`, runners 0-4 ask to redeem everything now and runners 5-9 one epoch later, with
-    ///         no limit; a runner still waiting 24 hours after its request exits the rest in kind. 4 days. Logs
-    ///         each runner's first fill, completion, USDC and in-kind value. The result's `atk` is the runners' total
-    ///         value and `vic` 0; the scored loss is the stayers' (holders').
+    ///         limit-free requests; a runner still waiting after `expiryEpoch` gives post-`maxRoll` redemption notice
+    ///         and withdraws any returned credit once the notice round ends. 4 days. Logs each runner's first fill,
+    ///         completion, USDC and remaining credit/position value. The result's `atk` is the runners' total value
+    ///         and `vic` 0; the scored loss is the stayers' (holders').
     function a9Run(bool run) external returns (Res memory r) {
         require(msg.sender == address(this), "self only");
         uint256 t0 = vm.getBlockTimestamp();
@@ -1027,12 +1033,23 @@ contract AttackSimTimedTest is TimedSimBase, AttackSimCore {
         }
     }
 
-    function _a9InKind(uint256[] memory ids, uint256[] memory askedAt) internal {
+    function _a9InKind(uint256[] memory ids, uint256[] memory /*askedAt*/) internal {
         for (uint256 i; i < N_RUNNERS; ++i) {
-            if (ids[i] == 0 || queue.getRequest(ids[i]).closed) continue;
-            if (vm.getBlockTimestamp() < askedAt[i] + 1 days) continue;
-            vm.prank(runners[i]);
-            queue.exitInKind(ids[i]);
+            if (ids[i] == 0) continue;
+            Request memory q = queue.getRequest(ids[i]);
+            if (!q.closed) {
+                if (q.noticeRound == 0 && queue.currentEpoch() > q.expiryEpoch && !fund.isShutdown()) {
+                    vm.prank(runners[i]);
+                    queue.giveRedemptionNotice(ids[i]);
+                } else if (q.noticeRound != 0) {
+                    try queue.claimNoticeReturn(ids[i]) {} catch {}
+                }
+            }
+            (uint256 cu, uint256 cs) = queue.creditOf(runners[i]);
+            if (cu != 0 || cs != 0) {
+                vm.prank(runners[i]);
+                queue.withdrawCredit();
+            }
         }
     }
 

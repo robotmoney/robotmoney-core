@@ -4,7 +4,7 @@ import { clearVectorProblems } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, fundPausePairingProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -931,4 +931,102 @@ test("version bump (owner, 2026-11-13): v0.7.0-onevault stays Deploy 4's record 
   expect(now.decisions.map((d) => d.id)).toEqual([...old.decisions.map((d) => d.id), "D4-10", "D4-11"]);
   expect(runnableProblems(now, "rehearsal")).toEqual([]);
   expect(runnableProblems(now, "twin")).toEqual([]);
+});
+
+test("Step 3f E55: fundPausePairingProblems requires prior pauseDeposits() on each target before shutdown, codehash revocation, emergencyUnwind, or delist", () => {
+  const mk = (id: string, cmd: string, extra: Record<string, unknown> = {}) =>
+    ({ id, flow: "fund", cmds: [["bash", "-c", cmd]], expectExit: 0, ...extra }) as never;
+
+  // Protected ops without prior pauseDeposits fail on all applicable targets
+  for (const [op, label] of [
+    [`cast send $FUND 'shutdown()'`, "shutdown"],
+    [`cast send $FUND 'setAdapterCodeHashAllowed(bytes32,bool)' 0x01 false`, "setAdapterCodeHashAllowed(..., false)"],
+    [`cast send $FUND 'emergencyUnwind(address)' $ASSET`, "emergencyUnwind"],
+    [`cast send $FUND 'delistAsset(address)' $ASSET`, "asset delisting"],
+  ] as const) {
+    const errs = fundPausePairingProblems([mk("P9.99-bad", op)], "fund");
+    expect(errs.length).toBe(3); // twin, rehearsal, production
+    expect(errs[0]).toContain(label);
+    expect(errs[0]).toContain("without an active earlier pauseDeposits step (E55 / D33)");
+  }
+
+  // Same-step pauseDeposits + shutdown without earlier pause still fails
+  expect(fundPausePairingProblems([mk("P9.98-same", `cast send $F 'pauseDeposits()' && cast send $F 'shutdown()'`)], "fund").length).toBe(3);
+
+  // An intervening unpauseDeposits() clears pause protection
+  expect(
+    fundPausePairingProblems(
+      [
+        mk("P9.01-pause", `cast send $F 'pauseDeposits()'`),
+        mk("P9.02-unpause", `cast send $F 'unpauseDeposits()'`),
+        mk("P9.03-unwind", `cast send $F 'emergencyUnwind(address)' $A`),
+      ],
+      "fund",
+    ).length,
+  ).toBe(3);
+
+  // Target isolation: pause only on twin leaves rehearsal/production unprotected
+  const onlyTwin = fundPausePairingProblems(
+    [
+      mk("P9.01-pause", `cast send $F 'pauseDeposits()'`, { onlyFor: "twin" }),
+      mk("P9.02-shut", `cast send $F 'shutdown()'`, { onlyFor: ["twin", "rehearsal"] }),
+    ],
+    "fund",
+  );
+  expect(onlyTwin).toEqual(["fund P9.02-shut: schedules/calls shutdown on fund flow (rehearsal) without an active earlier pauseDeposits step (E55 / D33)"]);
+
+  // Valid prior pauseDeposits(), allowing codehash=true, read-only calls, and non-zero expectExit are accepted
+  expect(
+    fundPausePairingProblems(
+      [
+        {
+          id: "P9.00-ro",
+          flow: "fund",
+          expectExit: 0,
+          cmds: [["cast", "call", "$F", "shutdown()"], ["bash", "-c", "true && ! grep -q x log && grep -q 'shutdown()' log"]],
+        } as never,
+        mk("P9.00-reverted", `cast send $F 'shutdown()'`, { expectExit: 1 }),
+        mk("P9.00-allow", `cast send $F 'setAdapterCodeHashAllowed(bytes32,bool)' 0x01 true`),
+        mk("P9.01-pause", `cast send $F 'pauseDeposits()'`),
+        mk("P9.02-shut", `cast send $F 'shutdown()'`),
+        mk("P9.03-revoke", `cast send $F 'setAdapterCodeHashAllowed(bytes32,bool)' 0x01 false`),
+      ],
+      "fund",
+    ),
+  ).toEqual([]);
+});
+
+test("Step 3f OPS-03 and sheet model: scheduleBatch/executeBatch Safe actions and Step 3f fund sheet names validate cleanly", () => {
+  expect(model.safeActions?.has("scheduleBatch")).toBe(true);
+  expect(model.safeActions?.has("executeBatch")).toBe(true);
+  for (const n of [
+    "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FUND_MIN_POOL_DEPTH_USDC",
+    "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
+    "KEEPER_TYPE", "KEEPER_OWNERS", "KEEPER_BOT_KEYS", "RECEIPT_SUBMITTERS",
+  ]) {
+    expect(model.fundSheetNames.has(n), n).toBe(true);
+  }
+
+  const safeCmd = (action: string) =>
+    commandProblems(
+      [{
+        id: "P9.90-batch",
+        standing: ["4.4"],
+        description: "d",
+        host: "control",
+        phase: 9,
+        flow: "fund",
+        cmds: [["bun", "publish-contracts/src/safe/cli.ts", "propose", "--action", action, "--bundle", "b.json"]],
+        expectExit: 0,
+        receipts: [],
+        irreversible: false,
+      }] as never,
+      model,
+      null,
+    );
+  expect(safeCmd("scheduleBatch")).toEqual([]);
+  expect(safeCmd("executeBatch")).toEqual([]);
+  expect(safeCmd("approveBatch")).toEqual([
+    "P9.90-batch: --action approveBatch is no safe/cli.ts action (schedule, execute, scheduleBatch, executeBatch, cancel, updateDelay)",
+  ]);
 });

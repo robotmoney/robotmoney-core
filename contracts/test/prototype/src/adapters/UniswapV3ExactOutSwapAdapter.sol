@@ -8,6 +8,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IUniswapV3Pool} from "../../../../interfaces/IUniswapV3Pool.sol";
 import {UniswapV3SwapAdapter} from "../../../../adapters/UniswapV3SwapAdapter.sol";
 import {IExactOutSwapAdapter} from "../interfaces/IFlowAdapters.sol";
 
@@ -77,5 +78,28 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
         if (amountIn < maxAmountIn) {
             IERC20(tokenIn).safeTransfer(msg.sender, maxAmountIn - amountIn);
         }
+    }
+
+    /// @inheritdoc IExactOutSwapAdapter
+    /// @dev Uniswap V3 pool fees are immutable at construction (`E43`, §4.5 rule 6). Checks code presence, a
+    ///      valid `fee()` in `(0, 1_000_000)` pips, and the 7-field (224-byte) Uniswap V3 `slot0()` ABI so an
+    ///      Aerodrome Slipstream `CLPool` (whose mutable-fee `slot0()` returns 6 words / 192 bytes) is rejected.
+    function isFixedFeePool(address pool) external view returns (bool) {
+        if (pool == address(0) || pool.code.length == 0) return false;
+        (bool okFee, bytes memory feeData) =
+            pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.fee.selector));
+        if (!okFee || feeData.length != 32) return false;
+        uint256 feePips = abi.decode(feeData, (uint256));
+        if (feePips == 0 || feePips >= 1_000_000) return false;
+        (bool okSlot0, bytes memory slot0Data) =
+            pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.slot0.selector));
+        return okSlot0 && slot0Data.length == 224;
+    }
+
+    /// @inheritdoc IExactOutSwapAdapter
+    function poolFeeBps(address pool) external view returns (uint24) {
+        if (pool == address(0)) revert ZeroAddress();
+        uint256 feePips = IUniswapV3Pool(pool).fee();
+        return uint24((feePips + 99) / 100);
     }
 }

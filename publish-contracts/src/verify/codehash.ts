@@ -136,3 +136,93 @@ export async function logicCode(
   const word = (await chain.getStorageAt(address, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
   return chain.getCode(`0x${word.slice(24)}` as Hex);
 }
+
+export interface LinkedLibraryCheck {
+  name: string;
+  address: Hex;
+  ok: boolean;
+  detail: string;
+}
+
+export interface LinkedLibraryResult {
+  ok: boolean;
+  count: number;
+  libraries: LinkedLibraryCheck[];
+  detail: string;
+}
+
+/**
+ * Recursively walk `deployedBytecode.linkReferences` starting from `rootCode` / `rootArtifact` (in `rootArtifactsDir`),
+ * extract linked library addresses from the on-chain code, and verify every leaf and nested library via
+ * `compareDeployedCode(..., libArt, undefined)` against `libArtifactsDir`.
+ */
+export async function verifyLinkedLibraries(
+  chain: { getCode(a: Hex): Promise<Hex>; getStorageAt(a: Hex, slot: Hex): Promise<Hex> },
+  rootCode: Hex,
+  rootArtifact: string,
+  libArtifactsDir: string,
+  rootArtifactsDir = libArtifactsDir,
+): Promise<LinkedLibraryResult> {
+  if (rootCode === "0x" || rootCode.length <= 2) {
+    return { ok: false, count: 0, libraries: [], detail: "no implementation code to read the library links from" };
+  }
+  const problems: string[] = [];
+  const libraries: LinkedLibraryCheck[] = [];
+  const seen = new Set<string>();
+
+  const visit = async (code: Hex, artifact: string, dir: string): Promise<void> => {
+    let links: { name: string; start: number }[];
+    try {
+      links = linkedLibraries(dir, artifact);
+    } catch (e) {
+      problems.push(`${artifact}: ${(e as Error).message}`);
+      return;
+    }
+    const raw = code.replace(/^0x/, "");
+    for (const l of links) {
+      const hexEnd = (l.start + 20) * 2;
+      if (raw.length < hexEnd) {
+        const msg = `code length ${raw.length / 2} too short for link at byte ${l.start}`;
+        problems.push(`${l.name}: ${msg}`);
+        libraries.push({ name: l.name, address: "0x", ok: false, detail: msg });
+        continue;
+      }
+      const at = (`0x${raw.slice(l.start * 2, hexEnd)}`).toLowerCase() as Hex;
+      if (at === "0x0000000000000000000000000000000000000000") {
+        problems.push(`${l.name}: zero library link at byte ${l.start}`);
+        libraries.push({ name: l.name, address: at, ok: false, detail: "zero library link" });
+        continue;
+      }
+      const key = `${l.name}:${at}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const libArt = tryLoadArtifact(libArtifactsDir, l.name);
+      if (!libArt) {
+        const msg = `no build artifact for ${l.name} under ${libArtifactsDir}`;
+        problems.push(`${l.name} at ${at}: ${msg}`);
+        libraries.push({ name: l.name, address: at, ok: false, detail: msg });
+        continue;
+      }
+      const res = await compareDeployedCode(chain, at, libArt, undefined);
+      libraries.push({ name: l.name, address: at, ok: res.ok, detail: res.detail });
+      if (!res.ok) {
+        problems.push(`${l.name} at ${at}: ${res.detail}`);
+        continue;
+      }
+      if (linkedLibraries(libArtifactsDir, l.name).length > 0) {
+        const libCode = await chain.getCode(at);
+        await visit(libCode, l.name, libArtifactsDir);
+      }
+    }
+  };
+
+  await visit(rootCode, rootArtifact, rootArtifactsDir);
+  const n = libraries.length;
+  return {
+    ok: problems.length === 0,
+    count: n,
+    libraries,
+    detail: problems.length ? problems.join("; ") : `${n} linked librar${n === 1 ? "y" : "ies"} equal the build`,
+  };
+}

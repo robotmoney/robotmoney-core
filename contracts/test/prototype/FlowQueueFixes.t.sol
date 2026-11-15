@@ -24,7 +24,8 @@ import {
     RequestKind,
     RequestStatus,
     Settlement,
-    SettleCheck
+    SettleCheck,
+    TIMELOCK_DELAY_REFERENCE
 } from "./src/FlowTypes.sol";
 import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
 import {IAavePoolRate} from "./src/adapters/AaveV3RateAdapter.sol";
@@ -118,6 +119,12 @@ contract FixVenue is ILendingRateAdapter {
         if (rateFailsAfterTrade && traded) revert("FixVenue: rate unavailable after a trade");
         uint256 rate = IAavePoolRate(POOL).getReserveNormalizedIncome(USDC) / RAY_TO_WAD;
         return rate + rate * rateBumpBps / 10_000;
+    }
+
+    function availableLiquidity() external view returns (uint256) {
+        uint256 cash = IERC20(USDC).balanceOf(address(A_TOKEN));
+        uint256 bal = A_TOKEN.balanceOf(address(this));
+        return cash < bal ? cash : bal;
     }
 
     function venueWithdrawable() external pure returns (bool) {
@@ -363,77 +370,52 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     ///         request of that epoch once its own grace has passed.
     function test_fix1_aNonKeeperSettlesOnlyEpochsPastTheirOwnGrace() public fixtureCovered {
         FlowParams memory p = queue.flowParams();
-        uint256 stuck = openDepositRequest(carol, 100e6, 1);
+        uint256 first = openDepositRequest(carol, 1_000e6);
         vm.warp(block.timestamp + p.epochLength);
-        uint256 honest = openDepositRequest(alice, 5_000e6, type(uint256).max);
-        uint64 e1 = queue.getRequest(stuck).epoch;
-        uint64 e2 = queue.getRequest(honest).epoch;
+        uint256 second = openDepositRequest(alice, 5_000e6);
+        uint64 e1 = queue.getRequest(first).epoch;
+        uint64 e2 = queue.getRequest(second).epoch;
         assertEq(e2, e1 + 1, "consecutive epochs");
-        warpForward(queue.settleableAt(e2));
-        refreshFeeds();
-        assertGe(
-            block.timestamp,
-            uint256(queue.settleableAt(e1)) + p.keeperGrace,
-            "the first epoch is past its grace"
-        );
-        assertLt(
-            block.timestamp, uint256(queue.settleableAt(e2)) + p.keeperGrace, "the second is not"
-        );
-
-        uint256 snap = vm.snapshotState();
-        (bool ok,) = _trySettle(stranger, SETTLE_MAX_REQUESTS, type(uint256).max);
-        assertTrue(ok, "the stranger may settle the first epoch");
-        assertEq(
-            queue.getRequest(honest).remaining,
-            5_000e6,
-            "fix 1: a stranger cannot settle an epoch inside its grace"
-        );
-        assertEq(queue.settlementCount(), 0, "nothing settled");
-        assertEq(
-            queue.getRequest(stuck).remaining,
-            100e6,
-            "the stuck request is skipped by its own limit"
-        );
-        _keeperSettle();
-        assertTrue(queue.getRequest(honest).closed, "the keeper settles it at once");
-
-        vm.revertToState(snap);
         warpForward(uint256(queue.settleableAt(e2)) + p.keeperGrace);
         refreshFeeds();
-        vm.prank(stranger);
-        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        assertTrue(queue.getRequest(honest).closed, "past its own grace, anyone settles it");
+
+        // Step 3f (E34): permissionless settlement is retired; a non-keeper cannot settle even past keeperGrace.
+        _expectBlocked(stranger, SettleCheck.Caller, IDLE_INDEX);
+        assertEq(queue.settlementCount(), 0, "nothing settled by stranger");
+        assertEq(queue.getRequest(first).remaining, 1_000e6, "first waits");
+        assertEq(queue.getRequest(second).remaining, 5_000e6, "second waits");
+
+        _keeperSettle();
+        assertTrue(queue.getRequest(first).closed, "keeper settles first");
+        assertTrue(queue.getRequest(second).closed, "keeper settles second");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
     //  Item 2: the cursor (D-AT-3, RB-20, RB-14; ruling 3)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice D-AT-3: a call with no room (`maxUsdc` 0) fills nothing and must move no cursor, so the next call,
-    ///         whoever makes it, starts at the oldest request.
+    /// @notice D-AT-3: a call with no room (`maxUsdc` 0) fills nothing and must move no cursor, so the next call
+    ///         starts at the oldest request.
     function test_fix2_aCallWithNoRoomPassesNothing() public fixtureCovered {
-        uint256 oldest = openDepositRequest(alice, 5_000e6, type(uint256).max);
-        uint256 newer = openDepositRequest(bob, 5_000e6, type(uint256).max);
-        warpForward(
-            uint256(queue.settleableAt(queue.getRequest(oldest).epoch))
-                + queue.flowParams().keeperGrace
-        );
+        uint256 oldest = openDepositRequest(alice, 5_000e6);
+        uint256 newer = openDepositRequest(bob, 5_000e6);
+        warpToSettleable(oldest);
         refreshFeeds();
-        (, uint64 e0, uint256 i0) = _cursor(false, RequestKind.Deposit);
-        vm.prank(stranger);
+        (, uint64 e0, uint256 i0) = _cursor(true, RequestKind.Deposit);
+        vm.prank(keeper);
         assertEq(queue.settle(1, 0), 0, "a call with no room fills nothing");
-        (bool viewOk, uint64 e1, uint256 i1) = _cursor(false, RequestKind.Deposit);
+        (bool viewOk, uint64 e1, uint256 i1) = _cursor(true, RequestKind.Deposit);
         if (viewOk) {
             assertEq(e1, e0, "the cursor epoch did not move");
             assertEq(i1, i0, "the cursor index did not move");
         }
-        vm.prank(stranger);
+        vm.prank(keeper);
         queue.settle(1, type(uint256).max);
         assertTrue(queue.getRequest(oldest).closed, "fix 2: the next call fills the oldest request");
         assertFalse(queue.getRequest(newer).closed, "and only that one");
 
-        // The keeper's call is not moved either.
-        vm.prank(stranger);
+        // Another no-room call moves nothing before the rest fills.
+        vm.prank(keeper);
         assertEq(queue.settle(1, 0), 0, "no room again");
         _keeperSettle();
         assertTrue(queue.getRequest(newer).closed, "the keeper fills the rest");
@@ -466,47 +448,25 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         assertEq(queue.getRequest(newer).remaining, 1_000e6, "before the newer one");
     }
 
-    /// @notice A stranger's call passes a request its own limit refuses (correct at that bound). The bound then
-    ///         falls (the basket feeds move 30 bps down, inside `refBandBps`), so the request is admissible. The
-    ///         keeper's pass starts at the oldest epoch and is moved only by the keeper's calls, so it fills that
-    ///         request; the scaffold's shared cursor made the keeper continue past it.
+    /// @notice A stranger's reverted call never touches the keeper's pass: the keeper settles the oldest request first.
     function test_fix2_aStrangerCannotMoveTheKeepersPass() public fixtureCovered {
         _invest();
-        vm.warp(block.timestamp + 2 hours); // the TWAP window now lies after the plan's trades
+        uint256 r1 = openDepositRequest(alice, 5_000e6);
+        uint256 r2 = openDepositRequest(bob, 5_000e6);
+        warpToSettleable(r1);
         refreshFeeds();
-        Quote memory q = queue.quoteDeposit(5_000e6);
-        uint256 tight = openDepositRequest(alice, 5_000e6, q.boundPrice - 1);
-        uint256 newer = openDepositRequest(bob, 5_000e6, type(uint256).max);
-        warpForward(
-            uint256(queue.settleableAt(queue.getRequest(tight).epoch))
-                + queue.flowParams().keeperGrace
-        );
-        refreshFeeds();
-        assertGt(
-            queue.quoteDeposit(5_000e6).boundPrice, queue.getRequest(tight).limit, "refused now"
-        );
+        (, uint64 e0, uint256 i0) = _cursor(true, RequestKind.Deposit);
+        _expectBlocked(stranger, SettleCheck.Caller, IDLE_INDEX);
+        (, uint64 e1, uint256 i1) = _cursor(true, RequestKind.Deposit);
+        assertEq(e1, e0, "stranger call did not move keeper cursor epoch");
+        assertEq(i1, i0, "stranger call did not move keeper cursor index");
 
-        vm.prank(stranger);
-        assertEq(
-            queue.settle(1, type(uint256).max),
-            0,
-            "the stranger looks at the tight request only and skips it"
-        );
-        assertEq(queue.getRequest(tight).remaining, 5_000e6, "skipped by its own limit");
-
-        uint256 eth8 = poolPrice8(WETH_POOL, WETH);
-        uint256 btc8 = poolPrice8(CBBTC_POOL, CBBTC);
-        setFeedPrice(IDX_WETH, eth8 - eth8 * 30 / 10_000);
-        setFeedPrice(IDX_CBBTC, btc8 - btc8 * 30 / 10_000);
-        assertLe(
-            queue.quoteDeposit(5_000e6).boundPrice, queue.getRequest(tight).limit, "admissible now"
-        );
-
+        vm.prank(keeper);
+        queue.settle(1, type(uint256).max);
+        assertTrue(queue.getRequest(r1).closed, "keeper fills oldest request first");
+        assertFalse(queue.getRequest(r2).closed, "newer request still waits");
         _keeperSettle();
-        assertTrue(
-            queue.getRequest(tight).closed, "fix 2: the keeper's pass starts at the oldest request"
-        );
-        assertTrue(queue.getRequest(newer).closed, "and fills the newer one too");
+        assertTrue(queue.getRequest(r2).closed, "keeper fills remaining request");
     }
 
     /// @notice A flood of deposit requests that cannot fill (deposits paused) must not hold back a redemption behind
@@ -519,7 +479,7 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         vm.startPrank(flooder);
         IERC20(USDC).approve(address(queue), n * 100e6);
         for (uint256 k; k < n; ++k) {
-            queue.requestDeposit(100e6, type(uint256).max, flooder);
+            queue.requestDeposit(100e6, flooder);
         }
         vm.stopPrank();
         uint256 red = openRedeemRequest(bob, bobShares / 2, 0);
@@ -543,12 +503,15 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     function _withEpochLength(uint32 len) internal view returns (FlowParams memory p) {
         p = queue.flowParams();
         p.epochLength = len;
+        // E51: maxRoll * epochLength <= TIMELOCK_DELAY_REFERENCE (48 hours).
+        uint256 maxAllowedRoll = uint256(TIMELOCK_DELAY_REFERENCE) / len;
+        if (p.maxRoll > maxAllowedRoll) p.maxRoll = uint16(maxAllowedRoll);
     }
 
     /// @notice Longer epochs, with a request pending: it settles at the end of its own window (its epoch keeps the
     ///         length it was opened with), and a request made after the change settles on the new schedule.
     function test_fix3_longerEpochsWithAPendingRequest() public fixtureCovered {
-        uint256 r1 = openDepositRequest(alice, 5_000e6, type(uint256).max);
+        uint256 r1 = openDepositRequest(alice, 5_000e6);
         Request memory q1 = queue.getRequest(r1);
         FlowParams memory p0 = queue.flowParams();
         uint256 window1 = (uint256(q1.epoch) + 1) * p0.epochLength + p0.settleWindow;
@@ -563,7 +526,7 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
             queue.getRequest(r1).closed, "fix 3: the pending request settles after the change"
         );
 
-        uint256 r2 = openDepositRequest(bob, 5_000e6, type(uint256).max);
+        uint256 r2 = openDepositRequest(bob, 5_000e6);
         Request memory q2 = queue.getRequest(r2);
         assertGt(q2.epoch, q1.epoch, "epoch indices only grow");
         uint256 window2 = queue.settleableAt(q2.epoch);
@@ -578,17 +541,14 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     /// @notice Longer epochs after a settlement, nothing pending: the scaffold's stored oldest epoch then lay above
     ///         every new epoch index and every settle reverted `Window`.
     function test_fix3_longerEpochsAfterASettlement() public fixtureCovered {
-        uint256 r0 = openDepositRequest(alice, 5_000e6, type(uint256).max);
-        uint256 marker = openDepositRequest(carol, 100e6, 1); // stays open, so the walk records its epoch
+        uint256 r0 = openDepositRequest(alice, 5_000e6);
         warpToSettleable(r0);
         refreshFeeds();
         _keeperSettle();
         assertTrue(queue.getRequest(r0).closed, "settled before the change");
-        vm.prank(carol);
-        queue.cancel(marker);
 
         _setParams(_withEpochLength(12 hours));
-        uint256 r2 = openDepositRequest(bob, 5_000e6, type(uint256).max);
+        uint256 r2 = openDepositRequest(bob, 5_000e6);
         warpToSettleable(r2);
         refreshFeeds();
         (bool ok, bytes memory ret) = _trySettle(keeper, SETTLE_MAX_REQUESTS, type(uint256).max);
@@ -648,47 +608,63 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         assertTrue(queue.getRequest(r2).closed, "settles on the new schedule");
     }
 
-    /// @notice A larger `maxRoll` makes an expired request live again. The scaffold's stored oldest epoch lay above
-    ///         it, so it read Pending and no settle could reach it (an orphan). Now any parameter change resets the
-    ///         walk, and it fills.
+    /// @notice Step 3f (RB-31, E41): parameter changes reset walk cursors without orphaning waiting requests, while
+    ///         snapshotted `maxRoll` / `expiryEpoch` on earlier requests never expand retroactively.
     function test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest() public fixtureCovered {
         FlowParams memory p = queue.flowParams();
-        uint256 old = openDepositRequest(alice, 5_000e6, type(uint256).max);
-        // Nobody settles for maxRoll + 1 epochs: the request expires.
+        p.maxRoll = 4; // 4 * 6h = 24h; later raised to 8 (8 * 6h = 48h <= TIMELOCK_DELAY_REFERENCE)
+        _setParams(p);
+
+        uint256 old = openDepositRequest(alice, 5_000e6);
+        // Nobody settles for maxRoll + 1 epochs: `old` expires with its locked `maxRoll = 4`.
         vm.warp(block.timestamp + (uint256(p.maxRoll) + 1) * p.epochLength);
         assertEq(uint8(queue.requestStatus(old)), uint8(RequestStatus.Expired), "expired");
-        uint256 marker = openDepositRequest(carol, 100e6, 1); // never fills; keeps its epoch open
-        uint256 fresh = openDepositRequest(bob, 5_000e6, type(uint256).max);
+        uint256 fresh = openDepositRequest(bob, 5_000e6);
+        uint256 marker = openDepositRequest(carol, 5_000e6);
         warpToSettleable(fresh);
         refreshFeeds();
-        _keeperSettle();
+        // Settle 2 look slots: skip expired `old` and fill `fresh`, leaving `marker` waiting behind cursor.
+        vm.prank(keeper);
+        queue.settle(2, type(uint256).max);
         assertTrue(queue.getRequest(fresh).closed, "a fresh request settles");
-        assertEq(queue.getRequest(marker).remaining, 100e6, "the marker waits");
+        assertEq(queue.getRequest(marker).remaining, 5_000e6, "the marker waits");
 
-        p.maxRoll = 16;
+        p.maxRoll = 8;
         _setParams(p);
         assertEq(
             uint8(queue.requestStatus(old)),
-            uint8(RequestStatus.Pending),
-            "live again under maxRoll 16"
+            uint8(RequestStatus.Expired),
+            "RB-31: snapshotted maxRoll never expands for locked requests"
         );
+        uint256 underNewMaxRoll = openDepositRequest(bob, 5_000e6);
+        assertEq(queue.getRequest(underNewMaxRoll).maxRoll, 8, "new requests get maxRoll 8");
         refreshFeeds();
         (bool ok,) = _trySettle(keeper, SETTLE_MAX_REQUESTS, type(uint256).max);
         assertTrue(ok, "a settle runs");
-        assertTrue(queue.getRequest(old).closed, "fix 3: the revived request is walked and fills");
+        assertTrue(queue.getRequest(marker).closed, "fix 3: waiting marker is not orphaned");
+        vm.prank(alice);
+        assertEq(queue.withdrawExpired(old), 5_000e6, "expired locked request returns full escrow");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
     //  Item 4: a venue that burns all its gas fails its own side alone (ruling 1, RB-15, RB-20)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice The deposit side's venue burns every unit of gas it gets. The redemption side still settles and the
-    ///         deposit side fails alone (on the scaffold the burn tripped the out-of-gas guard and reverted both).
+    /// @notice With net deposits (D > R), the deposit venue burns every unit of gas it gets. Whole match still settles
+    ///         the paired redemptions (`Match` first, §5.11.4), while the net deposit side fails alone (`SideFailed`).
     function test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone()
         public
         fixtureCovered
     {
-        _twoSided();
+        _invest();
+        _bobShares = _holder(bob, 50_000e6);
+        coverageCheckpoint();
+        _redId = openRedeemRequest(bob, _bobShares / 2);
+        _depId = openDepositRequest(alice, 20_000e6);
+        uint256 extraDep = openDepositRequest(dave, 20_000e6); // D = 40k > R (~25k), so net side is Deposit
+        warpToSettleable(_depId);
+        refreshFeeds();
+
         FixVenue v = _etchVenue();
         v.setBurn(true, false);
         vm.recordLogs();
@@ -697,19 +673,20 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         if (!ok) emit log_named_bytes("settle reverted with", ret);
         assertTrue(ok, "fix 4: the settle succeeds");
         Settlement memory st = queue.getSettlement(queue.settlementCount());
-        assertEq(st.sharesBurned, _bobShares / 2, "the redemption side settled");
-        assertEq(st.sharesMinted, 0, "the deposit side did not");
+        assertEq(st.matchedShares, _bobShares / 2, "matched redemptions still settled");
+        assertEq(st.sharesMinted, 0, "the net deposit side did not");
         assertEq(_sideFailures(logs, RequestKind.Deposit), 1, "the deposit side failed");
-        assertEq(queue.getRequest(_depId).remaining, 20_000e6, "the deposit waits");
+        assertGt(queue.pendingDepositRequest(extraDep, dave), 0, "unmatched net deposits wait");
         _assertBooks("burning supply");
     }
 
-    /// @notice The redemption side's venue burns every unit of gas it gets: deposits still settle.
+    /// @notice With net redemptions (R > D), the redemption venue burns every unit of gas it gets: whole match still
+    ///         settles paired flow while the net redemption side fails alone.
     function test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone()
         public
         fixtureCovered
     {
-        _twoSided();
+        _twoSided(); // R (~25k) > D (20k)
         FixVenue v = _etchVenue();
         v.setBurn(false, true);
         vm.recordLogs();
@@ -718,19 +695,26 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         if (!ok) emit log_named_bytes("settle reverted with", ret);
         assertTrue(ok, "fix 4: the settle succeeds");
         Settlement memory st = queue.getSettlement(queue.settlementCount());
-        assertEq(st.sharesBurned, 0, "the redemption side did not settle");
-        assertGt(st.sharesMinted, 0, "the deposit side did");
+        assertGt(st.matchedShares, 0, "matched volume still settled");
+        assertEq(st.sharesBurned, 0, "the net redemption side did not settle");
         assertEq(_sideFailures(logs, RequestKind.Redeem), 1, "the redemption side failed");
-        assertEq(queue.getRequest(_redId).remaining, _bobShares / 2, "the redemption waits");
+        assertGt(queue.pendingRedeemRequest(_redId, bob), 0, "the unmatched redemption waits");
         _assertBooks("burning withdraw");
     }
 
-    /// @notice The out-of-gas protection stays (RB-20): over gas limits from 600 % down to 35 % of a full
-    ///         settlement's use, an honest call settles both sides or reverts whole; with the deposit venue burning
-    ///         its gas, a call settles the redemption side (the deposit side failing alone) or reverts whole. No gas
-    ///         limit makes the redemption side fail or settles one side of the honest pair.
+    /// @notice The out-of-gas protection stays (RB-20): under Step 3f (Match + at most one net side), an honest
+    ///         net-deposit round (`D > R`) either settles both match and the net deposit side or reverts whole; with a
+    ///         burning deposit venue it settles only the match (`sharesMinted == 0`) or reverts whole. No gas limit
+    ///         makes an honest net side fail while leaving match alone.
     function test_fix4_theGasACallerSendsStillCannotChooseASide() public fixtureCovered {
-        _twoSided();
+        _invest();
+        _bobShares = _holder(bob, 50_000e6);
+        coverageCheckpoint();
+        _redId = openRedeemRequest(bob, _bobShares / 2);
+        _depId = openDepositRequest(alice, 40_000e6); // D = 40k > R (~25k): Match + net Deposit
+        warpToSettleable(_depId);
+        refreshFeeds();
+
         bytes memory data = abi.encodeCall(queue.settle, (SETTLE_MAX_REQUESTS, type(uint256).max));
         uint256 snap = vm.snapshotState();
         vm.prank(keeper);
@@ -739,33 +723,32 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         uint256 used = g0 - gasleft();
         assertTrue(ok, "a full call settles");
         vm.revertToState(snap);
-        emit log_named_uint("gas used by a full two-sided settle", used);
+        emit log_named_uint("gas used by a full match + net deposit settle", used);
         coverageCheckpoint();
 
-        uint256[4] memory n = _gasSweep(data, used, false); // both, one side, revert(guard), revert(other)
-        emit log_named_uint("honest: limits that settled both sides", n[0]);
-        emit log_named_uint("honest: limits that settled one side", n[1]);
+        uint256[4] memory n = _gasSweep(data, used, false); // match+net, partial/other, guard, other revert
+        emit log_named_uint("honest: limits that settled match and net side", n[0]);
+        emit log_named_uint("honest: limits with partial outcome", n[1]);
         emit log_named_uint("honest: limits stopped by SettleSideOutOfGas", n[2]);
         emit log_named_uint("honest: limits that ran out elsewhere", n[3]);
-        assertEq(n[1], 0, "no gas limit settles one side of an honest pair");
-        assertGt(n[0], 0, "enough gas settles both");
+        assertEq(n[1], 0, "no gas limit silently drops the net side of an honest round");
+        assertGt(n[0], 0, "enough gas settles both match and net side");
 
         FixVenue v = _etchVenue();
         v.setBurn(true, false);
         coverageCheckpoint();
-        uint256[4] memory m = _gasSweep(data, used, true); // redemption only, other success, guard, other revert
-        emit log_named_uint("burning: limits that settled the redemption side", m[0]);
+        uint256[4] memory m = _gasSweep(data, used, true); // match only, other success, guard, other revert
+        emit log_named_uint("burning: limits that settled match alone", m[0]);
         emit log_named_uint("burning: limits that settled otherwise", m[1]);
         emit log_named_uint("burning: limits stopped by SettleSideOutOfGas", m[2]);
         emit log_named_uint("burning: limits that ran out elsewhere", m[3]);
-        assertEq(m[1], 0, "with a burning deposit venue a success is always the redemption side");
-        assertGt(m[0], 0, "fix 4: enough gas settles the redemption side");
+        assertEq(m[1], 0, "with a burning deposit venue a success settles only the match");
+        assertGt(m[0], 0, "fix 4: enough gas settles match");
     }
 
-    /// @notice Control and measurement for the fixed side budgets: 24 deposits and 24 redemptions, each from its own
-    ///         fresh owner (cold storage everywhere), settle in one keeper call on the five-asset fund, both sides
-    ///         inside their budgets. Run with -vvvv to read each side's gas in the trace (fix-queue notes). 24, so
-    ///         the call's gas limit stays under the 40M per call of the fixture recorder's fork.
+    /// @notice Control and measurement for the fixed side budgets under Step 3f: 24 cold deposits fit in one
+    ///         call (`first`), then 24 smaller cold deposits match O(1) against 24 cold redemptions (`R*S > D`),
+    ///         leaving all 24 net redemption fills inside their side budget in one keeper call.
     function test_fix4_aBatchOf24FillsPerSideFitsItsBudget_control() public fixtureCovered {
         _invest();
         uint256 n = 24;
@@ -786,7 +769,7 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
             queue.mint(sh, who[k]);
             lastRed = openRedeemRequest(who[k], fund.balanceOf(who[k]), 0);
             openDepositRequest(
-                makeAddr(string.concat("depositor", vm.toString(k))), 1_000e6, type(uint256).max
+                makeAddr(string.concat("depositor", vm.toString(k))), 500e6, type(uint256).max
             );
         }
         coverageCheckpoint();
@@ -795,7 +778,7 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         uint256 claims0 = queue.claimCount();
         vm.recordLogs();
         uint256 g0 = gasleft();
-        _keeperSettle();
+        uint256 sid = _keeperSettle();
         uint256 used = g0 - gasleft();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(
@@ -803,8 +786,11 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
             0,
             "no side failed"
         );
-        assertEq(queue.claimCount() - claims0, 2 * n, "48 fills in one call");
-        emit log_named_uint("gas of one keeper settle with 24 fills per side", used);
+        Settlement memory st = queue.getSettlement(sid);
+        assertGt(st.matchedShares, 0, "all 24 deposits matched O(1)");
+        assertGt(st.sharesBurned, 0, "net redemptions settled in the same call");
+        assertEq(queue.claimCount() - claims0, 2 * n, "24 synced match claims + 24 net redemption fills");
+        emit log_named_uint("gas of one keeper settle with 24 matched deposits + 24 net redemptions", used);
     }
 
     function _gasSweep(bytes memory data, uint256 used, bool burning)
@@ -819,10 +805,10 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
             (bool success, bytes memory ret) = address(queue).call{gas: g}(data);
             if (success) {
                 Settlement memory st = queue.getSettlement(queue.settlementCount());
-                bool both = st.sharesMinted != 0 && st.sharesBurned != 0;
-                bool redOnly = st.sharesMinted == 0 && st.sharesBurned == _bobShares / 2;
+                bool both = st.matchedShares == _bobShares / 2 && st.sharesMinted > 0;
+                bool matchOnly = st.matchedShares == _bobShares / 2 && st.sharesMinted == 0;
                 if (!burning && both) ++n[0];
-                else if (burning && redOnly) ++n[0];
+                else if (burning && matchOnly) ++n[0];
                 else ++n[1];
             } else {
                 assertEq(queue.settlementCount(), settled0, "a failed call records nothing");
@@ -838,17 +824,18 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     //  Item 5: a lending-rate read that fails is never skipped (check 5 fails closed)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice The first settlement reads Aave's rate before its trades (check 5) and not after (the venue's read
-    ///         fails once it traded). The scaffold then skipped the record, left no reference, and a later 5 % jump
-    ///         of the rate passed check 5. Now the reference is the rate check 5 read, and the jump is caught.
+    /// @notice The first settlement reads Aave's rate before its trades and records the post-trade rate. When a
+    ///         subsequent 5 % rate jump causes check 5 (`LendRate`) to trip, Step 3f (E36) stops deposits for the
+    ///         round (`DepositStoppedForRound` with cause 2) while `checkSettle()` stays `Ok` so redemptions settle alone.
     function test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference()
         public
         fixtureCovered
     {
         _invest();
+        uint256 bobShares = _holder(bob, 20_000e6);
         FixVenue v = _etchVenue();
         v.setRate(true, 0);
-        uint256 a = openDepositRequest(alice, 5_000e6, type(uint256).max);
+        uint256 a = openDepositRequest(alice, 5_000e6);
         warpToSettleable(a);
         refreshFeeds();
         uint256 sid = _keeperSettle();
@@ -858,38 +845,52 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
 
         v.setRate(false, 500);
         v.setTraded(false);
-        uint256 b = openDepositRequest(bob, 5_000e6, type(uint256).max);
+        uint256 b = openDepositRequest(alice, 5_000e6);
+        uint256 r = openRedeemRequest(bob, bobShares / 2);
         warpToSettleable(b);
         refreshFeeds();
-        uint256 growth = _expectBlocked(keeper, SettleCheck.LendRate, IDX_AAVE);
-        assertGe(growth, 499, "fix 5: the 5 % jump is measured against the recorded rate");
+        vm.prank(keeper);
+        (SettleCheck chk,) = queue.checkSettle();
+        assertEq(
+            uint8(chk),
+            uint8(SettleCheck.Ok),
+            "checkSettle stays Ok so redemptions settle during rate stop"
+        );
+
+        vm.expectEmit(true, false, false, true, address(queue));
+        emit IFlowEvents.DepositStoppedForRound(queue.getRequest(b).epoch, 2);
+        uint256 sid2 = _keeperSettle();
+        assertGt(sid2, sid, "redemptions settle alone despite LendRate");
+        assertTrue(queue.getRequest(r).closed, "redemption settled");
+        assertEq(queue.getRequest(b).remaining, 5_000e6, "deposit blocked for round");
     }
 
     /// @notice Control: a second settle in the same block, after the first supplied to every lending venue, passes
     ///         check 5. With no time elapsed check 5 allows no growth, and the fund's own supply can move a venue's
-    ///         rate by a rounding unit, so the reference must be the rate read after the trades (a first version of
-    ///         this fix recorded the rate read before them, and `Attacks.t.sol` A19 then stopped at `LendRate` on
-    ///         Compound).
+    ///         rate by a rounding unit, so the reference must be the rate read after the trades.
     function test_fix5_aSecondSettleInTheSameBlockPassesCheck5_control() public fixtureCovered {
         _invest();
-        uint256 a = openDepositRequest(alice, 20_000e6, type(uint256).max);
-        uint256 stuck = openDepositRequest(carol, 100e6, 1); // keeps the epoch in range for the second call
+        uint256 a = openDepositRequest(alice, 20_000e6);
+        uint256 second = openDepositRequest(carol, 5_000e6);
         warpToSettleable(a);
         refreshFeeds();
-        _keeperSettle();
+        vm.prank(keeper);
+        queue.settle(1, type(uint256).max);
         assertTrue(queue.getRequest(a).closed, "the first settle supplied to the venues");
+        assertEq(queue.getRequest(second).remaining, 5_000e6, "second waits for the next call");
+
         (bool ok, bytes memory ret) = _trySettle(keeper, SETTLE_MAX_REQUESTS, type(uint256).max);
         if (!ok) emit log_named_bytes("the second settle reverted with", ret);
         assertTrue(ok, "check 5 passes a second settle in the same block");
-        assertEq(queue.getRequest(stuck).remaining, 100e6, "nothing else to fill");
+        assertTrue(queue.getRequest(second).closed, "the second settle fills it in the same block");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
-    //  Item 6: `returnAllowed` is cleared (E17, RB-11, RB-18)
+    //  Item 6: Freeze release and cooldown (E49, RB-18)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
     function _heldDeposit() internal returns (uint256 sid, uint256 claimId) {
-        uint256 id = openDepositRequest(alice, 5_000e6, type(uint256).max);
+        uint256 id = openDepositRequest(alice, 5_000e6);
         warpToSettleable(id);
         refreshFeeds();
         sid = _keeperSettle();
@@ -897,50 +898,55 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         assertEq(queue.getClaim(claimId).requestId, id, "alice's claim");
     }
 
-    /// @notice After `allowReturn` the Safe releases instead. Release ends the return: the depositor can no longer
-    ///         take its held shares out early (RB-11); they deliver after the hold.
+    /// @notice After `freezeSettlement`, the Safe releases instead (`releaseSettlement`). Release lifts the freeze
+    ///         without lifting the regular hold (no early return path exists in Step 3f); shares deliver at `holdEndsAt`.
     function test_fix6_releaseClearsTheReturn() public fixtureCovered {
-        (uint256 sid, uint256 claimId) = _heldDeposit();
+        (uint256 sid,) = _heldDeposit();
         vm.prank(emergency);
         queue.freezeSettlement(sid);
-        timelockExecute(address(queue), abi.encodeCall(queue.allowReturn, (sid)));
-        assertTrue(queue.getSettlement(sid).returnAllowed, "return allowed");
-        timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid)));
-        assertFalse(queue.getSettlement(sid).returnAllowed, "fix 6: release clears it");
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.ReturnNotAllowed.selector, sid));
-        queue.takeReturn(claimId);
+        assertGt(queue.getSettlement(sid).frozenUntil, block.timestamp, "frozen");
 
-        Claim memory c = queue.getClaim(claimId);
-        vm.warp(c.unlockAt);
-        refreshFeeds();
-        queue.mint(c.shares, alice);
-        assertEq(fund.balanceOf(alice), c.shares, "delivered after the hold");
+        timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid)));
+        assertLe(queue.getSettlement(sid).frozenUntil, block.timestamp, "release clears the freeze");
+        assertEq(queue.maxMint(alice), 0, "still in hold before holdEndsAt");
+
+        warpForward(queue.getSettlement(sid).holdEndsAt);
+        assertGt(queue.maxMint(alice), 0, "shares deliver once hold ends");
+        vm.prank(alice);
+        queue.mint(queue.maxMint(alice), alice);
+        assertGt(fund.balanceOf(alice), 0, "alice receives her shares");
     }
 
-    /// @notice A freeze that ended by itself inside the hold, then a new freeze: the new freeze starts with returns
-    ///         disallowed, so only the Safe's new decision allows one.
+    /// @notice Step 3f (E49): once a settlement is frozen at `t0`, re-freezing within `[t0, t0 + maxFreeze)` reverts
+    ///         `FreezeOnCooldown` even after early release or self-expiry; a new freeze succeeds only once the
+    ///         cooldown expires inside an extended hold.
     function test_fix6_aNewFreezeStartsWithReturnsDisallowed() public fixtureCovered {
         FlowParams memory p = queue.flowParams();
-        p.maxFreeze = 1 hours;
-        // The freeze must run out INSIDE the hold, after the timelock's allowReturn: a hold longer than maxFreeze plus
-        // the timelock delay (the 1 h default of decision D4-11 is not; 24 h is inside the hold bounds).
-        p.minHold = 24 hours;
+        p.minHold = 6 hours;
+        p.maxFreeze = 2 hours;
         _setParams(p);
-        (uint256 sid, uint256 claimId) = _heldDeposit();
+
+        (uint256 sid,) = _heldDeposit();
+        uint64 t0 = uint64(block.timestamp);
         vm.prank(emergency);
         queue.freezeSettlement(sid);
-        timelockExecute(address(queue), abi.encodeCall(queue.allowReturn, (sid)));
-        vm.warp(queue.getSettlement(sid).frozenUntil);
-        assertLt(block.timestamp, queue.getSettlement(sid).holdEndsAt, "still inside the hold");
+        assertEq(queue.getSettlement(sid).frozenUntil, t0 + p.maxFreeze, "frozen for maxFreeze");
+
+        // Release early inside hold: re-freezing immediately is blocked by cooldown (E49).
+        timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid)));
+        uint64 cooldownEnd = t0 + p.maxFreeze;
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownEnd));
         vm.prank(emergency);
         queue.freezeSettlement(sid);
-        assertFalse(
-            queue.getSettlement(sid).returnAllowed, "fix 6: a new freeze clears the old return"
+
+        // Once cooldown passes while still inside the 6h hold, a fresh freeze succeeds.
+        vm.warp(cooldownEnd);
+        refreshFeeds();
+        vm.prank(emergency);
+        queue.freezeSettlement(sid);
+        assertEq(
+            queue.getSettlement(sid).frozenUntil, cooldownEnd + p.maxFreeze, "second freeze granted"
         );
-        vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.ReturnNotAllowed.selector, sid));
-        queue.takeReturn(claimId);
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -958,7 +964,8 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         warpToSettleable(c);
         settleAll();
         assertTrue(
-            queue.getRequest(c).closed && queue.getRequest(d).closed, "carol and dave settled"
+            queue.getRequest(c).closed && queue.requestStatus(d) == RequestStatus.Closed,
+            "carol and dave settled"
         );
         bobPending = openDepositRequest(bob, 3_000e6, type(uint256).max);
         uint256 bobCancel = openDepositRequest(bob, 1_000e6, type(uint256).max);
@@ -1021,17 +1028,60 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         assertEq(fund.balanceOf(address(queue)), queue.books().dustShares, "and no share");
     }
 
-    /// @dev Every owner takes what the queue owes it, whatever settled meanwhile: each open request is cancelled,
-    ///      each settled redemption's USDC taken, each held deposit delivered after its hold, each credit withdrawn.
+    /// @dev Every owner takes what the queue owes it, whatever settled meanwhile: pending requests before
+    ///      `cancelBuffer` are cancelled, post-cutoff remainders (e.g. match dust below `minRequestUsdc`) exit after
+    ///      `maxRoll` via `withdrawExpired` / `giveRedemptionNotice`, each settled redemption's USDC is taken, each held
+    ///      deposit delivered after its hold, and each credit withdrawn.
     function _everyoneTakesAll(uint256, uint256) internal {
         address[5] memory owners = [alice, bob, carol, dave, erin];
         uint256 n = queue.requestCount();
+        uint64 maxExp;
         for (uint256 id = 1; id <= n; ++id) {
+            RequestStatus st = queue.requestStatus(id);
+            if (st != RequestStatus.Pending && st != RequestStatus.Expired) continue;
             Request memory r = queue.getRequest(id);
-            if (r.closed || r.remaining == 0) continue;
-            vm.prank(r.owner);
-            queue.cancel(id);
+            if (st == RequestStatus.Pending) {
+                vm.prank(r.owner);
+                try queue.cancel(id) {
+                    continue;
+                } catch {}
+            }
+            if (r.expiryEpoch > maxExp) maxExp = r.expiryEpoch;
         }
+        if (maxExp != 0) {
+            FlowParams memory p = queue.flowParams();
+            uint64 cur = queue.currentEpoch();
+            if (cur <= maxExp) {
+                vm.warp(block.timestamp + (uint256(maxExp - cur) + 1) * p.epochLength);
+                refreshFeeds();
+            }
+            bool noticed;
+            for (uint256 id = 1; id <= n; ++id) {
+                RequestStatus st = queue.requestStatus(id);
+                Request memory r = queue.getRequest(id);
+                if (st == RequestStatus.Expired) {
+                    vm.prank(r.owner);
+                    queue.withdrawExpired(id);
+                } else if (st == RequestStatus.Pending && r.kind == RequestKind.Redeem && r.noticeRound == 0) {
+                    vm.prank(r.owner);
+                    queue.giveRedemptionNotice(id);
+                    noticed = true;
+                }
+            }
+            if (noticed) {
+                vm.warp(block.timestamp + 2 * uint256(p.epochLength) + p.settleWindow);
+                refreshFeeds();
+                for (uint256 id = 1; id <= n; ++id) {
+                    Request memory r = queue.getRequest(id);
+                    if (!r.closed && r.kind == RequestKind.Redeem && r.noticeRound != 0) {
+                        queue.claimNoticeReturn(id);
+                    }
+                }
+            }
+        }
+        FlowParams memory fp = queue.flowParams();
+        warpForward(block.timestamp + uint256(fp.minHold) + 1);
+        refreshFeeds();
         for (uint256 k; k < owners.length; ++k) {
             address u = owners[k];
             uint256 owed = queue.maxRedeem(u);
@@ -1040,6 +1090,8 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
                 queue.redeem(owed, u, u);
             }
             deliverAfterHold(u);
+            uint256 mintable = queue.maxMint(u);
+            if (mintable != 0) queue.mint(mintable, u);
             (uint256 cu, uint256 cs) = queue.creditOf(u);
             if (cu != 0 || cs != 0) {
                 vm.prank(u);
@@ -1269,38 +1321,22 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
 
     // ─── Actions ─────────────────────────────────────────────────────────────────────────────────────────
 
-    /// @notice A deposit of 200 to 2 000 USDC with a limit at the quote (admissible now), one unit under it (tight:
-    ///         refused now, maybe admissible after a feed move), or 1 (never).
-    function act_requestDeposit(uint256 who, uint256 size, uint256 kindOfLimit) public {
+    /// @notice A forward-priced deposit of 200 to 2 000 USDC.
+    function act_requestDeposit(uint256 who, uint256 size, uint256) public {
         address u = users[who % users.length];
         size = bound(size, 200e6, 2_000e6);
         refreshFeeds();
-        uint256 limit = type(uint256).max;
-        uint256 k = kindOfLimit % 3;
-        if (k != 2) {
-            try queue.quoteDeposit(size) returns (Quote memory q) {
-                limit = k == 0 ? q.boundPrice - 1 : q.boundPrice;
-            } catch {}
-        } else {
-            limit = 1;
-        }
-        openDepositRequest(u, size, limit);
+        openDepositRequest(u, size);
         coverageCheckpoint();
     }
 
-    /// @notice A redemption of 1 % to 5 % of a holder's shares, any price or tight (one unit over the quote).
-    function act_requestRedeem(uint256 who, uint256 bps, bool tight) public {
+    /// @notice A forward-priced redemption of 1 % to 5 % of a holder's shares.
+    function act_requestRedeem(uint256 who, uint256 bps, bool) public {
         address u = users[who % users.length];
         uint256 shares = fund.balanceOf(u) * bound(bps, 100, 500) / 10_000;
         if (shares == 0) return;
         refreshFeeds();
-        uint256 limit;
-        if (tight) {
-            try queue.quoteRedeem(shares) returns (Quote memory q) {
-                limit = q.boundPrice + 1;
-            } catch {}
-        }
-        openRedeemRequest(u, shares, limit);
+        openRedeemRequest(u, shares);
         coverageCheckpoint();
     }
 
@@ -1324,11 +1360,12 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
         uint256 n = queue.requestCount();
         for (uint256 k; k < n; ++k) {
             uint256 id = 1 + (seed + k) % n;
+            if (queue.requestStatus(id) != RequestStatus.Pending) continue;
             Request memory r = queue.getRequest(id);
-            if (r.closed || r.remaining == 0) continue;
             vm.prank(r.owner);
-            queue.cancel(id);
-            break;
+            try queue.cancel(id) {
+                break;
+            } catch {}
         }
         coverageCheckpoint();
     }
@@ -1336,147 +1373,224 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
     struct Pre {
         uint256[] ids;
         uint256[] remaining;
-        bool[] admissible;
         bool[] inRange;
+        bool[] enrolled;
+        uint256 claimCount0;
+        uint256 settlementCount0;
         bool keeperCursorOk;
         uint64 kDepE;
         uint256 kDepI;
         uint64 kRedE;
         uint256 kRedI;
-        uint64 pDepE;
-        uint256 pDepI;
-        uint64 pRedE;
-        uint256 pRedI;
     }
 
-    /// @notice `settle` by the keeper (whole budget, any USDC) or a stranger (1 to 8 requests; any USDC or none).
-    ///         With `wait`, time first passes to the end of the oldest open request's window (and its keeper grace
-    ///         for a stranger), as a settler that waits for the window would.
+    /// @notice `settle` by the keeper (whole budget or 1..8 when `maxReq` small) or a stranger (must revert E34).
+    ///         With `wait`, time first passes to the end of the oldest open request's window.
     function act_settle(uint256 callerSeed, uint256 maxReq, bool noRoom, bool wait) public {
         bool isKeeper = callerSeed % 2 == 0;
         address c = isKeeper ? keeper : stranger;
-        if (wait) _waitForOldestWindow(!isKeeper);
+        if (wait) _waitForOldestWindow(false);
         refreshFeeds();
-        uint256 maxRequests = isKeeper ? SETTLE_MAX_REQUESTS : bound(maxReq, 1, 8);
+        uint256 maxRequests = isKeeper
+            ? (maxReq != 0 && maxReq <= 8 ? maxReq : SETTLE_MAX_REQUESTS)
+            : bound(maxReq, 1, 8);
         uint256 maxUsdc = noRoom ? 0 : type(uint256).max;
-        Pre memory pre = _pre(isKeeper);
+        Pre memory pre = _pre();
         vm.recordLogs();
         vm.prank(c);
         try queue.settle(maxRequests, maxUsdc) {
             Vm.Log[] memory logs = vm.getRecordedLogs();
             if (isKeeper) ++callsSettleKeeper;
             else ++callsSettleStranger;
-            _post(pre, isKeeper, noRoom, logs);
+            _post(pre, isKeeper, maxRequests, noRoom, logs);
         } catch {
             vm.getRecordedLogs();
         }
         coverageCheckpoint();
     }
 
-    /// @notice `act_settle` after waiting for the oldest open request's window (and grace, for a stranger).
+    /// @notice `act_settle` after waiting for the oldest open request's window.
     function act_settleAfterWindow(uint256 callerSeed, uint256 maxReq, bool noRoom) public {
         act_settle(callerSeed, maxReq, noRoom, true);
     }
 
-    function _waitForOldestWindow(bool plusGrace) internal {
+    function _waitForOldestWindow(bool) internal {
         uint256 n = queue.requestCount();
         uint64 oldest = type(uint64).max;
         for (uint256 id = 1; id <= n; ++id) {
+            if (queue.requestStatus(id) != RequestStatus.Pending) continue;
             Request memory r = queue.getRequest(id);
-            if (r.closed || r.remaining == 0 || queue.requestStatus(id) != RequestStatus.Pending) {
-                continue;
-            }
             if (r.epoch < oldest) oldest = r.epoch;
         }
         if (oldest == type(uint64).max) return;
-        warpForward(
-            uint256(queue.settleableAt(oldest)) + (plusGrace ? queue.flowParams().keeperGrace : 0)
-        );
+        warpForward(uint256(queue.settleableAt(oldest)));
     }
 
-    function _pre(bool isKeeper) internal view returns (Pre memory pre) {
+    function _liveRem(uint256 id, Request memory r) internal view returns (uint256) {
+        if (r.closed) return 0;
+        return r.kind == RequestKind.Deposit
+            ? queue.pendingDepositRequest(id, r.owner)
+            : queue.pendingRedeemRequest(id, r.owner);
+    }
+
+    function _pre() internal view returns (Pre memory pre) {
         uint256 n = queue.requestCount();
         pre.ids = new uint256[](n);
         pre.remaining = new uint256[](n);
-        pre.admissible = new bool[](n);
         pre.inRange = new bool[](n);
-        FlowParams memory p = queue.flowParams();
-        uint64 cur = queue.currentEpoch();
+        pre.enrolled = new bool[](n);
+        pre.claimCount0 = queue.claimCount();
+        pre.settlementCount0 = queue.settlementCount();
         for (uint256 k; k < n; ++k) {
             uint256 id = k + 1;
             Request memory r = queue.getRequest(id);
             pre.ids[k] = id;
-            pre.remaining[k] = r.closed ? 0 : r.remaining;
-            if (r.closed || r.remaining == 0 || uint256(cur) > uint256(r.epoch) + p.maxRoll) {
-                continue;
-            }
-            uint256 ends = queue.settleableAt(r.epoch);
-            pre.inRange[k] = block.timestamp >= ends + (isKeeper ? 0 : p.keeperGrace);
-            if (r.kind == RequestKind.Deposit) {
-                try queue.quoteDeposit(r.remaining) returns (Quote memory q) {
-                    pre.admissible[k] = r.limit >= q.boundPrice;
-                } catch {}
-            } else {
-                try queue.quoteRedeem(r.remaining) returns (Quote memory q) {
-                    pre.admissible[k] = r.limit <= q.boundPrice;
-                } catch {}
-            }
+            pre.enrolled[k] = r.enrolled;
+            uint256 rem = _liveRem(id, r);
+            pre.remaining[k] = rem;
+            if (rem == 0 || queue.requestStatus(id) != RequestStatus.Pending) continue;
+            pre.inRange[k] = block.timestamp >= queue.settleableAt(r.epoch);
         }
         (pre.keeperCursorOk, pre.kDepE, pre.kDepI) = _cursor(true, RequestKind.Deposit);
         (, pre.kRedE, pre.kRedI) = _cursor(true, RequestKind.Redeem);
-        (, pre.pDepE, pre.pDepI) = _cursor(false, RequestKind.Deposit);
-        (, pre.pRedE, pre.pRedI) = _cursor(false, RequestKind.Redeem);
     }
 
-    function _post(Pre memory pre, bool isKeeper, bool noRoom, Vm.Log[] memory logs) internal {
-        FlowParams memory p = queue.flowParams();
-        bool depFailed = _sideFailures(logs, RequestKind.Deposit) != 0;
-        bool redFailed = _sideFailures(logs, RequestKind.Redeem) != 0;
-        for (uint256 k; k < pre.ids.length; ++k) {
-            Request memory r = queue.getRequest(pre.ids[k]);
-            uint256 rem = r.closed ? 0 : r.remaining;
-            bool filled = rem < pre.remaining[k] && !(r.closed && _cancelledNow(logs, pre.ids[k]));
-            if (filled) {
-                ++fillsChecked;
-                if (noRoom) _violation("no room: a call with maxUsdc 0 filled a request");
-                if (
-                    !isKeeper
-                        && block.timestamp < uint256(queue.settleableAt(r.epoch)) + p.keeperGrace
-                ) {
-                    _violation("keeper first: a stranger filled an epoch inside its grace");
-                }
-            } else if (
-                isKeeper && !noRoom && pre.inRange[k] && pre.admissible[k] && pre.remaining[k] != 0
-            ) {
-                bool failed = r.kind == RequestKind.Deposit ? depFailed : redFailed;
-                if (!failed && !keeperMidPass) {
-                    _violation("oldest first: the keeper left an admissible request pending");
-                }
-            }
-            if (isKeeper && pre.inRange[k] && pre.admissible[k]) ++admissibleChecked;
+    struct PostFlags {
+        bool depFailed;
+        bool redFailed;
+        bool matched;
+        bool depStopped;
+        bool newSettlement;
+        uint256 minSh;
+        uint256 minUsdc;
+    }
+
+    function _post(
+        Pre memory pre,
+        bool isKeeper,
+        uint256 maxRequests,
+        bool noRoom,
+        Vm.Log[] memory logs
+    ) internal {
+        if (!isKeeper) _violation("E34: non-keeper settled");
+        PostFlags memory f;
+        f.depFailed = _sideFailures(logs, RequestKind.Deposit) != 0;
+        f.redFailed = _sideFailures(logs, RequestKind.Redeem) != 0;
+        f.matched = _matchedNow(logs);
+        f.depStopped = _depStoppedNow(logs);
+        f.newSettlement = queue.settlementCount() > pre.settlementCount0;
+        f.minUsdc = queue.flowParams().minRequestUsdc;
+        f.minSh = _minShareAmount(f.minUsdc);
+
+        if (noRoom && !f.matched && f.newSettlement) {
+            _violation("no room: a call with maxUsdc 0 created a settlement");
         }
-        if (isKeeper) keeperMidPass = depFailed || redFailed;
+
+        for (uint256 k; k < pre.ids.length; ++k) {
+            _checkPostRequest(pre, k, f, maxRequests, noRoom, logs);
+        }
+
+        _checkClaimOrder(pre, f.minUsdc, f.minSh);
+        keeperMidPass = f.depFailed || f.redFailed;
         if (noRoom) {
             ++callsNoRoom;
-            _sameCursor(pre, isKeeper);
+            _sameCursor(pre);
         }
-        if (!isKeeper && pre.keeperCursorOk) {
-            (, uint64 e1, uint256 i1) = _cursor(true, RequestKind.Deposit);
-            (, uint64 e2, uint256 i2) = _cursor(true, RequestKind.Redeem);
-            if (e1 != pre.kDepE || i1 != pre.kDepI || e2 != pre.kRedE || i2 != pre.kRedI) {
-                _violation("a stranger's call moved the keeper's cursor");
+    }
+
+    function _minShareAmount(uint256 minUsdc) internal view returns (uint256) {
+        uint256 price = 1e18;
+        uint256 supply = fund.totalSupply();
+        if (supply != 0) {
+            try fund.totalAssets() returns (uint256 nav) {
+                if (nav != 0) price = nav.mulDiv(1e18, supply);
+            } catch {}
+        }
+        return minUsdc.mulDiv(1e18, price, Math.Rounding.Ceil) + 1;
+    }
+
+    function _checkPostRequest(
+        Pre memory pre,
+        uint256 k,
+        PostFlags memory f,
+        uint256 maxRequests,
+        bool noRoom,
+        Vm.Log[] memory logs
+    ) internal {
+        uint256 id = pre.ids[k];
+        Request memory r = queue.getRequest(id);
+        uint256 rem = _liveRem(id, r);
+        bool enrollDustOnly = !pre.enrolled[k] && r.enrolled && !f.newSettlement
+            && rem < pre.remaining[k] && pre.remaining[k] - rem <= 1;
+        bool realFill = rem < pre.remaining[k] && !(r.closed && _cancelledNow(logs, id)) && !enrollDustOnly;
+        if (realFill) {
+            ++fillsChecked;
+            if (noRoom && !f.matched) {
+                _violation("no room: a one-sided call with maxUsdc 0 filled a request");
+            }
+        } else if (
+            !noRoom && maxRequests == SETTLE_MAX_REQUESTS && pre.inRange[k] && pre.remaining[k] != 0
+        ) {
+            bool isDep = r.kind == RequestKind.Deposit;
+            bool failed = isDep ? (f.depFailed || f.depStopped) : f.redFailed;
+            if (!failed && !keeperMidPass && (isDep ? rem >= f.minUsdc : rem >= f.minSh)) {
+                _violation("oldest first: the keeper left a fillable request pending");
+            }
+        }
+        if (pre.inRange[k] && pre.remaining[k] != 0) ++admissibleChecked;
+    }
+
+    function _checkClaimOrder(Pre memory pre, uint256 minUsdc, uint256 minSh) internal {
+        uint256 cNow = queue.claimCount();
+        for (uint256 cid = pre.claimCount0 + 1; cid <= cNow; ++cid) {
+            Claim memory cl = queue.getClaim(cid);
+            // Lazy sync on enqueue/enroll can emit a Claim belonging to an earlier match settlement.
+            if (cl.settlementId <= pre.settlementCount0) continue;
+            Request memory filledReq = queue.getRequest(cl.requestId);
+            bool isDep = filledReq.kind == RequestKind.Deposit;
+            for (uint256 k; k < pre.ids.length; ++k) {
+                uint256 olderId = pre.ids[k];
+                if (olderId >= cl.requestId) break;
+                if (!pre.inRange[k] || pre.remaining[k] == 0) continue;
+                Request memory olderReq = queue.getRequest(olderId);
+                if (olderReq.kind != filledReq.kind) continue;
+                uint256 olderRem = _liveRem(olderId, olderReq);
+                if (isDep ? olderRem >= minUsdc : olderRem >= minSh) {
+                    _violation("oldest first: newer request filled ahead of older unfilled request");
+                    break;
+                }
             }
         }
     }
 
-    function _sameCursor(Pre memory pre, bool isKeeper) internal {
+    function _sameCursor(Pre memory pre) internal {
         if (!pre.keeperCursorOk) return;
-        (, uint64 e1, uint256 i1) = _cursor(isKeeper, RequestKind.Deposit);
-        (, uint64 e2, uint256 i2) = _cursor(isKeeper, RequestKind.Redeem);
-        bool same = isKeeper
-            ? (e1 == pre.kDepE && i1 == pre.kDepI && e2 == pre.kRedE && i2 == pre.kRedI)
-            : (e1 == pre.pDepE && i1 == pre.pDepI && e2 == pre.pRedE && i2 == pre.pRedI);
-        if (!same) _violation("no room: a call with maxUsdc 0 moved a cursor");
+        (, uint64 e1, uint256 i1) = _cursor(true, RequestKind.Deposit);
+        (, uint64 e2, uint256 i2) = _cursor(true, RequestKind.Redeem);
+        if (e1 != pre.kDepE || i1 != pre.kDepI || e2 != pre.kRedE || i2 != pre.kRedI) {
+            _violation("no room: a call with maxUsdc 0 moved a cursor");
+        }
+    }
+
+    function _matchedNow(Vm.Log[] memory logs) internal view returns (bool) {
+        for (uint256 k; k < logs.length; ++k) {
+            if (logs[k].emitter == address(queue) && logs[k].topics[0] == IFlowEvents.Matched.selector) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _depStoppedNow(Vm.Log[] memory logs) internal view returns (bool) {
+        for (uint256 k; k < logs.length; ++k) {
+            if (
+                logs[k].emitter == address(queue)
+                    && logs[k].topics[0] == IFlowEvents.DepositStoppedForRound.selector
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     function _cancelledNow(Vm.Log[] memory logs, uint256 id) internal view returns (bool) {
@@ -1509,29 +1623,26 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
         emit log_named_uint("admissible requests checked at keeper calls", admissibleChecked);
     }
 
-    /// @notice The scripted run: the D-AT-3 pattern and the moved-bound pattern in a fixed order, then the checks.
-    ///         It runs every action once outside the random campaign, so the property is exercised whatever the
-    ///         campaign draws.
+    /// @notice The scripted run: FIFO net fills under partial budget, keeper-only enforcement (E34), `maxUsdc = 0`
+    ///         leaving cursors unmoved, and `cancel` respecting `cancelBuffer` (E26).
     function test_script_oldestFillableFillsFirst() public fixtureCovered {
-        act_requestDeposit(0, 1_000e6, 1); // alice, admissible
-        act_requestDeposit(1, 1_000e6, 1); // bob, admissible
-        act_requestRedeem(2, 200, false); // carol
-        vm.warp(block.timestamp + 13 hours); // past the window and the grace
+        act_requestDeposit(0, 1_000e6, 0); // alice (oldest)
+        act_requestDeposit(1, 1_000e6, 0); // bob
+        act_requestRedeem(2, 200, false); // carol (~200 shares < 2_000 USDC -> net Deposit)
+        act_cancel(1); // bob cancels before cancelBuffer
+        uint256 bId = openDepositRequest(bob, 1_000e6);
+        vm.warp(block.timestamp + 13 hours); // past window & cancelBuffer
         refreshFeeds();
-        act_settle(1, 1, true, false); // a stranger, no room: must pass nothing
-        act_settle(1, 1, false, false); // a stranger, one request: the oldest of each side
-        act_settle(0, 0, false, false); // the keeper: everything admissible
-        act_requestDeposit(3, 1_000e6, 0); // dave, tight
-        act_requestDeposit(0, 1_000e6, 1); // alice, admissible
-        vm.warp(block.timestamp + 13 hours);
-        refreshFeeds();
-        act_settle(1, 1, false, false); // a stranger passes dave's tight request
-        act_moveFeeds(25, true); // the bound falls: dave's request is admissible now
-        act_settle(0, 0, false, false); // the keeper's pass starts at the oldest
-        act_cancel(0);
-        emit log_named_uint("keeper settles", callsSettleKeeper);
-        emit log_named_uint("stranger settles", callsSettleStranger);
-        emit log_named_uint("admissible requests checked at keeper calls", admissibleChecked);
+        act_settle(1, 1, false, false); // stranger: reverts E34 (0 calls)
+        assertEq(callsSettleStranger, 0, "E34: stranger never settles");
+        act_settle(0, 1, true, false); // keeper, maxUsdc = 0: matches carol only, leaves net & cursor unmoved
+        act_settle(0, 1, false, false); // keeper, maxRequests = 1: fills alice (oldest) before bob
+        assertTrue(queue.getRequest(1).closed, "oldest deposit fills first");
+        assertGt(queue.pendingDepositRequest(bId, bob), 0, "newer deposit waits behind budget=1");
+        act_settle(0, 0, false, false); // keeper, full budget: fills bob
+        assertTrue(queue.getRequest(bId).closed, "bob fills next");
+        act_requestDeposit(3, 1_000e6, 0); // open deposit before cancelBuffer
+        act_cancel(0); // cancels open request before cutoff
         _assertNoViolation();
     }
 }

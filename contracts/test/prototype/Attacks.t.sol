@@ -15,7 +15,19 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
 import {BaselineHarness} from "./baseline/BaselineHarness.sol";
 import {SimLib} from "./sim/SimLib.sol";
-import {BPS, IDLE_INDEX, PRICE_SCALE, PlanParams} from "./src/FundTypes.sol";
+import {
+    AssetConfig,
+    AssetKind,
+    BPS,
+    IDLE_INDEX,
+    IFundEvents,
+    PRICE_SCALE,
+    PlanParams,
+    PlanStatus,
+    SkipReason,
+    StepOrder,
+    Venue
+} from "./src/FundTypes.sol";
 import {
     PlanParams as BaselinePlanParams,
     PlanStatus as PlanStatusB
@@ -26,6 +38,7 @@ import {
     FlowLevers,
     FlowParams,
     IFlowEvents,
+    QueueLiveness,
     Quote,
     Request,
     RequestKind,
@@ -35,8 +48,12 @@ import {
 } from "./src/FlowTypes.sol";
 import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
 import {IRobotMoneyFund as IBaselineFund} from "./baseline/src/interfaces/IRobotMoneyFund.sol";
+import {IRebalancer} from "./src/interfaces/IRebalancer.sol";
 import {FundExclusionLedger} from "./src/FundExclusionLedger.sol";
 import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
+import {MechAaveAdapter} from "./mocks/MechAaveAdapter.sol";
+import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
+import {MockAggregator} from "./mocks/MockAggregator.sol";
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Shared types and interfaces (named so they never clash with the two harnesses' own)
@@ -442,9 +459,10 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.expectRevert(window);
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
 
-        // The in-kind exit reads no price: a pro-rata slice whatever the pool says.
+        // E29 / RB-26: in-kind exit is closed while the fund is running (opens only in WindDown).
         uint256 rest = fund.balanceOf(attacker);
         vm.prank(attacker);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
         fund.redeemInKind(rest, attacker, attacker);
 
         // Price-free exits of the requests.
@@ -588,7 +606,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     function test_A4_lendingRate_giftDoesNotMoveRate_realJumpBlocks() public fixtureCovered {
         _world();
         _begin();
-        // Two pending deposits: one with a limit from the quote (+50 bps), one that accepts any price.
+        // Step 3f (D17/E25): requests carry no per-request limit; both pending deposits fill after a gift, and
+        // the gift accrues pro rata to holders.
         uint256 tight = _victimDeposit(victim, 50_000e6);
         uint256 loose = openDepositRequest(victim2, 50_000e6, type(uint256).max);
         warpToSettleable(loose);
@@ -611,19 +630,16 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(keeper);
         (SettleCheck check,) = queue.checkSettle();
         assertEq(uint8(check), uint8(SettleCheck.Ok), "check 5 passes after the gift");
-        vm.prank(keeper);
-        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        // The gift raised the Aave amount per share, so a share now costs more: the tight limit no longer admits
-        // the bound and that request waits (RB-14 protects it); the loose one fills.
+        assertGt(_settleOverBlocks(keeper, loose, 8), 0, "gift-era deposits settle across blocks");
         assertEq(
             uint8(queue.requestStatus(tight)),
-            uint8(RequestStatus.Pending),
-            "the tight limit waits (RB-14)"
+            uint8(RequestStatus.Closed),
+            "first forward deposit settled after the gift"
         );
         assertEq(
             uint8(queue.requestStatus(loose)),
             uint8(RequestStatus.Closed),
-            "the any-price deposit settled"
+            "second forward deposit settled"
         );
         AttackPnl memory r = _end("A4 timed, a 10,000 USDC gift to the Aave adapter", true);
         assertLe(
@@ -632,27 +648,40 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             "the gifter loses its gift (less any pro-rata share)"
         );
 
-        // A real jump of the venue's own rate (+1 %, far over 10 bps a day) blocks every settlement at check 5.
+        // E36 / SAFE-09 / RB-28: a real jump of the venue's own rate (+1 %, far over 10 bps/day) stops
+        // deposits & matching for that round (DepositStoppedForRound, cause 2), while redemptions still settle.
         uint256 v2 = openDepositRequest(dave, 50_000e6, type(uint256).max);
+        uint256 r2 = openRedeemRequest(alice, fund.balanceOf(alice) / 10, 0);
         warpToSettleable(v2);
         refreshFeeds();
-        uint256 index = IAtkAavePool(AAVE_POOL).getReserveNormalizedIncome(USDC);
+        // Mock the adapter's rate view directly so the Aave V3 pool's own `aToken.balanceOf` / `withdraw`
+        // index math stays internally consistent while Check 5 sees a +1% venue rate jump.
+        uint256 rate1 = IAtkRateAdapter(address(aaveAdapter)).ratePerUnit();
         vm.mockCall(
-            AAVE_POOL,
-            abi.encodeWithSelector(IAtkAavePool.getReserveNormalizedIncome.selector, USDC),
-            abi.encode(index + index / 100)
+            address(aaveAdapter),
+            abi.encodeWithSelector(IAtkRateAdapter.ratePerUnit.selector),
+            abi.encode(rate1 + rate1 / 100)
         );
-        uint256 idx;
         vm.prank(keeper);
-        (check, idx) = queue.checkSettle();
-        assertEq(uint8(check), uint8(SettleCheck.LendRate), "check 5 blocks a rate jump");
-        assertEq(idx, IDX_AAVE, "on Aave");
-        uint256 supply = fund.totalSupply();
+        (check,) = queue.checkSettle();
+        assertEq(
+            uint8(check),
+            uint8(SettleCheck.Ok),
+            "E36: preTrade stays Ok so redemptions settle during rate stop"
+        );
+        uint256 aliceShares0 = queue.getRequest(r2).remaining;
+        uint256 supply0 = fund.totalSupply();
+        uint64 stopEpoch = queue.getRequest(v2).epoch;
+        vm.recordLogs();
         vm.prank(keeper);
-        vm.expectPartialRevert(IFlowEvents.SettleBlocked.selector);
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        assertEq(fund.totalSupply(), supply, "nothing settled");
-        assertEq(queue.getRequest(v2).remaining, 50_000e6, "the request waits");
+        assertTrue(
+            _sawDepositStopped(stopEpoch, 2),
+            "E36: DepositStoppedForRound cause 2 emitted on rate jump"
+        );
+        assertEq(queue.getRequest(v2).remaining, 50_000e6, "the deposit waits under check 5 stop");
+        assertLt(queue.getRequest(r2).remaining, aliceShares0, "redemptions still settle under rate stop");
+        assertLt(fund.totalSupply(), supply0, "no deposit minted; net redemption burned shares");
         vm.clearMockedCalls();
     }
 
@@ -697,7 +726,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         queue.mint(1, attacker);
         vm.prank(attacker);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.WrongRequestKind.selector, id));
-        queue.exitInKind(id);
+        queue.giveRedemptionNotice(id);
         vm.roll(block.number + 1);
         vm.warp(block.timestamp + 2);
         vm.prank(keeper);
@@ -710,7 +739,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         warpToSettleable(id);
         refreshFeeds();
         vm.prank(keeper);
-        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
         uint256 claimId = queue.claimCount();
         Claim memory c = queue.getClaim(claimId);
         assertEq(c.owner, attacker, "the attacker's claim");
@@ -724,8 +753,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotEnoughClaimable.selector, 1, 0));
         queue.mint(1, attacker);
         vm.prank(attacker);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.ReturnNotAllowed.selector, sid));
-        queue.takeReturn(claimId);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(1, attacker, attacker);
         vm.roll(block.number + 1);
         vm.warp(unlockAt - 1);
         vm.prank(attacker);
@@ -798,11 +827,25 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  exceed the cap, or G8 fails and the band is the finding.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev After keeperGrace anyone may settle, so the attacker is the caller: in ONE transaction it pushes both
-    ///      basket pools up, settles a pending deposit of the period cap's size, and sells back what it bought.
-    ///      Three push sizes inside the per-swap band; the best is scored.
+    /// @dev E34 / RB-20: `keeperGrace` is retired in Step 3f; only `KEEPER_ROLE` may settle. An attacker trying to
+    ///      settle after `keeperGrace` reverts with `SettleBlocked(Caller, ...)`.
     function test_A7_sandwich_byTheCallerAfterKeeperGrace() public fixtureCovered {
-        _a7(true, "A7 timed sandwich, the attacker settles after keeperGrace");
+        _world();
+        uint256 vid = _victimDeposit(victim, 250_000e6);
+        warpToSettleable(vid);
+        vm.warp(block.timestamp + queue.flowParams().keeperGrace);
+        refreshFeeds();
+        _begin();
+        vm.prank(attacker);
+        (SettleCheck check, uint256 idx) = queue.checkSettle();
+        assertEq(uint8(check), uint8(SettleCheck.Caller), "non-keeper blocked at Check 0");
+        assertEq(idx, IDLE_INDEX, "caller check returns idle index");
+        vm.prank(attacker);
+        vm.expectRevert(
+            abi.encodeWithSelector(IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0)
+        );
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertEq(queue.getRequest(vid).remaining, 250_000e6, "victim request untouched");
     }
 
     /// @dev Before keeperGrace only the keeper settles. A third party who can order its trades around the keeper's
@@ -916,18 +959,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         }
     }
 
-    /// @dev Request `vid`'s fills so far (deposit claims): the USDC paid and the shares got. RB-14 on each fill.
+    /// @dev Request `vid`'s fills so far (deposit claims): the USDC paid and the shares got.
     function _victimFills(uint256 vid) internal view returns (uint256 usdc, uint256 shares) {
-        uint256 limit = queue.getRequest(vid).limit;
         uint256 n = queue.claimCount();
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
             if (cl.requestId != vid) continue;
-            assertLe(
-                cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil),
-                limit,
-                "RB-14: each fill inside the limit"
-            );
             usdc += cl.usdc;
             shares += cl.shares;
         }
@@ -1068,13 +1105,23 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         (borrowed, bought) = _pushBps(attacker, WETH_POOL, WETH, USDC, push);
         warpToSettleable(vid);
         uint256 supply = fund.totalSupply();
+        uint256 twapBlockedHours;
         for (uint256 h; h < 24; ++h) {
             refreshFeeds();
             vm.prank(keeper);
             (SettleCheck check,) = queue.checkSettle();
-            assertEq(uint8(check), uint8(SettleCheck.TwapVsFeed), "blocked at check 4 all day");
+            if (check == SettleCheck.TwapVsFeed) {
+                ++twapBlockedHours;
+            } else {
+                assertEq(
+                    uint8(check),
+                    uint8(SettleCheck.Window),
+                    "check 1 Window precedes check 4 only inside settlement observation windows"
+                );
+            }
             vm.warp(block.timestamp + 1 hours);
         }
+        assertGe(twapBlockedHours, 18, "blocked at check 4 outside observation windows all day");
         assertEq(fund.totalSupply(), supply, "nothing settled, nothing moved");
         assertEq(queue.getRequest(vid).remaining, 50_000e6, "the request waits, whole");
         _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
@@ -1189,13 +1236,17 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             vm.warp(block.timestamp + queue.flowParams().keeperGrace);
             refreshFeeds();
             (uint64 ke, uint256 ki) = queue.settleCursor(true, RequestKind.Deposit);
+            bytes memory callerErr = abi.encodeWithSelector(
+                IFlowEvents.SettleBlocked.selector, SettleCheck.Caller, IDLE_INDEX, 0
+            );
             uint256 g = gasleft();
             vm.startPrank(attacker);
-            assertEq(queue.settle(1, 0), 0, "griefing call 1 (no room) fills nothing");
-            assertEq(
-                queue.settle(0, type(uint256).max), 0, "griefing call 2 (no look) fills nothing"
-            );
-            assertEq(queue.settle(1, 1), 0, "griefing call 3 (a room under any fill) fills nothing");
+            vm.expectRevert(callerErr);
+            queue.settle(1, 0);
+            vm.expectRevert(callerErr);
+            queue.settle(0, type(uint256).max);
+            vm.expectRevert(callerErr);
+            queue.settle(1, 1);
             vm.stopPrank();
             griefGas = g - gasleft();
             (uint64 ke2, uint256 ki2) = queue.settleCursor(true, RequestKind.Deposit);
@@ -1236,10 +1287,8 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         _end("A8 way 4, cursor griefing after fix-queue item 2 (gas only)", true);
     }
 
-    /// @dev Way 5: a gift larger than pending users' limit margins. A gift raises the amount per share, so every
-    ///      deposit request whose limit sits within the gift's share of NAV above the quote is skipped (RB-14) and
-    ///      waits for its owner to re-quote. It costs the gift, which goes to the holders. Not a day block: one
-    ///      gift moves the price once.
+    /// @dev Way 5: a gift cannot skip or block pending deposits once per-request limits are retired (E25).
+    ///      The deposit fills (receiving slightly fewer shares at the higher NAV) and holders keep the gift.
     function test_A8_block_giftAboveLimitMargins_skipsTightRequests() public fixtureCovered {
         _world();
         _begin();
@@ -1252,8 +1301,12 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(attacker);
         IERC20(USDC).transfer(address(fund), gift);
         _settleAs(keeper);
-        assertEq(queue.getRequest(vid).remaining, 50_000e6, "the tight limit is skipped and waits");
-        AttackPnl memory r = _end("A8 way 5, a gift of 2x the limit margin", true);
+        assertEq(
+            uint8(queue.requestStatus(vid)),
+            uint8(RequestStatus.Closed),
+            "with limits retired, the gift cannot skip or block the deposit"
+        );
+        AttackPnl memory r = _end("A8 way 5, a gift cannot block limit-free deposits", true);
         assertLe(r.attackerNet, -int256(gift * 99 / 100), "the gift is lost to the holders");
     }
 
@@ -1284,11 +1337,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             runAmounts[k] = fund.balanceOf(runners[k]);
             runIds[k] = openRedeemRequest(runners[k], runAmounts[k], 0);
         }
-        _a9InKindExit(runners[3]);
+        // E29 / RB-26: in-kind exit is closed while running; timed redemptions fill FIFO under the period cap.
+        uint256 runner3Shares = fund.balanceOf(runners[3]);
+        vm.prank(runners[3]);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(runner3Shares, runners[3], runners[3]);
         _a9FirstSettlement();
         _assertPerShareNotLower("A9 run");
         coverageCheckpoint();
-        _a9VenueLoss(runners[3]);
         // The next period fills the rest, oldest first.
         vm.warp(block.timestamp + queue.flowParams().epochLength);
         settleAll();
@@ -1299,6 +1355,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
                 "the run fills over periods"
             );
         }
+        // Per proposal §10 step 3f: A9 uses the in-kind exit only in a wind-down.
+        _a9InKindExit(runners[3]);
+        _a9VenueLoss(runners[3]);
     }
 
     /// @dev Four more holders deposit 100,000 USDC each in one epoch.
@@ -1319,11 +1378,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         coverageCheckpoint();
     }
 
-    /// @dev The fourth runner leaves at once in kind through the queue: basket tokens now, lending USDC up to the
+    /// @dev In wind-down (`shutdown()`), the fourth runner exits in kind: basket tokens now, lending USDC up to the
     ///      period's allowance, the rest as position claims.
     function _a9InKindExit(address who) private {
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
         uint256 shares = fund.balanceOf(who);
-        uint256 id = openRedeemRequest(who, shares, 0);
         (uint16 bps, uint128 floorUsdc,, uint256 used0) = fund.inKindAllowance();
         // The allowance is measured on the venues' holdings before the exit (FundPositionLib.allowanceLeft).
         (, uint256[] memory held) = fund.heldBalances();
@@ -1333,7 +1392,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         }
         uint256 cap = Math.max(lending.mulDiv(bps, BPS), floorUsdc);
         vm.prank(who);
-        queue.exitInKind(id);
+        fund.redeemInKind(shares, who, who);
         assertGt(IERC20(WETH).balanceOf(who), 0, "wETH at once");
         assertGt(IERC20(CBBTC).balanceOf(who), 0, "cbBTC at once");
         assertGt(IERC20(USDC).balanceOf(who), 0, "idle and lending USDC up to the allowance");
@@ -1534,7 +1593,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         Request memory before1 = queue.getRequest(id1);
         vm.startPrank(attacker);
         IERC20(USDC).approve(address(queue), minUsdc);
-        uint256 id2 = queue.requestDeposit(minUsdc, type(uint256).max, pooled);
+        uint256 id2 = queue.requestDeposit(minUsdc, pooled);
         vm.stopPrank();
         assertTrue(id2 != id1, "a stranger's request is a new request");
         assertEq(
@@ -1673,59 +1732,16 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     //  Report the keeper's gas against the attacker's cost.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function test_A13_floodOfUnfillableRequests_honestStillFills() public fixtureCovered {
-        _world();
-        _begin();
-        uint256 n = 300;
-        uint256 minUsdc = queue.flowParams().minRequestUsdc;
-        fundUsdc(attacker, n * minUsdc);
-        _startAttacker();
-        uint256 g = gasleft();
-        for (uint256 k; k < n; ++k) {
-            _reqDeposit(attacker, minUsdc, 1);
-        }
-        uint256 attackerGas = g - gasleft();
-        uint256 honest = openDepositRequest(victim, 50_000e6, type(uint256).max);
-        warpToSettleable(honest);
-        refreshFeeds();
-        g = gasleft();
-        _settleAs(keeper);
-        uint256 keeperGas1 = g - gasleft();
-        assertEq(
-            queue.getRequest(honest).remaining,
-            50_000e6,
-            "the first call only skipped flood requests"
-        );
-        g = gasleft();
-        _settleAs(keeper);
-        uint256 keeperGas2 = g - gasleft();
-        assertEq(
-            uint8(queue.requestStatus(honest)),
-            uint8(RequestStatus.Closed),
-            "the honest request fills next call"
-        );
-        coverageCheckpoint();
-        // The attacker takes its float back.
-        vm.startPrank(attacker);
-        for (uint256 id = 1; id <= queue.requestCount(); ++id) {
-            Request memory r = queue.getRequest(id);
-            if (r.owner == attacker && !r.closed) queue.cancel(id);
-        }
-        queue.withdrawCredit();
-        vm.stopPrank();
-        emit log_named_uint("A13: attacker gas for 300 requests", attackerGas);
-        emit log_named_uint("A13: keeper gas, call 1 (256 skips)", keeperGas1);
-        emit log_named_uint("A13: keeper gas, call 2 (44 skips + the fill)", keeperGas2);
-        emit log_named_uint("A13: attacker float held (USDC units)", n * minUsdc);
-        _end("A13 timed, 300 unfillable requests", true);
-    }
+    // A13 (flood of unfillable-limit requests) retired in Step 3f with per-request price limits (E25, D17;
+    // docs/technical/one-vault-timed-flows-eng-plan.md §8.3).
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
     //  A14: a lending venue that is impaired, at its supply cap, or fully borrowed.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Impaired: Aave loses 10 % after an in-kind exit left a position claim. Exiter and stayers share it; a
-    ///      timed redemption after it pays the impaired value (it does not take the stayers' money).
+    /// @dev Impaired (E29, proposal §10 step 3f): `redeemInKind` is closed while running and opens only in
+    ///      `shutdown()` wind-down; an in-kind exit in wind-down leaves a position claim. Exiter and stayers share a
+    ///      later venue loss pro rata; after `restore(TVL_CAP)`, a timed redemption settles at the impaired value.
     function test_A14_venueImpaired_exitersAndStayersShareTheLoss() public fixtureCovered {
         _world();
         timelockExecute(
@@ -1736,12 +1752,19 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         );
         refreshFeeds();
         uint256 half = fund.balanceOf(alice) / 2;
-        uint256 id = openRedeemRequest(alice, half, 0);
         vm.prank(alice);
-        queue.exitInKind(id);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(half, alice, alice);
+
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        vm.prank(alice);
+        fund.redeemInKind(half, alice, alice);
         (uint256 units,) = fund.positionClaimOf(IDX_AAVE, alice);
-        assertGt(units, 0, "the exit left an Aave claim");
+        assertGt(units, 0, "the wind-down in-kind exit left an Aave claim");
         _a9VenueLoss(alice);
+
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
+        refreshFeeds();
         uint256 supply = fund.totalSupply();
         (, uint256[] memory held) = fund.heldBalances();
         uint256 aavePerShare = held[IDX_AAVE].mulDiv(1e36, supply);
@@ -1785,8 +1808,9 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         );
     }
 
-    /// @dev Fully borrowed: Aave pays no withdrawal. Timed redemptions wait, deposits of the same call settle, and
-    ///      the in-kind exit stays open (the Aave leg becomes a position claim).
+    /// @dev Fully borrowed (E36, E37, RB-28): no deposit settles and no match happens (`DepositStoppedForRound`
+    ///      cause 3), while the net redemption still settles and turns the borrowed venue leg into position claim
+    ///      units. `redeemInKind` stays closed while running and gives `alice` direct claims in wind-down.
     function test_A14_venueFullyBorrowed_redemptionsWait_depositsSettle_inKindOpen()
         public
         fixtureCovered
@@ -1800,18 +1824,36 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.mockCallRevert(
             AAVE_POOL, abi.encodeWithSelector(IAtkAavePool.withdraw.selector), bytes("32")
         );
+        vm.mockCall(
+            address(aaveAdapter),
+            abi.encodeWithSignature("availableLiquidity()"),
+            abi.encode(uint256(0))
+        );
         vm.recordLogs();
         _settleAs(keeper);
-        assertTrue(_sawSideFailed(RequestKind.Redeem), "the redemption side failed at the venue");
-        assertEq(queue.getRequest(rid).remaining, quarter, "the redemption waits, whole");
-        assertEq(
-            uint8(queue.requestStatus(vid)), uint8(RequestStatus.Closed), "the deposit settled"
+        assertTrue(
+            _sawDepositStopped(queue.getRequest(vid).epoch, 3),
+            "E36: DepositStoppedForRound cause 3 on illiquid venue"
         );
+        assertEq(queue.getRequest(vid).remaining, 50_000e6, "no match and no net deposit settled");
+        assertEq(
+            uint8(queue.requestStatus(rid)),
+            uint8(RequestStatus.Closed),
+            "E37: net redemption settled with shortfall claim"
+        );
+        (, uint256 claimUnits) = fund.positionUnits(IDX_AAVE);
+        assertGt(claimUnits, 0, "E37: Aave shortfall left position claim units");
+
+        // In-kind exit stays closed while running and opens only in wind-down (E29).
         vm.prank(alice);
-        queue.exitInKind(rid);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(quarter, alice, alice);
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        vm.prank(alice);
+        fund.redeemInKind(quarter, alice, alice);
         (uint256 units,) = fund.positionClaimOf(IDX_AAVE, alice);
-        assertGt(units, 0, "in kind: the Aave leg is a claim on the position");
-        assertGt(IERC20(WETH).balanceOf(alice), 0, "in kind: the basket legs are paid at once");
+        assertGt(units, 0, "wind-down in-kind: the Aave leg is a direct claim on the position");
+        assertGt(IERC20(WETH).balanceOf(alice), 0, "wind-down in-kind: basket legs paid at once");
         vm.clearMockedCalls();
     }
 
@@ -1904,33 +1946,25 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 supply = fund.totalSupply();
         uint256 queueShares = fund.balanceOf(address(queue));
 
-        // Settlement 2 is frozen at once; settlement 1 at the last second of its hold (the longest wait).
-        vm.prank(emergency);
-        queue.freezeSettlement(sid2);
+        // E49 / RB-18: settlement 1 is frozen at the last second of its hold (longest wait); any second
+        // freeze inside `maxFreeze` reverts with `FreezeOnCooldown`.
         vm.warp(c1.unlockAt - 1);
         vm.prank(emergency);
         queue.freezeSettlement(sid1);
+        uint64 cooldownUntil = uint64(block.timestamp) + p.maxFreeze;
         vm.prank(emergency);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.SettlementAlreadyFrozen.selector, sid1));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil));
         queue.freezeSettlement(sid1);
+        vm.prank(emergency);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOnCooldown.selector, cooldownUntil));
+        queue.freezeSettlement(sid2);
         uint64 until1 = queue.getSettlement(sid1).frozenUntil;
         assertLe(
             until1, uint256(c1.unlockAt) + p.maxFreeze, "RB-18: a freeze ends by unlock + maxFreeze"
         );
 
-        // ADMIN's release and a new freeze inside the hold cannot push settlement 2 past its own bound.
-        timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid2)));
-        warpForward(c2.unlockAt - 1);
-        vm.prank(emergency);
-        queue.freezeSettlement(sid2);
-        uint64 until2 = queue.getSettlement(sid2).frozenUntil;
-        assertLe(
-            until2,
-            uint256(c2.unlockAt) + p.maxFreeze,
-            "RB-18: release and refreeze stay inside the bound"
-        );
-
-        // Nothing moves while frozen; each freeze ends by itself; after the hold no new freeze.
+        // Nothing moves while frozen; freeze 1 ends by itself; after cooldown, a fresh freeze can be
+        // released by ADMIN or immediately lifted by wind-down (`shutdown()`).
         vm.warp(until1 - 1);
         refreshFeeds();
         assertEq(queue.maxMint(victim), 0, "frozen: nothing deliverable");
@@ -1946,10 +1980,34 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(emergency);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FreezeOutsideHold.selector, sid1));
         queue.freezeSettlement(sid1);
-        warpForward(until2);
+
+        // Release test after cooldown on settlement 3 (frozen inside its hold).
+        uint256 v3 = openDepositRequest(victim2, 50_000e6, type(uint256).max);
+        settleUntilFilled(v3);
+        uint256 sid3 = queue.settlementCount();
+        Claim memory c3 = queue.getClaim(queue.claimCount());
+        vm.warp(c3.unlockAt - 1);
+        refreshFeeds();
+        vm.prank(emergency);
+        queue.freezeSettlement(sid3);
+        assertLe(
+            queue.getSettlement(sid3).frozenUntil,
+            uint256(c3.unlockAt) + p.maxFreeze,
+            "RB-18: freeze ends by unlock + maxFreeze"
+        );
+        timelockExecute(address(queue), abi.encodeCall(queue.releaseSettlement, (sid3)));
+        refreshFeeds();
+        queue.mint(c3.shares, victim2);
+        assertEq(
+            fund.balanceOf(victim2),
+            c3.shares,
+            "the released depositor gets all shares immediately"
+        );
+        // After waiting for minHold of sid2 too, victim2 delivers sid2.
+        warpForward(c2.unlockAt);
         refreshFeeds();
         queue.mint(c2.shares, victim2);
-        assertEq(fund.balanceOf(victim2), c2.shares, "the second depositor too");
+        assertEq(fund.balanceOf(victim2), c2.shares + c3.shares, "the second depositor too");
         emit log_named_uint(
             "A16: longest wait after settlement (s)", until1 - (c1.unlockAt - p.minHold)
         );
@@ -1977,22 +2035,38 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.prank(keeper);
         vm.expectPartialRevert(IFlowEvents.SettleBlocked.selector);
         queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
-        vm.expectPartialRevert(IFlowEvents.SettleBlocked.selector);
-        queue.quoteDeposit(1_000e6);
+        // E31: forward-priced terms view never reverts on feeds/peg.
+        Quote memory qDep = queue.quoteDeposit(1_000e6);
+        Quote memory qRed = queue.quoteRedeem(1e18);
+        assertEq(qDep.feeBps, 0, "E31: deposit quote has zero exit fee even during depeg");
+        assertEq(qRed.feeBps, EXIT_FEE_BPS, "E31: redeem quote returns fee even during depeg");
+        assertGt(qDep.holdEnds, qDep.earliestSettle, "E31: terms quote computes schedule during depeg");
 
-        // Every exit that reads no price works.
+        // E29 / RB-25: locked redemption cannot exit in kind while live; it may give notice after maxRoll.
         vm.prank(alice);
-        queue.exitInKind(rid);
-        vm.startPrank(victim);
-        queue.cancel(vid);
-        queue.withdrawCredit();
-        vm.stopPrank();
-        assertEq(IERC20(USDC).balanceOf(victim), 50_000e6, "the cancelled escrow came back whole");
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(1, alice, alice);
+        // A locked deposit cannot cancel in a quiet depeg either (only in open epoch or under a deposit stop),
+        // and exits via withdrawExpired once maxRoll epochs have passed.
+        vm.warp(block.timestamp + uint256(queue.flowParams().maxRoll + 1) * queue.flowParams().epochLength);
+        vm.prank(victim);
+        queue.withdrawExpired(vid);
+        assertEq(IERC20(USDC).balanceOf(victim), 50_000e6, "the expired escrow came back whole");
+        vm.prank(alice);
+        assertGt(queue.giveRedemptionNotice(rid), 0, "E40: aged redemption enters notice cleanly");
         uint256 w = fund.balanceOf(victim2) / 2;
+        vm.prank(victim2);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(w, victim2, victim2);
+        // Once Safe enters wind-down (`shutdown()`), holders exit in kind cleanly even during depeg.
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
         vm.prank(victim2);
         fund.redeemInKind(w, victim2, victim2);
         _assertPerShareNotLower("A17");
         setUsdcFeedPrice(1e8);
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
+        refreshFeeds();
+        // Inside an epoch window vs outside: ensure peg check specifically cleared.
         vm.prank(keeper);
         (check,) = queue.checkSettle();
         assertTrue(check != SettleCheck.UsdcPeg, "the peg check clears with the peg");
@@ -2225,6 +2299,1352 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         emit log_named_uint("A19: alice's claim (USDC units)", ledger.claimable(id, alice));
     }
 
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    //  Step 3f attacks (A21, A23 to A28, A30 to A45; A22 and A29 withdrawn in D20 and D24)
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+    function _etchAaveMech() internal returns (MechAaveAdapter m) {
+        MechAaveAdapter impl = new MechAaveAdapter(AAVE_POOL, USDC, AAVE_A_USDC, address(fund));
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+        );
+        vm.etch(address(aaveAdapter), address(impl).code);
+        m = MechAaveAdapter(address(aaveAdapter));
+    }
+
+    function _etchSwapMech() internal returns (MechSwapAdapter m) {
+        MechSwapAdapter impl = new MechSwapAdapter(ROUTER);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+        );
+        vm.etch(address(swapAdapter), address(impl).code);
+        m = MechSwapAdapter(address(swapAdapter));
+    }
+
+    function _seedHolder(address who, uint256 usdc) internal returns (uint256 shares) {
+        deposit(who, usdc);
+        _takeCredit(who);
+        shares = fund.balanceOf(who);
+    }
+
+    /// @dev Fair share value in USDC at the fixed reference prices (`_navRef`).
+    function _sharesRefUsdc(uint256 shares) internal view returns (uint256) {
+        return _shareValue(shares);
+    }
+
+    /// @notice A21: lagging TWAP — an informed user joins the side the TWAP lag favors (within `refBandBps`)
+    ///         against an uninformed counterparty in a whole-match round. Logs matched loss and attacker net.
+    function test_A21_laggingTwap_informedJoinsFavoredSideInsideGuard() public fixtureCovered {
+        _world();
+        uint256 vShares = fund.balanceOf(alice) / 2;
+        uint64 ep = queue.currentEpoch();
+        uint256 windowEnd = queue.settleableAt(ep);
+        openRedeemRequest(alice, vShares);
+
+        // Move market +80 bps near the end of the settle window so 11/12 slices keep TWAP near pre-move price
+        // while the Chainlink feed jumps to spot: |TWAP - feed| < refBandBps (100 bps).
+        _begin();
+        fundUsdc(attacker, 60_000e6);
+        _startAttacker();
+
+        // Informed attacker joins the deposit side to match alice's redemption at the lagging TWAP.
+        uint256 vValueRef = _sharesRefUsdc(vShares);
+        _reqDeposit(attacker, vValueRef, 0);
+
+        vm.warp(windowEnd - 5 minutes);
+        refreshFeeds();
+        _moveMarket(WETH_POOL, WETH, 80);
+        setFeedPrice(IDX_WETH, poolPrice8(WETH_POOL, WETH));
+
+        vm.warp(windowEnd);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(sid, 0, "A21: round settled inside feed guard");
+        Settlement memory st = queue.getSettlement(sid);
+        assertGt(st.matchedShares, 0, "A21: whole match executed");
+
+        // Matched redeemer loss against true current spot NAV at `_begin()` (before exit fee).
+        uint256 aliceGot = _claimRedeemUsdc(alice);
+        uint256 fairAfterFee = vValueRef - vValueRef.mulDiv(10, BPS);
+        pending = fairAfterFee > aliceGot ? fairAfterFee - aliceGot : 0;
+        assertLe(
+            pending,
+            vValueRef.mulDiv(queue.flowParams().refBandBps, BPS),
+            "A21: matched user loss within refBandBps"
+        );
+
+        // Wait until TWAP catches up, deliver shares, and redeem net back to USDC so exit + swap fees apply.
+        vm.warp(block.timestamp + queue.flowParams().minHold + queue.flowParams().epochLength);
+        refreshFeeds();
+        uint256 atkShares = deliverAfterHold(attacker);
+        _takeCredit(attacker);
+        if (atkShares != 0) redeem(attacker, atkShares);
+        AttackPnl memory r = _end("A21: lagging TWAP informed match inside guard", false);
+        _assertPerShareNotLower("A21");
+        _g8OrFinding("A21: lagging TWAP informed match", r);
+    }
+
+    /// @notice A23: self-match — one owner on both sides pays the exit fee, gains nothing, uses epoch cap, and
+    ///         stays bound by `minHold`.
+    function test_A23_selfMatch_paysFeeGainsNothing_respectsCapAndHold() public fixtureCovered {
+        _world();
+        uint256 initShares = _seedHolder(attacker, 100_000e6);
+        _begin();
+        fundUsdc(attacker, 60_000e6);
+        _startAttacker();
+
+        uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
+        uint256 depAmt = 50_000e6;
+        uint256 redShares = initShares / 2;
+        uint256 did = _reqDeposit(attacker, depAmt, 0);
+        uint256 rid = openRedeemRequest(attacker, redShares);
+
+        uint64 ep = queue.getRequest(did).epoch;
+        warpToSettleable(did);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(sid, 0, "A23: settled");
+        Settlement memory st = queue.getSettlement(sid);
+        assertGt(st.matchedShares, 0, "A23: self-match booked");
+
+        // Exit fee was still paid on matched shares.
+        uint256 feePaid = IERC20(USDC).balanceOf(feeRecipient) - feeBefore;
+        assertGt(feePaid, 0, "A23: self-match paid exit fee");
+
+        // Epoch cap was consumed by matched USDC (`periodFlow`).
+        FlowParams memory p = queue.flowParams();
+        uint256 cap = Math.max(_navRef().mulDiv(p.maxEpochFlowBps, BPS), p.epochFlowFloorUsdc);
+        (uint256 depUsed, uint256 redUsed) = queue.periodFlow(block.timestamp / p.epochLength);
+        ep;
+        assertGt(cap, 0);
+        assertGe(depUsed, st.matchedUsdc, "A23: self-match counted against deposit cap");
+        assertGe(redUsed, st.matchedUsdc, "A23: self-match counted against redeem cap");
+
+        // Newly matched deposit shares are STILL under minHold (`maxDeposit == 0`).
+        assertEq(queue.maxDeposit(attacker), 0, "A23: matched deposit shares remain held during minHold");
+        assertGt(queue.claimableRedeemRequest(rid, attacker), 0, "A23: matched redeem claim created");
+        deliverAfterHold(attacker);
+        _claimRedeemUsdc(attacker);
+        _takeCredit(attacker);
+        AttackPnl memory r = _end("A23: self-match pays fee and obeys cap+hold", true);
+        assertLt(r.attackerNet, 0, "A23: self-matcher lost at least the exit fee");
+    }
+
+    /// @notice A24: cancel cutoff (`cancelBuffer`) — cancelling past cutoff reverts `RequestLocked`, and a request
+    ///         created in the last block of an epoch locks immediately against cancel.
+    function test_A24_cutoff_cancelAfterCloseReverts_lastBlockRequestLocksOneBlockLater()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        fundUsdc(attacker, 60_000e6);
+        _startAttacker();
+
+        FlowParams memory p = queue.flowParams();
+        uint64 ep = queue.currentEpoch();
+        uint256 epEnd = (uint256(ep) + 1) * p.epochLength;
+        uint256 cutoff = epEnd - p.cancelBuffer;
+
+        // Open early request -> cancellable before cutoff, locked at cutoff.
+        uint256 didEarly = _reqDeposit(attacker, 10_000e6, 0);
+        vm.warp(cutoff - 1);
+        vm.prank(attacker);
+        queue.cancel(didEarly);
+        _takeCredit(attacker);
+
+        uint256 didLocked = _reqDeposit(attacker, 10_000e6, 0);
+        uint256 aliceShares = fund.balanceOf(alice);
+        uint256 ridLocked = openRedeemRequest(alice, aliceShares / 4);
+
+        vm.warp(cutoff);
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestLocked.selector, didLocked));
+        queue.cancel(didLocked);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestLocked.selector, ridLocked));
+        queue.cancel(ridLocked);
+
+        // Request in the very last second of epoch `ep` (within cancelBuffer) -> locked now and 1s later (`ep + 1`).
+        vm.warp(epEnd - 1);
+        uint256 didLast = _reqDeposit(attacker, 10_000e6, 0);
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestLocked.selector, didLast));
+        queue.cancel(didLast);
+        vm.warp(epEnd + 1);
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestLocked.selector, didLast));
+        queue.cancel(didLast);
+
+        // Clean settlement closes locked requests without gain.
+        warpToSettleable(didLocked);
+        refreshFeeds();
+        settleAll();
+        deliverAfterHold(attacker);
+        vm.warp(block.timestamp + p.minHold);
+        refreshFeeds();
+        uint256 mShares = queue.maxMint(attacker);
+        if (mShares > 0) {
+            vm.prank(attacker);
+            queue.mint(mShares, attacker);
+        }
+        _claimRedeemUsdc(alice);
+        _takeCredit(attacker);
+        _end("A24: cancel cutoff and last-block lock", true);
+    }
+
+    /// @notice A25: attacker pushes the pool spot past `legBandBps` right at settle so the net side fails while
+    ///         the whole match still settles cleanly at TWAP.
+    function test_A25_pushedNetSideFailsWhileMatchSettles() public fixtureCovered {
+        _world();
+        uint256 rShares = fund.balanceOf(alice) / 4; // ~25k shares
+        uint256 vid = _victimDeposit(victim, 60_000e6); // larger deposit -> net deposit
+        uint256 rid = openRedeemRequest(alice, rShares);
+
+        warpToSettleable(vid);
+        refreshFeeds();
+        _begin();
+        fundUsdc(attacker, FLASH_USDC);
+        _startAttacker();
+
+        // Push WETH pool spot by +250 bps right in the settle block (> legBandBps, while 12-slice median TWAP is
+        // unchanged -> Check 4 still passes, whole match settles, net deposit fails Swap/Check 11).
+        (, uint256 boughtWeth) = _pushBps(attacker, WETH_POOL, WETH, USDC, 250);
+        borrowed += _sharesRefUsdc(0); // only push spending counts
+        vm.recordLogs();
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(sid, 0, "A25: settlement created for match");
+        Settlement memory st = queue.getSettlement(sid);
+        assertGt(st.matchedShares, 0, "A25: whole match settled despite net-side failure");
+        assertEq(st.sharesMinted, 0, "A25: net deposit failed and minted zero shares");
+        assertTrue(_sawSideFailed(RequestKind.Deposit), "A25: SideFailed(Deposit) emitted");
+        assertEq(
+            uint8(queue.requestStatus(rid)),
+            uint8(RequestStatus.Closed),
+            "A25: matched redemption fully closed"
+        );
+        assertGt(queue.getRequest(vid).remaining, 0, "A25: unmatched deposit remainder kept safely pending");
+
+        _sellExact(attacker, WETH_POOL, WETH, USDC, boughtWeth);
+        _claimRedeemUsdc(alice);
+        _end("A25: net deposit fails while match settles", true);
+    }
+
+    /// @notice A26: stuck fund — settlement blocked for `maxRoll` epochs. Reports blocker cost, holder actions
+    ///         before expiry, expired/notice exits, and Safe timelock wind-down.
+    function test_A26_stuckFund_blockedMaxRollEpochs_reportsCostAndWindDown() public fixtureCovered {
+        _world();
+        uint256 vid = _victimDeposit(victim, 50_000e6);
+        uint256 initAlice = fund.balanceOf(alice);
+        uint256 half = initAlice / 2;
+        uint256 rid = openRedeemRequest(alice, half);
+        _begin();
+        fundUsdc(attacker, 100_000e6);
+        _startAttacker();
+
+        // While stuck (USDC off-peg): redeemInKind MUST stay closed (only Safe timelock shuts down),
+        // and emergency CANNOT call shutdown.
+        setUsdcFeedPrice(0.95e8);
+        FlowParams memory p = queue.flowParams();
+        for (uint256 k; k < p.maxRoll + 1; ++k) {
+            if (k == 0) warpToSettleable(vid);
+            else vm.warp(block.timestamp + p.epochLength);
+            refreshFeeds();
+            vm.prank(keeper);
+            (SettleCheck chk,) = queue.checkSettle();
+            assertEq(uint8(chk), uint8(SettleCheck.UsdcPeg), "A26: usdc off-peg keeps blocking");
+        }
+        vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(half, alice, alice);
+        vm.prank(emergency);
+        vm.expectPartialRevert(0xe2517d3f); // AccessControlUnauthorizedAccount
+        fund.shutdown();
+
+        // After maxRoll epochs: expired deposit withdraws USDC directly; old redemption gives notice & recovers
+        // when notice round closes; rest of Alice's wallet shares exit in kind once Safe shuts down.
+        vm.prank(victim);
+        assertEq(queue.withdrawExpired(vid), 50_000e6, "A26: expired deposit returned whole");
+        vm.prank(alice);
+        assertGt(queue.giveRedemptionNotice(rid), 0, "A26: old redemption gave notice while stuck");
+        vm.warp(block.timestamp + 2 * uint256(p.epochLength) + p.settleWindow);
+        refreshFeeds();
+        vm.prank(alice);
+        queue.withdrawCredit();
+        assertEq(fund.balanceOf(alice), initAlice, "A26: all shares restored");
+
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        vm.prank(alice);
+        fund.redeemInKind(fund.balanceOf(alice), alice, alice);
+        assertGt(IERC20(WETH).balanceOf(alice), 0, "A26: wind-down pays basket tokens in kind");
+        _end("A26: stuck fund maxRoll exits & Safe wind-down", true);
+    }
+
+    /// @notice A27: held pool TWAP — pushes pool steadily inside `refBandBps` so check 4 passes, measures match
+    ///         price lean, matched loss, holding cost, and verifies check 4 blocks past `refBandBps`.
+    function test_A27_heldPoolTwap_measuresMatchLeanAndHoldCost() public fixtureCovered {
+        _world();
+        uint256 matchAmt = 100_000e6;
+        uint256 dShares = _seedHolder(dave, matchAmt);
+        uint256 vDep = _victimDeposit(victim, matchAmt);
+        openRedeemRequest(dave, dShares);
+        uint256 windowEnd = queue.settleableAt(queue.getRequest(vDep).epoch);
+
+        vm.warp(windowEnd - 1 hours);
+        refreshFeeds();
+        _begin();
+
+        // Counterfactual honest match price.
+        uint256 snap = vm.snapshotState();
+        vm.warp(windowEnd);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 hSid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        uint256 honestMatchPrice = queue.getSettlement(hSid).matchSharePrice;
+        vm.revertToState(snap);
+
+        // Ramp WETH inside refBandBps across 12 x 5-min slices (+7 bps/slice ~ +84 bps < 100 bps refBand).
+        fundUsdc(attacker, FLASH_USDC);
+        _startAttacker();
+        uint256 bought;
+        for (uint256 k; k < 12; ++k) {
+            (uint256 spent, uint256 tok) = _pushBps(attacker, WETH_POOL, WETH, USDC, 7);
+            borrowed += spent;
+            bought += tok;
+            vm.warp(block.timestamp + 5 minutes);
+        }
+        vm.warp(windowEnd > block.timestamp ? windowEnd : block.timestamp);
+        refreshFeeds();
+        vm.prank(keeper);
+        (SettleCheck chk,) = queue.checkSettle();
+        assertEq(uint8(chk), uint8(SettleCheck.Ok), "A27: held ramp inside refBand passes check 4");
+        vm.prank(keeper);
+        uint256 aSid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        uint256 leanMatchPrice = queue.getSettlement(aSid).matchSharePrice;
+        _sellExact(attacker, WETH_POOL, WETH, USDC, bought);
+
+        uint256 leanBps = leanMatchPrice > honestMatchPrice
+            ? (leanMatchPrice - honestMatchPrice) * BPS / honestMatchPrice
+            : 0;
+        emit log_named_uint("A27: honest match price (1e36)", honestMatchPrice);
+        emit log_named_uint("A27: leaned match price (1e36)", leanMatchPrice);
+        emit log_named_uint("A27: match price lean (bps)", leanBps);
+        pending = matchAmt.mulDiv(leanBps, BPS);
+        AttackPnl memory r = _end("A27: held pool TWAP match lean", false);
+        _assertPerShareNotLower("A27");
+        _g8OrFinding("A27: held pool TWAP match", r);
+    }
+
+    /// @notice A28: bank run with a match — many redeemers and one small depositor over cap: equal match fraction
+    ///         across same-round redeemers, FIFO oldest-first net redemption, and tracked final wait time.
+    function test_A28_runWithMatch_manyRedeemersFewDepositors_proRataFillsAndWait()
+        public
+        fixtureCovered
+    {
+        _world();
+        address r2 = makeAddr("redeemer2");
+        address r3 = makeAddr("redeemer3");
+        uint256 s1 = fund.balanceOf(alice);
+        uint256 s2 = _seedHolder(r2, 200_000e6);
+        uint256 s3 = _seedHolder(r3, 200_000e6);
+        _begin();
+        _startAttacker();
+
+        // Same epoch: 100k deposit vs ~500k redemptions (> 250k epoch cap).
+        uint256 depId = _victimDeposit(victim, 100_000e6);
+        uint64 tStart = uint64(block.timestamp);
+        uint256 id1 = openRedeemRequest(alice, s1);
+        uint256 id2 = openRedeemRequest(r2, s2);
+        uint256 id3 = openRedeemRequest(r3, s3);
+
+        warpToSettleable(depId);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        Settlement memory st1 = queue.getSettlement(sid1);
+        assertGt(st1.matchedShares, 0, "A28: match booked");
+        // All three redeemers got matched first pro-rata (all have positive claimable shares in round 1).
+        assertGt(queue.claimableRedeemRequest(id1, alice), 0, "A28: r1 received match fill");
+        assertGt(queue.claimableRedeemRequest(id2, r2), 0, "A28: r2 received match fill");
+        assertGt(queue.claimableRedeemRequest(id3, r3), 0, "A28: r3 received match fill");
+        assertEq(
+            uint8(queue.requestStatus(depId)), uint8(RequestStatus.Closed), "A28: depositor filled"
+        );
+        // FIFO net side: r1 closed first while r3 waits for subsequent cap periods.
+        assertEq(uint8(queue.requestStatus(id1)), uint8(RequestStatus.Closed), "A28: oldest redeemer closed");
+
+        uint256 settledEpochs = 1;
+        while (uint8(queue.requestStatus(id3)) != uint8(RequestStatus.Closed) && settledEpochs < 12) {
+            vm.warp(block.timestamp + queue.flowParams().epochLength);
+            refreshFeeds();
+            settleAll();
+            ++settledEpochs;
+        }
+        assertEq(uint8(queue.requestStatus(id3)), uint8(RequestStatus.Closed), "A28: last redeemer drained");
+        emit log_named_uint("A28: wait time to drain last redeemer (seconds)", block.timestamp - tStart);
+        _claimRedeemUsdc(alice);
+        _claimRedeemUsdc(r2);
+        _claimRedeemUsdc(r3);
+        _end("A28: run with match pro-rata and FIFO wait", true);
+    }
+
+    /// @notice A30: fully borrowed or impaired lending venue while both sides have requests — no match is booked
+    ///         and net redemptions produce position claims (impaired venue uses exclusion ledger).
+    function test_A30_venueFullyBorrowedOrImpairedWithBothSides_noMatchAndClaim()
+        public
+        fixtureCovered
+    {
+        // Part 1: Impaired venue (revoked adapter -> open exclusion ledger).
+        _world();
+        _begin();
+        _startAttacker();
+        uint256 vid = _victimDeposit(victim, 50_000e6);
+        uint256 half = fund.balanceOf(alice) / 2;
+        uint256 rid = openRedeemRequest(alice, half);
+        warpToSettleable(vid);
+        refreshFeeds();
+
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+            )
+        );
+        refreshFeeds();
+        vm.recordLogs();
+        vm.prank(keeper);
+        uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(sid1, 0, "A30-impaired: redemption settled");
+        assertEq(queue.getSettlement(sid1).matchedShares, 0, "A30-impaired: no match during exclusion");
+        assertTrue(
+            _sawDepositStopped(queue.getRequest(vid).epoch, 1),
+            "A30-impaired: DepositStopped cause 1 emitted"
+        );
+        assertEq(
+            uint8(queue.requestStatus(rid)), uint8(RequestStatus.Closed), "A30-impaired: redeem settled"
+        );
+        assertEq(queue.getRequest(vid).remaining, 50_000e6, "A30-impaired: deposit stayed pending");
+
+        // Part 2: Fully borrowed lending venue while both sides have requests (same E36/E37 flow).
+        // Restore Moonwell first so only Check 5 venue liquidity stops deposits.
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, true)
+            )
+        );
+        uint256 quarter = fund.balanceOf(alice) / 2;
+        uint256 vid2 = openDepositRequest(victim2, 40_000e6);
+        uint256 rid2 = openRedeemRequest(alice, quarter);
+        warpToSettleable(vid2);
+        refreshFeeds();
+        vm.mockCallRevert(
+            AAVE_POOL, abi.encodeWithSelector(IAtkAavePool.withdraw.selector), bytes("32")
+        );
+        vm.mockCall(
+            address(aaveAdapter),
+            abi.encodeWithSignature("availableLiquidity()"),
+            abi.encode(uint256(0))
+        );
+        vm.recordLogs();
+        vm.prank(keeper);
+        uint256 sid2 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        vm.clearMockedCalls();
+        assertTrue(_sawDepositStopped(queue.getRequest(vid2).epoch, 3), "A30-borrowed: cause 3 emitted");
+        assertEq(queue.getSettlement(sid2).matchedShares, 0, "A30-borrowed: no match while illiquid");
+        assertEq(
+            uint8(queue.requestStatus(rid2)), uint8(RequestStatus.Closed), "A30-borrowed: redeem closed"
+        );
+        (, uint256 aliceClaimUsdc) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertGt(aliceClaimUsdc, 0, "A30-borrowed: redeemer received Aave position claim");
+        _end("A30: illiquid/impaired venue blocks match and issues claims", true);
+    }
+
+    /// @notice A31: plan in progress — basket steps interleaved with settlement windows across a whole plan;
+    ///         reports blocked settlements (`StepInWindow`) and match price lean vs reference.
+    function test_A31_planInProgress_stepsAtWindowEdges_reportsBlockedAndMatchLean()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        _startAttacker();
+        setTargetViaTimelock(bucketVec(5_500, 4_500), PlanParams(1 days, 500));
+        vm.warp(block.timestamp + 1 days + 1);
+        refreshFeeds();
+
+        uint256 stepsDone;
+        uint256 blockedRounds;
+        uint256 roundNum;
+        while (fund.planStatus() == PlanStatus.Open && roundNum < 5) {
+            ++roundNum;
+            vm.prank(keeper);
+            (bool did,) = rebalancer.step();
+            if (did) ++stepsDone;
+
+            // Open equal match orders in this epoch; try settle inside window before `settleWindow` passes.
+            uint256 dep = _victimDeposit(victim, 25_000e6);
+            uint256 rShares = fund.balanceOf(alice) / 10;
+            openRedeemRequest(alice, rShares);
+            uint64 ep = queue.getRequest(dep).epoch;
+            warpToSettleable(dep);
+            refreshFeeds();
+
+            // If basket step ran inside `settleWindow` of settle time, keeper settle reverts `StepInWindow`.
+            uint64 lastBasket = rebalancer.lastBasketStepAt();
+            if (lastBasket != 0 && block.timestamp - lastBasket < queue.flowParams().settleWindow) {
+                ++blockedRounds;
+                vm.prank(keeper);
+                vm.expectPartialRevert(IFlowEvents.StepInWindow.selector);
+                queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+                vm.warp(uint256(lastBasket) + queue.flowParams().settleWindow);
+                refreshFeeds();
+            }
+            vm.prank(keeper);
+            uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+            assertGt(sid, 0, "A31: round settled after StepInWindow clears");
+            deliverAfterHold(victim);
+            _claimRedeemUsdc(alice);
+            uint64 nextEp = ep + 1;
+            uint256 tNext = (uint256(nextEp) + 1) * queue.flowParams().epochLength;
+            if (block.timestamp < tNext) {
+                vm.warp(tNext);
+                refreshFeeds();
+            }
+        }
+        emit log_named_uint("A31: steps executed across plan", stepsDone);
+        emit log_named_uint("A31: settlements delayed by StepInWindow", blockedRounds);
+        assertGt(stepsDone, 0, "A31: plan steps progressed alongside queue");
+        AttackPnl memory r = _end("A31: plan steps vs settle windows", false);
+        _assertG8("A31: plan steps vs settle windows", r);
+    }
+
+    /// @notice A32: compromised emergency key — `pauseQueue` & `pauseRebalance` end by themselves, trigger
+    ///         cooldown against immediate re-pause, and emergency cannot call `shutdown` or `emergencyUnwind`.
+    function test_A32_compromisedEmergencyKey_pauseEndsSelf_cannotShutdownOrUnwind()
+        public
+        fixtureCovered
+    {
+        _world();
+        setTargetViaTimelock(bucketVec(5_500, 4_500), PlanParams(1 days, 500));
+        _begin();
+        _startAttacker();
+
+        // Compromised emergency key cannot shutdown or unwind.
+        vm.startPrank(emergency);
+        vm.expectPartialRevert(0xe2517d3f);
+        fund.shutdown();
+        vm.expectPartialRevert(0xe2517d3f);
+        fund.emergencyUnwind();
+        vm.expectPartialRevert(0xe2517d3f);
+        fund.emergencyUnwind(IDX_WETH);
+
+        // Self-expiring pauses and mandatory cooldowns.
+        queue.pauseQueue();
+        uint64 pausedUntil = queue.queuePausedUntil();
+        vm.expectPartialRevert(IFlowEvents.PauseOnCooldown.selector);
+        queue.pauseQueue();
+        fund.pauseRebalance();
+        vm.expectPartialRevert(IRobotMoneyFund.PauseOnCooldown.selector);
+        fund.pauseRebalance();
+        vm.stopPrank();
+
+        assertTrue(queue.queuePaused(), "A32: queue paused initially");
+        vm.warp(pausedUntil);
+        refreshFeeds();
+        assertFalse(queue.queuePaused(), "A32: queue pause self-expired at pausedUntil");
+        assertEq(
+            uint8(fund.planStatus()), uint8(PlanStatus.Open), "A32: plan pause self-expired cleanly"
+        );
+
+        // Emergency STILL locked out of re-pausing for another maxPause cooldown window.
+        vm.prank(emergency);
+        vm.expectPartialRevert(IFlowEvents.PauseOnCooldown.selector);
+        queue.pauseQueue();
+        _end("A32: compromised emergency key bounded by cooldown", true);
+    }
+
+    /// @notice A33: timelock parameter change while requests are locked does not alter their fee, hold, or expiry.
+    function test_A33_timelockParamChangeWhileLocked_keepsFeeHoldExpiry() public fixtureCovered {
+        _world();
+        _begin();
+        _startAttacker();
+
+        uint256 v1 = _victimDeposit(victim, 25_000e6);
+        uint256 vHold = _victimDeposit(victim2, 25_000e6); // held/cancelled/expired test
+        uint256 half = fund.balanceOf(alice) / 2;
+        uint256 rid = openRedeemRequest(alice, half);
+
+        FlowParams memory oldP = queue.flowParams();
+        uint64 ep = queue.getRequest(v1).epoch;
+        uint256 cutoff = (uint256(ep) + 1) * oldP.epochLength - oldP.cancelBuffer;
+        vm.warp(cutoff);
+
+        // Record locked terms before timelock mutates params.
+        Request memory rDepBefore = queue.getRequest(vHold);
+        Request memory rRedBefore = queue.getRequest(rid);
+        assertEq(rRedBefore.exitFeeBps, 10, "A33: initial exit fee 10 bps");
+        assertEq(rDepBefore.minHold, oldP.minHold, "A33: initial minHold snapshotted");
+
+        // Timelock raises exit fee to 100 bps, triples minHold, cuts maxRoll to 2.
+        uint32 oldMinHold = oldP.minHold;
+        FlowParams memory newP = queue.flowParams(); // a fresh copy: memory structs alias on assignment
+        newP.minHold = oldMinHold * 3;
+        newP.maxRoll = 2;
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.setExitFeeBps, (100)));
+        timelockExecute(address(queue), abi.encodeCall(queue.setFlowParams, (newP)));
+
+        // Locked request struct retains old fee, minHold, maxRoll, expiryEpoch.
+        Request memory rDepAfter = queue.getRequest(vHold);
+        Request memory rRedAfter = queue.getRequest(rid);
+        assertEq(rRedAfter.exitFeeBps, 10, "A33: exitFeeBps immutable on locked redeem");
+        assertEq(rDepAfter.minHold, oldP.minHold, "A33: minHold immutable on locked deposit");
+        assertEq(rDepAfter.expiryEpoch, rDepBefore.expiryEpoch, "A33: expiryEpoch immutable");
+
+        // Settle in round 1: feePaid uses 10 bps (NOT 100 bps) and claims unlock after old minHold!
+        uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
+        warpToSettleable(v1);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        Settlement memory st = queue.getSettlement(sid);
+        uint256 feePaid = IERC20(USDC).balanceOf(feeRecipient) - feeBefore;
+        assertLe(
+            feePaid,
+            st.matchedUsdc.mulDiv(15, BPS) + st.usdcOut.mulDiv(15, BPS) + 10,
+            "A33: fee charged at original 10 bps, not raised 100 bps"
+        );
+        assertLe(st.holdEndsAt, block.timestamp + oldP.minHold, "A33: deposit unlocked on old hold");
+
+        vm.warp(block.timestamp + oldP.minHold);
+        refreshFeeds();
+        assertGt(queue.maxDeposit(victim), 0, "A33: deposit delivered at old minHold before tripled hold");
+        deliverAfterHold(victim);
+        deliverAfterHold(victim2);
+        _claimRedeemUsdc(alice);
+        _end("A33: param change keeps locked fee, hold, and expiry", true);
+    }
+
+    /// @notice A34: short-paying lending adapter — defeated in recovery (`openExclusion`), in net redemption
+    ///         Check 11 (`RealizedPrice`), and in pre-match venue liquidity test (`availableLiquidity`).
+    function test_A34_shortPayingAdapter_rejectedInRecoveryPositionClaimAndVenueTest()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        fundUsdc(attacker, 50_000e6);
+        _startAttacker();
+        MechAaveAdapter mech = _etchAaveMech();
+
+        // 1) Pre-match venue test: zero/short available liquidity stops deposits and blocks match.
+        uint256 vid = _victimDeposit(victim, 30_000e6);
+        uint256 quarter = fund.balanceOf(alice) / 4;
+        openRedeemRequest(alice, quarter);
+        warpToSettleable(vid);
+        refreshFeeds();
+        mech.setAvailableLiquidity(0);
+        vm.recordLogs();
+        vm.prank(keeper);
+        uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertTrue(_sawDepositStopped(queue.getRequest(vid).epoch, 3), "A34: venue liquidity stopped match");
+        assertEq(queue.getSettlement(sid1).matchedShares, 0, "A34: no match booked under short liquidity");
+        mech.clearAvailableLiquidity();
+
+        // 2) Net redemption short-pay: Check 11 (`RealizedPrice`) blocks settlement without paying inflated shares.
+        mech.setMode(mech.SHORT_PAY(), 2_500);
+        uint256 r2Shares = fund.balanceOf(alice) / 2;
+        uint256 rid2 = openRedeemRequest(alice, r2Shares);
+        warpToSettleable(rid2);
+        refreshFeeds();
+        vm.recordLogs();
+        vm.prank(keeper);
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertTrue(_sawSideFailed(RequestKind.Redeem), "A34: short-paying net redeem rejected");
+        assertEq(
+            uint8(queue.requestStatus(rid2)),
+            uint8(RequestStatus.Pending),
+            "A34: short-paying redeem did not close at degraded rate"
+        );
+
+        // 3) Exclusion recovery short-pay: draining an excluded venue that pays short does NOT mark asset gone
+        //    if value remains held or fails proportion check.
+        mech.setMode(mech.SHORT_PAY(), 5_000);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (address(mech).codehash, false))
+        );
+        uint256 exclId = fund.openExclusionOf(IDX_AAVE);
+        assertGt(exclId, 0, "A34: exclusion opened");
+        vm.prank(address(timelock));
+        vm.expectRevert(IFundEvents.InvalidParam.selector);
+        fund.setAdapterCodeHashAllowed(address(mech).codehash, true);
+        assertEq(
+            fund.openExclusionOf(IDX_AAVE),
+            exclId,
+            "A34: short-paying exclusion restore refused and stays open"
+        );
+        mech.setMode(mech.HONEST(), 0);
+        _end("A34: short-paying adapter rejected across venue test, redeem, and recovery", true);
+    }
+
+    /// @notice A35: pool fee at or above `legBandBps` less margin, or mutable fee — refused at admission and funding.
+    function test_A35_poolFeeAtOrAboveLegBand_refusedAtAdmissionAndFunding() public fixtureCovered {
+        _world();
+        _begin();
+        _startAttacker();
+        MechSwapAdapter mech = _etchSwapMech();
+
+        // Funding (plan open) rejects non-fixed fee and fee + margin >= legBandBps.
+        mech.setFixedFeePool(false);
+        (address[] memory ids, uint256[] memory w) = assetArrays(bucketVec(6_500, 3_500));
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL));
+        governance.setTarget(ids, w, PlanParams(1 days, 500));
+
+        mech.setFixedFeePool(true);
+        uint256 legBand = queue.flowParams().legBandBps;
+        uint256 margin = fund.feeMarginBps();
+        mech.setPoolFeeBps(uint24(legBand - margin));
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.PoolFeeMarginTooSmall.selector, legBand - margin, margin, legBand
+            )
+        );
+        governance.setTarget(ids, w, PlanParams(1 days, 500));
+
+        // Admission (`addAsset`) also refuses mutable or overly costly pool fee.
+        AssetConfig memory wethCfg = fund.assetConfig(IDX_WETH);
+        mech.setPoolFeeBps(5);
+        setTargetViaTimelock(bucketVec(0, 10_000), PlanParams(1 days, 500));
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.closePlan, ()));
+        timelockExecute(address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH));
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.deactivateAsset, (IDX_WETH)));
+        refreshFeeds();
+
+        mech.setFixedFeePool(false);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL));
+        fund.addAsset(wethCfg);
+
+        mech.setFixedFeePool(true);
+        mech.setPoolFeeBps(uint24(legBand));
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.PoolFeeMarginTooSmall.selector, legBand, margin, legBand)
+        );
+        fund.addAsset(wethCfg);
+        mech.setPoolFeeBps(5);
+        AttackPnl memory r = _end("A35: unsafe pool fee refused at admission and funding", false);
+        _assertG8("A35: unsafe pool fee refused at admission and funding", r);
+    }
+
+    /// @notice A36: round cut in two — pause, sequencer outage, and 5% market move between two `settle` calls of
+    ///         one round. No second match may be booked at the old price.
+    function test_A36_roundCutInTwo_pauseOutageMove5Pct_noMatchAtOldPrice() public fixtureCovered {
+        _world();
+        uint256 dShares = _seedHolder(dave, 60_000e6);
+        _begin();
+        fundUsdc(attacker, FLASH_USDC);
+        _startAttacker();
+
+        // Same epoch: 2 deposits + 2 redemptions, call 1 settles match + 1 request so round stays open (`rs.done == false`).
+        uint256 dep1 = _victimDeposit(victim, 30_000e6);
+        _victimDeposit(victim2, 30_000e6);
+        openRedeemRequest(alice, fund.balanceOf(alice) / 4);
+        openRedeemRequest(dave, dShares / 2);
+
+        warpToSettleable(dep1);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid1 = queue.settle(1, type(uint256).max);
+        assertEq(queue.settlementCount(), sid1, "A36: call 1 booked the round match");
+        uint256 mShares1 = queue.getSettlement(sid1).matchedShares;
+        assertGt(mShares1, 0, "A36: whole match occurred in call 1");
+
+        // Between call 1 and call 2: pause + unpause, sequencer outage + recover, and +5% WETH move.
+        vm.prank(emergency);
+        queue.pauseQueue();
+        timelockExecute(address(queue), abi.encodeCall(queue.unpauseQueue, ()));
+        MockAggregator(FEED_SEQUENCER).setRound(0, 1, block.timestamp, block.timestamp);
+        vm.warp(block.timestamp + 2 hours);
+        sequencerUpSince = block.timestamp - queue.flowParams().sequencerGrace - 1;
+        refreshFeeds();
+        (, uint256 wBought) = _pushBps(attacker, WETH_POOL, WETH, USDC, 500);
+        setFeedPrice(IDX_WETH, poolPrice8(WETH_POOL, WETH));
+        refreshFeeds();
+
+        // While TWAP lags the 5% move, Check 3/4 blocks continuation rather than settling at stale price.
+        vm.prank(keeper);
+        (SettleCheck chk,) = queue.checkSettle();
+        assertTrue(
+            chk == SettleCheck.TwapQuorum || chk == SettleCheck.TwapVsFeed,
+            "A36: 5% move blocks call 2 while TWAP lags"
+        );
+        vm.prank(keeper);
+        vm.expectPartialRevert(IFlowEvents.SettleBlocked.selector);
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+
+        // Restore market / let TWAP catch up and finish call 2: NO match may be booked on call 2.
+        _sellExact(attacker, WETH_POOL, WETH, USDC, wBought);
+        alignFeedsToPools();
+        vm.warp(block.timestamp + queue.flowParams().settleWindow);
+        refreshFeeds();
+        uint256 sBefore = queue.settlementCount();
+        vm.prank(keeper);
+        uint256 sid2 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        if (sid2 > sBefore) {
+            assertEq(queue.getSettlement(sid2).matchedShares, 0, "A36: zero match booked on call 2");
+        }
+        deliverAfterHold(victim);
+        deliverAfterHold(victim2);
+        _claimRedeemUsdc(alice);
+        _claimRedeemUsdc(dave);
+        _end("A36: round cut in two books no second match at old price", true);
+    }
+
+    /// @notice A37: the looks — notice on an old redemption inside an open settle window, and cancel of a deposit
+    ///         before/after scheduled `unpauseDeposits`. Neither avoids a price already forming.
+    function test_A37_looks_lateRedemptionNoticeAndDepositCancelBeforeUnpause_cannotAvoidPrice()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        fundUsdc(attacker, 50_000e6);
+        _startAttacker();
+
+        // Part 1: Aged redemption gives notice while its current round's settle window is already open.
+        uint256 half = fund.balanceOf(alice) / 2;
+        uint256 rid = openRedeemRequest(alice, half);
+        FlowParams memory p = queue.flowParams();
+        // Advance past expiryEpoch so notice is eligible, landing inside the settle window of round `cur - 1`.
+        vm.warp(block.timestamp + uint256(p.maxRoll + 1) * p.epochLength + p.settleWindow);
+        refreshFeeds();
+        vm.prank(alice);
+        uint64 targetRound = queue.giveRedemptionNotice(rid);
+        assertEq(targetRound, queue.currentEpoch() - 1, "A37: notice binds to currently active round");
+        // Calling claimNoticeReturn while that round is still open MUST revert `NoticeNotReady`.
+        vm.prank(alice);
+        vm.expectPartialRevert(IFlowEvents.NoticeNotReady.selector);
+        queue.claimNoticeReturn(rid);
+        // Keeper settles that round -> the noticed redemption STILL takes the round price instead of dodging!
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(sid, 0, "A37: active round settled");
+        assertEq(
+            uint8(queue.requestStatus(rid)),
+            uint8(RequestStatus.Closed),
+            "A37: aged redemption still filled in the active round"
+        );
+        _claimRedeemUsdc(alice);
+
+        // Part 2: Locked deposit during scheduled `unpauseDeposits` cannot dodge an active round price.
+        uint256 did = _victimDeposit(victim, 25_000e6);
+        vm.prank(emergency);
+        fund.pauseDeposits();
+        // Close epoch of `did` while pause holds, then schedule + execute `unpauseDeposits` inside next epoch `cur`.
+        uint256 curStart = (uint256(queue.getRequest(did).epoch) + 1) * p.epochLength;
+        vm.warp(curStart + 10);
+        refreshFeeds();
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.unpauseDeposits, ()));
+        // Once epoch `cur` ends and enters its settle window (`cur + 1`), cancel is CLOSED while `cur` prices!
+        vm.warp(curStart + p.epochLength + p.settleWindow);
+        refreshFeeds();
+        vm.prank(victim);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestLocked.selector, did));
+        queue.cancel(did);
+        settleAll();
+        deliverAfterHold(victim);
+        _end("A37: notice and unpause cancel cannot dodge forming price", true);
+    }
+
+    /// @notice A38: wind-down notice — between `pauseDeposits` + scheduling `shutdown` and `shutdown` execution,
+    ///         redeemers cannot match against locked depositors (`depositsPaused` -> cause 1 -> zero match).
+    function test_A38_windDownNotice_redeemersCannotMatchAgainstLockedDepositsBeforeShutdown()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        _startAttacker();
+
+        uint256 did = _victimDeposit(victim, 40_000e6);
+        // Step E55: pauseDeposits then schedule shutdown in timelock.
+        vm.prank(emergency);
+        fund.pauseDeposits();
+        bytes32 salt = keccak256("a38-shutdown");
+        bytes memory data = abi.encodeCall(IRobotMoneyFund.shutdown, ());
+        timelock.schedule(address(fund), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
+
+        // Attacker queues a matching redemption between schedule and execution, and keeper settles.
+        uint256 half = fund.balanceOf(alice) / 2;
+        uint256 rid = openRedeemRequest(alice, half);
+        warpToSettleable(did);
+        refreshFeeds();
+        vm.recordLogs();
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertTrue(
+            _sawDepositStopped(queue.getRequest(did).epoch, 1), "A38: deposit stop prevented match"
+        );
+        assertEq(queue.getSettlement(sid).matchedShares, 0, "A38: zero match while shutdown scheduled");
+        assertEq(queue.getRequest(did).remaining, 40_000e6, "A38: locked deposit untouched");
+
+        // Now execute shutdown after timelock delay -> wind-down releases deposit to credit & redeems cleanly.
+        if (block.timestamp < TIMELOCK_DELAY + 10) vm.warp(TIMELOCK_DELAY + 10);
+        refreshFeeds();
+        timelock.execute(address(fund), 0, data, bytes32(0), salt);
+        vm.prank(victim);
+        queue.withdrawCredit();
+        assertEq(IERC20(USDC).balanceOf(victim), 40_000e6, "A38: depositor recovered 100% escrow");
+        rid;
+        _claimRedeemUsdc(alice);
+        _end("A38: wind-down notice stops match before shutdown", true);
+    }
+
+    /// @notice A39: more locked than epoch flow cap (2x cap deposits vs 1x cap redemptions, and reverse) —
+    ///         RB-36 exact share & USDC conservation and no fill above cap.
+    function test_A39_moreLockedThanCap_conservationAndCapBounds() public fixtureCovered {
+        _world();
+        // Give alice + dave > 600k worth of shares so 2 * cap (500k) can be redeemed cleanly.
+        uint256 sDave = _seedHolder(dave, 450_000e6);
+        _begin();
+        _startAttacker();
+
+        FlowParams memory p = queue.flowParams();
+        uint256 cap = Math.max(_navRef().mulDiv(p.maxEpochFlowBps, BPS), p.epochFlowFloorUsdc);
+        uint256 d1 = _victimDeposit(victim, cap);
+        uint256 d2 = _victimDeposit(victim2, cap); // 2 * cap total deposits
+        openRedeemRequest(dave, sDave * 3 / 5); // ~cap shares redeemed
+
+        warpToSettleable(d1);
+        refreshFeeds();
+        uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        Settlement memory st = queue.getSettlement(sid);
+        assertLe(st.matchedUsdc, cap, "A39: matchedUsdc <= cap");
+        assertLe(st.usdcIn, cap - st.matchedUsdc + 1, "A39: total deposit fills <= cap");
+        assertLe(st.usdcOut, cap - st.matchedUsdc + 1, "A39: total redeem fills <= cap");
+
+        // RB-36: queue books match token/USDC balances to the unit.
+        FlowBooks memory b = queue.books();
+        uint256 qUsdc = IERC20(USDC).balanceOf(address(queue));
+        uint256 qShares = IERC20(address(fund)).balanceOf(address(queue));
+        assertGe(
+            qUsdc,
+            b.pendingUsdc + b.owedUsdc + b.creditUsdc + b.dustUsdc,
+            "A39: USDC covers all queue liabilities"
+        );
+        assertEq(
+            qUsdc,
+            b.pendingUsdc + b.owedUsdc + b.creditUsdc + b.dustUsdc,
+            "A39: exact USDC conservation"
+        );
+        assertEq(
+            qShares,
+            b.escrowShares + b.heldShares + b.creditShares + b.dustShares,
+            "A39: exact share conservation"
+        );
+
+        // Next period: reverse (1x cap deposits vs 2x cap redemptions).
+        vm.warp(block.timestamp + queue.flowParams().epochLength);
+        refreshFeeds();
+        uint256 d3 = _victimDeposit(victim, cap);
+        openRedeemRequest(alice, fund.balanceOf(alice));
+        openRedeemRequest(dave, fund.balanceOf(dave));
+        warpToSettleable(d3);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid2 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        Settlement memory st2 = queue.getSettlement(sid2);
+        assertLe(st2.matchedUsdc, cap, "A39-rev: matchedUsdc <= cap");
+        assertGt(IERC20(USDC).balanceOf(feeRecipient), feeBefore, "A39: fees collected");
+        FlowBooks memory b2 = queue.books();
+        assertEq(
+            IERC20(USDC).balanceOf(address(queue)),
+            b2.pendingUsdc + b2.owedUsdc + b2.creditUsdc + b2.dustUsdc,
+            "A39-rev: exact USDC conservation"
+        );
+        assertEq(
+            IERC20(address(fund)).balanceOf(address(queue)),
+            b2.escrowShares + b2.heldShares + b2.creditShares + b2.dustShares,
+            "A39-rev: exact share conservation"
+        );
+        d2;
+        _end("A39: over-cap match booking conservation", true);
+    }
+
+    /// @notice A40 (RB-22): exclusion after a match — neither matched user touches the queue, an adapter is revoked,
+    ///         both claim: recovery goes to the depositor. Repeat with a second match before either checkpoints.
+    function test_A40_exclusionAfterMatch_bothClaimWithoutTouching_recoveryToDepositor_andRepeat()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        _startAttacker();
+
+        FundExclusionLedger ledger = FundExclusionLedger(fund.exclusionLedger());
+        uint256 aliceInit = fund.balanceOf(alice);
+
+        // Cycle 1: victim deposits vs alice redeems -> whole match -> NEITHER touches queue -> revoke Moonwell.
+        uint256 r1Shares = aliceInit / 4;
+        uint256 did1 = _victimDeposit(victim, 30_000e6);
+        openRedeemRequest(alice, r1Shares);
+        warpToSettleable(did1);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid1 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(queue.getSettlement(sid1).matchedShares, 0, "A40-c1: matched");
+
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+            )
+        );
+        uint256 ex1 = fund.openExclusionOf(IDX_MOONWELL);
+        assertGt(ex1, 0, "A40-c1: exclusion opened");
+        vm.warp(block.timestamp + queue.flowParams().minHold);
+        refreshFeeds();
+        deliverAfterHold(victim);
+        _claimRedeemUsdc(alice);
+
+        // End exclusion and drain recovery, then check attribution and run Cycle 2 BEFORE explicit claim.
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, true)
+            )
+        );
+        assertGt(ledger.claimable(ex1, victim), 0, "A40-c1: recovery attributed to depositor");
+        assertEq(
+            ledger.balanceAt(alice, ex1),
+            aliceInit - r1Shares,
+            "A40-c1: matched redeemer lost exclusion claim on matched shares"
+        );
+        vm.warp(block.timestamp + queue.flowParams().epochLength);
+        refreshFeeds();
+        settleAll();
+
+        uint256 aliceAfter1 = fund.balanceOf(alice);
+        uint256 r2Shares = aliceAfter1 / 4;
+        uint256 did2 = _victimDeposit(victim, 20_000e6);
+        openRedeemRequest(alice, r2Shares);
+        warpToSettleable(did2);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid2 = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        assertGt(queue.getSettlement(sid2).matchedShares, 0, "A40-c2: second match booked");
+
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+            )
+        );
+        uint256 ex2 = fund.openExclusionOf(IDX_MOONWELL);
+        assertGt(ex2, ex1, "A40-c2: second exclusion opened");
+        vm.warp(block.timestamp + queue.flowParams().minHold);
+        refreshFeeds();
+        deliverAfterHold(victim);
+        _claimRedeemUsdc(alice);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, true)
+            )
+        );
+        assertGt(ledger.claimable(ex2, victim), 0, "A40-c2: second recovery went to depositor");
+        assertEq(
+            ledger.balanceAt(alice, ex2),
+            aliceAfter1 - r2Shares,
+            "A40-c2: matched redeemer lost second exclusion claim on matched shares"
+        );
+        _end("A40: RB-22 exclusion after match attributes to depositor across cycles", true);
+    }
+
+    /// @notice A41: scheduled adapter revoke — redeemers try leaving at face value between schedule and execution
+    ///         (with and without `pauseDeposits`); `pauseDeposits` is immediately renewable without cooldown.
+    function test_A41_scheduledAdapterRevoke_redeemersCannotExitAtFaceValue_pauseDepositsRenewable()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        _startAttacker();
+
+        // Schedule adapter revocation.
+        bytes32 salt = keccak256("a41-revoke");
+        bytes memory data = abi.encodeCall(
+            IRobotMoneyFund.setAdapterCodeHashAllowed, (address(moonwellAdapter).codehash, false)
+        );
+        timelock.schedule(address(fund), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
+
+        // Case 1 (no pauseDeposits): redeemer CANNOT call redeemInKind (InKindClosed), and queue redeem pays
+        // exit fee (no free face-value exit).
+        uint256 rShares = fund.balanceOf(alice) / 4;
+        vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(rShares, alice, alice);
+
+        uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
+        uint256 rid1 = openRedeemRequest(alice, rShares);
+        warpToSettleable(rid1);
+        refreshFeeds();
+        vm.prank(keeper);
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        _claimRedeemUsdc(alice);
+        assertGt(IERC20(USDC).balanceOf(feeRecipient), feeBefore, "A41: redeem paid exit fee");
+
+        // Case 2 (with pauseDeposits): emergency renews `pauseDeposits` back-to-back with ZERO cooldown (E39/A41)!
+        vm.startPrank(emergency);
+        fund.pauseDeposits();
+        vm.warp(block.timestamp + 1 hours);
+        fund.pauseDeposits(); // MUST succeed without cooldown!
+        vm.stopPrank();
+        assertTrue(fund.depositsPaused(), "A41: deposit pause active and renewed");
+
+        // Execute revoke when delay finishes; deposits remained blocked and redeemer cannot dodge exclusion.
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        refreshFeeds();
+        timelock.execute(address(fund), 0, data, bytes32(0), salt);
+        assertGt(fund.openExclusionOf(IDX_MOONWELL), 0, "A41: exclusion opened on execute");
+        AttackPnl memory r = _end("A41: scheduled revoke and renewable pauseDeposits", false);
+        _assertG8("A41: scheduled revoke and renewable pauseDeposits", r);
+    }
+
+    /// @notice A42: delisting sale with redemptions and sale steps interleaved — no double claim, USDC split by
+    ///         tokens, and NAV never counts claimed tokens.
+    function test_A42_delistingSale_interleavedWithRedemptions_noDoubleClaim_navExcludesClaimed()
+        public
+        fixtureCovered
+    {
+        _world();
+        uint256 sDave = _seedHolder(dave, 100_000e6);
+        _begin();
+        _startAttacker();
+
+        // Delist WETH -> marks asset in sale, stops deposits.
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_WETH)));
+        assertTrue(fund.isAssetInSale(IDX_WETH), "A42: WETH in sale");
+
+        // Interleave: redeem 1 -> sale step 1 -> redeem 2 -> remaining sale steps.
+        uint256 rid1 = openRedeemRequest(alice, fund.balanceOf(alice) / 2);
+        warpToSettleable(rid1);
+        refreshFeeds();
+        vm.prank(keeper);
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        _claimRedeemUsdc(alice);
+
+        (, uint256[] memory held1) = fund.heldBalances();
+        uint256 contractWeth1 = IERC20(WETH).balanceOf(address(fund));
+        assertLt(held1[IDX_WETH], contractWeth1, "A42: claimed WETH excluded from heldBalances");
+        assertLt(
+            fund.assetValue(IDX_WETH),
+            fund.assetUsdcValue(IDX_WETH, contractWeth1),
+            "A42: NAV never counts claimed WETH"
+        );
+
+        // Execute half the WETH sale via rebalancer `stepDelisted`.
+        vm.prank(keeper);
+        rebalancer.stepDelisted(IDX_WETH);
+
+        // Interleave redemption 2 AFTER step 1.
+        vm.warp(block.timestamp + queue.flowParams().epochLength);
+        refreshFeeds();
+        uint256 rid2 = openRedeemRequest(dave, sDave / 2);
+        warpToSettleable(rid2);
+        refreshFeeds();
+        vm.prank(keeper);
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        _claimRedeemUsdc(dave);
+
+        // Drain rest of delist sale.
+        for (uint256 k; k < 20 && fund.isAssetInSale(IDX_WETH); ++k) {
+            vm.warp(block.timestamp + rebalancer.stepParams().stepInterval + 1);
+            refreshFeeds();
+            vm.prank(keeper);
+            rebalancer.stepDelisted(IDX_WETH);
+        }
+        assertFalse(fund.isAssetInSale(IDX_WETH), "A42: delist sale finished");
+        assertFalse(fund.assetConfig(IDX_WETH).active, "A42: WETH deactivated cleanly");
+
+        // Stranger settles claims for alice and dave: USDC split cleanly, second call reverts NoClaimToSettle.
+        uint256 aBefore = IERC20(USDC).balanceOf(alice);
+        uint256 dBefore = IERC20(USDC).balanceOf(dave);
+        vm.prank(attacker);
+        uint256 aGot = fund.settleClaim(IDX_WETH, alice);
+        vm.prank(attacker);
+        uint256 dGot = fund.settleClaim(IDX_WETH, dave);
+        assertGt(aGot, 0, "A42: alice claim paid");
+        assertGt(dGot, 0, "A42: dave claim paid");
+        assertEq(IERC20(USDC).balanceOf(alice) - aBefore, aGot);
+        assertEq(IERC20(USDC).balanceOf(dave) - dBefore, dGot);
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, IDX_WETH, alice));
+        fund.settleClaim(IDX_WETH, alice);
+        AttackPnl memory r = _end("A42: interleaved delisting sale & claim settlement", false);
+        _assertG8("A42: interleaved delisting sale & claim settlement", r);
+    }
+
+    /// @notice A43: a basket rebalance step inside the window before a round's first call makes `settle` revert
+    ///         `StepInWindow` (RB-30); while the queue is paused, steps still execute.
+    function test_A43_stepInsideWindowBlocksFirstSettle_pausedQueueAllowsSteps() public fixtureCovered {
+        _world();
+        _begin();
+        _startAttacker();
+        setTargetViaTimelock(bucketVec(5_500, 4_500), PlanParams(1 days, 500));
+        vm.warp(block.timestamp + 1 days + 1);
+        refreshFeeds();
+
+        uint256 vid = _victimDeposit(victim, 20_000e6);
+        uint256 windowAt = queue.settleableAt(queue.getRequest(vid).epoch);
+        vm.warp(windowAt - 10 minutes);
+        refreshFeeds();
+
+        // Execute a basket step INSIDE the upcoming settle window (`windowAt - 10 min`).
+        vm.prank(keeper);
+        (bool did,) = rebalancer.step();
+        assertTrue(did, "A43: basket step ran");
+        uint64 lastBasket = rebalancer.lastBasketStepAt();
+        assertGt(lastBasket, 0, "A43: basket step recorded timestamp");
+
+        // At window open (< lastBasket + settleWindow), first call of round reverts `StepInWindow`.
+        vm.warp(windowAt);
+        refreshFeeds();
+        uint32 settleWin = queue.flowParams().settleWindow;
+        vm.prank(keeper);
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.StepInWindow.selector, lastBasket, settleWin));
+        queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+
+        // Once settleWindow elapses after lastBasket, round settles.
+        vm.warp(uint256(lastBasket) + queue.flowParams().settleWindow);
+        refreshFeeds();
+        vm.prank(keeper);
+        assertGt(queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max), 0, "A43: settled after window wait");
+        deliverAfterHold(victim);
+
+        // Pausing queue does NOT block rebalance steps.
+        vm.warp(block.timestamp + rebalancer.stepParams().stepInterval + 1);
+        refreshFeeds();
+        vm.prank(emergency);
+        queue.pauseQueue();
+        assertTrue(queue.queuePaused(), "A43: queue paused");
+        if (fund.planStatus() == PlanStatus.Open) {
+            vm.prank(keeper);
+            (bool didWhilePaused,) = rebalancer.step();
+            assertTrue(didWhilePaused, "A43: step ran while queue paused");
+        }
+        AttackPnl memory r = _end("A43: StepInWindow guard & step under paused queue", false);
+        _assertG8("A43: StepInWindow guard & step under paused queue", r);
+    }
+
+    /// @notice A44 (report-only per eng plan §8.3): compares an honest 10k request vs a 100k (10x) request competing
+    ///         for a scarce 20k match, reporting extra matched fill gained and locked surplus cost.
+    function test_A44_askTenTimesMoreThanWanted_reportMatchShareVsLockedSurplusCost()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        fundUsdc(attacker, 100_000e6);
+        _startAttacker();
+
+        // Scarce match counterparty: 20k worth of redemption shares vs honest 10k deposit + attacker 100k (10x).
+        uint256 rShares = fund.balanceOf(alice) / 5; // ~20k USDC
+        uint256 dHonest = _victimDeposit(victim, 10_000e6);
+        uint256 dTenX = _reqDeposit(attacker, 100_000e6, 0);
+        openRedeemRequest(alice, rShares);
+
+        uint64 ep = queue.getRequest(dHonest).epoch;
+        // Stop deposits right after match? Measure after normal full settlement vs capped epoch where surplus waits.
+        warpToSettleable(dHonest);
+        refreshFeeds();
+        vm.prank(keeper);
+        uint256 sid = queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max);
+        uint256 matchedTotal = queue.getSettlement(sid).matchedUsdc;
+
+        deliverAfterHold(victim);
+        deliverAfterHold(attacker);
+        _claimRedeemUsdc(alice);
+        // Estimate match allocation (10k vs 100k => 10/11 of matchedTotal went to attacker vs 1/2 honest fair).
+        uint256 honestShareOfMatch = matchedTotal / 2;
+        uint256 tenXMatchFill = matchedTotal.mulDiv(100_000e6, 110_000e6);
+        emit log_named_uint("A44 REPORT: total scarce match (USDC)", matchedTotal);
+        emit log_named_uint("A44 REPORT: fair 1x match share (USDC)", honestShareOfMatch);
+        emit log_named_uint("A44 REPORT: 10x request match share (USDC)", tenXMatchFill);
+        emit log_named_uint("A44 REPORT: locked surplus exposed to net costs (USDC)", 100_000e6 - tenXMatchFill);
+        pending = honestShareOfMatch > (matchedTotal - tenXMatchFill)
+            ? honestShareOfMatch - (matchedTotal - tenXMatchFill)
+            : 0;
+        ep;
+        dTenX;
+        // Report-only (`g8 = false`): explicitly does not pass/fail G8 per proposal §10 step 3f.
+        _end("A44 REPORT ONLY: 10x oversizing in scarce match", false);
+    }
+
+    /// @notice A45 (RB-35): a lending claim protects its venue's outstanding claim units from rebalance withdrawal,
+    ///         and a stranger can permissionlessly call `settleClaim`.
+    function test_A45_lendingClaimAndStep_stepSkipsClaimVenue_strangerSettlesClaim()
+        public
+        fixtureCovered
+    {
+        _world();
+        _begin();
+        _startAttacker();
+
+        // Create an Aave position claim for Alice via wind-down `redeemInKind` with inKindAllowance = 0, then restore.
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(IRobotMoneyFund.setInKindAllowance, (0, 0, queue.flowParams().epochLength))
+        );
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        uint256 half = fund.balanceOf(alice) / 2;
+        vm.prank(alice);
+        fund.redeemInKind(half, alice, alice);
+        (uint256 aaveUnits0, uint256 claimUsdc0) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertGt(aaveUnits0, 0, "A45: Aave claim created");
+
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
+        // Open plan trying to move ALL funds OUT of Aave (`target[IDX_AAVE] = 0`).
+        uint16[5] memory tVec = cometListed
+            ? assetVec(0, 3_500, 1_750, 1_750, 3_000)
+            : assetVec(0, 6_000, 2_000, 2_000, 0);
+        setTargetViaTimelock(tVec, PlanParams(1 days, 500));
+        vm.warp(block.timestamp + 1 days + 1);
+        refreshFeeds();
+
+        // Rebalance steps run, but NEVER consume Alice's claim units (`positionClaimOf` intact).
+        for (uint256 k; k < 4; ++k) {
+            vm.prank(keeper);
+            rebalancer.step();
+            vm.warp(block.timestamp + rebalancer.stepParams().stepInterval + 1);
+            refreshFeeds();
+        }
+        (uint256 aaveUnitsAfterSteps, uint256 claimUsdcAfterSteps) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertEq(aaveUnitsAfterSteps, aaveUnits0, "A45: rebalance step never consumed claim units");
+        assertGe(claimUsdcAfterSteps, claimUsdc0, "A45: claim value preserved across steps");
+
+        // Stranger (`attacker`) settles Alice's claim -> USDC goes directly to Alice.
+        uint256 aliceUsdcBefore = IERC20(USDC).balanceOf(alice);
+        vm.prank(attacker);
+        uint256 netPaid = fund.settleClaim(IDX_AAVE, alice);
+        assertGt(netPaid, 0, "A45: stranger settled Aave claim");
+        assertEq(IERC20(USDC).balanceOf(alice) - aliceUsdcBefore, netPaid, "A45: USDC sent to Alice");
+        (uint256 unitsEnd,) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertEq(unitsEnd, 0, "A45: claim cleared after settleClaim");
+        AttackPnl memory r = _end("A45: lending claim protects venue from step & stranger settles", false);
+        _assertG8("A45: lending claim protects venue from step & stranger settles", r);
+    }
+
     /// @dev While check 6 (share price) blocks the keeper, move one epoch at a time (at most `maxRoll − 1`, so no
     ///      request expires). Returns the epochs it held.
     function _waitOutSharePriceBreaker() internal returns (uint256 epochs) {
@@ -2249,6 +3669,21 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
             ) continue;
             (RequestKind k,) = abi.decode(logs[i].data, (RequestKind, bytes));
             if (k == kind) return true;
+        }
+        return false;
+    }
+
+    /// @dev Whether the recorded logs hold `DepositStoppedForRound(roundEpoch, cause)` from the queue.
+    function _sawDepositStopped(uint64 roundEpoch, uint8 cause) internal returns (bool) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            if (
+                logs[i].emitter != address(queue)
+                    || logs[i].topics[0] != IFlowEvents.DepositStoppedForRound.selector
+            ) continue;
+            if (uint64(uint256(logs[i].topics[1])) != roundEpoch) continue;
+            uint8 loggedCause = abi.decode(logs[i].data, (uint8));
+            if (loggedCause == cause) return true;
         }
         return false;
     }
@@ -2309,7 +3744,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         } else if (id == 1) {
             (l.name, l.legBand) = ("L1 legBand 50", 50);
         } else if (id == 2) {
-            (l.name, l.legBand) = ("L2 legBand 25", 25);
+            (l.name, l.legBand) = ("L2 legBand 26", 26);
         } else if (id == 3) {
             (l.name, l.mode) = ("L3 limits from TWAP only", 1);
         } else if (id == 4) {
@@ -2323,7 +3758,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         } else if (id == 8) {
             (l.name, l.legBand, l.callBps) = ("L8 legBand 50 + cap 10 bps", 50, 10);
         } else if (id == 9) {
-            (l.name, l.legBand, l.mode) = ("L9 legBand 25 + feed only", 25, 2);
+            (l.name, l.legBand, l.mode) = ("L9 legBand 26 + feed only", 26, 2);
         } else if (id == 10) {
             (l.name, l.refBand) = ("L10 refBand 90", 90);
         } else if (id == 11) {
@@ -2950,19 +4385,13 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         }
     }
 
-    /// @dev Close a run: the victim's fills of request `vid` (RB-14 asserted on each), the attacker's net, the
+    /// @dev Close a run: the victim's fills of request `vid`, the attacker's net, the
     ///      holders' loss (asserted under 1 bps of NAV), check 10 from outside.
     function _leverClose(uint256 vid, LeverRun memory r) internal {
-        uint256 limit = queue.getRequest(vid).limit;
         uint256 n = queue.claimCount();
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
             if (cl.requestId != vid) continue;
-            assertLe(
-                cl.usdc.mulDiv(PRICE_SCALE, cl.shares, Math.Rounding.Ceil),
-                limit,
-                "lever: RB-14, each fill inside the limit"
-            );
             r.victimUsdc += cl.usdc;
             r.victimShares += cl.shares;
         }
@@ -3147,7 +4576,11 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 n = queue.requestCount();
         for (uint256 id = 1; id <= n; ++id) {
             Request memory r = queue.getRequest(id);
-            if (r.owner == who && !r.closed && r.kind == RequestKind.Deposit) v += r.remaining;
+            if (r.owner == who && !r.closed && r.kind == RequestKind.Deposit) {
+                v += queue.requestStatus(id) == RequestStatus.Pending
+                    ? queue.pendingDepositRequest(id, who)
+                    : r.remaining;
+            }
         }
         n = queue.claimCount();
         for (uint256 c = 1; c <= n; ++c) {
@@ -3188,18 +4621,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
     }
 
     /// @dev `who` asks to deposit `usdc` it already holds (no funding), with limit `limit`.
-    function _reqDeposit(address who, uint256 usdc, uint256 limit) internal returns (uint256 id) {
+    function _reqDeposit(address who, uint256 usdc, uint256 /* limit */) internal returns (uint256 id) {
         vm.startPrank(who);
         IERC20(USDC).approve(address(queue), usdc);
-        id = queue.requestDeposit(usdc, limit, who);
+        id = queue.requestDeposit(usdc, who);
         vm.stopPrank();
     }
 
-    /// @dev A pending user's deposit request with a limit from the quote plus `LIMIT_MARGIN_BPS` (E21).
+    /// @dev A pending user's deposit request (limits retired in Step 3f).
     function _victimDeposit(address who, uint256 usdc) internal returns (uint256 id) {
         refreshFeeds();
-        Quote memory q = queue.quoteDeposit(usdc);
-        id = openDepositRequest(who, usdc, q.boundPrice.mulDiv(BPS + LIMIT_MARGIN_BPS, BPS));
+        queue.quoteDeposit(usdc);
+        id = openDepositRequest(who, usdc);
     }
 
     /// @dev `who` takes every settled redemption USDC it has (computed before the prank: a call inside the

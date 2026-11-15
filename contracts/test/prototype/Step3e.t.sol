@@ -485,29 +485,38 @@ contract Step3eTest is PrototypeHarness {
     //  Backoff only on the keeper's own failed calls (§5.10)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice After keeperGrace a stranger pushes the wETH pool past the step's floor and calls `step()` in the
-    ///         same transaction: the step fails and nothing backs off. The keeper's own failed call does back off.
+    /// @notice Step 3f (`E34`, `RB-20`): `step()` stays keeper-only even past the old grace horizon
+    ///         (`permissionlessAt == type(uint256).max`). A stranger's call is refused without backing anything off,
+    ///         while the keeper's own failed call into a pushed pool backs wETH off.
     function test_3e_backoff_onlyOnTheKeepersOwnFailedCall() public fixtureCovered {
         _buyWethReady();
         vm.warp(block.timestamp + KEEPER_GRACE);
         _freshFeeds();
-        assertLe(rebalancer.permissionlessAt(), block.timestamp, "open to anyone");
+        assertEq(
+            rebalancer.permissionlessAt(), type(uint256).max, "E34: step stays keeper-only"
+        );
         uint256 slip = rebalancer.assetStepParams(IDX_WETH).maxStepSlippageBps;
         fundUsdc(attacker, FLASH_USDC);
         _pushBps(attacker, WETH_POOL, WETH, int256(slip + 30));
 
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                bytes4(keccak256("AccessControlUnauthorizedAccount(address,bytes32)")),
+                stranger,
+                rebalancer.KEEPER_ROLE()
+            )
+        );
         vm.prank(stranger);
-        (bool did, SkipReason why) = rebalancer.step();
-        assertFalse(did, "no trade");
-        assertEq(uint8(why), uint8(SkipReason.StepFailed), "the floor refused the pushed pool");
+        rebalancer.step();
         assertEq(
-            rebalancer.assetBackoffUntil(IDX_WETH), 0, "a stranger's failure backs nothing off"
+            rebalancer.assetBackoffUntil(IDX_WETH), 0, "a stranger's refusal backs nothing off"
         );
         (SkipReason next,,,) = rebalancer.previewStep();
         assertEq(uint8(next), uint8(SkipReason.None), "wETH stays eligible");
 
-        (did, why) = keeperStep();
+        (bool did, SkipReason why) = keeperStep();
         assertFalse(did, "the keeper's call fails too");
+        assertEq(uint8(why), uint8(SkipReason.StepFailed), "the floor refused the pushed pool");
         assertGt(
             rebalancer.assetBackoffUntil(IDX_WETH),
             block.timestamp,

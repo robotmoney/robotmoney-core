@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.9.2 steps 1, 6 and 7 (request, hold, roll and expiry),
-//            §5.9.4 (exits and emergency powers), §5.9.6 (claims), RB-10, RB-11, RB-12, RB-15, RB-18, RB-22;
-//            docs/technical/one-vault-timed-flows-eng-plan.md E8, E9, E11, E13, E17, E18, E22
+// Canonical: docs/technical/one-vault-rebalancer-proposal.md §5.9.2, §5.9.4, §5.9.6, §5.11.3-§5.11.7;
+//            docs/technical/one-vault-timed-flows-eng-plan.md E8, E11, E13, E17, E18, E22, E25, E26, E38-E41, E49, E52
 // Experiment prototype only (contracts/test/prototype/). Not a production contract.
 pragma solidity ^0.8.24;
 
@@ -19,62 +18,56 @@ import {
 } from "../FlowTypes.sol";
 import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState} from "./FlowStorage.sol";
+import {FlowCheckLib} from "./FlowCheckLib.sol";
+import {FlowMatchLib} from "./FlowMatchLib.sol";
 
 /// @title FlowClaimLib
-/// @notice Requests, exits, claims and the emergency powers of the FlowQueue, linked (`public`) for size.
+/// @notice Limit-free requests, cancels (with `cancelBuffer` & deposit-stop exits), expiry, redemption notice,
+///         claims, wind-down-aware freeze, and sweep for Step 3f `FlowQueue`.
 ///
-///         Ledger rule (E13, RB-22): before any change of an owner's queued shares (`FlowState.queuedShares`:
-///         escrowed redemption shares, deposit shares in their hold, and share credits) the queue calls
-///         `fund.ledgerCheckpoint(owner)`. Every function here that changes them does that first.
-///
-///         Returns are pulled (E22): every payment goes to `msg.sender` acting as the owner, or, for a claim, to the
-///         owner (deposit / mint, RB-11) or to a receiver the owner itself names (redeem). Nobody can push escrow,
-///         refunds or in-kind returns to another address.
+///         Ledger rule (E13, RB-22, E52): before any mutation of an owner's queued shares (escrow, held, credit),
+///         `fund.ledgerCheckpoint(owner)` runs first so index snapshots capture pre-change balances.
 library FlowClaimLib {
     using Math for uint256;
     using SafeERC20 for IERC20;
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Requests (§5.9.2 step 1, E11)
+    //  Requests (E11, E25, E41, RB-31)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Body of `FlowQueue.requestDeposit`. Pulls `usdc` from `msg.sender` only (ruling 10).
-    function requestDeposit(
-        FlowState storage s,
-        uint256 usdc,
-        uint256 maxUsdcPerShare,
-        address owner
-    ) public returns (uint256 requestId) {
+    /// @notice Body of `FlowQueue.requestDeposit(usdc, owner)` (limit-free, terms locked at creation).
+    function requestDeposit(FlowState storage s, uint256 usdc, address owner)
+        public
+        returns (uint256 requestId)
+    {
         _open(s, owner);
-        if (usdc == 0 || maxUsdcPerShare == 0) revert IFlowEvents.ZeroAmount();
-        FlowParams memory p = s.params;
-        if (usdc < p.minRequestUsdc) revert IFlowEvents.BelowMinRequest(usdc, p.minRequestUsdc);
-        (, uint256 perDepositCap,,) = IRobotMoneyFundFull(s.fund).config();
+        if (usdc == 0) revert IFlowEvents.ZeroAmount();
+        if (usdc < s.params.minRequestUsdc) {
+            revert IFlowEvents.BelowMinRequest(usdc, s.params.minRequestUsdc);
+        }
+        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
+        (, uint256 perDepositCap, uint256 exitFeeBps,) = fund.config();
         if (usdc > perDepositCap) revert IFlowEvents.AbovePerDepositCap(usdc, perDepositCap);
 
-        requestId = _newRequest(s, owner, RequestKind.Deposit, usdc, maxUsdcPerShare);
+        requestId = _newRequest(s, owner, RequestKind.Deposit, usdc, uint16(exitFeeBps));
         s.totalPendingUsdc += usdc;
-        uint256 before = IERC20(s.usdc).balanceOf(address(this));
-        IERC20(s.usdc).safeTransferFrom(msg.sender, address(this), usdc);
-        if (IERC20(s.usdc).balanceOf(address(this)) - before != usdc) {
-            revert IFlowEvents.FundResultMismatch(
-                usdc, IERC20(s.usdc).balanceOf(address(this)) - before
-            );
+        {
+            uint256 before = IERC20(s.usdc).balanceOf(address(this));
+            IERC20(s.usdc).safeTransferFrom(msg.sender, address(this), usdc);
+            uint256 received = IERC20(s.usdc).balanceOf(address(this)) - before;
+            if (received != usdc) revert IFlowEvents.FundResultMismatch(usdc, received);
         }
-        emit IFlowEvents.DepositRequested(
-            requestId, owner, msg.sender, usdc, maxUsdcPerShare, s.requests[requestId].epoch
-        );
+
+        uint64 epoch = s.requests[requestId].epoch;
+        FlowMatchLib.registerCreated(s, requestId, owner, RequestKind.Deposit, epoch, usdc);
+        emit IFlowEvents.DepositRequested(requestId, owner, msg.sender, usdc, epoch);
     }
 
-    /// @notice Body of `FlowQueue.requestRedeem`. Ledger hook for `owner` first, then pulls `shares` from
-    ///         `msg.sender`. The minimum is valued at `lastGoodNav` (DOWN); a redemption of the caller's whole
-    ///         wallet balance is exempt (E11).
-    function requestRedeem(
-        FlowState storage s,
-        uint256 shares,
-        uint256 minUsdcPerShare,
-        address owner
-    ) public returns (uint256 requestId) {
+    /// @notice Body of `FlowQueue.requestRedeem(shares, owner)` (limit-free, snapshots `exitFeeBps`, never expires).
+    function requestRedeem(FlowState storage s, uint256 shares, address owner)
+        public
+        returns (uint256 requestId)
+    {
         _open(s, owner);
         if (shares == 0) revert IFlowEvents.ZeroAmount();
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
@@ -87,39 +80,53 @@ library FlowClaimLib {
                 revert IFlowEvents.BelowMinRequest(value, minUsdc);
             }
         }
-        requestId = _newRequest(s, owner, RequestKind.Redeem, shares, minUsdcPerShare);
-        // E13 / RB-22: the owner's queued shares are about to change. The caller's wallet side is checkpointed by
-        // the fund's own transfer hook.
+        (,, uint256 exitFeeBps,) = fund.config();
+        requestId = _newRequest(s, owner, RequestKind.Redeem, shares, uint16(exitFeeBps));
+        uint64 epoch = s.requests[requestId].epoch;
+
+        // Checkpoint owner BEFORE increasing ownerUnenrolledRedShares (RB-22).
         fund.ledgerCheckpoint(owner);
-        s.queuedShares[owner] += shares;
+        FlowMatchLib.registerCreated(s, requestId, owner, RequestKind.Redeem, epoch, shares);
         s.totalEscrowShares += shares;
         IERC20(address(fund)).safeTransferFrom(msg.sender, address(this), shares);
-        emit IFlowEvents.RedeemRequested(
-            requestId, owner, msg.sender, shares, minUsdcPerShare, s.requests[requestId].epoch
-        );
+        emit IFlowEvents.RedeemRequested(requestId, owner, msg.sender, shares, epoch);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Exits that read no price (§5.9.4): cancel, in-kind exit, expired escrow, credits
+    //  Exits: cancel (D39, E26, E40), deposit expiry, redemption notice, credits
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Body of `FlowQueue.cancel`: the unfilled part of a pending or expired request goes to the owner's
-    ///         credit, exactly (RB-12). Open while paused (RB-15).
+    /// @notice Body of `FlowQueue.cancel`: cancels the unfilled remainder to credit.
+    ///         Respects `cancelBuffer`, except after cutoff when shutdown or a deposit stop unlocks deposits (E40).
     function cancel(FlowState storage s, uint256 requestId) public {
         Request storage r = _owned(s, requestId);
-        uint256 rem = r.remaining;
-        r.remaining = 0;
-        _close(s, r);
+        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
+        bool shutdown = fund.isShutdown() || r.era < s.windDownEra;
+        if (!shutdown) {
+            uint256 cutoff = FlowEpochs.endOf(s, r.epoch) - s.params.cancelBuffer;
+            if (block.timestamp >= cutoff) {
+                if (r.kind != RequestKind.Deposit || !_depositStopAllowsCancel(s, fund, r)) {
+                    revert IFlowEvents.RequestLocked(requestId);
+                }
+            }
+        }
+
+        // Checkpoint BEFORE syncing or mutating owner queued shares (RB-22).
+        fund.ledgerCheckpoint(r.owner);
+        uint256 rem;
         if (r.kind == RequestKind.Deposit) {
-            s.totalPendingUsdc -= rem;
+            FlowMatchLib.syncOwnerDeposits(s, r.owner);
+            rem = r.remaining;
+            if (rem == 0) revert IFlowEvents.RequestNotPending(requestId);
+            FlowMatchLib.consumeDeposit(s, requestId, rem, false);
             s.usdcCredit[r.owner] += rem;
             s.totalCreditUsdc += rem;
             emit IFlowEvents.CreditAdded(r.owner, rem, 0);
         } else {
-            // Escrow becomes credit: the owner's queued shares do not change, the hook runs anyway (cheap, and the
-            // rule "hook before every change of queued state" then has no exception).
-            IRobotMoneyFundFull(s.fund).ledgerCheckpoint(r.owner);
-            s.totalEscrowShares -= rem;
+            FlowMatchLib.syncOwnerRedeems(s, r.owner);
+            rem = r.remaining;
+            if (rem == 0) revert IFlowEvents.RequestNotPending(requestId);
+            FlowMatchLib.consumeRedeem(s, requestId, rem, false);
             s.shareCredit[r.owner] += rem;
             s.totalCreditShares += rem;
             emit IFlowEvents.CreditAdded(r.owner, 0, rem);
@@ -127,61 +134,63 @@ library FlowClaimLib {
         emit IFlowEvents.RequestCancelled(requestId, r.owner, rem);
     }
 
-    /// @notice Body of `FlowQueue.exitInKind`: the unfilled shares of a redemption request leave at once through the
-    ///         fund's `redeemInKind(shares, owner, queue)`; the assets go to the owner (E9). Open while paused.
-    function exitInKind(FlowState storage s, uint256 requestId) public {
-        Request storage r = _owned(s, requestId);
-        if (r.kind != RequestKind.Redeem) revert IFlowEvents.WrongRequestKind(requestId);
-        uint256 rem = r.remaining;
-        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
-        fund.ledgerCheckpoint(r.owner);
-        s.queuedShares[r.owner] -= rem;
-        s.totalEscrowShares -= rem;
-        r.remaining = 0;
-        _close(s, r);
-        uint256 before = fund.balanceOf(address(this));
-        fund.redeemInKind(rem, r.owner, address(this));
-        if (before - fund.balanceOf(address(this)) != rem) {
-            revert IFlowEvents.FundResultMismatch(rem, before - fund.balanceOf(address(this)));
-        }
-        emit IFlowEvents.RequestExitedInKind(requestId, r.owner, rem);
-    }
-
-    /// @notice Body of `FlowQueue.withdrawExpired`: after `maxRoll` epochs the owner takes the unfilled escrow (E18).
+    /// @notice Body of `FlowQueue.withdrawExpired`: deposits only (E40). Redemptions never expire.
     function withdrawExpired(FlowState storage s, uint256 requestId)
         public
         returns (uint256 amount)
     {
         Request storage r = _owned(s, requestId);
-        if (FlowEpochs.current(s) <= uint256(r.epoch) + s.params.maxRoll) {
-            revert IFlowEvents.RequestNotExpired(requestId);
-        }
+        if (r.kind != RequestKind.Deposit) revert IFlowEvents.WrongRequestKind(requestId);
+        if (!_isDepositExpired(s, r)) revert IFlowEvents.RequestNotExpired(requestId);
+
+        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
+        fund.ledgerCheckpoint(r.owner);
+        FlowMatchLib.syncOwnerDeposits(s, r.owner);
         amount = r.remaining;
-        r.remaining = 0;
-        _close(s, r);
-        if (r.kind == RequestKind.Deposit) {
-            s.totalPendingUsdc -= amount;
-            IERC20(s.usdc).safeTransfer(r.owner, amount);
-        } else {
-            IRobotMoneyFundFull(s.fund).ledgerCheckpoint(r.owner);
-            s.queuedShares[r.owner] -= amount;
-            s.totalEscrowShares -= amount;
-            IERC20(s.fund).safeTransfer(r.owner, amount);
-        }
+        if (amount == 0) revert IFlowEvents.RequestNotPending(requestId);
+        FlowMatchLib.consumeDeposit(s, requestId, amount, false);
+        IERC20(s.usdc).safeTransfer(r.owner, amount);
         emit IFlowEvents.ExpiredWithdrawn(requestId, r.owner, amount);
     }
 
-    /// @notice Body of `FlowQueue.withdrawCredit`: pays `msg.sender` every USDC and share credit booked to it.
+    /// @notice Body of `FlowQueue.giveRedemptionNotice`: after `maxRoll`, schedules unfilled remainder to
+    ///         return at the end of the active open round or the forming epoch's round (E40, RB-25).
+    function giveRedemptionNotice(FlowState storage s, uint256 requestId)
+        public
+        returns (uint64 targetRound)
+    {
+        Request storage r = _owned(s, requestId);
+        if (r.kind != RequestKind.Redeem) revert IFlowEvents.WrongRequestKind(requestId);
+        if (r.noticeRound != 0) revert IFlowEvents.NoticeAlreadyGiven(requestId);
+        if (IRobotMoneyFundFull(s.fund).isShutdown() || r.era < s.windDownEra) {
+            revert IFlowEvents.FundIsShutdown();
+        }
+        uint64 cur = FlowEpochs.current(s);
+        if (cur <= r.expiryEpoch) {
+            revert IFlowEvents.NoticeNotReady(requestId, r.expiryEpoch + 1);
+        }
+        targetRound = (cur > 0 && !s.rounds[cur - 1].done) ? cur - 1 : cur;
+        r.noticeRound = targetRound;
+        FlowMatchLib.registerNotice(s, requestId, targetRound);
+        emit IFlowEvents.RedemptionNoticeGiven(requestId, r.owner, targetRound);
+    }
+
+    /// @notice Body of `FlowQueue.withdrawCredit`: finalizes ended notices and releases wind-down escrows
+    ///         automatically if shut down, then pays all USDC and share credits to `msg.sender`.
     function withdrawCredit(FlowState storage s) public returns (uint256 usdc, uint256 shares) {
+        FlowMatchLib.finalizeEndedNotices(s);
+        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
+        if (fund.isShutdown()) {
+            FlowMatchLib.releaseWindDown(s, msg.sender);
+        }
         usdc = s.usdcCredit[msg.sender];
         shares = s.shareCredit[msg.sender];
         if (usdc == 0 && shares == 0) revert IFlowEvents.NothingToWithdraw(msg.sender);
         if (shares != 0) {
-            IRobotMoneyFundFull(s.fund).ledgerCheckpoint(msg.sender);
+            fund.ledgerCheckpoint(msg.sender);
             s.shareCredit[msg.sender] = 0;
             s.totalCreditShares -= shares;
-            s.queuedShares[msg.sender] -= shares;
-            IERC20(s.fund).safeTransfer(msg.sender, shares);
+            IERC20(address(fund)).safeTransfer(msg.sender, shares);
         }
         if (usdc != 0) {
             s.usdcCredit[msg.sender] = 0;
@@ -192,14 +201,10 @@ library FlowClaimLib {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Claims (E8, RB-10, RB-11): stored fills, never a convert view
+    //  Claims (E8, E38, RB-10, RB-11): lazy-synced & FIFO delivered
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Body of `FlowQueue.deposit` (`byShares == false`, `amount` = USDC of cost) and `FlowQueue.mint`
-    ///         (`byShares == true`, `amount` = shares). Delivers `receiver`'s unlocked, unfrozen deposit claims
-    ///         oldest first, only to `receiver` (RB-11). Reverts `NotEnoughClaimable` when less is claimable.
-    /// @return shares Shares delivered.
-    /// @return assets Their USDC cost: for `mint`, rounded UP per claim; for `deposit`, at most `amount`.
+    /// @notice Body of `FlowQueue.deposit` (`byShares == false`) and `FlowQueue.mint` (`byShares == true`).
     function deliver(FlowState storage s, address receiver, uint256 amount, bool byShares)
         public
         returns (uint256 shares, uint256 assets)
@@ -207,14 +212,16 @@ library FlowClaimLib {
         if (receiver == address(0)) revert IFlowEvents.ZeroAddress();
         if (amount == 0) revert IFlowEvents.ZeroAmount();
         IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
-        // E13: checkpoint before the receiver's queued shares fall.
         fund.ledgerCheckpoint(receiver);
+        FlowMatchLib.syncOwnerDeposits(s, receiver);
+
+        bool shutdown = fund.isShutdown();
         uint256[] storage ids = s.claimsOf[receiver];
         uint256 left = amount;
         bool prefix = true;
         for (uint256 k = s.claimCursor[receiver]; k < ids.length && left != 0; ++k) {
             Claim storage c = s.claims[ids[k]];
-            if (c.kind == RequestKind.Deposit && c.claimed < c.shares && deliverable(s, c)) {
+            if (c.kind == RequestKind.Deposit && c.claimed < c.shares && _deliverable(s, c, shutdown)) {
                 uint256 x;
                 uint256 cost;
                 (x, cost, left) = _take(c, left, byShares);
@@ -226,14 +233,12 @@ library FlowClaimLib {
             else prefix = false;
         }
         if (left != 0) revert IFlowEvents.NotEnoughClaimable(amount, amount - left);
-        s.queuedShares[receiver] -= shares;
+        s.ownerHeldShares[receiver] -= shares;
         s.totalHeldShares -= shares;
         IERC20(address(fund)).safeTransfer(receiver, shares);
         emit IFlowEvents.SharesDelivered(receiver, msg.sender, shares, assets);
     }
 
-    /// @dev One deposit claim's part of a delivery. Cost of the first `n` shares of a claim is
-    ///      `ceil(usdc × n / shares)`, so partial deliveries never sum to less than the claim's cost.
     function _take(Claim storage c, uint256 left, bool byShares)
         private
         view
@@ -250,8 +255,6 @@ library FlowClaimLib {
                 x = rem;
                 leftAfter = left - remCost;
             } else {
-                // The most shares whose cost fits in `left` (DOWN); what does not buy a whole share unit stays unspent
-                // and the request is complete.
                 x = (costBefore + left).mulDiv(c.shares, c.usdc) - c.claimed;
                 if (x > rem) x = rem;
                 leftAfter = 0;
@@ -260,8 +263,7 @@ library FlowClaimLib {
         cost = c.usdc.mulDiv(c.claimed + x, c.shares, Math.Rounding.Ceil) - costBefore;
     }
 
-    /// @notice Body of `FlowQueue.redeem`: the owner takes the settled USDC of `shares` burned shares of its
-    ///         redemption claims, oldest first, to `receiver`. USDC per claim `usdc × sharesClaimed / shares` (DOWN).
+    /// @notice Body of `FlowQueue.redeem`: syncs owner redemption matches, then pays claim USDC FIFO.
     function redeemClaims(FlowState storage s, uint256 shares, address receiver, address owner)
         public
         returns (uint256 assets)
@@ -269,6 +271,10 @@ library FlowClaimLib {
         if (msg.sender != owner) revert IFlowEvents.NotRequestOwner(0, msg.sender);
         if (receiver == address(0)) revert IFlowEvents.ZeroAddress();
         if (shares == 0) revert IFlowEvents.ZeroAmount();
+
+        IRobotMoneyFundFull(s.fund).ledgerCheckpoint(owner);
+        FlowMatchLib.syncOwnerRedeems(s, owner);
+
         uint256[] storage ids = s.claimsOf[owner];
         uint256 left = shares;
         bool prefix = true;
@@ -293,85 +299,38 @@ library FlowClaimLib {
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    //  Emergency powers (§5.9.4, E17, RB-18): each can only delay or return
+    //  Emergency powers (E38, E39, E49, RB-18): freeze (rate-limited, no returns) & sweep
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Body of `FlowQueue.freezeSettlement`: only while the settlement's deposit shares are in their hold;
-    ///         ends by itself at `now + maxFreeze` (the clock starts at the freeze call, ruling 8). A new freeze starts
-    ///         with returns disallowed: a return allowed under an earlier freeze does not carry over (step 3 finish
-    ///         plan §3.1 item 6).
+    /// @notice Body of `FlowQueue.freezeSettlement`: covers matched + net-minted deposit shares while in hold;
+    ///         at most one freeze per `maxFreeze` window (E49); blocked during wind-down (E38).
     function freeze(FlowState storage s, uint256 id) public {
+        if (IRobotMoneyFundFull(s.fund).isShutdown()) revert IFlowEvents.FundIsShutdown();
         Settlement storage st = _settlement(s, id);
-        if (st.sharesMinted == 0 || block.timestamp >= st.holdEndsAt) {
+        if (s.lastFreezeAt != 0 && block.timestamp < uint256(s.lastFreezeAt) + s.params.maxFreeze) {
+            revert IFlowEvents.FreezeOnCooldown(uint64(uint256(s.lastFreezeAt) + s.params.maxFreeze));
+        }
+        if ((st.matchedShares + st.sharesMinted) == 0 || block.timestamp >= st.holdEndsAt) {
             revert IFlowEvents.FreezeOutsideHold(id);
         }
         if (st.frozenUntil > block.timestamp) revert IFlowEvents.SettlementAlreadyFrozen(id);
-        st.frozenUntil = uint64(block.timestamp) + s.params.maxFreeze;
-        st.returnAllowed = false;
-        emit IFlowEvents.SettlementFrozen(id, st.frozenUntil);
+
+        uint64 until = uint64(block.timestamp) + s.params.maxFreeze;
+        st.frozenUntil = until;
+        st.freezeSetAt = uint64(block.timestamp);
+        s.lastFreezeAt = uint64(block.timestamp);
+        emit IFlowEvents.SettlementFrozen(id, until);
     }
 
-    /// @notice Body of `FlowQueue.releaseSettlement`: ends the freeze now and any return it allowed (item 6: the
-    ///         scaffold left `returnAllowed` set, so a depositor could still take its held shares out early after the
-    ///         release, RB-11); claims then deliver after their unlock.
+    /// @notice Body of `FlowQueue.releaseSettlement`: ends an active freeze early.
     function release(FlowState storage s, uint256 id) public {
         Settlement storage st = _settlement(s, id);
         if (st.frozenUntil <= block.timestamp) revert IFlowEvents.SettlementNotFrozen(id);
         st.frozenUntil = uint64(block.timestamp);
-        st.returnAllowed = false;
         emit IFlowEvents.SettlementReleased(id);
     }
 
-    /// @notice Body of `FlowQueue.allowReturn`: while frozen, lets each depositor of `id` take its own slice back in
-    ///         kind (`takeReturn`). Nobody else can receive it (RB-18).
-    function allowReturn(FlowState storage s, uint256 id) public {
-        Settlement storage st = _settlement(s, id);
-        if (st.frozenUntil <= block.timestamp) revert IFlowEvents.SettlementNotFrozen(id);
-        st.returnAllowed = true;
-        emit IFlowEvents.SettlementReturnAllowed(id);
-    }
-
-    /// @notice Body of `FlowQueue.takeReturn`: the claim's owner takes its undelivered shares out through the fund's
-    ///         `redeemInKind(shares, owner, queue)`, paid to the owner only.
-    function takeReturn(FlowState storage s, uint256 claimId) public {
-        Claim storage c = s.claims[claimId];
-        if (c.owner == address(0)) revert IFlowEvents.UnknownClaim(claimId);
-        if (c.owner != msg.sender) revert IFlowEvents.NotRequestOwner(c.requestId, msg.sender);
-        if (c.kind != RequestKind.Deposit) revert IFlowEvents.WrongRequestKind(c.requestId);
-        // Allowed AND still frozen: a freeze that ran out (not released) leaves `returnAllowed` set, and an early
-        // in-kind exit must not outlive the freeze it was allowed under (RB-11, review Q-F4).
-        Settlement storage st = s.settlements[c.settlementId];
-        if (!st.returnAllowed || st.frozenUntil <= block.timestamp) {
-            revert IFlowEvents.ReturnNotAllowed(c.settlementId);
-        }
-        uint256 x = c.shares - c.claimed;
-        if (x == 0) revert IFlowEvents.NothingToWithdraw(msg.sender);
-        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
-        fund.ledgerCheckpoint(c.owner);
-        c.claimed = c.shares;
-        s.queuedShares[c.owner] -= x;
-        s.totalHeldShares -= x;
-        uint256 before = fund.balanceOf(address(this));
-        fund.redeemInKind(x, c.owner, address(this));
-        if (before - fund.balanceOf(address(this)) != x) {
-            revert IFlowEvents.FundResultMismatch(x, before - fund.balanceOf(address(this)));
-        }
-        emit IFlowEvents.ReturnTaken(claimId, c.owner, x);
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    //  Sweep (step 3 finish plan §3.1 item 7, D-AT-5)
-    // ═════════════════════════════════════════════════════════════════════════
-
-    /// @notice Body of `FlowQueue.sweep`: anyone sends the USDC and the shares the queue holds above its obligations
-    ///         to the fund. Obligations are exactly the booked amounts some owner can still take: pending, owed and
-    ///         credited USDC; escrowed, held and credited shares. What lies above them is rounding dust (booked to
-    ///         nobody, `dustUsdc` / `dustShares`) and gifts. Proof that booked value never moves: the amount sent is
-    ///         `balance − obligations` when positive, else 0, so after the sweep the balance is at least the
-    ///         obligations; no obligation changes here; and every later payment is bounded by its own booked line
-    ///         (E22 credits, claims, escrow), whose sum is the obligations. USDC lands in the fund's idle USDC, a gift
-    ///         to holders. Shares land beside the fund's seed shares, which never move (`SeedSharesLocked`): out of
-    ///         circulation for good. The destination is this run's assumed choice (plan §4); the owner may change it.
+    /// @notice Body of `FlowQueue.sweep`: sends surplus above obligations (gifts + dust) to the fund.
     function sweep(FlowState storage s) public returns (uint256 usdc, uint256 shares) {
         uint256 owedUsdc = s.totalPendingUsdc + s.totalOwedUsdc + s.totalCreditUsdc;
         uint256 owedShares = s.totalEscrowShares + s.totalHeldShares + s.totalCreditShares;
@@ -394,8 +353,6 @@ library FlowClaimLib {
     //  Views
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Request ids made in `epoch`, in order: the deposit and redemption lists merged by id (ids grow in
-    ///         creation order).
     function epochRequests(FlowState storage s, uint64 epoch)
         public
         view
@@ -412,38 +369,43 @@ library FlowClaimLib {
         }
     }
 
-    /// @notice A deposit claim can be delivered now: its hold ended and its settlement is not frozen.
     function deliverable(FlowState storage s, Claim storage c) internal view returns (bool) {
-        return block.timestamp >= c.unlockAt
-            && s.settlements[c.settlementId].frozenUntil <= block.timestamp;
+        return _deliverable(s, c, IRobotMoneyFundFull(s.fund).isShutdown());
+    }
+
+    function _deliverable(FlowState storage s, Claim storage c, bool isShutdown)
+        private
+        view
+        returns (bool)
+    {
+        if (isShutdown) return true;
+        if (block.timestamp < c.unlockAt) return false;
+        Settlement storage st = s.settlements[c.settlementId];
+        return !(st.frozenUntil > block.timestamp && c.unlockAt > st.freezeSetAt);
     }
 
     function status(FlowState storage s, uint256 requestId) public view returns (RequestStatus) {
         Request storage r = s.requests[requestId];
         if (r.owner == address(0)) return RequestStatus.None;
-        if (r.closed) return RequestStatus.Closed;
-        if (FlowEpochs.current(s) > uint256(r.epoch) + s.params.maxRoll) {
-            return RequestStatus.Expired;
+        if (r.closed || FlowMatchLib.currentRequestRemaining(s, requestId) == 0) {
+            return RequestStatus.Closed;
         }
+        if (_isDepositExpired(s, r)) return RequestStatus.Expired;
         return RequestStatus.Pending;
     }
 
-    /// @notice ERC-7540 pending amount of `requestId` for `controller` (its owner): the unfilled part while the
-    ///         request can still fill; 0 otherwise.
     function pending(FlowState storage s, uint256 requestId, address controller, RequestKind kind)
         public
         view
         returns (uint256)
     {
         Request storage r = s.requests[requestId];
-        if (
-            r.owner != controller || r.kind != kind || status(s, requestId) != RequestStatus.Pending
-        ) return 0;
-        return r.remaining;
+        if (r.owner != controller || r.kind != kind || status(s, requestId) != RequestStatus.Pending) {
+            return 0;
+        }
+        return FlowMatchLib.currentRequestRemaining(s, requestId);
     }
 
-    /// @notice ERC-7540 claimable amount of `requestId` for `controller`: Deposit, the USDC cost of its deliverable
-    ///         undelivered shares; Redeem, its burned shares whose USDC is not yet taken.
     function claimable(FlowState storage s, uint256 requestId, address controller, RequestKind kind)
         public
         view
@@ -451,31 +413,38 @@ library FlowClaimLib {
     {
         Request storage r = s.requests[requestId];
         if (r.owner != controller || r.kind != kind) return 0;
+        bool shutdown = IRobotMoneyFundFull(s.fund).isShutdown();
         uint256[] storage ids = s.requestClaims[requestId];
         for (uint256 k; k < ids.length; ++k) {
             Claim storage c = s.claims[ids[k]];
             if (kind == RequestKind.Deposit) {
-                if (c.claimed < c.shares && deliverable(s, c)) {
+                if (c.claimed < c.shares && _deliverable(s, c, shutdown)) {
                     total += c.usdc - c.usdc.mulDiv(c.claimed, c.shares, Math.Rounding.Ceil);
                 }
             } else {
                 total += c.shares - c.sharesClaimed;
             }
         }
+        if (kind == RequestKind.Deposit) {
+            (uint256 unsyncedUsdc,) =
+                FlowMatchLib.previewUnsyncedDepDeliverable(s, controller, requestId, shutdown);
+            total += unsyncedUsdc;
+        } else {
+            total += FlowMatchLib.previewUnsyncedRedClaimable(s, controller, requestId);
+        }
     }
 
-    /// @notice ERC-7540 claim limits of `owner` now: deliverable deposit cost (`maxDeposit`), deliverable deposit
-    ///         shares (`maxMint`) and claimable redeemed shares (`maxRedeem`).
     function maxClaims(FlowState storage s, address owner)
         public
         view
         returns (uint256 depositAssets, uint256 depositShares, uint256 redeemShares)
     {
+        bool shutdown = IRobotMoneyFundFull(s.fund).isShutdown();
         uint256[] storage ids = s.claimsOf[owner];
         for (uint256 k = s.claimCursor[owner]; k < ids.length; ++k) {
             Claim storage c = s.claims[ids[k]];
             if (c.kind == RequestKind.Deposit) {
-                if (c.claimed < c.shares && deliverable(s, c)) {
+                if (c.claimed < c.shares && _deliverable(s, c, shutdown)) {
                     depositShares += c.shares - c.claimed;
                     depositAssets += c.usdc - c.usdc.mulDiv(c.claimed, c.shares, Math.Rounding.Ceil);
                 }
@@ -483,6 +452,11 @@ library FlowClaimLib {
                 redeemShares += c.shares - c.sharesClaimed;
             }
         }
+        (uint256 unsyncedUsdc, uint256 unsyncedDepShares) =
+            FlowMatchLib.previewUnsyncedDepDeliverable(s, owner, 0, shutdown);
+        depositAssets += unsyncedUsdc;
+        depositShares += unsyncedDepShares;
+        redeemShares += FlowMatchLib.previewUnsyncedRedClaimable(s, owner, 0);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -490,35 +464,45 @@ library FlowClaimLib {
     // ═════════════════════════════════════════════════════════════════════════
 
     function _open(FlowState storage s, address owner) private view {
-        if (s.paused) revert IFlowEvents.QueueIsPaused();
+        if (s.paused || (s.queuePausedUntil != 0 && block.timestamp < s.queuePausedUntil)) {
+            revert IFlowEvents.QueueIsPaused();
+        }
+        if (IRobotMoneyFundFull(s.fund).isShutdown()) revert IFlowEvents.FundIsShutdown();
         if (owner == address(0)) revert IFlowEvents.ZeroAddress();
     }
 
-    /// @dev The request goes on its side's list of its epoch (`sideIds`): each side walks its own (item 2).
     function _newRequest(
         FlowState storage s,
         address owner,
         RequestKind kind,
         uint256 amount,
-        uint256 limit
+        uint16 exitFeeBps
     ) private returns (uint256 requestId) {
+        FlowParams storage p = s.params;
         uint64 epoch = FlowEpochs.current(s);
+        uint64 expiryEpoch = epoch + p.maxRoll;
         requestId = ++s.requestCount;
-        s.requests[requestId] = Request({
-            owner: owner,
-            kind: kind,
-            epoch: epoch,
-            amount: amount,
-            remaining: amount,
-            limit: limit,
-            closed: false
-        });
+        Request storage r = s.requests[requestId];
+        r.owner = owner;
+        r.kind = kind;
+        r.epoch = epoch;
+        r.amount = amount;
+        r.remaining = amount;
+        r.exitFeeBps = exitFeeBps;
+        r.minHold = p.minHold;
+        r.maxRoll = p.maxRoll;
+        r.createdAt = uint64(block.timestamp);
+        r.expiryEpoch = expiryEpoch;
+        r.expiresAt = kind == RequestKind.Deposit
+            ? uint64(FlowEpochs.endOf(s, expiryEpoch))
+            : type(uint64).max;
+        r.era = s.windDownEra;
+
         s.sideIds[uint8(kind)][epoch].push(requestId);
         s.sideOpen[uint8(kind)][epoch] += 1;
         s.epochOpen[epoch] += 1;
     }
 
-    /// @dev The request, which must exist, belong to `msg.sender` and still hold escrow.
     function _owned(FlowState storage s, uint256 requestId)
         private
         view
@@ -530,6 +514,35 @@ library FlowClaimLib {
         if (r.closed || r.remaining == 0) revert IFlowEvents.RequestNotPending(requestId);
     }
 
+    function _isDepositExpired(FlowState storage s, Request storage r) private view returns (bool) {
+        if (r.kind != RequestKind.Deposit) return false;
+        return FlowEpochs.current(s) > r.expiryEpoch
+            || (r.expiresAt != 0 && block.timestamp >= r.expiresAt);
+    }
+
+    function _depositStopAllowsCancel(
+        FlowState storage s,
+        IRobotMoneyFundFull fund,
+        Request storage r
+    ) private view returns (bool) {
+        if (fund.depositsPaused() || fund.hasAssetInSale() || FlowCheckLib.excludedMask(s) != 0) {
+            return true;
+        }
+        uint64 cur = FlowEpochs.current(s);
+        uint64 stopEnd = fund.lastStateStopEndedAt();
+        uint64 pauseUntil = fund.depositsPausedUntil();
+        if (pauseUntil != 0 && pauseUntil <= block.timestamp && pauseUntil > stopEnd) {
+            stopEnd = pauseUntil;
+        }
+        if (
+            stopEnd != 0 && stopEnd >= FlowEpochs.startOf(s, cur) && r.createdAt <= stopEnd
+        ) {
+            return true;
+        }
+        return s.lastDepositStopEpoch != 0 && r.epoch <= s.lastDepositStopEpoch
+            && cur <= s.openStopCancelUntilEpoch;
+    }
+
     function _settlement(FlowState storage s, uint256 id)
         private
         view
@@ -539,13 +552,6 @@ library FlowClaimLib {
         st = s.settlements[id];
     }
 
-    function _close(FlowState storage s, Request storage r) private {
-        r.closed = true;
-        s.epochOpen[r.epoch] -= 1;
-        s.sideOpen[uint8(r.kind)][r.epoch] -= 1;
-    }
-
-    /// @dev A claim with nothing left to deliver or to pay.
     function _done(Claim storage c) private view returns (bool) {
         return c.kind == RequestKind.Deposit ? c.claimed >= c.shares : c.sharesClaimed >= c.shares;
     }

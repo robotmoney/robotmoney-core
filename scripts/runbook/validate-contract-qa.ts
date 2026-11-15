@@ -256,6 +256,8 @@ export interface CliModel {
   /** Deploy 4: the fund sheet's names and the fund system's manifests, for the steps of the fund flow. */
   fundSheetNames: Set<string>;
   fundManifestFiles: Set<string>;
+  /** Safe CLI actions parsed from safe/cli.ts (including scheduleBatch/executeBatch for OPS-03). */
+  safeActions?: Set<string>;
 }
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), "utf8");
 const flagsIn = (text: string): Set<string> => new Set([...text.matchAll(/(?<![\w-])--([a-z][a-z0-9-]*)/g)].map((m) => m[1]!));
@@ -327,7 +329,17 @@ export function loadModel(root: string = ROOT): CliModel {
   const sections = new Set([...doc.matchAll(/^#{2,3} (\d+(?:\.\d+)?)\./gm)].map((m) => m[1]!));
   const sheetNames = new Set([...read(root, TARGETS.twin.sheetTemplate!).matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]!));
   const fundSheetNames = new Set(existsSync(join(root, FUND_SHEET)) ? [...read(root, FUND_SHEET).matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]!) : []);
-  return { publish, coreStack, tools, rmpc, sections, sheetNames, manifestFiles: new Set(MANIFEST_FILES), fundSheetNames, fundManifestFiles: new Set(FUND_MANIFEST_FILES) };
+  if (existsSync(join(root, "publish-contracts/src/sheet.ts"))) {
+    const sheetTs = read(root, "publish-contracts/src/sheet.ts");
+    for (const arrName of ["FUND_ONLY_NAMES", "FUND_STEP3F_UINT_NAMES", "FUND_SHEET_NAMES"]) {
+      const m = new RegExp(`export const ${arrName} = \\[([\\s\\S]*?)\\] as const;`).exec(sheetTs);
+      if (m) for (const q of m[1]!.matchAll(/"([A-Z][A-Z0-9_]*)"/g)) fundSheetNames.add(q[1]!);
+    }
+  }
+  const safeActions = new Set<string>();
+  const actionsBlock = /\/\/ Actions:\s*([\s\S]*?)\nimport /m.exec(safe)?.[1] ?? "";
+  for (const m of actionsBlock.matchAll(/\b(scheduleBatch|executeBatch|schedule|execute|cancel|updateDelay)\b/g)) safeActions.add(m[1]!);
+  return { publish, coreStack, tools, rmpc, sections, sheetNames, manifestFiles: new Set(MANIFEST_FILES), fundSheetNames, fundManifestFiles: new Set(FUND_MANIFEST_FILES), safeActions };
 }
 
 /** Argv elements with list placeholders expanded (the flags they stand for are checked here, once). */
@@ -432,6 +444,13 @@ export function commandProblems(steps: RunbookStep[], model: CliModel, root: str
             if (!verb || !t.verbs.has(verb)) out.push(`${at}: ${inv.tool} has no verb '${verb}' (${[...t.verbs].join(", ")})`);
           }
           for (const f of flagsOf(inv.args)) if (!t.flags.has(f)) out.push(`${at}: --${f} is no ${inv.tool} flag`);
+          if (inv.tool === "publish-contracts/src/safe/cli.ts" && model.safeActions && model.safeActions.size > 0) {
+            const ai = inv.args.indexOf("--action");
+            const act = ai >= 0 ? inv.args[ai + 1] : undefined;
+            if (act && !act.includes("{") && !model.safeActions.has(act)) {
+              out.push(`${at}: --action ${act} is no safe/cli.ts action (${[...model.safeActions].join(", ")})`);
+            }
+          }
         }
       }
       if (root) for (const a of cmd.concat(...(cmd[0] === "bash" ? [wordsOf(cmd[2] ?? "")] : []))) if (looksLikeRepoPath(a) && !existsSync(join(root, a))) out.push(`${at}: ${a} does not exist in the checkout`);
@@ -888,6 +907,64 @@ export function fundExecuteProblems(r: Pick<ReleaseRunbook, "release" | "steps">
   return out;
 }
 
+const STEP_PROTECTED_OPS: readonly { name: string; re: RegExp }[] = [
+  { name: "shutdown", re: /\bshutdown\s*\(/ },
+  { name: "setAdapterCodeHashAllowed(..., false)", re: /\bsetAdapterCodeHashAllowed\s*\([^)]*\)[^;\n|&]*\bfalse\b/ },
+  { name: "emergencyUnwind", re: /\bemergencyUnwind\s*\(/ },
+  { name: "asset delisting", re: /\b(?:startDelist|delistAsset|scheduleDelist|initiateDelist)\w*\s*\(/ },
+];
+
+const shellSegments = (s: Pick<RunbookStep, "cmds">): string[] => {
+  const segs: string[] = [];
+  for (const c of s.cmds) {
+    const joined = expandArgv(c).join(" ");
+    for (const part of joined.split(/\s*(?:&&|\|\||;|\||\n)\s*/)) {
+      const t = part.trim();
+      if (t !== "") segs.push(t);
+    }
+  }
+  return segs;
+};
+
+const isActionableFundSegment = (seg: string): boolean => !/^\s*(?:!|grep\b|cast\s+(?:call|balance|nonce)\b)/.test(seg);
+const stepCanSucceed = (expectExit?: number | number[]): boolean =>
+  expectExit === undefined || (Array.isArray(expectExit) ? expectExit : [expectExit]).includes(0);
+
+/**
+ * PURE (E55 / D33). On the `"fund"` flow, any step that schedules or calls `shutdown`, lending adapter code-hash
+ * revocation (`setAdapterCodeHashAllowed(..., false)`), `emergencyUnwind`, or asset delisting must follow an earlier
+ * `"fund"` step on that target that schedules/executes `pauseDeposits` without an intervening `unpauseDeposits`
+ * cancelling it.
+ */
+export function fundPausePairingProblems(
+  steps: (Pick<RunbookStep, "id" | "cmds" | "flow" | "onlyFor"> & { expectExit?: number | number[] })[],
+  where = "runbook",
+): string[] {
+  const out: string[] = [];
+  for (const target of TARGET_NAMES) {
+    const run = steps.filter(
+      (s) => flowsOf(s).includes("fund") && (onlyForList(s).length === 0 || onlyForList(s).includes(target)),
+    );
+    let pauseActive = false;
+    for (const s of run) {
+      if (!stepCanSucceed(s.expectExit)) continue;
+      const segs = shellSegments(s).filter(isActionableFundSegment);
+      if (!pauseActive) {
+        for (const op of STEP_PROTECTED_OPS) {
+          if (segs.some((seg) => op.re.test(seg))) {
+            out.push(`${where} ${s.id}: schedules/calls ${op.name} on fund flow (${target}) without an active earlier pauseDeposits step (E55 / D33)`);
+          }
+        }
+      }
+      for (const seg of segs) {
+        if (/\bpauseDeposits\s*\(/.test(seg)) pauseActive = true;
+        if (/\bunpauseDeposits\s*\(/.test(seg)) pauseActive = false;
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -895,7 +972,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   let template: { name: string; steps: RunbookStep[] } = { name: TEMPLATE_NAME, steps: [] };
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
-  problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...commandProblems(template.steps, model, root), ...fundPausePairingProblems(template.steps, "template.yaml"));
   problems.push(...clearVectorProblems(template.steps, "template.yaml"));
   problems.push(...upgradeBuildGateProblems(template.steps, "template.yaml"));
   problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps), ...stateSelfReadProblems(template.steps));
@@ -924,7 +1001,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
         continue;
       }
       problems.push(...checkAddOnly(template, r));
-      problems.push(...commandProblems(r.steps, model, root));
+      problems.push(...commandProblems(r.steps, model, root), ...fundPausePairingProblems(r.steps, `releases/${f}`));
       problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps), ...stateSelfReadProblems(r.steps));

@@ -580,4 +580,6 @@ interface IFundEvents {
     error StepParamOutOfBounds();
     /// @notice A slippage or deviation bound is at or below the asset's pool fee (§5.6 last para).
     error BoundAtOrBelowPoolFee(uint256 index, uint256 boundBps, uint256 poolFeeBps);
+    /// @notice Step 3f (D38, E57): sum of basket asset targets (`sum`) exceeds `maxBasketBps` (`cap`).
+    error BasketCapExceeded(uint256 sum, uint256 cap);
 }

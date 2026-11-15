@@ -32,4 +32,12 @@ contract MorphoRateAdapter is MorphoAdapter, ILendingRateAdapter {
         }
         rate1e18 = MORPHO_VAULT.convertToAssets(10 ** (uint256(sd) + 18 - ad));
     }
+
+    /// @inheritdoc ILendingRateAdapter
+    /// @dev ERC-4626 `maxWithdraw(this)` returns `min(venueWithdrawableLiquidity, convertToAssets(shares))` and
+    ///      already returns 0 when paused or illiquid, so it never overstates withdrawable underlying (`E44`, `RB-34`).
+    function availableLiquidity() external view returns (uint256) {
+        if (MORPHO_VAULT.balanceOf(address(this)) == 0) return 0;
+        return MORPHO_VAULT.maxWithdraw(address(this));
+    }
 }

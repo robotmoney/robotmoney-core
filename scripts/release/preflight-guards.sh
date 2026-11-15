@@ -79,8 +79,10 @@ CEREMONY_CONTRACTS=(
   "FundAdminLib"
   "FundFlowsLib"
   "FundStepLib"
+  "FundDelistLib"
   "StepFeedLib"
   "FlowCheckLib"
+  "FlowMatchLib"
   "FlowSettleLib"
   "FlowClaimLib"
 )
