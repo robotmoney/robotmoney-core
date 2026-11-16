@@ -66,7 +66,7 @@ export const SCALARS = new Set([
   // per command and needs the threshold of 2), the keeper's and the emergency key's keystores for cast (keeper first settle and step, the emergency pause drill), and the fund
   // target vector the Safe applies with a receipt (cast array syntax, "[0x..,0x..]" and "[2000,..]"): no tool derives it from a receipt payload yet (the release's notes).
   "ownerSigner2", "keeperKeystore", "emergencyKeystore", "fundTargetAssets", "fundTargetBps",
-  // The fund-upgrade flow (releases/v0.8.0-onevault-upgrade.yaml): the LIVE Deploy 4 record the run copies and never edits, its manifests, its run manifest's evidence directory and
+  // The fund-upgrade flow (releases/v0.8.0-onevault-upgrade.yaml, v0.9.0-onevault-upgrade.yaml): the LIVE Deploy 4 record the run copies and never edits, its manifests, its run manifest's evidence directory and
   // its run sheet. {manifestDir} and {evidenceDir} are the run's own copies (on 8453 also {v050ManifestDir} and {v050EvidenceDir}, run.ts configProblems).
   "liveManifestDir", "liveEvidenceDir", "liveSheet",
 ]);
