@@ -14,8 +14,10 @@ jobs:
     name: live-monitor
     env:
       CI_CLASS: heavy
+      RPC_URL: ${{ secrets.BASE_RPC_URL || secrets.BASE_UPSTREAM_RPC || vars.BASE_RPC_URL || 'https://base-rpc.publicnode.com' }}
+      RPC_FALLBACK_URLS: ${{ (secrets.BASE_RPC_URL || secrets.BASE_UPSTREAM_RPC || vars.BASE_RPC_URL) && '' || 'https://mainnet.base.org' }}
     # Only meaningful on schedule / manual dispatch against live RPC. Skipped on
-    # push/PR so contributor CI never depends on the BASE_RPC_URL secret.
+    # push/PR so contributor CI never depends on an external RPC.
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -27,43 +29,19 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Require BASE_RPC_URL on the nightly schedule
-        # Fails the scheduled run loudly when the secret is missing so the
-        # nightly can never report success while running no monitors. On
-        # workflow_dispatch it only warns and the steps below skip as before.
-        env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
+      - name: Require RPC_URL on the nightly schedule
+        # Fails the scheduled run loudly if RPC_URL is somehow empty so the
+        # nightly can never report success while running no monitors.
         run: bash scripts/monitor-require-rpc.sh
 
       - name: Venue liveness (Compound v3 / Aave v3)
-        env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
-        run: |
-          if [[ -z "${RPC_URL:-}" ]]; then
-            echo "::warning::BASE_RPC_URL not set — skipping live venue-liveness check"
-            exit 0
-          fi
-          bash scripts/monitor-venue-liveness.sh
+        run: bash scripts/monitor-venue-liveness.sh
 
       - name: Governance proposals (Compound / Aave)
-        env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
-        run: |
-          if [[ -z "${RPC_URL:-}" ]]; then
-            echo "::warning::BASE_RPC_URL not set — skipping live governance check"
-            exit 0
-          fi
-          bash scripts/monitor-governance-proposals.sh
+        run: bash scripts/monitor-governance-proposals.sh
 
       - name: USDC upgrade (Circle)
-        env:
-          RPC_URL: ${{ secrets.BASE_RPC_URL }}
-        run: |
-          if [[ -z "${RPC_URL:-}" ]]; then
-            echo "::warning::BASE_RPC_URL not set — skipping live USDC upgrade check"
-            exit 0
-          fi
-          bash scripts/monitor-usdc-upgrade.sh
+        run: bash scripts/monitor-usdc-upgrade.sh
 
   # Core 1779, QA plan v1 E10: the recorder keeper on an isolated Base fork against Deploy 2's
   # rmAGENT and its recorder, read from the committed manifests in deployments/8453/deploy-2
