@@ -8,6 +8,22 @@ import {
   type FlowQuote,
 } from "../lib/flowQueueTerms";
 
+/** Do not render old terms as current when either queue read is unavailable. */
+export function FlowQueueTermsReadState(props: {
+  readonly quote?: FlowQuote;
+  readonly liveness?: FlowLiveness;
+  readonly loading: boolean;
+  readonly stale: boolean;
+  readonly error: boolean;
+}) {
+  if (props.error || props.stale) {
+    return <p role="alert">Queue terms are unavailable or stale. Refresh before continuing.</p>;
+  }
+  if (props.loading) return <p>Loading queue terms…</p>;
+  if (!props.quote || !props.liveness) return <p role="alert">Queue terms are unavailable.</p>;
+  return <FlowQueueTerms quote={props.quote} liveness={props.liveness} />;
+}
+
 /**
  * Terms of a deposit made now. It shows each deposit stop with its cause, its end and the cancel deadline,
  * the guard bands, and keeper and Safe liveness (OPS-07, FLOW-08). It shows no price: the queue quotes none.

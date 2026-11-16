@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "./helpers/render";
-import { FlowQueueTerms } from "../../src/components/FlowQueueTerms";
+import { FlowQueueTerms, FlowQueueTermsReadState } from "../../src/components/FlowQueueTerms";
 import {
   formatBandBps,
   formatUnixUtc,
@@ -71,6 +71,20 @@ describe("formatting", () => {
 });
 
 describe("FlowQueueTerms", () => {
+  it.each([
+    { loading: false, stale: true, error: false },
+    { loading: false, stale: false, error: true },
+    { loading: false, stale: false, error: false },
+  ])("does not show healthy terms when reads are stale, failed or missing", (state) => {
+    render(<FlowQueueTermsReadState {...state} />);
+    expect(screen.queryByTestId("flow-queue-terms")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("unavailable");
+  });
+  it("does not show cached terms when a refresh fails", () => {
+    render(<FlowQueueTermsReadState quote={quote} liveness={live} loading={false} stale error />);
+    expect(screen.queryByTestId("flow-queue-terms")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("stale");
+  });
   it("shows terms, bands, keeper and no stop when open", () => {
     render(<FlowQueueTerms quote={quote} liveness={live} />);
     expect(screen.getByTestId("flow-cancel-deadline").textContent).toContain(
