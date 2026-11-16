@@ -5,7 +5,7 @@ description: "NAV, TWAP pricing and the ORA-4 market check of `RobotMoneyFund` (
 
 # FundValuationLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundValuationLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FundValuationLib.sol)
 
 **Title:** FundValuationLib
 
@@ -46,6 +46,54 @@ uint256 internal constant DEPTH_SLICES = 12;
 
 ```solidity
 uint256 internal constant DEPTH_DROP = 2;
+```
+
+### VIEW_IDLE_USDC
+
+```solidity
+uint8 internal constant VIEW_IDLE_USDC = 0;
+```
+
+### VIEW_ASSET_VALUE
+
+```solidity
+uint8 internal constant VIEW_ASSET_VALUE = 1;
+```
+
+### VIEW_POOL_FEE_BPS
+
+```solidity
+uint8 internal constant VIEW_POOL_FEE_BPS = 2;
+```
+
+### VIEW_MAX_TWAP_WINDOW
+
+```solidity
+uint8 internal constant VIEW_MAX_TWAP_WINDOW = 3;
+```
+
+### VIEW_MAX_POOL_FEE_BPS
+
+```solidity
+uint8 internal constant VIEW_MAX_POOL_FEE_BPS = 4;
+```
+
+### VIEW_PLAN_STATUS
+
+```solidity
+uint8 internal constant VIEW_PLAN_STATUS = 5;
+```
+
+### VIEW_HAS_ASSET_IN_SALE
+
+```solidity
+uint8 internal constant VIEW_HAS_ASSET_IN_SALE = 6;
+```
+
+### VIEW_MAX_PAUSE
+
+```solidity
+uint8 internal constant VIEW_MAX_PAUSE = 7;
 ```
 
 ## Functions
@@ -99,15 +147,37 @@ function anyExcluded(FundState storage s) internal view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
-<a id="heldbalance-fundstate-uint256"></a>
+<a id="idleusdc-fundstate"></a>
 
-### heldBalance
+### idleUsdc
 
 What the holders own of asset `i`: Basket the fund's token balance less `deferredTotal[i]` (owed to
 past in-kind exits, §4.4), floored at 0. Lending (step 3d, E9, RB-21): the holders' units of the
 position, `positionValue × (positionUnits − positionClaimTotal) / positionUnits`, rounded DOWN; the
 whole `positionValue` while the position has no units yet (no claim can exist then). Every NAV read
 and every pro-rata leg uses this, never the raw balance, so position claims are never counted.
+
+Fund-owned idle USDC (excludes USDC reserved for delisting & lending claims).
+
+```solidity
+function idleUsdc(FundState storage s) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="heldbalance-fundstate-uint256"></a>
+
+### heldBalance
 
 ```solidity
 function heldBalance(FundState storage s, uint256 i) internal view returns (uint256 bal);
@@ -273,11 +343,90 @@ function requireProportion(
 | supplyBefore | `uint256` |  |
 | supplyAfter | `uint256` |  |
 
+<a id="usdcfeed8-fundstate"></a>
+
+### usdcFeed8
+
+USDC / USD feed read (8 decimals) matching settlement check 2.
+
+```solidity
+function usdcFeed8(FundState storage s)
+        internal
+        view
+        returns (bool ok, FeedStatus st, uint256 px8);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| st | `FeedStatus` |  |
+| px8 | `uint256` |  |
+
+<a id="feedpricepertoken-fundstate-uint256"></a>
+
+### feedPricePerToken
+
+Healthy Chainlink price for asset `i` expressed in USDC base units per whole token (`10**decimals`).
+
+```solidity
+function feedPricePerToken(FundState storage s, uint256 i)
+        internal
+        view
+        returns (bool ok, FeedStatus st, uint256 pxPerToken);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| st | `FeedStatus` |  |
+| pxPerToken | `uint256` |  |
+
+<a id="insalepricepertoken-fundstate-uint256"></a>
+
+### inSalePricePerToken
+
+Current NAV price per whole token (`10**decimals`) for an `inSale` asset: live feed if healthy,
+else `saleFallbackPrice`.
+
+```solidity
+function inSalePricePerToken(FundState storage s, uint256 i) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="assetvalue-fundstate-uint256"></a>
 
 ### assetValue
 
-USDC value of asset `i` at TWAP (Lending: `heldBalance`, 1:1). 0 when not counted.
+USDC value of asset `i` at TWAP (or live/fallback feed when `inSale`; Lending: `heldBalance`, 1:1).
 
 ```solidity
 function assetValue(FundState storage s, uint256 i) public view returns (uint256);
@@ -300,7 +449,7 @@ function assetValue(FundState storage s, uint256 i) public view returns (uint256
 
 ### nav
 
-`totalAssets()`: idle plus every counted asset's value.
+`totalAssets()`: fund-owned idle USDC plus every counted asset's value.
 
 ```solidity
 function nav(FundState storage s) public view returns (uint256 sum);
@@ -865,4 +1014,116 @@ function currentWeightsBps(FundState storage s)
 | ---- | ---- | ----------- |
 | bps | `uint256[]` |  |
 | idleBps | `uint256` |  |
+
+<a id="isdepositspaused-fundstate"></a>
+
+### isDepositsPaused
+
+True while deposits are paused via legacy bool or active self-expiring deadline.
+
+```solidity
+function isDepositsPaused(FundState storage s) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="effectiveplanstatus-fundstate"></a>
+
+### effectivePlanStatus
+
+Effective plan status accounting for self-expired emergency rebalance pause (E39).
+
+```solidity
+function effectivePlanStatus(FundState storage s) internal view returns (PlanStatus);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `PlanStatus` |  |
+
+<a id="hasassetinsale-fundstate"></a>
+
+### hasAssetInSale
+
+True while any active asset is in a delisting sale (`inSale`).
+
+```solidity
+function hasAssetInSale(FundState storage s) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="maxpause-fundstate"></a>
+
+### maxPause
+
+Effective `maxPause` duration: bound queue's `maxPause`, or `DEFAULT_MAX_PAUSE` before binding.
+
+```solidity
+function maxPause(FundState storage s) internal view returns (uint32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+
+<a id="viewuint-fundstate-uint8-uint256"></a>
+
+### viewUint
+
+Consolidated scalar view entrypoint called via one `DELEGATECALL` site on `RobotMoneyFund`.
+
+```solidity
+function viewUint(FundState storage s, uint8 op, uint256 index) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `uint8` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 

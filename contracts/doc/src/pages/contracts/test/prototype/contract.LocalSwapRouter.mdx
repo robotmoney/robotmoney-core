@@ -1,0 +1,90 @@
+---
+title: "LocalSwapRouter"
+---
+
+# LocalSwapRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/Adapters.t.sol)
+
+## Constants
+
+### weth
+
+```solidity
+address public immutable weth;
+```
+
+### usdc
+
+```solidity
+address public immutable usdc;
+```
+
+### price6
+
+```solidity
+uint256 public immutable price6;
+```
+
+## Functions
+
+<a id="constructor-address-address-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(address weth_, address usdc_, uint256 price6_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| weth_ | `address` |  |
+| usdc_ | `address` |  |
+| price6_ | `uint256` |  |
+
+<a id="exactoutputsingle-iswaprouterexactout-exactoutputsingleparams"></a>
+
+### exactOutputSingle
+
+```solidity
+function exactOutputSingle(ISwapRouterExactOut.ExactOutputSingleParams calldata p)
+        external
+        returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ISwapRouterExactOut.ExactOutputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+
+<a id="exactinputsingle-iswaprouter-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ISwapRouter.ExactInputSingleParams calldata p)
+        external
+        returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ISwapRouter.ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+

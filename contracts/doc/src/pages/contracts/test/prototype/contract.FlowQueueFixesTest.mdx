@@ -5,7 +5,7 @@ description: "One section per item of the step 3 finish plan §3.1. Each test fa
 
 # FlowQueueFixesTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueueFixes.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/FlowQueueFixes.t.sol)
 
 **Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
 
@@ -33,8 +33,8 @@ function test_fix1_aNonKeeperSettlesOnlyEpochsPastTheirOwnGrace() public fixture
 
 ### test_fix2_aCallWithNoRoomPassesNothing
 
-D-AT-3: a call with no room (`maxUsdc` 0) fills nothing and must move no cursor, so the next call,
-whoever makes it, starts at the oldest request.
+D-AT-3: a call with no room (`maxUsdc` 0) fills nothing and must move no cursor, so the next call
+starts at the oldest request.
 
 ```solidity
 function test_fix2_aCallWithNoRoomPassesNothing() public fixtureCovered;
@@ -57,10 +57,7 @@ function test_fix2_spentCapsPassNothing_theNextPeriodStartsAtTheOldestWaiting()
 
 ### test_fix2_aStrangerCannotMoveTheKeepersPass
 
-A stranger's call passes a request its own limit refuses (correct at that bound). The bound then
-falls (the basket feeds move 30 bps down, inside `refBandBps`), so the request is admissible. The
-keeper's pass starts at the oldest epoch and is moved only by the keeper's calls, so it fills that
-request; the scaffold's shared cursor made the keeper continue past it.
+A stranger's reverted call never touches the keeper's pass: the keeper settles the oldest request first.
 
 ```solidity
 function test_fix2_aStrangerCannotMoveTheKeepersPass() public fixtureCovered;
@@ -146,9 +143,8 @@ function test_fix3_shorterEpochsNothingPending_control() public fixtureCovered;
 
 ### test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest
 
-A larger `maxRoll` makes an expired request live again. The scaffold's stored oldest epoch lay above
-it, so it read Pending and no settle could reach it (an orphan). Now any parameter change resets the
-walk, and it fills.
+Step 3f (RB-31, E41): parameter changes reset walk cursors without orphaning waiting requests, while
+snapshotted `maxRoll` / `expiryEpoch` on earlier requests never expand retroactively.
 
 ```solidity
 function test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest() public fixtureCovered;
@@ -158,8 +154,8 @@ function test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest() public fixtureCo
 
 ### test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone
 
-The deposit side's venue burns every unit of gas it gets. The redemption side still settles and the
-deposit side fails alone (on the scaffold the burn tripped the out-of-gas guard and reverted both).
+With net deposits (D > R), the deposit venue burns every unit of gas it gets. Whole match still settles
+the paired redemptions (`Match` first, §5.11.4), while the net deposit side fails alone (`SideFailed`).
 
 ```solidity
 function test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone()
@@ -171,7 +167,8 @@ function test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone()
 
 ### test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone
 
-The redemption side's venue burns every unit of gas it gets: deposits still settle.
+With net redemptions (R > D), the redemption venue burns every unit of gas it gets: whole match still
+settles paired flow while the net redemption side fails alone.
 
 ```solidity
 function test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone()
@@ -183,10 +180,10 @@ function test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone()
 
 ### test_fix4_theGasACallerSendsStillCannotChooseASide
 
-The out-of-gas protection stays (RB-20): over gas limits from 600 % down to 35 % of a full
-settlement's use, an honest call settles both sides or reverts whole; with the deposit venue burning
-its gas, a call settles the redemption side (the deposit side failing alone) or reverts whole. No gas
-limit makes the redemption side fail or settles one side of the honest pair.
+The out-of-gas protection stays (RB-20): under Step 3f (Match + at most one net side), an honest
+net-deposit round (`D > R`) either settles both match and the net deposit side or reverts whole; with a
+burning deposit venue it settles only the match (`sharesMinted == 0`) or reverts whole. No gas limit
+makes an honest net side fail while leaving match alone.
 
 ```solidity
 function test_fix4_theGasACallerSendsStillCannotChooseASide() public fixtureCovered;
@@ -196,10 +193,9 @@ function test_fix4_theGasACallerSendsStillCannotChooseASide() public fixtureCove
 
 ### test_fix4_aBatchOf24FillsPerSideFitsItsBudget_control
 
-Control and measurement for the fixed side budgets: 24 deposits and 24 redemptions, each from its own
-fresh owner (cold storage everywhere), settle in one keeper call on the five-asset fund, both sides
-inside their budgets. Run with -vvvv to read each side's gas in the trace (fix-queue notes). 24, so
-the call's gas limit stays under the 40M per call of the fixture recorder's fork.
+Control and measurement for the fixed side budgets under Step 3f: 24 cold deposits fit in one
+call (`first`), then 24 smaller cold deposits match O(1) against 24 cold redemptions (`R*S > D`),
+leaving all 24 net redemption fills inside their side budget in one keeper call.
 
 ```solidity
 function test_fix4_aBatchOf24FillsPerSideFitsItsBudget_control() public fixtureCovered;
@@ -233,9 +229,9 @@ function _gasSweep(bytes memory data, uint256 used, bool burning)
 
 ### test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference
 
-The first settlement reads Aave's rate before its trades (check 5) and not after (the venue's read
-fails once it traded). The scaffold then skipped the record, left no reference, and a later 5 % jump
-of the rate passed check 5. Now the reference is the rate check 5 read, and the jump is caught.
+The first settlement reads Aave's rate before its trades and records the post-trade rate. When a
+subsequent 5 % rate jump causes check 5 (`LendRate`) to trip, Step 3f (E36) stops deposits for the
+round (`DepositStoppedForRound` with cause 2) while `checkSettle()` stays `Ok` so redemptions settle alone.
 
 ```solidity
 function test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference()
@@ -249,9 +245,7 @@ function test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference()
 
 Control: a second settle in the same block, after the first supplied to every lending venue, passes
 check 5. With no time elapsed check 5 allows no growth, and the fund's own supply can move a venue's
-rate by a rounding unit, so the reference must be the rate read after the trades (a first version of
-this fix recorded the rate read before them, and `Attacks.t.sol` A19 then stopped at `LendRate` on
-Compound).
+rate by a rounding unit, so the reference must be the rate read after the trades.
 
 ```solidity
 function test_fix5_aSecondSettleInTheSameBlockPassesCheck5_control() public fixtureCovered;
@@ -276,8 +270,8 @@ function _heldDeposit() internal returns (uint256 sid, uint256 claimId);
 
 ### test_fix6_releaseClearsTheReturn
 
-After `allowReturn` the Safe releases instead. Release ends the return: the depositor can no longer
-take its held shares out early (RB-11); they deliver after the hold.
+After `freezeSettlement`, the Safe releases instead (`releaseSettlement`). Release lifts the freeze
+without lifting the regular hold (no early return path exists in Step 3f); shares deliver at `holdEndsAt`.
 
 ```solidity
 function test_fix6_releaseClearsTheReturn() public fixtureCovered;
@@ -287,8 +281,9 @@ function test_fix6_releaseClearsTheReturn() public fixtureCovered;
 
 ### test_fix6_aNewFreezeStartsWithReturnsDisallowed
 
-A freeze that ended by itself inside the hold, then a new freeze: the new freeze starts with returns
-disallowed, so only the Safe's new decision allows one.
+Step 3f (E49): once a settlement is frozen at `t0`, re-freezing within `[t0, t0 + maxFreeze)` reverts
+`FreezeOnCooldown` even after early release or self-expiry; a new freeze succeeds only once the
+cooldown expires inside an extended hold.
 
 ```solidity
 function test_fix6_aNewFreezeStartsWithReturnsDisallowed() public fixtureCovered;
@@ -334,8 +329,10 @@ function test_fix7_aSweepSendsOnlyWhatLiesAboveTheBooks() public fixtureCovered;
 
 <i>
 
-Every owner takes what the queue owes it, whatever settled meanwhile: each open request is cancelled,
-each settled redemption's USDC taken, each held deposit delivered after its hold, each credit withdrawn.
+Every owner takes what the queue owes it, whatever settled meanwhile: pending requests before
+`cancelBuffer` are cancelled, post-cutoff remainders (e.g. match dust below `minRequestUsdc`) exit after
+`maxRoll` via `withdrawExpired` / `giveRedemptionNotice`, each settled redemption's USDC is taken, each held
+deposit delivered after its hold, and each credit withdrawn.
 
 </i>
 

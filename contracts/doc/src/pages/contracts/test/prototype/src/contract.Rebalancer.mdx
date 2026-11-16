@@ -5,7 +5,7 @@ description: "Step selection for the one vault (§5). It holds no funds, grants 
 
 # Rebalancer
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/Rebalancer.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/Rebalancer.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalancer](/contracts/test/prototype/src/interfaces/interface.IRebalancer)
 
@@ -17,21 +17,19 @@ chain state, and calls `fund.executeStep`, which does all custody, swaps, NAV
 measurement, the RB-7 guard, the per-step cost cap and the budget halt (RB-3, RB-4).
 
 Authority:
-- `step()`: KEEPER_ROLE always; anyone once `keeperGrace` has passed with no step on an
-Open plan (§5.4). The caller chooses only WHEN (RB-2).
+- `step()`, `stepDelisted(index)`: `KEEPER_ROLE` only (§5.4, E34, E53). The caller chooses
+only WHEN (RB-2).
 - Parameters (§5.6): ADMIN_ROLE (the timelock).
-On the fund this contract holds REBALANCER_ROLE (`executeStep`, `concludePlan`).
+On the fund this contract holds REBALANCER_ROLE (`executeStep`, `executeDelistStep`, `concludePlan`).
 
 Runtime hardening beyond the pinned interface (prototype choices, see NatSpec below):
 - The cooldown is `max(stepInterval, fund.maxTwapWindow())`, so an asset added later
 with a longer TWAP window can never make the cooldown shorter than a window (§5.3.1).
 - Each leg's slippage floor is clamped to `fund.maxSlippageBps()` at run time, so a
 later lowering of the fund ceiling is honoured without re-setting every asset.
-- Per-asset backoff: when `executeStep` reverts on a KEEPER's call, both non-idle legs are
-excluded from leg picking for one cooldown, so a frozen venue stalls only its own asset
-while the rest of the plan keeps converging (§5.8 "A venue freezes"). Step 3e (§5.10): a
-stranger's failed call after `keeperGrace` backs nothing off, so nobody but the keeper
-can delay an asset's next step.
+- Per-asset backoff: when `executeStep` or `executeDelistStep` reverts, traded non-idle legs
+are excluded from leg picking for one cooldown, so a frozen venue stalls only its own asset
+while the rest of the plan keeps converging (§5.8 "A venue freezes").
 - Gas starvation: `executeStep` is only called with at least `STEP_GAS_FLOOR` gas left
 (else `StepGasStarved`), and a revert that left this frame with under 1/63 of the gas it
 forwarded is re-thrown, so a permissionless caller cannot force a fake `StepFailed` and a
@@ -59,7 +57,7 @@ bytes32 public constant ADMIN_ROLE = Roles.ADMIN_ROLE;
 
 ### KEEPER_ROLE
 
-May call `step()` before `keeperGrace` has passed (§5.4).
+May call `step()` and `stepDelisted()` (§5.4, E34, E53).
 
 ```solidity
 bytes32 public constant KEEPER_ROLE = Roles.KEEPER_ROLE;
@@ -130,6 +128,31 @@ Depth cap on basket legs, in bps of the pool's time-weighted USDC depth (`assetS
 uint16 private _stepDepthBps;
 ```
 
+### _lastBasketStepAt
+
+<i>
+
+Timestamp of the most recent executed normal `step()` that traded a Basket leg (E42, RB-30).
+Lending-only steps and `stepDelisted()` do not update it.
+
+</i>
+
+```solidity
+uint64 private _lastBasketStepAt;
+```
+
+### _lastDelistStepAt
+
+<i>
+
+Per-asset timestamp of the last executed `stepDelisted()` for cooldown spacing.
+
+</i>
+
+```solidity
+mapping(uint256 index => uint64) private _lastDelistStepAt;
+```
+
 ## Functions
 
 <a id="initialize-address-address-address-stepparams-address-upgrademode"></a>
@@ -155,7 +178,7 @@ function initialize(
 | ---- | ---- | ----------- |
 | fund_ | `address` | The fund this rebalancer drives. Set once, no setter. |
 | admin | `address` | Receives ADMIN_ROLE (deployer first, then the timelock). |
-| keeper | `address` | Receives KEEPER_ROLE. address(0) grants none (grace path only). |
+| keeper | `address` | Receives KEEPER_ROLE. address(0) grants none. |
 | params | `StepParams` | Initial global step parameters, bounded as in `setStepParams` (§5.6). |
 | upgradeTimelock_ | `address` | The only upgrade and freeze authority. |
 | upgradeMode_ | `UpgradeMode` | Release mode; `Undeclared` reverts. |
@@ -165,10 +188,8 @@ function initialize(
 ### step
 
 Run at most one step. Takes no input (RB-2): the caller chooses only WHEN.
-Access (§5.4): KEEPER_ROLE always; anyone once
-`now ≥ max(fund.lastStepAt(), plan.startTime) + keeperGrace` while the plan is Open;
-otherwise reverts `NotKeeperBeforeGrace`. Every other non-execution RETURNS
-(does not revert) and emits `RebalanceStepSkipped`.
+Access (§5.4, E34): `KEEPER_ROLE` only (`AccessControlUnauthorizedAccount` otherwise).
+Every other non-execution RETURNS (does not revert) and emits `RebalanceStepSkipped`.
 
 Order (§5.3):
 
@@ -186,11 +207,13 @@ If `now > plan.endTime + maxOverrun` → `fund.concludePlan(Expired)`, return
 
 `fund.concludePlan(Converged)`, return `(false, Concluded)`.
 
-3. Market check: build the eligible mask = active ∧ maxStepUsdc > 0 ∧ not backed
+3. Market check: build the eligible mask = active ∧ maxStepUsdc > 0 ∧ not in delisting
 
-off (`assetBackoffUntil(i) &lt; now`, inclusive end) ∧ `fund.marketCheck(i).ok`. An asset failing
+sale (`!fund.isAssetInSale(i)`, E53) ∧ not a Lending asset with outstanding claims
 
-ORA-4 (or an excluded Lending asset) is masked out (RB-5: it is never traded).
+(`fund.positionClaimTotal(i) == 0`, E54/RB-35) ∧ not backed off (`assetBackoffUntil(i) &lt; now`,
+
+inclusive end) ∧ `fund.marketCheck(i).ok` ∧ Basket `_stepCap >= minStepUsdc`.
 
 4. Pick legs: `PlanMath.pickLegs` over `fund.portfolioValues()` and the plan's
 
@@ -198,27 +221,19 @@ start/end/startIdle at `now`. No over or no under → skip `MarketDeviation`
 
 (detail = first ORA-4 failer) when an asset was masked by ORA-4, else
 
+`DepthCap` when a Basket asset's cap was below `minStepUsdc`, else
+
 `Cooldown` (detail = longest backoff left) when one was backed off, else
 
 `NothingToTrade`.
 
-5. Size: `notional = min(over, under, maxStepUsdc[sell], maxStepUsdc[buy])` (idle
+5. Size: `notional = min(over, under, cap[sell], cap[buy])` (idle legs uncapped).
 
-legs uncapped). `notional &lt; minStepUsdc` → skip `BelowMinStep`.
+`notional &lt; minStepUsdc` → skip `BelowMinStep`, except for the last dust after
 
-6. Floors from TWAP, never spot (each slippage clamped to `fund.maxSlippageBps()`):
+`endTime` when `notional == min(over, under)` (SAFE-05).
 
-Basket sell: `minSellUsdcOut = assetUsdcValue(sell, assetTokenValue(sell, notional))
-
-× (1 − maxStepSlippageBps[sell])`;
-
-Lending sell: `notional × (1 − maxStepSlippageBps[sell])`; idle sell: 0.
-
-Basket buy: `minBuyOut = assetTokenValue(buy, notional) × (1 − maxStepSlippageBps[buy])`;
-
-otherwise 0.
-
-`maxCostUsdc = notional × maxStepCostBps / 10 000`.
+6. Floors from stricter of TWAP and feed (`_buildOrder`); `maxCostUsdc = notional × maxStepCostBps / 10 000`.
 
 7. `try fund.executeStep(order)`; on revert → both non-idle legs back off for one
 
@@ -226,22 +241,24 @@ effective cooldown (`AssetBackoff`) and skip `StepFailed` (detail = selector);
 
 a gas-starved revert re-throws `StepGasStarved`.
 
-Cost cap and budget halt are enforced inside `executeStep` (RB-4).
-
-8. Emit `RebalanceStep` with the legs' path targets at `now`.
+8. Update `lastBasketStepAt` when either leg is a Basket asset (E42), and emit `RebalanceStep`.
 
 <i>
 
 Implements §5.3 steps 1 to 9 in order, plus the §5.5 Converged and Expired transitions.
-Takes no input (RB-2). Skips return and emit `RebalanceStepSkipped`; only the access
-check (`NotKeeperBeforeGrace`) and gas starvation (`StepGasStarved`) revert.
+Takes no input (RB-2). Skips return and emit `RebalanceStepSkipped`; only `KEEPER_ROLE`
+access enforcement and gas starvation (`StepGasStarved`) revert.
 A concluded plan (Converged or Expired) returns `(false, Concluded)` with the fund's
 `PlanStatusChanged` as its only event.
 
 </i>
 
 ```solidity
-function step() external nonReentrant returns (bool executed, SkipReason reason);
+function step()
+        external
+        nonReentrant
+        onlyRole(KEEPER_ROLE)
+        returns (bool executed, SkipReason reason);
 ```
 
 **Returns**
@@ -250,6 +267,35 @@ function step() external nonReentrant returns (bool executed, SkipReason reason)
 | ---- | ---- | ----------- |
 | executed | `bool` | True when a step traded. |
 | reason | `SkipReason` | `SkipReason.None` when executed, `Concluded` when this call moved the<br/>plan to Converged or Expired, else why not. |
+
+<a id="stepdelisted-uint256"></a>
+
+### stepDelisted
+
+Keeper-only capped liquidation step for a delisted (`inSale`) asset toward USDC (E53).
+Reverts `InvalidAssetIndex` if `index` is out of range; returns `false` if not active/`inSale`,
+on backoff or step cooldown, when `_stepCap` is 0, or if `fund.executeDelistStep` reverts or
+returns `false`.
+
+```solidity
+function stepDelisted(uint256 index)
+        external
+        nonReentrant
+        onlyRole(KEEPER_ROLE)
+        returns (bool executed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| executed | `bool` | True when a step executed. |
 
 <a id="_execute-irobotmoneyfund-plan-decision"></a>
 
@@ -555,33 +601,6 @@ function _effectiveInterval(IRobotMoneyFund f) internal view returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="_permissionlessat-irobotmoneyfund-plan"></a>
-
-### _permissionlessAt
-
-<i>
-
-§5.4: `max(lastStepAt, startTime) + keeperGrace` while Open, else never.
-
-</i>
-
-```solidity
-function _permissionlessAt(IRobotMoneyFund f, Plan memory p) internal view returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| f | `IRobotMoneyFund` |  |
-| p | `Plan` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
 <a id="previewplan-address-uint256"></a>
 
 ### previewPlan
@@ -600,7 +619,8 @@ Per asset at current TWAP: `turnover = |target − current| × NAV / 10 000` and
 pool fee only. It ignores price impact and the slippage allowance, so it is a lower
 bound; the realized cost is bounded above by `maxStepCostBps` per step and by
 `costBudgetBps` per plan. Reverts on a refused vector with the same `PlanMath.assetTargets`
-errors the fund would raise at plan open (§4.1, RB-9), including `TargetExceedsCap`.
+errors the fund would raise at plan open (§4.1, RB-9; §4.5 rule 7, E57), including
+`TargetExceedsCap` and `BasketCapExceeded`.
 
 </i>
 
@@ -681,17 +701,17 @@ function previewOrder() external view returns (SkipReason reason, StepOrder memo
 
 ### permissionlessAt
 
-Earliest timestamp at which `step()` is open to anyone (§5.4).
-`type(uint256).max` while the plan is not Open.
+Retired after Step 3f made `step()` `KEEPER_ROLE`-only (E34).
+Always returns `type(uint256).max`.
 
 <i>
 
-`type(uint256).max` when the plan is not Open (§5.4).
+Retired in Step 3f (`step()` is `KEEPER_ROLE`-only, E34). Always returns `type(uint256).max`.
 
 </i>
 
 ```solidity
-function permissionlessAt() external view returns (uint256);
+function permissionlessAt() external pure returns (uint256);
 ```
 
 **Returns**
@@ -740,16 +760,33 @@ function effectiveStepInterval() external view returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
+<a id="lastbasketstepat"></a>
+
+### lastBasketStepAt
+
+Timestamp of the most recent executed basket rebalance step (`step()` with a Basket leg;
+0 if none yet). Lending-only steps and `stepDelisted()` do not update it (E42, RB-30).
+
+```solidity
+function lastBasketStepAt() external view returns (uint64);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
 <a id="setstepparams-stepparams"></a>
 
 ### setStepParams
 
 Set the global step parameters. Bounds (`StepParamOutOfBounds` /
-`BoundAtOrBelowPoolFee`): see `StepParams` NatSpec. In particular
-`stepInterval ≥ max(MIN_STEP_INTERVAL, fund.maxTwapWindow())` and
-`maxStepCostBps >` the sum of the two largest active basket pool fees (a basket-to-basket
-step pays both), and `minStepUsdc ≤` every asset's non-zero `maxStepUsdc`
-(`MaxStepBelowMinStep`).
+`BoundAtOrBelowPoolFee`): `stepInterval ∈ [max(MIN_STEP_INTERVAL, fund.maxTwapWindow()), MAX_STEP_INTERVAL]`,
+`maxOverrun ≤ MAX_OVERRUN`,
+`maxStepCostBps ∈ (fee1 + fee2, MAX_STEP_COST_BPS]` (sum of the two largest active basket pool fees),
+`toleranceBps ∈ [1, MAX_TOLERANCE_BPS]`, and `minStepUsdc ≤` every asset's non-zero
+`maxStepUsdc` (`MaxStepBelowMinStep`).
 
 ```solidity
 function setStepParams(StepParams calldata params) external onlyRole(ADMIN_ROLE);
@@ -768,7 +805,7 @@ function setStepParams(StepParams calldata params) external onlyRole(ADMIN_ROLE)
 <i>
 
 §5.6 bounds. `stepInterval ≥ max(MIN_STEP_INTERVAL, fund.maxTwapWindow())`;
-`keeperGrace ∈ [stepInterval, MAX_KEEPER_GRACE]`; `maxOverrun ≤ MAX_OVERRUN`;
+`maxOverrun ≤ MAX_OVERRUN`;
 `maxStepCostBps ∈ (fee1 + fee2, MAX_STEP_COST_BPS]` where fee1, fee2 are the two largest
 active basket pool fees: leg picking pairs the most-over with the most-under asset, so a
 basket-to-basket step pays both fees, and a cap at or below their sum would make every such
@@ -1005,6 +1042,7 @@ struct Decision {
         StepFeedCheck feedCheck;
         uint256 feedIndex;
         StepPrices px;
+        bool hasBasketLeg;
     }
 ```
 
@@ -1021,6 +1059,7 @@ struct Decision {
 | feedCheck | `StepFeedCheck` |  |
 | feedIndex | `uint256` |  |
 | px | `StepPrices` |  |
+| hasBasketLeg | `bool` |  |
 
 ### Mask
 

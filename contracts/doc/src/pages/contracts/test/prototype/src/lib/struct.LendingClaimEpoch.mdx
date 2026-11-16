@@ -1,0 +1,25 @@
+---
+title: "LendingClaimEpoch"
+description: "One epoch of a lending position's claim pool (resets cleanly whenever all claim units clear)."
+---
+
+# LendingClaimEpoch
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FundStorage.sol)
+
+One epoch of a lending position's claim pool (resets cleanly whenever all claim units clear).
+
+```solidity
+struct LendingClaimEpoch {
+    uint256 totalScaled;
+    uint256 usdcPerScaled;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalScaled | `uint256` |  |
+| usdcPerScaled | `uint256` |  |
+

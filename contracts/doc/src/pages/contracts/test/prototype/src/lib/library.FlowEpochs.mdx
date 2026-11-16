@@ -5,7 +5,7 @@ description: "Epoch arithmetic that survives a change of `epochLength` (step 3 f
 
 # FlowEpochs
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowStorage.sol)
 
 **Title:** FlowEpochs
 
@@ -41,6 +41,29 @@ function current(FlowState storage s) internal view returns (uint64);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint64` |  |
+
+<a id="startof-flowstate-uint64"></a>
+
+### startOf
+
+Start time of epoch `e`.
+
+```solidity
+function startOf(FlowState storage s, uint64 e) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| e | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="endof-flowstate-uint64"></a>
 

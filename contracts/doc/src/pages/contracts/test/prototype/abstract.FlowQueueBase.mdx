@@ -5,7 +5,7 @@ description: "Shared state and helpers of the mechanism tests. Everything runs o
 
 # FlowQueueBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/FlowQueue.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -135,11 +135,32 @@ function _settleOverBlocks(uint256 id, string memory label) internal;
 | id | `uint256` |  |
 | label | `string` |  |
 
+<a id="_settlealigned"></a>
+
+### _settleAligned
+
+Refresh the feeds, then `settle` as the keeper.
+
+<i>
+
+`_settleNow` with the feeds put at the pools' spot first. The match books only when TWAP NAV is within
+`matchBandBps` of feed NAV, so a test about the match's bookkeeping must start from a world with no noise.
+
+</i>
+
+```solidity
+function _settleAligned() internal returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="_settlenow"></a>
 
 ### _settleNow
-
-Refresh the feeds, then `settle` as the keeper.
 
 ```solidity
 function _settleNow() internal returns (uint256);
@@ -463,7 +484,7 @@ function _assertBooks(string memory label) internal view;
 
 ### _assertClaimsInsideLimits
 
-RB-14 from the claims: every claim with id above `afterClaimId` is inside its request's limit.
+Check claim consistency: every claim with id above `afterClaimId` records nonzero shares and USDC.
 
 ```solidity
 function _assertClaimsInsideLimits(uint256 afterClaimId) internal view;
@@ -532,18 +553,29 @@ function _sideFailedData(Vm.Log[] memory logs, RequestKind kind)
 
 ### _skipped
 
-Whether `logs` holds a `RequestSkipped` for `requestId`.
+<i>
+
+Step 3f retired `RequestSkipped` because requests carry no price limits (E25).
+
+</i>
 
 ```solidity
-function _skipped(Vm.Log[] memory logs, uint256 requestId) internal view returns (bool);
+function _skipped(
+        Vm.Log[] memory,
+        /* logs */
+        uint256 /* requestId */
+    )
+        internal
+        pure
+        returns (bool);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| logs | `Vm.Log[]` |  |
-| requestId | `uint256` |  |
+| _ | `Vm.Log[]` |  |
+| _ | `uint256` |  |
 
 **Returns**
 

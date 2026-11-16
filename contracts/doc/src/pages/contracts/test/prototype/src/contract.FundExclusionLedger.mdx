@@ -1,69 +1,31 @@
 ---
 title: "FundExclusionLedger"
-description: "Step 3d (E13, RB-22): a share that waits in the FlowQueue (an escrowed redemption, or a deposit's shares in their hold) still belongs to its owner for exclusion recovery. The production ledger reads `balanceOf`, which would credit those shares to the queue's address and nothing to their owners. This copy reads `ledgerBalanceOf` instead. The fund checkpoints both sides of every share transfer (its `_update`), and the queue calls `fund.ledgerCheckpoint(owner)` before it changes an owner's queued shares, so a lazy checkpoint always records the balance as it stood when the record opened. A fresh address filled after a record opened gets nothing; a redeemer whose shares were burned keeps its claim (A19)."
+description: "Step 3f (E13, E52, RB-22): tracks exclusion recovery pro rata to holders at the moment an ineligible adapter is excluded, including shares held inside `FlowQueue`."
 ---
 
 # FundExclusionLedger
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundExclusionLedger.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/FundExclusionLedger.sol)
 
 **Title:** FundExclusionLedger
 
-Step 3d (E13, RB-22): a share that waits in the FlowQueue (an escrowed redemption, or a deposit's shares in
-their hold) still belongs to its owner for exclusion recovery. The production ledger reads
-`balanceOf`, which would credit those shares to the queue's address and nothing to their owners. This
-copy reads `ledgerBalanceOf` instead. The fund checkpoints both sides of every share transfer (its
-`_update`), and the queue calls `fund.ledgerCheckpoint(owner)` before it changes an owner's queued
-shares, so a lazy checkpoint always records the balance as it stood when the record opened. A fresh
-address filled after a record opened gets nothing; a redeemer whose shares were burned keeps its claim
-(A19).
+Step 3f (E13, E52, RB-22): tracks exclusion recovery pro rata to holders at the moment an
+ineligible adapter is excluded, including shares held inside `FlowQueue`.
 
-Production description follows.
-
-The exclusion record of one `RobotMoneyVault`. When the vault excludes an
-adapter from NAV (ADP-2: eligibility revoked while the entry is active), the vault
-opens a record here with a snapshot of its share supply. Every USDC later recovered
-from that adapter is moved here instead of into vault idle, and belongs pro rata to
-the holders at the moment of exclusion (owner decision 2026-10-13, core 1820:
-"we can't take funds from innocent users").
-
-- A holder who exits during the exclusion is paid at the reduced NAV and KEEPS the
-claim. A holder who stays gets the same per-share recovery.
-- Shares minted or received after the exclusion carry no claim, and the vault's
-share price never rises from a recovery.
-- The claim is `recoveredUsdc * balanceAt(holder, id) / snapshotSupply`, floored.
-It can be claimed any number of times as more recovery arrives. Rounding dust
-stays here. No one can sweep unclaimed USDC: a claim never expires.
-
-The vault creates this contract in its initializer (here: `FundAdminLib.createLedger`) and is its only writer
-(`open`, `credit`, `finalize`, `checkpoint`). `claim` is permissionless and always
-pays the holder, never the caller.
-
-Per-holder entitlement uses lazy balance checkpoints (the OZ v4 `ERC20Snapshot`
-pattern): once a record exists, the vault reports every share balance change here
-first, and the first change after record `id` stores the balance as it stood at
-`id`. `balanceAt` reads that checkpoint, or the live balance when the holder has not
-moved since. No off-chain input is needed.
-
-Read surface for the indexer and the dapp: `exclusionCount`, `exclusions(id)`,
-`balanceAt`, `claimable`, `claimableTotal`, `claimed`, `heldUsdc`, and the events
-`ExclusionOpened`, `ExclusionRecoveryCredited`, `ExclusionFinalized`,
-`ExclusionClaimed`. The vault exposes the ledger as `RobotMoneyVault.exclusionLedger()`
-and the open record per registry index as `RobotMoneyVault.openExclusionOf(index)`.
+When `open` records an exclusion `id`, it also snapshots `(depIdx, redIdx)` from `FlowQueue.currentMatchIndexes()`.
+When `_checkpoint` runs lazily on a later balance or queue mutation, it fills one checkpoint per missed
+snapshot `id` using `wallet + FlowQueue.queuedSharesOfAt(holder, depIdx[id], redIdx[id])`, ensuring
+earlier match indexes stay immune to later O(1) whole-match updates between checkpoints.
 
 ## Constants
 
 ### VAULT
-
-The vault this ledger belongs to (its only writer, and the share token).
 
 ```solidity
 address public immutable VAULT;
 ```
 
 ### USDC
-
-The vault's asset. Recovered value is held and paid in it.
 
 ```solidity
 IERC20 public immutable USDC;
@@ -73,15 +35,11 @@ IERC20 public immutable USDC;
 
 ### exclusionCount
 
-Number of records ever opened. Ids run 1..exclusionCount; 0 means "none".
-
 ```solidity
 uint256 public exclusionCount;
 ```
 
 ### exclusions
-
-Record by id.
 
 ```solidity
 mapping(uint256 id => Exclusion) public exclusions;
@@ -89,15 +47,11 @@ mapping(uint256 id => Exclusion) public exclusions;
 
 ### claimed
 
-USDC paid to `holder` from record `id` so far.
-
 ```solidity
 mapping(uint256 id => mapping(address holder => uint256 amount)) public claimed;
 ```
 
 ### heldUsdc
-
-USDC this ledger owes across all records (recovered minus claimed).
 
 ```solidity
 uint256 public heldUsdc;
@@ -107,6 +61,18 @@ uint256 public heldUsdc;
 
 ```solidity
 mapping(address holder => Checkpoint[]) private _checkpoints;
+```
+
+### _depIndexes
+
+```solidity
+mapping(uint256 id => uint256[2]) private _depIndexes;
+```
+
+### _redIndexes
+
+```solidity
+mapping(uint256 id => uint256[2]) private _redIndexes;
 ```
 
 ## Functions
@@ -131,21 +97,14 @@ constructor(address vault_, IERC20 usdc_);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| vault_ | `address` | The vault this ledger belongs to: its only writer. `RobotMoneyVaultOps.createLedger`<br/>passes the vault proxy, during the vault's initializer (issue 1808). |
-| usdc_ | `IERC20` | The vault's asset. |
+| vault_ | `address` |  |
+| usdc_ | `IERC20` |  |
 
 <a id="open-uint256-address-uint256"></a>
 
 ### open
 
-Open a record and take its snapshot. Vault only.
-
-<i>
-
-Reads the adapter's self-reported value for the record (0 if the read reverts):
-a failing adapter must never block its own exclusion.
-
-</i>
+Open a record and snapshot both supply and `FlowQueue` match indexes (E52). Vault only.
 
 ```solidity
 function open(uint256 adapterIndex, address adapter, uint256 snapshotSupply)
@@ -158,22 +117,21 @@ function open(uint256 adapterIndex, address adapter, uint256 snapshotSupply)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| adapterIndex | `uint256` | Vault registry index of the excluded adapter. |
-| adapter | `address` | Excluded adapter address. |
-| snapshotSupply | `uint256` | Vault `totalSupply()` now. |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| snapshotSupply | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| id | `uint256` | The new record id. It is also the new current snapshot id. |
+| id | `uint256` |  |
 
 <a id="credit-uint256-uint256-recoverysource"></a>
 
 ### credit
 
-Credit `amount` USDC, already transferred here by the vault, to record `id`.
-Vault only.
+Credit `amount` USDC, already transferred here by the vault, to record `id`. Vault only.
 
 ```solidity
 function credit(uint256 id, uint256 amount, RecoverySource source) external onlyVault;
@@ -183,9 +141,9 @@ function credit(uint256 id, uint256 amount, RecoverySource source) external only
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| id | `uint256` | Open record id. |
-| amount | `uint256` | USDC the vault just moved here. |
-| source | `RecoverySource` | Vault path that recovered it. |
+| id | `uint256` |  |
+| amount | `uint256` |  |
+| source | `RecoverySource` |  |
 
 <a id="finalize-uint256-finalizereason"></a>
 
@@ -201,16 +159,14 @@ function finalize(uint256 id, FinalizeReason reason) external onlyVault;
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| id | `uint256` | Open record id. |
-| reason | `FinalizeReason` | Why it closes. |
+| id | `uint256` |  |
+| reason | `FinalizeReason` |  |
 
 <a id="checkpoint-address-address"></a>
 
 ### checkpoint
 
-Record pre-change share balances. The vault calls this from `_update` before
-every mint, burn and transfer once a record exists, so `balanceOf` still reads
-the balances as they stood before the change. Vault only.
+Record pre-change share balances for any missed snapshots up to `exclusionCount`. Vault only.
 
 ```solidity
 function checkpoint(address from, address to) external onlyVault;
@@ -220,16 +176,12 @@ function checkpoint(address from, address to) external onlyVault;
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| from | `address` | Share sender (zero on mint). |
-| to | `address` | Share receiver (zero on burn). |
+| from | `address` |  |
+| to | `address` |  |
 
 <a id="claim-uint256-address"></a>
 
 ### claim
-
-Pay `holder` everything it can claim from record `id` now. Permissionless: the
-USDC always goes to `holder`. Returns 0 (no transfer, no event) when nothing is
-owed.
 
 ```solidity
 function claim(uint256 id, address holder) public returns (uint256 amount);
@@ -239,20 +191,18 @@ function claim(uint256 id, address holder) public returns (uint256 amount);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| id | `uint256` | Record id. |
-| holder | `address` | Snapshot holder to pay. |
+| id | `uint256` |  |
+| holder | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| amount | `uint256` | USDC paid. |
+| amount | `uint256` |  |
 
 <a id="claimall-address"></a>
 
 ### claimAll
-
-`claim` over every record. Permissionless; pays `holder`.
 
 ```solidity
 function claimAll(address holder) external returns (uint256 total);
@@ -262,19 +212,45 @@ function claimAll(address holder) external returns (uint256 total);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| holder | `address` | Snapshot holder to pay. |
+| holder | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| total | `uint256` | USDC paid across all records. |
+| total | `uint256` |  |
+
+<a id="indexsnapshots-uint256"></a>
+
+### indexSnapshots
+
+Stored match indexes `(depIdx, redIdx)` captured from `FlowQueue` when exclusion `id` opened.
+
+```solidity
+function indexSnapshots(uint256 id)
+        external
+        view
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
 
 <a id="balanceat-address-uint256"></a>
 
 ### balanceAt
 
-Vault shares `holder` held when record `id` opened.
+Vault shares `holder` held (wallet + queue at indexed snapshot `id`) when record `id` opened.
 
 ```solidity
 function balanceAt(address holder, uint256 id) public view returns (uint256);
@@ -284,20 +260,18 @@ function balanceAt(address holder, uint256 id) public view returns (uint256);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| holder | `address` | Account to read. |
-| id | `uint256` | Record id (= snapshot id). |
+| holder | `address` |  |
+| id | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` | Share balance at the snapshot (0 for an unknown id). |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="claimable-uint256-address"></a>
 
 ### claimable
-
-USDC `holder` can claim from record `id` now.
 
 ```solidity
 function claimable(uint256 id, address holder) public view returns (uint256 amount);
@@ -307,20 +281,18 @@ function claimable(uint256 id, address holder) public view returns (uint256 amou
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| id | `uint256` | Record id. |
-| holder | `address` | Account to read. |
+| id | `uint256` |  |
+| holder | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| amount | `uint256` | `recoveredUsdc * balanceAt / snapshotSupply` (floor) minus what was paid. |
+| amount | `uint256` |  |
 
 <a id="claimabletotal-address"></a>
 
 ### claimableTotal
-
-USDC `holder` can claim across every record now.
 
 ```solidity
 function claimableTotal(address holder) external view returns (uint256 total);
@@ -330,20 +302,17 @@ function claimableTotal(address holder) external view returns (uint256 total);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| holder | `address` | Account to read. |
+| holder | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| total | `uint256` | Sum of `claimable(id, holder)` over all records. |
+| total | `uint256` |  |
 
 <a id="returnsurplus"></a>
 
 ### returnSurplus
-
-Return USDC above `heldUsdc` (a direct donation, never a record's money) to the
-vault, where it is idle NAV for all holders (INV-2). Permissionless.
 
 ```solidity
 function returnSurplus() external returns (uint256 amount);
@@ -353,14 +322,11 @@ function returnSurplus() external returns (uint256 amount);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| amount | `uint256` | USDC returned. |
+| amount | `uint256` |  |
 
 <a id="sweepforeigntoken-address"></a>
 
 ### sweepForeignToken
-
-Sweep a foreign token to the vault's governed quarantine address (INV-1/INV-2).
-Permissionless. The vault asset and the vault share token are protected.
 
 ```solidity
 function sweepForeignToken(address token) external;
@@ -370,21 +336,53 @@ function sweepForeignToken(address token) external;
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| token | `address` | Foreign ERC-20 to sweep. |
+| token | `address` |  |
 
-<a id="_checkpoint-address-uint256"></a>
+<a id="_flowqueue"></a>
+
+### _flowQueue
+
+```solidity
+function _flowQueue() private view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_balanceatsnapshot-address-uint256-address"></a>
+
+### _balanceAtSnapshot
+
+```solidity
+function _balanceAtSnapshot(address account, uint256 id, address q)
+        private
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| id | `uint256` |  |
+| q | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_checkpoint-address-uint256-address"></a>
 
 ### _checkpoint
 
-<i>
-
-Store `account`'s pre-change vault balance as its balance at snapshot `current`,
-once per snapshot. A later change in the same snapshot is not a snapshot balance.
-
-</i>
-
 ```solidity
-function _checkpoint(address account, uint256 current) private;
+function _checkpoint(address account, uint256 current, address q) private;
 ```
 
 **Parameters**
@@ -393,13 +391,11 @@ function _checkpoint(address account, uint256 current) private;
 | ---- | ---- | ----------- |
 | account | `address` |  |
 | current | `uint256` |  |
+| q | `address` |  |
 
 ## Events
 
 ### ExclusionOpened
-
-A record opened: `adapter` left NAV and its future recovery belongs to the
-holders of `snapshotSupply` shares at this block.
 
 ```solidity
 event ExclusionOpened(
@@ -415,15 +411,13 @@ event ExclusionOpened(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| exclusionId | `uint256` | New record id. |
-| adapterIndex | `uint256` | Vault registry index of the excluded adapter. |
-| adapter | `address` | Excluded adapter address. |
-| snapshotSupply | `uint256` | Vault share supply at the snapshot. |
-| adapterValue | `uint256` | Adapter's self-reported value at exclusion (informational). |
+| exclusionId | `uint256` |  |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| snapshotSupply | `uint256` |  |
+| adapterValue | `uint256` |  |
 
 ### ExclusionRecoveryCredited
-
-USDC recovered from the excluded adapter was credited to a record.
 
 ```solidity
 event ExclusionRecoveryCredited(
@@ -438,14 +432,12 @@ event ExclusionRecoveryCredited(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| exclusionId | `uint256` | Record id. |
-| source | `RecoverySource` | Vault path that recovered it. |
-| amount | `uint256` | USDC credited by this call. |
-| recoveredUsdc | `uint256` | Record total after this credit. |
+| exclusionId | `uint256` |  |
+| source | `RecoverySource` |  |
+| amount | `uint256` |  |
+| recoveredUsdc | `uint256` |  |
 
 ### ExclusionFinalized
-
-A record stopped accepting recovery. It stays claimable forever.
 
 ```solidity
 event ExclusionFinalized(
@@ -457,13 +449,11 @@ event ExclusionFinalized(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| exclusionId | `uint256` | Record id. |
-| reason | `FinalizeReason` | Why it closed. |
-| recoveredUsdc | `uint256` | Final recovered total. |
+| exclusionId | `uint256` |  |
+| reason | `FinalizeReason` |  |
+| recoveredUsdc | `uint256` |  |
 
 ### ExclusionClaimed
-
-A holder was paid from a record.
 
 ```solidity
 event ExclusionClaimed(uint256 indexed exclusionId, address indexed holder, uint256 amount);
@@ -473,13 +463,11 @@ event ExclusionClaimed(uint256 indexed exclusionId, address indexed holder, uint
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| exclusionId | `uint256` | Record id. |
-| holder | `address` | Snapshot holder that received the USDC. |
-| amount | `uint256` | USDC paid by this call. |
+| exclusionId | `uint256` |  |
+| holder | `address` |  |
+| amount | `uint256` |  |
 
 ### ExclusionSurplusReturned
-
-USDC above `heldUsdc` (a direct donation) was returned to the vault's idle NAV.
 
 ```solidity
 event ExclusionSurplusReturned(uint256 amount);
@@ -489,21 +477,17 @@ event ExclusionSurplusReturned(uint256 amount);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| amount | `uint256` | USDC returned. |
+| amount | `uint256` |  |
 
 ## Errors
 
 ### OnlyVault
-
-Caller is not the vault.
 
 ```solidity
 error OnlyVault();
 ```
 
 ### ExclusionNotOpen
-
-`credit` or `finalize` named a record that is unknown or already finalized.
 
 ```solidity
 error ExclusionNotOpen(uint256 exclusionId);
@@ -513,13 +497,11 @@ error ExclusionNotOpen(uint256 exclusionId);
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| exclusionId | `uint256` | The record id. |
+| exclusionId | `uint256` |  |
 
 ## Structs
 
 ### Exclusion
-
-One exclusion record.
 
 ```solidity
 struct Exclusion {
@@ -539,23 +521,17 @@ struct Exclusion {
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| adapterIndex | `uint256` | Vault registry index of the excluded adapter. |
-| adapter | `address` | Excluded adapter address. |
-| openedBlock | `uint48` | Block in which the record opened (the snapshot block). |
-| openedAt | `uint40` | Timestamp of that block. |
-| finalized | `bool` | True once no further recovery can be credited. |
-| snapshotSupply | `uint256` | Vault `totalSupply()` at the snapshot. Claims divide by this. |
-| adapterValue | `uint256` | Adapter's self-reported `totalAssets()` at exclusion (0 when the<br/>read reverted). Informational: the adapter is no longer trusted. |
-| recoveredUsdc | `uint256` | USDC credited so far. |
-| claimedUsdc | `uint256` | USDC paid out so far. |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| openedBlock | `uint48` |  |
+| openedAt | `uint40` |  |
+| finalized | `bool` |  |
+| snapshotSupply | `uint256` |  |
+| adapterValue | `uint256` |  |
+| recoveredUsdc | `uint256` |  |
+| claimedUsdc | `uint256` |  |
 
 ### Checkpoint
-
-<i>
-
-Balance of one holder as it stood at snapshot `id`.
-
-</i>
 
 ```solidity
 struct Checkpoint {
@@ -574,16 +550,6 @@ struct Checkpoint {
 ## Enums
 
 ### RecoverySource
-
-Which vault path moved recovered USDC into a record.
-
-<i>
-
-`EmergencyWithdrawAdapter` also covers `RobotMoneyVault.recoverRemovedAdapter`, the
-EMERGENCY drain of a force-removed entry's open record (security round 2).
-`Restoration` also covers the drain `addAdapter` runs before a re-add.
-
-</i>
 
 ```solidity
 enum RecoverySource {
@@ -604,18 +570,6 @@ enum RecoverySource {
 | Restoration |  |
 
 ### FinalizeReason
-
-Why a record stopped accepting recovery.
-
-<i>
-
-`Restored`: eligibility came back and the residual balance was realised into the
-record first. `Removed`: `removeAdapter` on the drained entry. `ForceRemoved`:
-a force-removed adapter that reports an empty balance, at `forceRemoveAdapter` or
-after the last `recoverRemovedAdapter` tranche; whatever was not recovered is a
-loss borne by the snapshot holders only.
-
-</i>
 
 ```solidity
 enum FinalizeReason {

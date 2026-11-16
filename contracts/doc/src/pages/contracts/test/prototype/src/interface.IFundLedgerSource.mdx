@@ -4,11 +4,11 @@ title: "IFundLedgerSource"
 
 # IFundLedgerSource
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundExclusionLedger.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/FundExclusionLedger.sol)
 
 <i>
 
-The two fund reads the ledger needs: the governed sweep target, and the entitlement balance (E13).
+Fund reads needed by the exclusion ledger (E13, E52).
 
 </i>
 
@@ -53,4 +53,24 @@ function ledgerBalanceOf(address account) external view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="flowqueue"></a>
+
+### flowQueue
+
+<i>
+
+Bound FlowQueue address (`address(0)` before binding).
+
+</i>
+
+```solidity
+function flowQueue() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
 

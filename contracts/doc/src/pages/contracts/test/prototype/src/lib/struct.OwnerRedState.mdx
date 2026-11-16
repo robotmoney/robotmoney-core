@@ -1,0 +1,25 @@
+---
+title: "OwnerRedState"
+description: "O(1) per-owner enrolled redemption position in `matchCycle`."
+---
+
+# OwnerRedState
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+O(1) per-owner enrolled redemption position in `matchCycle`.
+
+```solidity
+struct OwnerRedState {
+    uint256 matchCycle;
+    uint256 normBasis;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| matchCycle | `uint256` |  |
+| normBasis | `uint256` |  |
+

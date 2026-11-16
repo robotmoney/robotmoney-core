@@ -1,0 +1,31 @@
+---
+title: "RoundState"
+description: "State of round `roundEpoch` (E35, E36, RB-24)."
+---
+
+# RoundState
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+State of round `roundEpoch` (E35, E36, RB-24).
+
+```solidity
+struct RoundState {
+    bool opened;
+    bool depositsOpen;
+    bool done;
+    uint64 matchTime;
+    uint64 settlementId;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| opened | `bool` |  |
+| depositsOpen | `bool` |  |
+| done | `bool` |  |
+| matchTime | `uint64` |  |
+| settlementId | `uint64` |  |
+

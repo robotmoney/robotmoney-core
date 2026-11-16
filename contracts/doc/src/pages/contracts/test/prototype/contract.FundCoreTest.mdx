@@ -4,7 +4,7 @@ title: "FundCoreTest"
 
 # FundCoreTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FundCore.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/FundCore.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -41,7 +41,7 @@ address internal bob = makeAddr("bob");
 
 <i>
 
-This contract plays the FlowQueue: its answer to the fund's `ledgerBalanceOf` read.
+This contract plays the FlowQueue: its answer to the fund's `ledgerBalanceOf` and Step 3f ledger snapshot reads.
 
 </i>
 
@@ -70,6 +70,63 @@ function queuedSharesOf(address account) external view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="currentmatchindexes"></a>
+
+### currentMatchIndexes
+
+```solidity
+function currentMatchIndexes()
+        external
+        pure
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
+
+<a id="queuedsharesofat-address-uint256-2-uint256-2"></a>
+
+### queuedSharesOfAt
+
+```solidity
+function queuedSharesOfAt(address account, uint256[2] calldata, uint256[2] calldata)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| _ | `uint256[2]` |  |
+| _ | `uint256[2]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="onshutdown"></a>
+
+### onShutdown
+
+<i>
+
+Hook called by `RobotMoneyFund.shutdown()` (Step 3f E52).
+
+</i>
+
+```solidity
+function onShutdown() external;
+```
 
 <a id="feeds"></a>
 
@@ -375,8 +432,8 @@ function test_mintInKind_refusesWhileDepositsPaused() public fixtureCovered;
 
 <i>
 
-RB-13 on the holder's own exit: the in-kind exit asserts check 10 too, with the lending legs two units
-short of exact.
+RB-13 & E29: `redeemInKind` is closed while live (`InKindClosed`) and opens during wind-down (`shutdown`),
+closing again upon `restore`; asserts check 10 with the lending legs two units short of exact.
 
 </i>
 
@@ -398,5 +455,51 @@ function test_ledger_isTheFundCopyAndCountsQueuedShares() public fixtureCovered;
 
 ```solidity
 function test_heldBalances_matchesTheHoldings() public fixtureCovered;
+```
+
+<a id="test_step3f_rules4and7_pooldepthfloorandmaxbasketcap"></a>
+
+### test_step3f_rules4And7_poolDepthFloorAndMaxBasketCap
+
+```solidity
+function test_step3f_rules4And7_poolDepthFloorAndMaxBasketCap() public fixtureCovered;
+```
+
+<a id="test_step3f_rule6_requiresfixedfeeandfeemargin"></a>
+
+### test_step3f_rule6_requiresFixedFeeAndFeeMargin
+
+```solidity
+function test_step3f_rule6_requiresFixedFeeAndFeeMargin() public fixtureCovered;
+```
+
+<a id="test_step3f_emergencyunwindassetandcooldownfreepausedeposits"></a>
+
+### test_step3f_emergencyUnwindAssetAndCooldownFreePauseDeposits
+
+```solidity
+function test_step3f_emergencyUnwindAssetAndCooldownFreePauseDeposits() public fixtureCovered;
+```
+
+<a id="test_step3f_emergencyunwindasset_floorsatfeedlessdelistband"></a>
+
+### test_step3f_emergencyUnwindAsset_floorsAtFeedLessDelistBand
+
+`emergencyUnwind(asset)` sells a basket leg with a floor of the feed price times `1 - delistBandBps`
+(plan section 3.3). A feed far above the pool refuses the sale. A feed on the pool lets it run.
+
+```solidity
+function test_step3f_emergencyUnwindAsset_floorsAtFeedLessDelistBand() public fixtureCovered;
+```
+
+<a id="test_step3f_setflowparams_rechecksrule6"></a>
+
+### test_step3f_setFlowParams_rechecksRule6
+
+Rule 6 on `setFlowParams` (plan section 3.3 item 4): a funded basket pool that is not fixed-fee
+refuses new flow params, and so does a `legBandBps` at or under pool fee plus margin.
+
+```solidity
+function test_step3f_setFlowParams_rechecksRule6() public fixtureCovered;
 ```
 

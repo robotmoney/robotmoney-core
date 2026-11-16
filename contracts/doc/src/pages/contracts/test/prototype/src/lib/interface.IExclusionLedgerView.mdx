@@ -4,11 +4,11 @@ title: "IExclusionLedgerView"
 
 # IExclusionLedgerView
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowCheckLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowCheckLib.sol)
 
 <i>
 
-The fund's exclusion ledger, as check 6 reads it (review Q-F3).
+Minimal interface of FundExclusionLedger read by Check 6 (cycled exclusions, review Q-F3).
 
 </i>
 
@@ -36,7 +36,17 @@ function exclusionCount() external view returns (uint256);
 function exclusions(uint256 id)
         external
         view
-        returns (uint256, address, uint48, uint40, bool, uint256, uint256, uint256, uint256);
+        returns (
+            uint256 adapterIndex,
+            address adapter,
+            uint48 openedBlock,
+            uint40 openedAt,
+            bool finalized,
+            uint256 snapshotSupply,
+            uint256 adapterValue,
+            uint256 recoveredUsdc,
+            uint256 claimedUsdc
+        );
 ```
 
 **Parameters**
@@ -49,13 +59,13 @@ function exclusions(uint256 id)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-| &lt;none&gt; | `address` |  |
-| &lt;none&gt; | `uint48` |  |
-| &lt;none&gt; | `uint40` |  |
-| &lt;none&gt; | `bool` |  |
-| &lt;none&gt; | `uint256` |  |
-| &lt;none&gt; | `uint256` |  |
-| &lt;none&gt; | `uint256` |  |
-| &lt;none&gt; | `uint256` |  |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| openedBlock | `uint48` |  |
+| openedAt | `uint40` |  |
+| finalized | `bool` |  |
+| snapshotSupply | `uint256` |  |
+| adapterValue | `uint256` |  |
+| recoveredUsdc | `uint256` |  |
+| claimedUsdc | `uint256` |  |
 

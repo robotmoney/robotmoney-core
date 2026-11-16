@@ -5,7 +5,7 @@ description: "One-vault experiment, plan Step 2.4: one short test per row of des
 
 # AdversarialTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Adversarial.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/Adversarial.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -184,10 +184,9 @@ function test_keeperAbuse_timingOnly_withinCostCap() public fixtureCovered;
 
 <i>
 
-The one input a permissionless caller controls is the gas limit (RB-2). A stranger after
-`keeperGrace` who sends too little gas for the step gets `StepGasStarved`: no fake `StepFailed`, no
-backoff, no trade. With enough gas the stranger's step is exactly the order `previewStep` showed (the
-keeper's), and a real step uses well under `STEP_GAS_FLOOR`.
+Gas starvation (RB-2): only KEEPER_ROLE may call `step()` in Step 3f, and calling with too little
+gas for the step reverts `StepGasStarved` without recording fake `StepFailed` backoff or touching
+the fund. With enough gas the keeper's step matches `previewStep` and uses well under `STEP_GAS_FLOOR`.
 
 </i>
 

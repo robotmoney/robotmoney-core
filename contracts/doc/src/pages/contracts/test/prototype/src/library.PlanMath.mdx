@@ -5,7 +5,7 @@ description: "The single home of the glide-path and weight math. Both `RobotMone
 
 # PlanMath
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/PlanMath.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/PlanMath.sol)
 
 **Title:** PlanMath
 
@@ -71,6 +71,10 @@ Reverts `InvalidParam` when `ids` and `bps` differ in length. Ids are `assetId`.
 
 </i>
 
+Validate and expand a target vector (`ids`, `bps`) against the fund's asset list,
+enforcing no basket weight cap (`maxBasketBps == BPS`). Kept for callers that do not
+pass a basket ceiling directly.
+
 ```solidity
 function assetTargets(address[] memory ids, uint256[] memory bps, AssetConfig[] memory cfgs)
         internal
@@ -85,6 +89,39 @@ function assetTargets(address[] memory ids, uint256[] memory bps, AssetConfig[] 
 | ids | `address[]` |  |
 | bps | `uint256[]` |  |
 | cfgs | `AssetConfig[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `uint16[]` |  |
+
+<a id="assettargets-address-uint256-assetconfig-uint256"></a>
+
+### assetTargets
+
+Validate and expand a target vector (`ids`, `bps`) against the fund's asset list,
+and check the cumulative basket target weight ceiling `maxBasketBps` (§4.5 rule 7, E57).
+Reverts `InvalidParam`, `TargetAssetNotActive`, `TargetAssetDuplicate`,
+`TargetSumInvalid`, `TargetExceedsCap`, `TargetAssetMissing`, or `BasketCapExceeded`.
+
+```solidity
+function assetTargets(
+        address[] memory ids,
+        uint256[] memory bps,
+        AssetConfig[] memory cfgs,
+        uint256 maxBasketBps
+    ) internal pure returns (uint16[] memory targets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| bps | `uint256[]` |  |
+| cfgs | `AssetConfig[]` |  |
+| maxBasketBps | `uint256` |  |
 
 **Returns**
 

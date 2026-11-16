@@ -5,7 +5,7 @@ description: "RB-9: a target vector names every active asset exactly once and su
 
 # TargetVectorTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/TargetVector.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/TargetVector.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -229,6 +229,22 @@ maps to the new index.
 function test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index()
         public
         fixtureCovered;
+```
+
+<a id="test_e57_basketcapexceeded_revertsthroughalldoors"></a>
+
+### test_e57_basketCapExceeded_revertsThroughAllDoors
+
+<i>
+
+E57 (Rule 7): `maxBasketBps` defaults to `10 000`; raising above `10 000` reverts `InvalidParam`;
+once capped at `5 000`, any target vector whose basket sum exceeds `5 000` reverts
+`BasketCapExceeded` through all three doors (`applyReceipt`, `setTarget`, `previewPlan`).
+
+</i>
+
+```solidity
+function test_e57_basketCapExceeded_revertsThroughAllDoors() public fixtureCovered;
 ```
 
 <a id="_expectrefused-address-uint256-bytes"></a>

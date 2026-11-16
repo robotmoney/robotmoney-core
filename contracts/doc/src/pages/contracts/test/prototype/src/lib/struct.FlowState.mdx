@@ -5,7 +5,7 @@ description: "Every piece of FlowQueue state outside the OpenZeppelin namespaces
 
 # FlowState
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowStorage.sol)
 
 Every piece of FlowQueue state outside the OpenZeppelin namespaces, in one struct, so the queue's linked
 libraries (`Flow*Lib`) take one storage reference per call. Owned by the `queue` agent after the
@@ -99,6 +99,40 @@ struct FlowState {
     uint128 leverBlockRed;
     /// @dev The exclusion ledger's record count at the last settlement (check 6, review Q-F3).
     uint256 lastExclusionCount;
+    // ── Step 3f (v0.9.0-onevault) ──
+    uint64 queuePausedUntil;
+    uint64 queuePauseLastEnd;
+    uint64 lastFreezeAt;
+    uint64 lastDepositStopEpoch;
+    uint64 openStopCancelUntilEpoch;
+    uint256 lastSaleMask;
+    mapping(uint256 index => uint256) lastAssetPerShare;
+    uint64 windDownEra;
+    mapping(uint64 roundEpoch => RoundState) rounds;
+    uint64[] activeEpochs;
+    uint256 enrollCursor;
+    mapping(uint64 epoch => bool) epochSeen;
+    uint256 depCycle;
+    uint256 depTotalNormBasis;
+    uint256 depPoolUsdc;
+    mapping(uint256 cycle => uint256) depCycleFactor;
+    mapping(uint256 cycle => mapping(uint64 expiryEpoch => DepBucket)) depBuckets;
+    uint64[] activeDepBuckets;
+    DepMatchRecord[] depMatches;
+    mapping(address owner => OwnerDepCohort[]) ownerDepCohorts;
+    mapping(address owner => uint256[]) ownerActiveDepReqs;
+    mapping(address owner => uint256) ownerHeldShares;
+    uint256 redCycle;
+    uint256 redPoolShares;
+    mapping(uint256 cycle => RedCycleState) redCycles;
+    mapping(address owner => OwnerRedState) ownerRedStates;
+    mapping(address owner => uint256[]) ownerActiveRedReqs;
+    mapping(address owner => uint256) ownerUnenrolledRedShares;
+    mapping(uint64 roundEpoch => uint256[]) noticeRequestsByRound;
+    uint64[] pendingNoticeRounds;
+    /// @dev Longest `minHold` stored on any deposit request created so far (E41). Settlement hold end uses it, not
+    ///      the live `params.minHold`, so a later param change never shortens a hold a request was promised.
+    uint32 maxDepositMinHold;
 }
 ```
 
@@ -157,4 +191,35 @@ struct FlowState {
 | leverBlockDep | `uint128` |  |
 | leverBlockRed | `uint128` |  |
 | lastExclusionCount | `uint256` |  |
+| queuePausedUntil | `uint64` |  |
+| queuePauseLastEnd | `uint64` |  |
+| lastFreezeAt | `uint64` |  |
+| lastDepositStopEpoch | `uint64` |  |
+| openStopCancelUntilEpoch | `uint64` |  |
+| lastSaleMask | `uint256` |  |
+| lastAssetPerShare | `mapping(uint256 index => uint256)` |  |
+| windDownEra | `uint64` |  |
+| rounds | `mapping(uint64 roundEpoch => RoundState)` |  |
+| activeEpochs | `uint64[]` |  |
+| enrollCursor | `uint256` |  |
+| epochSeen | `mapping(uint64 epoch => bool)` |  |
+| depCycle | `uint256` |  |
+| depTotalNormBasis | `uint256` |  |
+| depPoolUsdc | `uint256` |  |
+| depCycleFactor | `mapping(uint256 cycle => uint256)` |  |
+| depBuckets | `mapping(uint256 cycle => mapping(uint64 expiryEpoch => DepBucket))` |  |
+| activeDepBuckets | `uint64[]` |  |
+| depMatches | `DepMatchRecord[]` |  |
+| ownerDepCohorts | `mapping(address owner => OwnerDepCohort[])` |  |
+| ownerActiveDepReqs | `mapping(address owner => uint256[])` |  |
+| ownerHeldShares | `mapping(address owner => uint256)` |  |
+| redCycle | `uint256` |  |
+| redPoolShares | `uint256` |  |
+| redCycles | `mapping(uint256 cycle => RedCycleState)` |  |
+| ownerRedStates | `mapping(address owner => OwnerRedState)` |  |
+| ownerActiveRedReqs | `mapping(address owner => uint256[])` |  |
+| ownerUnenrolledRedShares | `mapping(address owner => uint256)` |  |
+| noticeRequestsByRound | `mapping(uint64 roundEpoch => uint256[])` |  |
+| pendingNoticeRounds | `uint64[]` |  |
+| maxDepositMinHold | `uint32` |  |
 

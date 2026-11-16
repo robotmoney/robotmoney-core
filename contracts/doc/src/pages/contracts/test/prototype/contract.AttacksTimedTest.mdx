@@ -5,7 +5,7 @@ description: "Eng plan §4.1 against the step 3d fund and its FlowQueue, on the 
 
 # AttacksTimedTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/Attacks.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness), [AttackBook](/contracts/test/prototype/abstract.AttackBook)
 
@@ -476,9 +476,8 @@ function test_A6_twapLagAfterRealMove_noGainOnTheTimedFund() public fixtureCover
 
 <i>
 
-After keeperGrace anyone may settle, so the attacker is the caller: in ONE transaction it pushes both
-basket pools up, settles a pending deposit of the period cap's size, and sells back what it bought.
-Three push sizes inside the per-swap band; the best is scored.
+E34 / RB-20: `keeperGrace` is retired in Step 3f; only `KEEPER_ROLE` may settle. An attacker trying to
+settle after `keeperGrace` reverts with `SettleBlocked(Caller, ...)`.
 
 </i>
 
@@ -617,7 +616,7 @@ function _settleOverBlocks(address caller, uint256 id, uint256 maxCalls)
 
 <i>
 
-Request `vid`'s fills so far (deposit claims): the USDC paid and the shares got. RB-14 on each fill.
+Request `vid`'s fills so far (deposit claims): the USDC paid and the shares got.
 
 </i>
 
@@ -864,10 +863,8 @@ function test_A8_block_cursorGriefing_cannotStarveTheOldestRequest() public fixt
 
 <i>
 
-Way 5: a gift larger than pending users' limit margins. A gift raises the amount per share, so every
-deposit request whose limit sits within the gift's share of NAV above the quote is skipped (RB-14) and
-waits for its owner to re-quote. It costs the gift, which goes to the holders. Not a day block: one
-gift moves the price once.
+Way 5: a gift cannot skip or block pending deposits once per-request limits are retired (E25).
+The deposit fills (receiving slightly fewer shares at the higher NAV) and holders keep the gift.
 
 </i>
 
@@ -903,7 +900,7 @@ function _a9Holders() private;
 
 <i>
 
-The fourth runner leaves at once in kind through the queue: basket tokens now, lending USDC up to the
+In wind-down (`shutdown()`), the fourth runner exits in kind: basket tokens now, lending USDC up to the
 period's allowance, the rest as position claims.
 
 </i>
@@ -1125,22 +1122,15 @@ function _arbBackWeth(uint160 sqrtTarget) internal;
 | ---- | ---- | ----------- |
 | sqrtTarget | `uint160` |  |
 
-<a id="test_a13_floodofunfillablerequests_honeststillfills"></a>
-
-### test_A13_floodOfUnfillableRequests_honestStillFills
-
-```solidity
-function test_A13_floodOfUnfillableRequests_honestStillFills() public fixtureCovered;
-```
-
 <a id="test_a14_venueimpaired_exitersandstayerssharetheloss"></a>
 
 ### test_A14_venueImpaired_exitersAndStayersShareTheLoss
 
 <i>
 
-Impaired: Aave loses 10 % after an in-kind exit left a position claim. Exiter and stayers share it; a
-timed redemption after it pays the impaired value (it does not take the stayers' money).
+Impaired (E29, proposal §10 step 3f): `redeemInKind` is closed while running and opens only in
+`shutdown()` wind-down; an in-kind exit in wind-down leaves a position claim. Exiter and stayers share a
+later venue loss pro rata; after `restore(TVL_CAP)`, a timed redemption settles at the impaired value.
 
 </i>
 
@@ -1169,8 +1159,9 @@ function test_A14_venueAtSupplyCap_depositsWait_redemptionsSettle() public fixtu
 
 <i>
 
-Fully borrowed: Aave pays no withdrawal. Timed redemptions wait, deposits of the same call settle, and
-the in-kind exit stays open (the Aave leg becomes a position claim).
+Fully borrowed (E36, E37, RB-28): no deposit settles and no match happens (`DepositStoppedForRound`
+cause 3), while the net redemption still settles and turns the borrowed venue leg into position claim
+units. `redeemInKind` stays closed while running and gives `alice` direct claims in wind-down.
 
 </i>
 
@@ -1335,6 +1326,396 @@ function test_A19_exclusionLedger_freshAddressGetsNothing_burnedRedeemerKeepsCla
         fixtureCovered;
 ```
 
+<a id="_etchaavemech"></a>
+
+### _etchAaveMech
+
+```solidity
+function _etchAaveMech() internal returns (MechAaveAdapter m);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| m | `MechAaveAdapter` |  |
+
+<a id="_etchswapmech"></a>
+
+### _etchSwapMech
+
+```solidity
+function _etchSwapMech() internal returns (MechSwapAdapter m);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| m | `MechSwapAdapter` |  |
+
+<a id="_seedholder-address-uint256"></a>
+
+### _seedHolder
+
+```solidity
+function _seedHolder(address who, uint256 usdc) internal returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="_sharesrefusdc-uint256"></a>
+
+### _sharesRefUsdc
+
+<i>
+
+Fair share value in USDC at the fixed reference prices (`_navRef`).
+
+</i>
+
+```solidity
+function _sharesRefUsdc(uint256 shares) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="test_a21_laggingtwap_informedjoinsfavoredsideinsideguard"></a>
+
+### test_A21_laggingTwap_informedJoinsFavoredSideInsideGuard
+
+A21: lagging TWAP. An informed user joins the side the TWAP lag favors, inside `refBandBps`, against an
+uninformed counterparty. The market moves +80 bps near the end of the window, so the TWAP trails the
+feed past `matchBandBps`. The match is not booked (plan 8.5 fallback), the round nets at the feed
+price, and the attacker's net after the exit fee is not positive.
+
+```solidity
+function test_A21_laggingTwap_informedJoinsFavoredSideInsideGuard() public fixtureCovered;
+```
+
+<a id="test_a21_smalllag_matchbooksinsideband_attackernetnotpositive"></a>
+
+### test_A21_smallLag_matchBooksInsideBand_attackerNetNotPositive
+
+A21, small lag: the TWAP trails the feed by less than `matchBandBps`, so the match books at the TWAP.
+The edge is bounded by the band, which is below the exit fee, so the attacker still nets nothing.
+
+```solidity
+function test_A21_smallLag_matchBooksInsideBand_attackerNetNotPositive() public fixtureCovered;
+```
+
+<a id="_a21-uint256-bool"></a>
+
+### _a21
+
+```solidity
+function _a21(uint256 moveBps, bool expectMatch) internal returns (AttackPnl memory r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| moveBps | `uint256` |  |
+| expectMatch | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `AttackPnl` |  |
+
+<a id="test_a23_selfmatch_paysfeegainsnothing_respectscapandhold"></a>
+
+### test_A23_selfMatch_paysFeeGainsNothing_respectsCapAndHold
+
+A23: self-match — one owner on both sides pays the exit fee, gains nothing, uses epoch cap, and
+stays bound by `minHold`.
+
+```solidity
+function test_A23_selfMatch_paysFeeGainsNothing_respectsCapAndHold() public fixtureCovered;
+```
+
+<a id="test_a24_cutoff_cancelafterclosereverts_lastblockrequestlocksoneblocklater"></a>
+
+### test_A24_cutoff_cancelAfterCloseReverts_lastBlockRequestLocksOneBlockLater
+
+A24: cancel cutoff (`cancelBuffer`) — cancelling past cutoff reverts `RequestLocked`, and a request
+created in the last block of an epoch locks immediately against cancel.
+
+```solidity
+function test_A24_cutoff_cancelAfterCloseReverts_lastBlockRequestLocksOneBlockLater()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a25_pushednetsidefailswhilematchsettles"></a>
+
+### test_A25_pushedNetSideFailsWhileMatchSettles
+
+A25: attacker pushes the pool spot past `legBandBps` right at settle so the net side fails while
+the whole match still settles cleanly at TWAP.
+
+```solidity
+function test_A25_pushedNetSideFailsWhileMatchSettles() public fixtureCovered;
+```
+
+<a id="test_a26_stuckfund_blockedmaxrollepochs_reportscostandwinddown"></a>
+
+### test_A26_stuckFund_blockedMaxRollEpochs_reportsCostAndWindDown
+
+A26: stuck fund — settlement blocked for `maxRoll` epochs. Reports blocker cost, holder actions
+before expiry, expired/notice exits, and Safe timelock wind-down.
+
+```solidity
+function test_A26_stuckFund_blockedMaxRollEpochs_reportsCostAndWindDown()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a27_heldpooltwap_measuresmatchleanandholdcost"></a>
+
+### test_A27_heldPoolTwap_measuresMatchLeanAndHoldCost
+
+A27: held pool TWAP — pushes pool steadily inside `refBandBps` so check 4 passes, measures match
+price lean, matched loss, holding cost, and verifies check 4 blocks past `refBandBps`.
+
+```solidity
+function test_A27_heldPoolTwap_measuresMatchLeanAndHoldCost() public fixtureCovered;
+```
+
+<a id="test_a28_runwithmatch_manyredeemersfewdepositors_proratafillsandwait"></a>
+
+### test_A28_runWithMatch_manyRedeemersFewDepositors_proRataFillsAndWait
+
+A28: bank run with a match — many redeemers and one small depositor over cap: equal match fraction
+across same-round redeemers, FIFO oldest-first net redemption, and tracked final wait time.
+
+```solidity
+function test_A28_runWithMatch_manyRedeemersFewDepositors_proRataFillsAndWait()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a30_venuefullyborrowedorimpairedwithbothsides_nomatchandclaim"></a>
+
+### test_A30_venueFullyBorrowedOrImpairedWithBothSides_noMatchAndClaim
+
+A30: fully borrowed or impaired lending venue while both sides have requests — no match is booked
+and net redemptions produce position claims (impaired venue uses exclusion ledger).
+
+```solidity
+function test_A30_venueFullyBorrowedOrImpairedWithBothSides_noMatchAndClaim()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a31_planinprogress_stepsatwindowedges_reportsblockedandmatchlean"></a>
+
+### test_A31_planInProgress_stepsAtWindowEdges_reportsBlockedAndMatchLean
+
+A31: plan in progress — basket steps interleaved with settlement windows across a whole plan;
+reports blocked settlements (`StepInWindow`) and match price lean vs reference.
+
+```solidity
+function test_A31_planInProgress_stepsAtWindowEdges_reportsBlockedAndMatchLean()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a32_compromisedemergencykey_pauseendsself_cannotshutdownorunwind"></a>
+
+### test_A32_compromisedEmergencyKey_pauseEndsSelf_cannotShutdownOrUnwind
+
+A32: compromised emergency key — `pauseQueue` & `pauseRebalance` end by themselves, trigger
+cooldown against immediate re-pause, and emergency cannot call `shutdown` or `emergencyUnwind`.
+
+```solidity
+function test_A32_compromisedEmergencyKey_pauseEndsSelf_cannotShutdownOrUnwind()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a33_timelockparamchangewhilelocked_keepsfeeholdexpiry"></a>
+
+### test_A33_timelockParamChangeWhileLocked_keepsFeeHoldExpiry
+
+A33: timelock parameter change while requests are locked does not alter their fee, hold, or expiry.
+
+```solidity
+function test_A33_timelockParamChangeWhileLocked_keepsFeeHoldExpiry() public fixtureCovered;
+```
+
+<a id="test_a34_shortpayingadapter_rejectedinrecoverypositionclaimandvenuetest"></a>
+
+### test_A34_shortPayingAdapter_rejectedInRecoveryPositionClaimAndVenueTest
+
+A34: short-paying lending adapter — defeated in recovery (`openExclusion`), in net redemption
+Check 11 (`RealizedPrice`), and in pre-match venue liquidity test (`availableLiquidity`).
+
+```solidity
+function test_A34_shortPayingAdapter_rejectedInRecoveryPositionClaimAndVenueTest()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a35_poolfeeatorabovelegband_refusedatadmissionandfunding"></a>
+
+### test_A35_poolFeeAtOrAboveLegBand_refusedAtAdmissionAndFunding
+
+A35: pool fee at or above `legBandBps` less margin, or mutable fee — refused at admission and funding.
+
+```solidity
+function test_A35_poolFeeAtOrAboveLegBand_refusedAtAdmissionAndFunding() public fixtureCovered;
+```
+
+<a id="test_a36_roundcutintwo_pauseoutagemove5pct_nomatchatoldprice"></a>
+
+### test_A36_roundCutInTwo_pauseOutageMove5Pct_noMatchAtOldPrice
+
+A36: round cut in two — pause, sequencer outage, and 5% market move between two `settle` calls of
+one round. No second match may be booked at the old price.
+
+```solidity
+function test_A36_roundCutInTwo_pauseOutageMove5Pct_noMatchAtOldPrice() public fixtureCovered;
+```
+
+<a id="test_a37_looks_lateredemptionnoticeanddepositcancelbeforeunpause_cannotavoidprice"></a>
+
+### test_A37_looks_lateRedemptionNoticeAndDepositCancelBeforeUnpause_cannotAvoidPrice
+
+A37: the looks — notice on an old redemption inside an open settle window, and cancel of a deposit
+before/after scheduled `unpauseDeposits`. Neither avoids a price already forming.
+
+```solidity
+function test_A37_looks_lateRedemptionNoticeAndDepositCancelBeforeUnpause_cannotAvoidPrice()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a38_winddownnotice_redeemerscannotmatchagainstlockeddepositsbeforeshutdown"></a>
+
+### test_A38_windDownNotice_redeemersCannotMatchAgainstLockedDepositsBeforeShutdown
+
+A38: wind-down notice — between `pauseDeposits` + scheduling `shutdown` and `shutdown` execution,
+redeemers cannot match against locked depositors (`depositsPaused` -> cause 1 -> zero match).
+
+```solidity
+function test_A38_windDownNotice_redeemersCannotMatchAgainstLockedDepositsBeforeShutdown()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a39_morelockedthancap_conservationandcapbounds"></a>
+
+### test_A39_moreLockedThanCap_conservationAndCapBounds
+
+A39: more locked than epoch flow cap (2x cap deposits vs 1x cap redemptions, and reverse) —
+RB-36 exact share & USDC conservation and no fill above cap.
+
+```solidity
+function test_A39_moreLockedThanCap_conservationAndCapBounds() public fixtureCovered;
+```
+
+<a id="test_a40_exclusionaftermatch_bothclaimwithouttouching_recoverytodepositor_andrepeat"></a>
+
+### test_A40_exclusionAfterMatch_bothClaimWithoutTouching_recoveryToDepositor_andRepeat
+
+A40 (RB-22): exclusion after a match — neither matched user touches the queue, an adapter is revoked,
+both claim: recovery goes to the depositor. Repeat with a second match before either checkpoints.
+
+```solidity
+function test_A40_exclusionAfterMatch_bothClaimWithoutTouching_recoveryToDepositor_andRepeat()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a41_scheduledadapterrevoke_redeemerscannotexitatfacevalue_pausedepositsrenewable"></a>
+
+### test_A41_scheduledAdapterRevoke_redeemersCannotExitAtFaceValue_pauseDepositsRenewable
+
+A41: scheduled adapter revoke — redeemers try leaving at face value between schedule and execution
+(with and without `pauseDeposits`); `pauseDeposits` is immediately renewable without cooldown.
+
+```solidity
+function test_A41_scheduledAdapterRevoke_redeemersCannotExitAtFaceValue_pauseDepositsRenewable()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a42_delistingsale_interleavedwithredemptions_nodoubleclaim_navexcludesclaimed"></a>
+
+### test_A42_delistingSale_interleavedWithRedemptions_noDoubleClaim_navExcludesClaimed
+
+A42: delisting sale with redemptions and sale steps interleaved — no double claim, USDC split by
+tokens, and NAV never counts claimed tokens.
+
+```solidity
+function test_A42_delistingSale_interleavedWithRedemptions_noDoubleClaim_navExcludesClaimed()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a43_stepinsidewindowblocksfirstsettle_pausedqueueallowssteps"></a>
+
+### test_A43_stepInsideWindowBlocksFirstSettle_pausedQueueAllowsSteps
+
+A43: a basket rebalance step inside the window before a round's first call makes `settle` revert
+`StepInWindow` (RB-30); while the queue is paused, steps still execute.
+
+```solidity
+function test_A43_stepInsideWindowBlocksFirstSettle_pausedQueueAllowsSteps()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a44_asktentimesmorethanwanted_reportmatchsharevslockedsurpluscost"></a>
+
+### test_A44_askTenTimesMoreThanWanted_reportMatchShareVsLockedSurplusCost
+
+A44 (report-only per eng plan §8.3): compares an honest 10k request vs a 100k (10x) request competing
+for a scarce 20k match, reporting extra matched fill gained and locked surplus cost.
+
+```solidity
+function test_A44_askTenTimesMoreThanWanted_reportMatchShareVsLockedSurplusCost()
+        public
+        fixtureCovered;
+```
+
+<a id="test_a45_lendingclaimandstep_stepskipsclaimvenue_strangersettlesclaim"></a>
+
+### test_A45_lendingClaimAndStep_stepSkipsClaimVenue_strangerSettlesClaim
+
+A45 (RB-35): a lending claim protects its venue's outstanding claim units from rebalance withdrawal,
+and a stranger can permissionlessly call `settleClaim`.
+
+```solidity
+function test_A45_lendingClaimAndStep_stepSkipsClaimVenue_strangerSettlesClaim()
+        public
+        fixtureCovered;
+```
+
 <a id="_waitoutsharepricebreaker"></a>
 
 ### _waitOutSharePriceBreaker
@@ -1375,6 +1756,33 @@ function _sawSideFailed(RequestKind kind) internal returns (bool);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_sawdepositstopped-uint64-uint8"></a>
+
+### _sawDepositStopped
+
+<i>
+
+Whether the recorded logs hold `DepositStoppedForRound(roundEpoch, cause)` from the queue.
+
+</i>
+
+```solidity
+function _sawDepositStopped(uint64 roundEpoch, uint8 cause) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| roundEpoch | `uint64` |  |
+| cause | `uint8` |  |
 
 **Returns**
 
@@ -2266,7 +2674,7 @@ function _leverCall(address caller, LeverRun memory r) internal returns (bool st
 
 <i>
 
-Close a run: the victim's fills of request `vid` (RB-14 asserted on each), the attacker's net, the
+Close a run: the victim's fills of request `vid`, the attacker's net, the
 holders' loss (asserted under 1 bps of NAV), check 10 from outside.
 
 </i>
@@ -2369,6 +2777,27 @@ so feed and pool agree when the attack starts.
 ```solidity
 function _world() internal;
 ```
+
+<a id="_fundsalecost"></a>
+
+### _fundSaleCost
+
+<i>
+
+The fund's own part of every `DelistStepExecuted` since `vm.recordLogs()`, at the reference price: the
+tokens it sold at the reference, less the USDC it kept. Claim holders carry their own part of each sale.
+
+</i>
+
+```solidity
+function _fundSaleCost() internal returns (uint256 cost);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cost | `uint256` |  |
 
 <a id="_begin"></a>
 
@@ -2582,7 +3011,13 @@ function _assertPerShareNotLower(string memory label) internal view;
 </i>
 
 ```solidity
-function _reqDeposit(address who, uint256 usdc, uint256 limit) internal returns (uint256 id);
+function _reqDeposit(
+        address who,
+        uint256 usdc,
+        uint256 /* limit */
+    )
+        internal
+        returns (uint256 id);
 ```
 
 **Parameters**
@@ -2591,7 +3026,7 @@ function _reqDeposit(address who, uint256 usdc, uint256 limit) internal returns 
 | ---- | ---- | ----------- |
 | who | `address` |  |
 | usdc | `uint256` |  |
-| limit | `uint256` |  |
+| _ | `uint256` |  |
 
 **Returns**
 
@@ -2605,7 +3040,7 @@ function _reqDeposit(address who, uint256 usdc, uint256 limit) internal returns 
 
 <i>
 
-A pending user's deposit request with a limit from the quote plus `LIMIT_MARGIN_BPS` (E21).
+A pending user's deposit request (limits retired in Step 3f).
 
 </i>
 

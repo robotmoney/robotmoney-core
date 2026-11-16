@@ -5,7 +5,7 @@ description: "Eng plan §4.2, bullet by bullet, against the wired harness. Each 
 
 # FlowQueueTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FlowQueue.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/FlowQueue.t.sol)
 
 **Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
 
@@ -34,8 +34,8 @@ function test_RB10_nothingLeavesTheQueueBeforeTheWindowEnds() public fixtureCove
 
 ### test_RB10_theExceptionsPayOnlyThatUser
 
-RB-10: the three exceptions (cancel, in-kind exit, withdrawal of expired escrow) each pay only the
-request's owner, and only what that request held.
+RB-10: the three exceptions (cancel, notice return on aged redemption, withdrawal of expired deposit
+escrow) each pay only the request's owner, and only what that request held.
 
 ```solidity
 function test_RB10_theExceptionsPayOnlyThatUser() public fixtureCovered;
@@ -56,9 +56,9 @@ function test_RB11_depositSharesStayForMinHoldAndGoOnlyToTheOwner() public fixtu
 
 ### test_RB12_aBlockedSettlementTradesNothingAndNoRoleSettlesPastIt
 
-RB-12: a blocked settlement trades nothing, and no role can settle past the failed check: the keeper,
-a stranger after `keeperGrace`, the emergency key, the fund, and the admin through the timelock all get
-the same `SettleBlocked`. Restoring the one broken input is all the keeper then needs.
+RB-12: a blocked settlement trades nothing, and no role can settle past the failed check: the keeper
+hits `UsdcPeg`, while non-keeper callers hit `Caller` (keeper-only since Step 3f E34). Restoring the
+broken input is all the keeper needs.
 
 ```solidity
 function test_RB12_aBlockedSettlementTradesNothingAndNoRoleSettlesPastIt()
@@ -70,7 +70,7 @@ function test_RB12_aBlockedSettlementTradesNothingAndNoRoleSettlesPastIt()
 
 ### test_RB12_cancelAndExpiryReturnExactlyTheUnfilledEscrow
 
-RB-12: cancel and expiry return exactly the escrow not yet filled, also after a partial fill.
+RB-12: cancel and expiry/notice return exactly the escrow not yet filled, also after a partial fill.
 
 ```solidity
 function test_RB12_cancelAndExpiryReturnExactlyTheUnfilledEscrow() public fixtureCovered;
@@ -80,8 +80,8 @@ function test_RB12_cancelAndExpiryReturnExactlyTheUnfilledEscrow() public fixtur
 
 ### test_RB13_aSettlementKeepsEveryAmountPerShare
 
-RB-13: after a settlement of both sides, the amount of idle USDC and of every active asset per share
-is at least what it was before.
+RB-13: across net deposit, net redemption, and matched-plus-net settlements, every amount of idle USDC
+and every active asset per share is at least what it was before.
 
 ```solidity
 function test_RB13_aSettlementKeepsEveryAmountPerShare() public fixtureCovered;
@@ -151,8 +151,8 @@ function test_RB13_aFlowRoleCallerThatSkipsItsChecksCannotBreakTheProportion()
 
 ### test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending
 
-RB-14: a request whose limit does not admit the bound price is skipped (`RequestSkipped`) and stays
-pending in full; the settlement still succeeds for the others; no fill is outside its limit.
+RB-14: requests carry no price limits in Step 3f (E25), so a sub-minimum deposit remainder left after
+a partial match waits harmlessly while subsequent requests settle at forward prices.
 
 ```solidity
 function test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending() public fixtureCovered;
@@ -173,7 +173,7 @@ function test_RB15_aRevertedSettleLeavesEveryBalanceAndFlag() public fixtureCove
 
 ### test_RB15_cancelAndExitInKindWorkWhilePaused
 
-RB-15: while the queue is paused, requests and settlement stop, and cancel, in-kind exit, credit
+RB-15: while the queue is paused, requests and settlement stop, and cancel (before cutoff), credit
 withdrawal and delivery stay open. Only the emergency key pauses; only the admin unpauses.
 
 ```solidity
@@ -184,8 +184,7 @@ function test_RB15_cancelAndExitInKindWorkWhilePaused() public fixtureCovered;
 
 ### test_check1_aNonKeeperBeforeKeeperGrace
 
-Check 1: a non-keeper before `keeperGrace` is refused (up to the last second); from the grace on,
-anyone settles.
+Check 1 (Step 3f E34): `settle()` is keeper-only at the window end and permanently thereafter (`keeperGrace` retired).
 
 ```solidity
 function test_check1_aNonKeeperBeforeKeeperGrace() public fixtureCovered;
@@ -360,7 +359,8 @@ function test_check1_pausedDeposits_redemptionsSettleAlone() public fixtureCover
 
 ### test_check1_aShutDownFund_redemptionsSettleAlone
 
-Check 1: a shut-down fund leaves deposits unprocessed; redemptions settle alone.
+Check 1 (Step 3f E38): a shut-down fund halts all settlement (`SettleCheck.Paused`) and releases
+pending escrows through `withdrawCredit()` so holders exit in kind via `fund.redeemInKind`.
 
 ```solidity
 function test_check1_aShutDownFund_redemptionsSettleAlone() public fixtureCovered;
@@ -371,8 +371,8 @@ function test_check1_aShutDownFund_redemptionsSettleAlone() public fixtureCovere
 ### test_check8_aSaleUnderItsLimit_depositsStillSettle
 
 Check 8: a sale under its limit. The wETH pool is pushed 3 % down in the settlement's block (a push
-inside one block leaves the slice median where it was, so checks 3 and 4 pass). The redemption side
-fails its per-sale limit and stays pending; the deposit side buys cheaper and settles.
+inside one block leaves the slice median where it was, so checks 3 and 4 pass). Net redemption fails its
+per-sale limit and stays pending; a net deposit buys cheaper and settles.
 
 ```solidity
 function test_check8_aSaleUnderItsLimit_depositsStillSettle() public fixtureCovered;
@@ -382,8 +382,10 @@ function test_check8_aSaleUnderItsLimit_depositsStillSettle() public fixtureCove
 
 ### test_check8_aVenueThatCannotPay_depositsStillSettle
 
-Check 8: a venue that cannot pay (Aave refuses every withdrawal). Timed redemptions wait; deposits
-still settle (they only supply).
+Check 8 (step 3f, E36/E37): a venue that cannot pay (Aave refuses every withdrawal). A net redemption
+does not wait and does not fail: it records a position claim for that venue's part and pays the rest.
+Deposits still settle (they only supply). The step 3d version of this test expected the redemption
+side to fail and the request to stay untouched. That was the old semantics, which E37 replaces.
 
 ```solidity
 function test_check8_aVenueThatCannotPay_depositsStillSettle() public fixtureCovered;
@@ -394,8 +396,7 @@ function test_check8_aVenueThatCannotPay_depositsStillSettle() public fixtureCov
 ### test_check9_aPurchaseOverItsLimit_redemptionsStillSettle
 
 Check 9: a purchase over its limit. The wETH pool is pushed 3 % up in the settlement's block. The
-deposit side fails its per-purchase limit and stays pending; the redemption side sells dearer and
-settles.
+deposit side fails its per-purchase limit and stays pending; a redemption sells dearer and settles.
 
 ```solidity
 function test_check9_aPurchaseOverItsLimit_redemptionsStillSettle() public fixtureCovered;
@@ -442,10 +443,9 @@ function _assertDepositPendingAfterRedemption(
 
 ### test_check11_aRealizedPriceOutsideTheBound_forcedWithAMockVenue
 
-Check 11 on the redemption side, forced with a mock venue: Aave pays half of each withdrawal and
-keeps the rest (`MechAaveAdapter.SHORT_PAY`). Every per-sale limit and the fund's proportion check pass
-(the position fell by exactly what the fund asked), so only the realized-price check sees the
-shortfall. The redemption side reverts `SettleBlocked(RealizedPrice)` and stays pending; deposits settle.
+A short-paying lending venue (`MechAaveAdapter.SHORT_PAY`) is caught by `ProportionViolated` on
+the net redemption leg (`SideFailed`), preserves any booked match (RB-15), and lets the next call
+after clearing the mock finish the net redemption cleanly.
 
 ```solidity
 function test_check11_aRealizedPriceOutsideTheBound_forcedWithAMockVenue()
@@ -457,9 +457,8 @@ function test_check11_aRealizedPriceOutsideTheBound_forcedWithAMockVenue()
 
 ### test_check11_aDepositAtEveryLegLimitStaysInsideTheBound
 
-Check 11 on the deposit side restates check 9: even a venue that charges exactly its per-purchase
-limit on every basket leg (`MechSwapAdapter.CHARGE_MAX`, the worst case) settles at or under the bound,
-because the queue sizes `sharesOut` from that bound. Both sides settle; holders lose nothing.
+Check 11 on the deposit side: even a venue that charges its full leg limit (`MechSwapAdapter.CHARGE_MAX`)
+stays within `spent &lt;= u`, and redemptions also keep per-share intact; holders lose nothing.
 
 ```solidity
 function test_check11_aDepositAtEveryLegLimitStaysInsideTheBound() public fixtureCovered;
@@ -470,7 +469,7 @@ function test_check11_aDepositAtEveryLegLimitStaysInsideTheBound() public fixtur
 ### test_caps_aDepositOverItsCapFillsToTheCapAndTheRestWaits
 
 A deposit over its period cap fills up to the cap (the floor, 250 000 USDC, on a small fund), the
-rest stays pending, and nothing reverts; the next period fills the rest.
+rest stays pending (with sub-unit rounding remainder credited), and nothing reverts; the next period fills the rest.
 
 ```solidity
 function test_caps_aDepositOverItsCapFillsToTheCapAndTheRestWaits() public fixtureCovered;
@@ -649,8 +648,8 @@ function test_RB18_releaseGoesOnlyToTheDepositors() public fixtureCovered;
 
 ### test_RB18_returnInKindOnlyByTheDepositor
 
-RB-18: after `allowReturn`, each depositor alone pulls its slice back in kind; the shares are
-burned, the assets go to the depositor, and the keeper, the emergency key and strangers cannot take it.
+RB-18 (E38): wind-down (`fund.shutdown`) ends an active freeze immediately so shares deliver only
+to the depositor, and `fund.redeemInKind` (in-kind exit) is restricted to the shareholder (or approved spender).
 
 ```solidity
 function test_RB18_returnInKindOnlyByTheDepositor() public fixtureCovered;
@@ -660,8 +659,8 @@ function test_RB18_returnInKindOnlyByTheDepositor() public fixtureCovered;
 
 ### test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall
 
-RB-18: a freeze ends by itself `maxFreeze` after the freeze call (not after the settlement), and a
-new freeze is impossible once the hold is over, so a depositor waits at most `minHold + maxFreeze`.
+RB-18 (E49): a freeze ends by itself `maxFreeze` after the freeze call (not after the settlement),
+re-freezing inside `maxFreeze` reverts `FreezeOnCooldown`, and after `maxFreeze` reverts `FreezeOutsideHold`.
 
 ```solidity
 function test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall() public fixtureCovered;
@@ -671,9 +670,8 @@ function test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall() public fixtu
 
 ### test_RB20_twoSettlersWithDifferentInputsFillTheSameRequestsAtTheSameBoundPrices
 
-RB-20: two settlers with different inputs (the keeper with the queue's maximum and any USDC; a
-stranger after the grace with 10 requests and 1 000 000 USDC) fill the same requests, the same
-amounts, at the same bound prices, from the same state.
+RB-20 (Step 3f E34): only the keeper settles (`stranger` reverts `Caller`), and two keeper calls
+with different `(maxRequests, maxUsdc)` above request volume fill identically at the same prices.
 
 ```solidity
 function test_RB20_twoSettlersWithDifferentInputsFillTheSameRequestsAtTheSameBoundPrices()
@@ -697,9 +695,9 @@ function test_RB20_aSmallCallIsContinuedByTheNext() public fixtureCovered;
 
 ### test_RB20_aFloodOfSkippedRequestsDoesNotHoldBackTheOnesBehind
 
-RB-20 (A13 shape): a flood of 260 requests whose limits never admit the bound does not hold back
-the honest request behind it: the first call looks at 256 and skips them all, the next continues
-at the cursor and fills the honest one. Gas of both calls is logged.
+RB-20 (A13 shape): a flood of 260 expired deposits does not hold back the honest request behind it:
+the first call looks at 256 and skips them all, the next continues at the cursor and fills the
+honest one. Gas of both calls is logged.
 
 ```solidity
 function test_RB20_aFloodOfSkippedRequestsDoesNotHoldBackTheOnesBehind() public fixtureCovered;
@@ -737,8 +735,8 @@ function test_RB20_theGasACallerSendsCannotChooseASide() public fixtureCovered;
 
 <i>
 
-Bob exits his escrowed shares in kind with no in-kind allowance, so each lending leg becomes a claim on
-a share of the position (E9), keyed to bob.
+Bob's redemption meets an illiquid Aave lending venue, so his shortfall becomes an on-chain claim
+on the position, keyed to bob, while the fund remains live.
 
 </i>
 
@@ -885,9 +883,8 @@ function test_E20_aSeededFundTakesADepositUpToTheFloor() public fixtureCovered;
 
 ### test_E21_aQuoteIsNeverBetterThanASettlementInTheSameBlock
 
-E21: a quote is never better than what a settlement in the same block allows: the deposit quote's
-price is at or above the settlement's bound and the realized cost per share; the redemption quote's
-price is at or below the bound and the realized proceeds per share; the worst amounts hold.
+E21: forward-priced quotes advertise the fee class, cancel cutoff, earliest settle, hold and price
+bands consistent with a same-block settlement.
 
 ```solidity
 function test_E21_aQuoteIsNeverBetterThanASettlementInTheSameBlock() public fixtureCovered;
@@ -945,8 +942,8 @@ function test_E22_anOwnerThatCannotReceiveUsdcBlocksNobodyElse() public fixtureC
 
 ### test_E23_inKindExitSurvivesARevertingVenueRead_andRefusesAZeroReceiver
 
-E23: an in-kind exit through the queue still works when one venue's value read reverts (that leg
-becomes a claim on bob's units; the others pay), and a zero receiver is refused.
+E23: wind-down in-kind exit survives when one venue's value read reverts (that leg becomes a claim on
+bob's units; the others pay), and a zero receiver is refused.
 
 ```solidity
 function test_E23_inKindExitSurvivesARevertingVenueRead_andRefusesAZeroReceiver()
@@ -1043,10 +1040,8 @@ function test_reentrancy_aHostileCallbackDuringMintInKindOrTheSaleCannotReenter(
 
 ### test_reentrancy_aHostileVenueDuringAClaimCannotReenter
 
-Reentrancy: a hostile lending venue called during an in-kind exit from the queue (the claim path
-that hands control to outside code: the fund withdraws the lending leg) cannot re-enter the queue or
-the fund; the owner is paid once. The other claim paths (`deposit`, `mint`, `redeem`,
-`withdrawCredit`, `withdrawExpired`) move only USDC and the fund's own shares, which call no outside code.
+Reentrancy: a hostile lending venue called during a claim exit (`redeemInKind` / `settleClaim`) cannot
+re-enter the fund (`ReentrancyGuardReentrantCall` / role guard) and pays the owner once.
 
 ```solidity
 function test_reentrancy_aHostileVenueDuringAClaimCannotReenter() public fixtureCovered;
@@ -1056,10 +1051,286 @@ function test_reentrancy_aHostileVenueDuringAClaimCannotReenter() public fixture
 
 ### test_setFlowParams_refusesAWindowAndGraceThatOutlastExpiry
 
-`setFlowParams` refuses a window plus grace that reaches the expiry of a request (`maxRoll ×
-epochLength`), which would let every request expire before anyone may settle it (field 7).
+`setFlowParams` enforces Step 3f E51 timing bounds: `maxRoll * epochLength &lt;= 48 hours` (field 7),
+`cancelBuffer &lt; epochLength` (field 18), and `maxPause >= 48 hours + epochLength` (field 19).
 
 ```solidity
 function test_setFlowParams_refusesAWindowAndGraceThatOutlastExpiry() public fixtureCovered;
+```
+
+<a id="_findmatchclaim-address-uint256"></a>
+
+### _findMatchClaim
+
+```solidity
+function _findMatchClaim(address owner, uint256 sid)
+        internal
+        view
+        returns (bool found, Claim memory cl);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| sid | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| found | `bool` |  |
+| cl | `Claim` |  |
+
+<a id="_runmatchrevokeclaimrestore-address-address-uint256-uint256"></a>
+
+### _runMatchRevokeClaimRestore
+
+```solidity
+function _runMatchRevokeClaimRestore(
+        address depositor,
+        address redeemer,
+        uint256 depUsdc,
+        uint256 redShares
+    ) internal returns (uint256 exclId, uint256 depRecovery, uint256 redRecovery);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depositor | `address` |  |
+| redeemer | `address` |  |
+| depUsdc | `uint256` |  |
+| redShares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exclId | `uint256` |  |
+| depRecovery | `uint256` |  |
+| redRecovery | `uint256` |  |
+
+<a id="_assertstoppedandcancels-vm-log-uint256-uint256-address-uint256-uint8-string"></a>
+
+### _assertStoppedAndCancels
+
+```solidity
+function _assertStoppedAndCancels(
+        Vm.Log[] memory logs,
+        uint256 sid,
+        uint256 depId,
+        address owner,
+        uint256 amount,
+        uint8 expectedCode,
+        string memory label
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| sid | `uint256` |  |
+| depId | `uint256` |  |
+| owner | `address` |  |
+| amount | `uint256` |  |
+| expectedCode | `uint8` |  |
+| label | `string` |  |
+
+<a id="_capusdc"></a>
+
+### _capUsdc
+
+```solidity
+function _capUsdc() internal view returns (uint256 cap);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cap | `uint256` |  |
+
+<a id="test_rb22_matchthenrevokethenclaim_andsecondmatchafterexclusionends"></a>
+
+### test_RB22_matchThenRevokeThenClaim_andSecondMatchAfterExclusionEnds
+
+RB-22 (A40): a match, then an adapter revoke, then both owners claim untouched -> recovery goes to the
+depositor, not the redeemer; same for a second match after the exclusion ends.
+
+```solidity
+function test_RB22_matchThenRevokeThenClaim_andSecondMatchAfterExclusionEnds()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb23_sameroundrequestsmatchproportionallyatsameprice"></a>
+
+### test_RB23_sameRoundRequestsMatchProportionallyAtSamePrice
+
+RB-23: two requests on one side in the same round get the same matched fraction at the same price,
+regardless of enqueue order and whether settled in one call or multiple `maxRequests = 1` calls.
+
+```solidity
+function test_RB23_sameRoundRequestsMatchProportionallyAtSamePrice() public fixtureCovered;
+```
+
+<a id="test_rb24_matchleavesheldandsupplyidentical_oneblockpushandmidroundstop"></a>
+
+### test_RB24_matchLeavesHeldAndSupplyIdentical_oneBlockPushAndMidRoundStop
+
+RB-24 (A36): a pure match preserves exact held balances and totalSupply; a 1-block pool push does not
+move `matchSharePrice`; TWAP > `refBandBps` blocks the round; pause / feed outage / market move between
+two calls of one round block without booking a second match.
+
+```solidity
+function test_RB24_matchLeavesHeldAndSupplyIdentical_oneBlockPushAndMidRoundStop()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb25_cancelcutoffnoticeandstopunlockexpiry"></a>
+
+### test_RB25_cancelCutoffNoticeAndStopUnlockExpiry
+
+RB-25 (A37): open-epoch cancel returns escrow; cutoff/close locks request; last-block request is
+already inside `cancelBuffer`; old redemption notice inside settle window stays in that round; a
+stopped deposit's unlock expires at the close of the epoch in which the stop ended or was recorded.
+
+```solidity
+function test_RB25_cancelCutoffNoticeAndStopUnlockExpiry() public fixtureCovered;
+```
+
+<a id="test_rb26_redeeminkindgateduntilwinddownforallholders"></a>
+
+### test_RB26_redeemInKindGatedUntilWindDownForAllHolders
+
+RB-26: `redeemInKind` reverts `InKindClosed` for a wallet holder, a pending request owner, and an
+expired request owner while running; once shut down, every holder exits in kind.
+
+```solidity
+function test_RB26_redeemInKindGatedUntilWindDownForAllHolders() public fixtureCovered;
+```
+
+<a id="test_rb27_shutdownonlytimelockevenwhenstaleandsilent_untilrestore"></a>
+
+### test_RB27_shutdownOnlyTimelockEvenWhenStaleAndSilent_untilRestore
+
+RB-27: `shutdown` reverts for emergency, keeper, and stranger even with all feeds stale and keeper
+silent past `maxRoll` epochs; timelock (Safe) executes it and holders exit in kind until `restore`.
+
+```solidity
+function test_RB27_shutdownOnlyTimelockEvenWhenStaleAndSilent_untilRestore()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb28_depositstopsblockmatchandnetdepositandallowcancel"></a>
+
+### test_RB28_depositStopsBlockMatchAndNetDepositAndAllowCancel
+
+RB-28: each deposit-stop cause emits `DepositStoppedForRound`, books zero match and zero net deposit,
+and lets locked deposits cancel past cutoff.
+
+```solidity
+function test_RB28_depositStopsBlockMatchAndNetDepositAndAllowCancel() public fixtureCovered;
+```
+
+<a id="test_rb29_matchedfillsconsumeperiodcaps"></a>
+
+### test_RB29_matchedFillsConsumePeriodCaps
+
+RB-29: matched fills count against both sides' period caps, bounding later same-period net fills.
+
+```solidity
+function test_RB29_matchedFillsConsumePeriodCaps() public fixtureCovered;
+```
+
+<a id="test_rb30_stepinwindowandpauseindependence_andnonkeeperstepreverts"></a>
+
+### test_RB30_stepInWindowAndPauseIndependence_andNonKeeperStepReverts
+
+RB-30 (A43) & RB-20: non-keeper `rebalancer.step()` reverts; a basket pool step inside `settleWindow`
+reverts round open `StepInWindow`, whereas lending-only and delisting steps do not; steps still run
+when the queue is paused.
+
+```solidity
+function test_RB30_stepInWindowAndPauseIndependence_andNonKeeperStepReverts()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb31_paramchangesdonotaffectlockedrequestandredemptiondoesnotexpire"></a>
+
+### test_RB31_paramChangesDoNotAffectLockedRequestAndRedemptionDoesNotExpire
+
+RB-31: timelock changes to exit fee, `minHold`, and `maxRoll` leave already-locked requests at their
+creation snapshots, and a redemption request remains valid past `maxRoll` epochs.
+
+```solidity
+function test_RB31_paramChangesDoNotAffectLockedRequestAndRedemptionDoesNotExpire()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb32_selfexpiringpausesandcooldownrules"></a>
+
+### test_RB32_selfExpiringPausesAndCooldownRules
+
+RB-32 (A41): self-expiring `pauseQueue`, `pauseRebalance`, and `pauseDeposits` auto-expire after
+`maxPause`; re-pausing queue or rebalance inside cooldown reverts `PauseOnCooldown`, while
+`pauseDeposits` is renewable immediately.
+
+```solidity
+function test_RB32_selfExpiringPausesAndCooldownRules() public fixtureCovered;
+```
+
+<a id="_assertroundwithincap-uint256-uint256-uint256-string"></a>
+
+### _assertRoundWithinCap
+
+```solidity
+function _assertRoundWithinCap(uint256 period, uint256 sid, uint256 cap, string memory label)
+        internal
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| period | `uint256` |  |
+| sid | `uint256` |  |
+| cap | `uint256` |  |
+| label | `string` |  |
+
+<a id="test_rb36_asymmetricdoublecapvscapmatchesconservesharesandusdctotheunit"></a>
+
+### test_RB36_asymmetricDoubleCapVsCapMatchesConserveSharesAndUsdcToTheUnit
+
+RB-36 (A39): `2 * cap` deposits against `cap` redemptions and the reverse conserve shares and USDC to
+the unit with no fill exceeding the period cap.
+
+```solidity
+function test_RB36_asymmetricDoubleCapVsCapMatchesConserveSharesAndUsdcToTheUnit()
+        public
+        fixtureCovered;
+```
+
+<a id="test_rb15_anetsidefailurepreservesthematchandleavestheroundopen"></a>
+
+### test_RB15_aNetSideFailurePreservesTheMatchAndLeavesTheRoundOpen
+
+RB-15: a failed net-side execution emits `SideFailed`, leaves the net side unchanged, preserves the booked
+match, and leaves the round open so the next `settle` call finishes the net leg without re-matching.
+
+```solidity
+function test_RB15_aNetSideFailurePreservesTheMatchAndLeavesTheRoundOpen()
+        public
+        fixtureCovered;
 ```
 

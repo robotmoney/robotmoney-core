@@ -1,56 +1,23 @@
 ---
 title: "FlowCheckLib"
-description: "The FlowQueue's view logic, linked (`public`) to keep the queue under G1: the pre-trade checks of proposal §5.9.3 (1 to 7), the two bound prices of E12 with the rounding allowances that make RB-14 hold by construction, and the quotes of E21. Nothing here writes state."
+description: "Pre-trade oracle, TWAP, venue liquidity, and breaker checks (Steps 1–7) plus forward-priced terms quotes (`quoteDeposit` / `quoteRedeem`). Linked (`public`) to keep `FlowQueue` under G1."
 ---
 
 # FlowCheckLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FlowCheckLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowCheckLib.sol)
 
 **Title:** FlowCheckLib
 
-The FlowQueue's view logic, linked (`public`) to keep the queue under G1: the pre-trade checks of proposal
-§5.9.3 (1 to 7), the two bound prices of E12 with the rounding allowances that make RB-14 hold by
-construction, and the quotes of E21. Nothing here writes state.
-
-Prices are `usdc × PRICE_SCALE / shares` (FundTypes). Every number rounds to the side that is worse for the
-flow user and never worse for the holders.
-
-Bound prices (E12). For a deposit of `s` new shares the fund buys, per asset, `ceil(held × s / supply)`
-(lending plus `LENDING_ROUNDING_UNITS`), paying for basket legs at most `buyPerToken` per whole token.
-So the worst USDC cost of `s` shares is at most `s × Vdep / supply + Fdep`, where `Vdep` values every
-holding at the purchase limit and `Fdep` is the fixed rounding overhead of one call (one unit per leg, the
-two lending units, one base unit of each basket token). The deposit bound adds that overhead spread over
-the fewest shares a fill can make (`sMin`: shares worth `minRequestUsdc` at twice the raw price):
-`depositBound = ceil(Vdep × PS / supply) + ceil((Fdep + 2) × PS / sMin)`. The redemption bound mirrors it
-with the sale limits, the two lending units withheld and the exit fee. `FlowSettleLib` verifies the
-realized price of every side against the bound after its trade (check 11) and reverts that side if not.
+Pre-trade oracle, TWAP, venue liquidity, and breaker checks (Steps 1–7) plus forward-priced terms
+quotes (`quoteDeposit` / `quoteRedeem`). Linked (`public`) to keep `FlowQueue` under G1.
 
 ## Constants
 
 ### LEND_RATE_GAS
 
-<i>
-
-Gas given to a lending venue's `ratePerUnit` read (review Q-F1). The real adapters read a few slots of
-their venue (Aave's normalized income, a Morpho vault's share price, Comet's indexes).
-
-</i>
-
 ```solidity
 uint256 internal constant LEND_RATE_GAS = 300_000;
-```
-
-### BOUND_SLACK_UNITS
-
-<i>
-
-Extra USDC units of slack in each bound's rounding term beyond the counted overhead.
-
-</i>
-
-```solidity
-uint256 private constant BOUND_SLACK_UNITS = 2;
 ```
 
 ## Functions
@@ -59,17 +26,15 @@ uint256 private constant BOUND_SLACK_UNITS = 2;
 
 ### preTrade
 
-Run checks 1 to 7 for a settlement called by `caller` now. Returns the first failing check with the
-asset index (IDLE_INDEX when not asset-specific) and a detail (the feed status, the slices in band,
-the deviation in bps, ...). `c` is complete only when `check == Ok`.
-
-Keeper first, per epoch (step 3 finish plan §3.1 item 1, E10): a caller without KEEPER_ROLE may settle
-an epoch only once that epoch's own window end plus `keeperGrace` has passed, and its walk stops at the
-newest epoch that qualifies (`c.lastEpoch`). The scaffold counted the grace from the oldest open epoch
-only, so one never-fillable request let anyone settle every newer epoch at its window end.
+Run checks 1 to 7 for a settlement called by `caller` now (`isKeeper == KEEPER_ROLE`).
 
 ```solidity
-function preTrade(FlowState storage s, address caller, bool isKeeper)
+function preTrade(
+        FlowState storage s,
+        address,
+        /*caller*/
+        bool isKeeper
+    )
         public
         view
         returns (SettleCheck check, uint256 index, uint256 detail, SettleContext memory c);
@@ -80,8 +45,8 @@ function preTrade(FlowState storage s, address caller, bool isKeeper)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | s | `FlowState` |  |
-| caller | `address` |  |
-| isKeeper | `bool` | Whether `caller` holds KEEPER_ROLE on the queue. |
+| _ | `address` |  |
+| isKeeper | `bool` |  |
 
 **Returns**
 
@@ -92,31 +57,95 @@ function preTrade(FlowState storage s, address caller, bool isKeeper)
 | detail | `uint256` |  |
 | c | `SettleContext` |  |
 
-<a id="breakerreference-flowstate-settlecontext"></a>
+<a id="_timewindowopen-flowstate-flowparams"></a>
 
-### breakerReference
-
-Check 6's reference for the snapshot `m`: NAV per share at the feeds at the last settlement, re-based
-for each lending venue excluded or restored since (step 3 finish plan §3.1 item 9, D-AT-4).
-
-An excluded venue reads 0 in `heldBalances`, so the exclusion itself drops NAV per share at the feeds
-by the venue's share, and the scaffold's breaker then held every settlement, redemptions included, for
-up to `ceil(share / maxSharePriceMoveBps)` epochs, against E13 ("redemptions settle alone"). Here a
-venue excluded since the last settlement leaves the reference with the per-share value it had then; a
-venue restored since enters it with its per-share value now. This has the effect of resetting the
-reference at the exclusion or the restore for that venue's part only, so the breaker still measures
-every market move since the last settlement, and none of the governed step. Assumed default of this
-run (plan §4); the owner may change it.
-A venue whose exclusion record opened AND closed since the last settlement (a revoke then a re-allow,
-or a revoke then a removal) shows the same mask bit at both ends; the ledger's record count shows it.
-Such a venue is re-based both ways: its per-share part at the last settlement leaves the reference
-and its per-share value now enters it (review Q-F3).
+### _timeWindowOpen
 
 ```solidity
-function breakerReference(FlowState storage s, SettleContext memory m)
-        public
+function _timeWindowOpen(FlowState storage s, FlowParams memory p)
+        private
         view
-        returns (uint256 ref);
+        returns (bool ok, uint64 cur, uint64 roundEpoch);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| cur | `uint64` |  |
+| roundEpoch | `uint64` |  |
+
+<a id="_hasroundwork-flowstate-uint64-uint64"></a>
+
+### _hasRoundWork
+
+```solidity
+function _hasRoundWork(FlowState storage s, uint64 roundEpoch, uint64 cur)
+        private
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| roundEpoch | `uint64` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_sharepricebreakerok-flowstate-settlecontext-uint64-flowparams"></a>
+
+### _sharePriceBreakerOk
+
+```solidity
+function _sharePriceBreakerOk(
+        FlowState storage s,
+        SettleContext memory m,
+        uint64 cur,
+        FlowParams memory p
+    ) private view returns (bool ok, uint256 moveBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| m | `SettleContext` |  |
+| cur | `uint64` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| moveBps | `uint256` |  |
+
+<a id="_breakervalues-flowstate-settlecontext"></a>
+
+### _breakerValues
+
+```solidity
+function _breakerValues(FlowState storage s, SettleContext memory m)
+        private
+        view
+        returns (uint256 curPx, uint256 ref);
 ```
 
 **Parameters**
@@ -130,18 +159,12 @@ function breakerReference(FlowState storage s, SettleContext memory m)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| curPx | `uint256` |  |
 | ref | `uint256` |  |
 
 <a id="_cycledvenues-flowstate-settlecontext"></a>
 
 ### _cycledVenues
-
-<i>
-
-Bit `i` set for each lending venue that had an exclusion record open since the last settlement and has
-the same mask bit now as then (its record cycled: opened and closed between two settlements).
-
-</i>
 
 ```solidity
 function _cycledVenues(FlowState storage s, SettleContext memory m)
@@ -189,9 +212,7 @@ function excludedMask(FlowState storage s) public view returns (uint256 mask);
 
 ### market
 
-Checks 2 to 5 and 7 (feeds, sequencer, USDC peg, TWAP quorum, TWAP against feed, lending rate,
-snapshot), then the bound prices. No time, caller or pause check: the quotes use this alone.
-Check 5 compares with the rates stored at the last settlement.
+Checks 2–4, 5 (non-reverting capture into `lendRateOk`), and 7 (snapshot, `navFeed`, `navTwap`, `S`).
 
 ```solidity
 function market(FlowState storage s)
@@ -218,14 +239,6 @@ function market(FlowState storage s)
 <a id="_basketprice-assetconfig-int24-uint256-feeds-flowparams"></a>
 
 ### _basketPrice
-
-<i>
-
-Per-swap limits of one basket asset, and check 4. Prices are USDC units per whole token. `f.legPriceMode`
-is the `FlowLevers.legPriceMode` lever (step 3 finish plan §3.2): 0, the design, starts a purchase from the
-lower of TWAP and feed and a sale from the higher; 1 from the TWAP only; 2 from the feed only.
-
-</i>
 
 ```solidity
 function _basketPrice(
@@ -259,16 +272,6 @@ function _basketPrice(
 
 ### _lendRates
 
-<i>
-
-Check 5. Growth per day `(rate − last) / last` against `maxLendRateGrowthBps × elapsed / 1 day`. A first
-settlement (no stored rate) passes and records the rate. A falling rate passes (its loss is shared pro
-rata, RB-21). A venue whose rate cannot be read fails (fail closed). Returns the rates it read and
-accepted; the settlement records them when its own read after the trades fails (step 3 finish plan §3.1
-item 5: the scaffold then silently kept the old reference).
-
-</i>
-
 ```solidity
 function _lendRates(FlowState storage s, AssetConfig[] memory cfg, FlowParams memory p)
         private
@@ -297,9 +300,6 @@ function _lendRates(FlowState storage s, AssetConfig[] memory cfg, FlowParams me
 
 ### lendRate
 
-The venue rate of a lending adapter (`ILendingRateAdapter.ratePerUnit`). `ok` false when the call
-reverts, returns short data or returns 0.
-
 ```solidity
 function lendRate(address adapter) public view returns (bool ok, uint256 rate);
 ```
@@ -317,12 +317,63 @@ function lendRate(address adapter) public view returns (bool ok, uint256 rate);
 | ok | `bool` |  |
 | rate | `uint256` |  |
 
+<a id="venueliquidity-address"></a>
+
+### venueLiquidity
+
+Available underlying liquidity from a lending adapter (`E36`, `E44`, gas-capped staticcall).
+
+```solidity
+function venueLiquidity(address adapter) public view returns (bool ok, uint256 avail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| avail | `uint256` |  |
+
+<a id="checkvenuesliquidity-flowstate-settlecontext-uint256"></a>
+
+### checkVenuesLiquidity
+
+Test whether every non-excluded Lending venue can pay its pro-rata slice of `redPoolShares` (`E36`, `E44`).
+
+```solidity
+function checkVenuesLiquidity(
+        FlowState storage s,
+        SettleContext memory c,
+        uint256 redPoolShares
+    ) public view returns (bool ok, uint256 failIndex);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| redPoolShares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| failIndex | `uint256` |  |
+
 <a id="depositsopen-flowstate"></a>
 
 ### depositsOpen
 
-Whether deposits may be processed (check 1): the fund does not pause deposits, is not shut down, and
-excludes no asset (E13). `preTrade` computes the same from its exclusion mask.
+Whether state deposit stops are inactive right now.
 
 ```solidity
 function depositsOpen(FlowState storage s) public view returns (bool);
@@ -340,89 +391,9 @@ function depositsOpen(FlowState storage s) public view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
-<a id="bounds-settlecontext-uint256"></a>
-
-### bounds
-
-The two bound prices for the snapshot `c` (see the library note). 0 means that side cannot be bounded
-for a fill of `minRequestUsdc` (an empty or tiny fund) and does not trade.
-
-```solidity
-function bounds(SettleContext memory c, uint256 minRequestUsdc)
-        public
-        pure
-        returns (uint256 depositBound, uint256 redeemBound);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| c | `SettleContext` |  |
-| minRequestUsdc | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| depositBound | `uint256` | The most a depositor pays per share, PRICE_SCALE, rounded UP. |
-| redeemBound | `uint256` |  The least a redeemer receives per share after the exit fee, PRICE_SCALE, rounded DOWN. |
-
-<a id="depositallowance-uint256-uint256"></a>
-
-### depositAllowance
-
-How far above the deposit bound a request of `usdc` must set its limit so that its own fill, after
-the per-request split (shares DOWN, refund DOWN), is still inside its limit (RB-14).
-`type(uint256).max` when `usdc` is too small to bound at all.
-Derivation: `y = floor(usdc × PS / bound)`; the fill gets at least `y − 2` shares' worth of slack, so
-its price is at most `bound + (bound + PS) / (y − 2)`.
-
-```solidity
-function depositAllowance(uint256 bound, uint256 usdc) public pure returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| bound | `uint256` |  |
-| usdc | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
-<a id="redeemallowance-uint256"></a>
-
-### redeemAllowance
-
-How far below the redemption bound a request of `shares` must set its limit so that its own fill,
-paid `floor(usdcOut × shares / X)`, is still inside its limit (RB-14): `ceil(PS / shares)`.
-
-```solidity
-function redeemAllowance(uint256 shares) public pure returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| shares | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
-
 <a id="settleableat-flowstate-uint64"></a>
 
 ### settleableAt
-
-When epoch `epoch`'s settlement window ends: its end plus `settleWindow` (`FlowEpochs`, item 3).
 
 ```solidity
 function settleableAt(FlowState storage s, uint64 epoch) internal view returns (uint256);
@@ -441,47 +412,12 @@ function settleableAt(FlowState storage s, uint64 epoch) internal view returns (
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="pendingrange-flowstate-uint256"></a>
-
-### pendingRange
-
-The epochs `settle` may walk: from the oldest one that can hold an unexpired request
-(`current − maxRoll`, or the stored `oldestEpoch` if later) to the newest that ended at or before
-`endedBy` (`now − settleWindow`: its window has ended), and the oldest of them that still has an open
-request (`type(uint64).max` if none: check 1 "Window").
-
-```solidity
-function pendingRange(FlowState storage s, uint256 endedBy)
-        public
-        view
-        returns (uint64 first, uint64 last, uint64 oldest);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| s | `FlowState` |  |
-| endedBy | `uint256` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| first | `uint64` |  |
-| last | `uint64` |  |
-| oldest | `uint64` |  |
-
 <a id="quotedeposit-flowstate-uint256"></a>
 
 ### quoteDeposit
 
-The worst case for a deposit request of `usdc` made now: the deposit bound a settlement in this block
-would use, plus this size's rounding allowance. Reverts `SettleBlocked` when checks 2 to 5 fail now
-(no settlement could bound it either).
-
 ```solidity
-function quoteDeposit(FlowState storage s, uint256 usdc) public view returns (Quote memory q);
+function quoteDeposit(FlowState storage s, uint256) public view returns (Quote memory q);
 ```
 
 **Parameters**
@@ -489,7 +425,7 @@ function quoteDeposit(FlowState storage s, uint256 usdc) public view returns (Qu
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | s | `FlowState` |  |
-| usdc | `uint256` |  |
+| _ | `uint256` |  |
 
 **Returns**
 
@@ -501,11 +437,8 @@ function quoteDeposit(FlowState storage s, uint256 usdc) public view returns (Qu
 
 ### quoteRedeem
 
-The worst case for a redemption request of `shares` made now: the redemption bound less this size's
-rounding allowance, after the exit fee.
-
 ```solidity
-function quoteRedeem(FlowState storage s, uint256 shares) public view returns (Quote memory q);
+function quoteRedeem(FlowState storage s, uint256) public view returns (Quote memory q);
 ```
 
 **Parameters**
@@ -513,7 +446,7 @@ function quoteRedeem(FlowState storage s, uint256 shares) public view returns (Q
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | s | `FlowState` |  |
-| shares | `uint256` |  |
+| _ | `uint256` |  |
 
 **Returns**
 
@@ -521,15 +454,12 @@ function quoteRedeem(FlowState storage s, uint256 shares) public view returns (Q
 | ---- | ---- | ----------- |
 | q | `Quote` |  |
 
-<a id="_times-flowstate-bool"></a>
+<a id="_terms-flowstate-bool"></a>
 
-### _times
+### _terms
 
 ```solidity
-function _times(FlowState storage s, bool isDeposit)
-        private
-        view
-        returns (uint64 earliest, uint64 holdEnds);
+function _terms(FlowState storage s, bool isDeposit) private view returns (Quote memory q);
 ```
 
 **Parameters**
@@ -543,25 +473,17 @@ function _times(FlowState storage s, bool isDeposit)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| earliest | `uint64` |  |
-| holdEnds | `uint64` |  |
+| q | `Quote` |  |
 
 ## Structs
 
 ### Feeds
-
-<i>
-
-Intermediate per-call values of `_market`.
-
-</i>
 
 ```solidity
 struct Feeds {
         uint256 usdc8;
         uint256 usdcUnit;
         address usdc;
-        // Appended by `levers` (2026-11-12): `FlowLevers.legPriceMode`, read once per `market` call.
         uint8 legPriceMode;
     }
 ```

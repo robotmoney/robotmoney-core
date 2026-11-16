@@ -1,17 +1,133 @@
 ---
 title: "FundAdminLib"
-description: "Asset configuration, ADP-2 exclusion sync, plan opening and the glide-path views of `RobotMoneyFund`, as an externally linked library (DELEGATECALL as the fund). The fund checks every role; this library checks every value."
+description: "Asset configuration, ADP-2 exclusion sync, plan opening, admin setters, lifecycle ops, and the glide-path views of `RobotMoneyFund`, as an externally linked library (DELEGATECALL as the fund). The fund checks every role; this library checks every value."
 ---
 
 # FundAdminLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundAdminLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FundAdminLib.sol)
 
 **Title:** FundAdminLib
 
-Asset configuration, ADP-2 exclusion sync, plan opening and the glide-path views of
-`RobotMoneyFund`, as an externally linked library (DELEGATECALL as the fund). The fund checks every
-role; this library checks every value.
+Asset configuration, ADP-2 exclusion sync, plan opening, admin setters, lifecycle ops, and the
+glide-path views of `RobotMoneyFund`, as an externally linked library (DELEGATECALL as the fund).
+The fund checks every role; this library checks every value.
+
+## Constants
+
+### ADMIN_SET_MIN_SEED_USDC
+
+```solidity
+uint8 internal constant ADMIN_SET_MIN_SEED_USDC = 0;
+```
+
+### ADMIN_SET_POOL_SHARE_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_POOL_SHARE_BPS = 1;
+```
+
+### ADMIN_SET_TVL_CAP
+
+```solidity
+uint8 internal constant ADMIN_SET_TVL_CAP = 2;
+```
+
+### ADMIN_SET_PER_DEPOSIT_CAP
+
+```solidity
+uint8 internal constant ADMIN_SET_PER_DEPOSIT_CAP = 3;
+```
+
+### ADMIN_SET_EXIT_FEE_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_EXIT_FEE_BPS = 4;
+```
+
+### ADMIN_SET_FEE_RECIPIENT
+
+```solidity
+uint8 internal constant ADMIN_SET_FEE_RECIPIENT = 5;
+```
+
+### ADMIN_SET_MAX_SLIPPAGE_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_MAX_SLIPPAGE_BPS = 6;
+```
+
+### ADMIN_SET_NAV_DEV_GUARD_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_NAV_DEV_GUARD_BPS = 7;
+```
+
+### ADMIN_SET_MIN_POOL_DEPTH_USDC
+
+```solidity
+uint8 internal constant ADMIN_SET_MIN_POOL_DEPTH_USDC = 8;
+```
+
+### ADMIN_SET_FEE_MARGIN_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_FEE_MARGIN_BPS = 9;
+```
+
+### ADMIN_SET_DELIST_BAND_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_DELIST_BAND_BPS = 10;
+```
+
+### ADMIN_SET_DELIST_BUDGET_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_DELIST_BUDGET_BPS = 11;
+```
+
+### ADMIN_SET_MAX_BASKET_BPS
+
+```solidity
+uint8 internal constant ADMIN_SET_MAX_BASKET_BPS = 12;
+```
+
+### ADMIN_DEACTIVATE_ASSET
+
+```solidity
+uint8 internal constant ADMIN_DEACTIVATE_ASSET = 13;
+```
+
+### ADMIN_DELIST_ASSET
+
+```solidity
+uint8 internal constant ADMIN_DELIST_ASSET = 14;
+```
+
+### ADMIN_PAUSE_DEPOSITS
+
+```solidity
+uint8 internal constant ADMIN_PAUSE_DEPOSITS = 15;
+```
+
+### ADMIN_UNPAUSE_DEPOSITS
+
+```solidity
+uint8 internal constant ADMIN_UNPAUSE_DEPOSITS = 16;
+```
+
+### ADMIN_SHUTDOWN
+
+```solidity
+uint8 internal constant ADMIN_SHUTDOWN = 17;
+```
+
+### ADMIN_RESTORE
+
+```solidity
+uint8 internal constant ADMIN_RESTORE = 18;
+```
 
 ## Functions
 
@@ -40,7 +156,7 @@ asset must have a live outside feed (rule 1). The pool must answer `observe` ove
 window (`settleWindow`: the bound queue's, else `DEFAULT_SETTLE_WINDOW`), else
 `PoolHistoryTooShort(index, window)` (rule 2).
 - Lending: the adapter must answer `ratePerUnit()` with a non-zero rate (`LendingRateUnavailable`),
-the venue rate check 5 reads; and `feed`, `maxFeedAge` must be 0 (`InvalidParam`).
+the venue rate check 5 reads, and `availableLiquidity()` (`LendingLiquidityUnavailable`, E44); and `feed`, `maxFeedAge` must be 0 (`InvalidParam`).
 `active` is forced true and `targetBps` grows by a 0. There is no sleeve to check (§4.1).
 
 ```solidity
@@ -60,26 +176,6 @@ function addAsset(FundState storage s, AssetConfig memory c) public returns (uin
 | ---- | ---- | ----------- |
 | index | `uint256` |  |
 
-<a id="setlimit-fundstate-bool-uint256"></a>
-
-### setLimit
-
-Body of `setPoolShareBps` (`poolShare` true) and `setTvlCap` (false). §4.5 rule 3 holds for the live
-targets after either change (review B-F4): a tighter pool share or a higher TVL cap re-checks it. A
-looser pool share or a lower cap is never refused.
-
-```solidity
-function setLimit(FundState storage s, bool poolShare, uint256 value) public;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| s | `FundState` |  |
-| poolShare | `bool` |  |
-| value | `uint256` |  |
-
 <a id="_rejectduplicate-fundstate-assetconfig"></a>
 
 ### _rejectDuplicate
@@ -94,34 +190,6 @@ function _rejectDuplicate(FundState storage s, AssetConfig memory c) private vie
 | ---- | ---- | ----------- |
 | s | `FundState` |  |
 | c | `AssetConfig` |  |
-
-<a id="_requirelendingempty-fundstate-uint256-address-uint256"></a>
-
-### _requireLendingEmpty
-
-<i>
-
-`deactivateAsset` for a lending entry (review B-F1). The holders' part of the adapter must be at most
-`LENDING_ROUNDING_UNITS` (the fund's own paths leave that much: `drain`, `claimPosition`, `sellForFlow`);
-the position claims' part may stay, it remains claimable. An adapter whose `totalAssets()` read fails
-may leave only while its exclusion record is open: its value is already in the ledger.
-
-</i>
-
-```solidity
-function _requireLendingEmpty(FundState storage s, uint256 i, address adapter, uint256 openId)
-        private
-        view;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| s | `FundState` |  |
-| i | `uint256` |  |
-| adapter | `address` |  |
-| openId | `uint256` |  |
 
 <a id="_checklending-fundstate-assetconfig"></a>
 
@@ -153,57 +221,6 @@ function _checkBasket(FundState storage s, AssetConfig memory c, uint256 index) 
 | s | `FundState` |  |
 | c | `AssetConfig` |  |
 | index | `uint256` |  |
-
-<a id="deactivateasset-fundstate-uint256"></a>
-
-### deactivateAsset
-
-Deactivate asset `i` (`IRobotMoneyFund.deactivateAsset`). The fund must hold nothing of it:
-Lending `adapter.totalAssets() == 0`; Basket a zero balance or dust whose TWAP sale floor rounds
-to 0 USDC (QA plan D6), and nothing still owed to in-kind exits (`deferredTotal`), else
-`AssetStillHeld`. Its persistent target must already be 0, else `AssetStillTargeted`.
-So an inactive asset always has target 0 (RB-9), and deposits never route to it.
-A target vector may no longer name it. A Lending entry's open
-exclusion record closes (`Removed`, core 1820); it stays claimable forever.
-
-```solidity
-function deactivateAsset(FundState storage s, uint256 i) public;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| s | `FundState` |  |
-| i | `uint256` |  |
-
-<a id="createledger-address"></a>
-
-### createLedger
-
-Create the fund's exclusion ledger, once, from the fund's initializer (replaces
-`RobotMoneyVaultOps.createLedger`). Step 3d (E13, RB-22): the ledger is `FundExclusionLedger`, the test
-copy whose per-holder balance is the fund's `ledgerBalanceOf` (wallet plus queued shares). It is stored
-in the same `RobotMoneyVaultOps.Exclusions` slot, typed as `ExclusionLedger`: the copy has the same
-ABI for every call the fund makes (`open`, `credit`, `finalize`, `checkpoint`), and the same enum
-ordinals. Its creation code lives here, in a linked library, so it does not count against the fund's
-EIP-170 budget. Reverts `InvalidParam` if a ledger already exists.
-
-```solidity
-function createLedger(address usdc) public returns (address ledger);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| usdc | `address` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| ledger | `address` |  |
 
 <a id="syncexclusions-fundstate-uint256-bool"></a>
 
@@ -330,7 +347,7 @@ function _move(Plan storage p, PlanStatus from, PlanStatus to) private;
 
 <i>
 
-Over budget: spent past it (a plan from before the review fix B-F5), or the budget left is below the
+Over budget: spent reached/exceeded budget (SAFE-06), or the budget left is below the
 cost of the step that halted it.
 
 </i>
@@ -408,24 +425,6 @@ function openPlan(
 | ---- | ---- | ----------- |
 | planId | `uint256` |  |
 
-<a id="initflows-fundstate-address"></a>
-
-### initFlows
-
-From the fund's `initialize`: the step 3d defaults the fund holds (`minSeedUsdc`, `poolShareBps`, the
-in-kind allowance of E20), then the exclusion ledger (`createLedger`).
-
-```solidity
-function initFlows(FundState storage s, address usdc) public;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| s | `FundState` |  |
-| usdc | `address` |  |
-
 <a id="_open-fundstate-uint16-planparams-bytes32"></a>
 
 ### _open
@@ -473,6 +472,125 @@ function _emitOpened(Plan storage p) private;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | p | `Plan` |  |
+
+<a id="adminop-fundstate-uint8-uint256-address-address"></a>
+
+### adminOp
+
+Consolidated admin setter and lifecycle dispatcher called via one `DELEGATECALL` site on the fund.
+
+```solidity
+function adminOp(FundState storage s, uint8 op, uint256 val, address addr, address caller)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `uint8` |  |
+| val | `uint256` |  |
+| addr | `address` |  |
+| caller | `address` |  |
+
+<a id="_adminparamop-fundstate-uint8-uint256-address"></a>
+
+### _adminParamOp
+
+```solidity
+function _adminParamOp(FundState storage s, uint8 op, uint256 val, address addr) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `uint8` |  |
+| val | `uint256` |  |
+| addr | `address` |  |
+
+<a id="_adminlifecycleop-fundstate-uint8-uint256-address"></a>
+
+### _adminLifecycleOp
+
+```solidity
+function _adminLifecycleOp(FundState storage s, uint8 op, uint256 val, address caller) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `uint8` |  |
+| val | `uint256` |  |
+| caller | `address` |  |
+
+<a id="_deactivateasset-fundstate-uint256"></a>
+
+### _deactivateAsset
+
+```solidity
+function _deactivateAsset(FundState storage s, uint256 i) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+<a id="_requirelendingempty-fundstate-uint256-address-uint256"></a>
+
+### _requireLendingEmpty
+
+```solidity
+function _requireLendingEmpty(FundState storage s, uint256 i, address adapter, uint256 openId)
+        private
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| adapter | `address` |  |
+| openId | `uint256` |  |
+
+<a id="_pausedeposits-fundstate-address"></a>
+
+### _pauseDeposits
+
+```solidity
+function _pauseDeposits(FundState storage s, address caller) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| caller | `address` |  |
+
+<a id="_unpausedeposits-fundstate-address"></a>
+
+### _unpauseDeposits
+
+```solidity
+function _unpauseDeposits(FundState storage s, address caller) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| caller | `address` |  |
 
 ## Enums
 

@@ -5,7 +5,7 @@ description: "The timed world the timed-flow sim and the timed sim attacks run i
 
 # TimedSimBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/TimedSimBase.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/sim/TimedSimBase.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness), [SimMarket](/contracts/test/prototype/sim/abstract.SimMarket)
 
@@ -280,24 +280,6 @@ uint256 internal lastSettleAt;
 uint256[3] internal lastLendRate;
 ```
 
-### lastDepBound
-
-<i>
-
-Bound prices of the last quotes that answered, for a client whose quote reverts now.
-
-</i>
-
-```solidity
-uint256 internal lastDepBound;
-```
-
-### lastRedBound
-
-```solidity
-uint256 internal lastRedBound;
-```
-
 ### lastAttemptDepFills
 
 <i>
@@ -314,6 +296,78 @@ uint256 internal lastAttemptDepFills;
 
 ```solidity
 uint256 internal lastAttemptRedFills;
+```
+
+### lastMatchPrice
+
+```solidity
+uint256 internal lastMatchPrice;
+```
+
+### depositStops
+
+<i>
+
+Rounds whose first call stopped deposits and the match (`DepositStoppedForRound`).
+
+</i>
+
+```solidity
+uint256 internal depositStops;
+```
+
+### lendStops
+
+<i>
+
+Of those, the rounds stopped by check 5 (a venue's rate grew faster than `maxLendRateGrowthBps`).
+
+</i>
+
+```solidity
+uint256 internal lendStops;
+```
+
+### seqAnswer
+
+<i>
+
+The sequencer feed's answer (0 up, 1 down) and the time that status began (0: `sequencerUpSince`).
+
+</i>
+
+```solidity
+int256 internal seqAnswer;
+```
+
+### seqStartedAt
+
+```solidity
+uint256 internal seqStartedAt;
+```
+
+### usdcFaultPx8
+
+<i>
+
+A USDC / USD answer (8 decimals) the feed holds on every tick; 0: the daily round at 1.00000000.
+
+</i>
+
+```solidity
+uint256 internal usdcFaultPx8;
+```
+
+### keeperStopped
+
+<i>
+
+The keeper sends no settle call while true.
+
+</i>
+
+```solidity
+bool internal keeperStopped;
 ```
 
 ## Functions
@@ -571,6 +625,25 @@ At a slot start: retry a call that failed, while something is settleable.
 function _retrySettle() internal;
 ```
 
+<a id="_pendingclosedepoch"></a>
+
+### _pendingClosedEpoch
+
+A sim request is open (Pending) in an epoch that has closed: a round has real work. `checkSettle` also
+reports work for an empty deposit bucket that has not yet expired (`FlowMatchLib.hasPendingForRound`
+tests `activeDepBuckets[i] >= cur` without `depPoolUsdc != 0`), so a call with no request behind it is
+sent at the window end but is not retried.
+
+```solidity
+function _pendingClosedEpoch() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
 <a id="_settled-uint16"></a>
 
 ### _settled
@@ -803,13 +876,39 @@ function _bookSettlement(uint256 sid, bytes memory data, Basis memory v) interna
 | data | `bytes` |  |
 | v | `Basis` |  |
 
+<a id="_bookmatched-uint256-basis"></a>
+
+### _bookMatched
+
+<i>
+
+Step 3f: a matched fill is booked in the queue's own books (E24, E52) and emits no per-request event. Read
+each open sim request's remainder through the queue's views (`pending*Request`: the remainder while
+Pending, 0 once Closed). What left the remainder and no `DepositFilled` / `RedeemFilled` covered was
+matched, at the match price: a deposit fill spent `u` USDC for `u / price` shares, a redemption fill burned
+`s` shares for `s x price` USDC (before the exit fee, which the cost leaves out as for net fills).
+
+</i>
+
+```solidity
+function _bookMatched(uint256 matchPrice, Basis memory v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| matchPrice | `uint256` |  |
+| v | `Basis` |  |
+
 <a id="_markdone"></a>
 
 ### _markDone
 
 <i>
 
-Mark every open sim request the queue now reports closed.
+Mark every open sim request the queue now reports closed. A matched fill is read through the queue's
+views, so `requestStatus` (not the stored flag) is the test.
 
 </i>
 
@@ -880,12 +979,14 @@ function _words(bytes memory err)
 
 ### _reqDeposit
 
-Fund `who` with `usdc` and request a deposit with the limit `quote × (1 + slackBps)`. A quote that
-reverts now (checks 2 to 5 fail) leaves the client with the last quote that answered (or the TWAP NAV
-per share plus twice `legBandBps` when none did). Returns false when the request reverts.
+Fund `who` with `usdc` and request a limit-free deposit. Returns false when the request reverts.
 
 ```solidity
-function _reqDeposit(address who, uint256 usdc, uint256 slackBps)
+function _reqDeposit(
+        address who,
+        uint256 usdc,
+        uint256 /*retiredSlackBps*/
+    )
         internal
         returns (bool ok, uint256 id, bytes memory err);
 ```
@@ -896,7 +997,7 @@ function _reqDeposit(address who, uint256 usdc, uint256 slackBps)
 | ---- | ---- | ----------- |
 | who | `address` |  |
 | usdc | `uint256` |  |
-| slackBps | `uint256` |  |
+| _ | `uint256` |  |
 
 **Returns**
 
@@ -910,10 +1011,14 @@ function _reqDeposit(address who, uint256 usdc, uint256 slackBps)
 
 ### _reqRedeem
 
-`who` requests a redemption of `shares` with the limit `quote × (1 − slackBps)` (same fallback).
+`who` requests a limit-free redemption of `shares`. Returns false when the request reverts.
 
 ```solidity
-function _reqRedeem(address who, uint256 shares, uint256 slackBps)
+function _reqRedeem(
+        address who,
+        uint256 shares,
+        uint256 /*retiredSlackBps*/
+    )
         internal
         returns (bool ok, uint256 id, bytes memory err);
 ```
@@ -924,7 +1029,7 @@ function _reqRedeem(address who, uint256 shares, uint256 slackBps)
 | ---- | ---- | ----------- |
 | who | `address` |  |
 | shares | `uint256` |  |
-| slackBps | `uint256` |  |
+| _ | `uint256` |  |
 
 **Returns**
 
@@ -1150,6 +1255,9 @@ struct SettleRec {
         uint256 redFairFeed;
         uint256 redFairRef;
         uint256 navFeed;
+        uint256 matchedShares;
+        uint256 matchedUsdc;
+        uint256 matchPrice;
     }
 ```
 
@@ -1166,6 +1274,9 @@ struct SettleRec {
 | redFairFeed | `uint256` |  |
 | redFairRef | `uint256` |  |
 | navFeed | `uint256` |  |
+| matchedShares | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| matchPrice | `uint256` |  |
 
 ### ReqRec
 
@@ -1196,6 +1307,7 @@ struct ReqRec {
         uint64 unlockAt;
         uint256 fills;
         uint256 limitSkips;
+        uint256 matched;
     }
 ```
 
@@ -1220,6 +1332,7 @@ struct ReqRec {
 | unlockAt | `uint64` |  |
 | fills | `uint256` |  |
 | limitSkips | `uint256` |  |
+| matched | `uint256` |  |
 
 ### Basis
 

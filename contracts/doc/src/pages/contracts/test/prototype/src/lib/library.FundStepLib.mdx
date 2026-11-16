@@ -5,7 +5,7 @@ description: "The rebalance step of `RobotMoneyFund` (`executeStep`, §5.3 steps
 
 # FundStepLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundStepLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FundStepLib.sol)
 
 **Title:** FundStepLib
 
@@ -68,19 +68,19 @@ function executeStep(FundState storage s, StepOrder memory o)
 | ---- | ---- | ----------- |
 | r | `StepResult` |  |
 
-<a id="_checkleg-fundstate-uint256"></a>
+<a id="_checkleg-fundstate-uint256-bool"></a>
 
 ### _checkLeg
 
 <i>
 
-A non-idle leg must name a counted (active, not excluded) asset, and a Basket leg must pass ORA-4
+A non-idle leg must name a counted (active, not excluded, not inSale) asset, and a Basket leg must pass ORA-4
 (RB-5 defence in depth: the Rebalancer already masks failing assets).
 
 </i>
 
 ```solidity
-function _checkLeg(FundState storage s, uint256 i) private view;
+function _checkLeg(FundState storage s, uint256 i, bool isSell) private view;
 ```
 
 **Parameters**
@@ -89,6 +89,7 @@ function _checkLeg(FundState storage s, uint256 i) private view;
 | ---- | ---- | ----------- |
 | s | `FundState` |  |
 | i | `uint256` |  |
+| isSell | `bool` |  |
 
 <a id="_stepfeeds-fundstate"></a>
 
@@ -97,7 +98,7 @@ function _checkLeg(FundState storage s, uint256 i) private view;
 <i>
 
 Step 3e: checks 2 and 4 of §5.9.3 on the step (`StepFeedLib.check`), else `StepFeedCheckFailed`. Returns
-every basket asset's feed and TWAP price for the cost at the feeds.
+every basket asset's feed and TWAP price for the cost at the feeds (skipping `inSale` assets).
 
 </i>
 

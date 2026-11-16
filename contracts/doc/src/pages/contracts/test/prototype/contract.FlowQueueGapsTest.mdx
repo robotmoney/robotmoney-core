@@ -1,0 +1,121 @@
+---
+title: "FlowQueueGapsTest"
+description: "Step 3f audit gaps in the queue, one dedicated test each: `queuedSharesOfAt` at stored indexes (E52), the stop that `expiresAt` puts on a deposit (E40), matched volume outside the TVL cap (E28), the `liveness()` view (E31, E34, E38, E39), the `slices` divides `settleWindow` bound (field 10) and the two bounds built on the timelock reference delay (E51, fields 7 and 19)."
+---
+
+# FlowQueueGapsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/FlowQueueGaps.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** FlowQueueGapsTest
+
+Step 3f audit gaps in the queue, one dedicated test each: `queuedSharesOfAt` at stored indexes (E52), the
+stop that `expiresAt` puts on a deposit (E40), matched volume outside the TVL cap (E28), the `liveness()`
+view (E31, E34, E38, E39), the `slices` divides `settleWindow` bound (field 10) and the two bounds built on
+the timelock reference delay (E51, fields 7 and 19).
+
+## Functions
+
+<a id="test_checksettle_emptypoolinlaterroundisnotwork"></a>
+
+### test_checkSettle_emptyPoolInLaterRoundIsNotWork
+
+```solidity
+function test_checkSettle_emptyPoolInLaterRoundIsNotWork() public fixtureCovered;
+```
+
+<a id="test_e52_queuedsharesofatreadsatthegivenindexes"></a>
+
+### test_E52_queuedSharesOfAtReadsAtTheGivenIndexes
+
+`queuedSharesOfAt(owner, depIdx, redIdx)` reads an owner's queued shares at the indexes it is given, not
+at the current ones. The exclusion ledger stores the indexes when a record opens and reads them later,
+so this is what keeps a recovery with the owners who held the shares at that time (RB-22).
+A match moves both indexes: the redeemer's escrow falls and the depositor's held shares rise.
+
+```solidity
+function test_E52_queuedSharesOfAtReadsAtTheGivenIndexes() public fixtureCovered;
+```
+
+<a id="test_e40_expiresatstopsadepositsparticipationatthesecond"></a>
+
+### test_E40_expiresAtStopsADepositsParticipationAtTheSecond
+
+A deposit request's `expiresAt` is the end of its expiry epoch, a redemption's is never. A round that
+settles one second before it fills the deposit and matches it. A round at `expiresAt` leaves the deposit
+unfilled and unmatched, and a live redemption of a later epoch is then sold net, not matched.
+
+```solidity
+function test_E40_expiresAtStopsADepositsParticipationAtTheSecond() public fixtureCovered;
+```
+
+<a id="test_e28_matchedvolumeisnotcountedagainstthetvlcap"></a>
+
+### test_E28_matchedVolumeIsNotCountedAgainstTheTvlCap
+
+The TVL cap counts the net deposit only. With the fund at its TVL cap a deposit is matched against a
+redemption of equal value in full, because a match leaves the NAV where it was. The same deposit with no
+redeemer finds no room and waits.
+
+```solidity
+function test_E28_matchedVolumeIsNotCountedAgainstTheTvlCap() public fixtureCovered;
+```
+
+<a id="test_liveness_eachfieldfollowsitsowncause"></a>
+
+### test_liveness_eachFieldFollowsItsOwnCause
+
+`liveness()` reports each disclosure the terms promise, and each field moves on its own cause.
+
+```solidity
+function test_liveness_eachFieldFollowsItsOwnCause() public fixtureCovered;
+```
+
+<a id="test_field10_slicesmustdividethesettlewindow"></a>
+
+### test_field10_slicesMustDivideTheSettleWindow
+
+`slices` must divide `settleWindow` into whole slices of at least `MIN_SLICE_SECONDS` (field 10): the
+settlement has no other TWAP window (E51).
+
+```solidity
+function test_field10_slicesMustDivideTheSettleWindow() public fixtureCovered;
+```
+
+<a id="test_matchband_boundsareexact"></a>
+
+### test_matchBand_boundsAreExact
+
+`matchBandBps` is at least 1 and at most `refBandBps` (field 20): a match band wider than the net
+trade's band would defeat its purpose.
+
+```solidity
+function test_matchBand_boundsAreExact() public fixtureCovered;
+```
+
+<a id="test_matchband_skipsthematchwhentwaplagsthefeed"></a>
+
+### test_matchBand_skipsTheMatchWhenTwapLagsTheFeed
+
+A deposit and a redemption in one round match at the TWAP only while TWAP NAV is within `matchBandBps`
+of feed NAV. With the feed 60 bps above the pools the round still settles (inside `refBandBps`), the
+match is skipped with `MatchSkipped`, and the round nets at the feed price. With the feeds at the pools
+the same round books the match.
+
+```solidity
+function test_matchBand_skipsTheMatchWhenTwapLagsTheFeed() public fixtureCovered;
+```
+
+<a id="test_e51_thereferencedelayboundshaveexactedges"></a>
+
+### test_E51_theReferenceDelayBoundsHaveExactEdges
+
+The queue does not read the timelock. Its bounds on `maxRoll * epochLength` and on `maxPause` use the
+reference constant, and both edges are exact: at the bound it is accepted, one unit over it is refused.
+
+```solidity
+function test_E51_theReferenceDelayBoundsHaveExactEdges() public fixtureCovered;
+```
+

@@ -5,7 +5,7 @@ description: "Test copy of the production `UniswapV3SwapAdapter` (step 3d): it i
 
 # UniswapV3ExactOutSwapAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol)
 
 **Inherits:** [UniswapV3SwapAdapter](/contracts/adapters/contract.UniswapV3SwapAdapter), [IExactOutSwapAdapter](/contracts/test/prototype/src/interfaces/interface.IExactOutSwapAdapter)
 
@@ -79,4 +79,56 @@ function swapExactOut(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amountIn | `uint256` | The input actually spent (≤ `maxAmountIn`). |
+
+<a id="isfixedfeepool-address"></a>
+
+### isFixedFeePool
+
+True when `pool` is a fixed-fee pool recognized by this adapter (e.g. Uniswap V3).
+
+<i>
+
+Uniswap V3 pool fees are immutable at construction (`E43`, §4.5 rule 6). Checks code presence, a
+valid `fee()` in `(0, 1_000_000)` pips, and the 7-field (224-byte) Uniswap V3 `slot0()` ABI so an
+Aerodrome Slipstream `CLPool` (whose mutable-fee `slot0()` returns 6 words / 192 bytes) is rejected.
+
+</i>
+
+```solidity
+function isFixedFeePool(address pool) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="poolfeebps-address"></a>
+
+### poolFeeBps
+
+Fee of pool in bps rounded up (e.g. 100 pips = 1 bps, 500 pips = 5 bps).
+
+```solidity
+function poolFeeBps(address pool) external view returns (uint24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
 

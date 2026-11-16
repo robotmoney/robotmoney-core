@@ -1,0 +1,75 @@
+---
+title: "KeeperAccountDeployTest"
+description: "The keeper-account deploy script: the address is predictable before the sheet is final, a wrong KEEPER_ADDRESS is refused, and the manifest records the owners and bot keys. No fork state is read."
+---
+
+# KeeperAccountDeployTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/KeeperAccountDeploy.t.sol)
+
+**Inherits:** Test
+
+**Title:** KeeperAccountDeployTest
+
+The keeper-account deploy script: the address is predictable before the sheet is final, a wrong
+KEEPER_ADDRESS is refused, and the manifest records the owners and bot keys. No fork state is read.
+
+## Constants
+
+### OUT
+
+<i>
+
+A constant, so the fixture recorder can key the read below.
+
+</i>
+
+```solidity
+string internal constant OUT = "deployments/keeper-account-deploy-test.json";
+```
+
+## State Variables
+
+### ownerA
+
+```solidity
+address internal ownerA = makeAddr("ownerA");
+```
+
+### ownerB
+
+```solidity
+address internal ownerB = makeAddr("ownerB");
+```
+
+### bot1
+
+```solidity
+address internal bot1 = makeAddr("bot1");
+```
+
+## Functions
+
+<a id="_env-string"></a>
+
+### _env
+
+```solidity
+function _env(string memory out) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| out | `string` |  |
+
+<a id="test_e56_thescriptdeploysatthepredictedaddressrecordsitandrefusesanotherkeeper"></a>
+
+### test_E56_theScriptDeploysAtThePredictedAddressRecordsItAndRefusesAnotherKeeper
+
+```solidity
+function test_E56_theScriptDeploysAtThePredictedAddressRecordsItAndRefusesAnotherKeeper()
+        public;
+```
+

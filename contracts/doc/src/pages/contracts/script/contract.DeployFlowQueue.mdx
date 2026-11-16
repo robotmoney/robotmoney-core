@@ -5,7 +5,7 @@ description: "The `queue` stage (Deploy 4): `FlowQueue` behind its ERC-1967 prox
 
 # DeployFlowQueue
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFlowQueue.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/script/DeployFlowQueue.s.sol)
 
 **Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
 
@@ -18,7 +18,8 @@ first), the USDC / USD feed and the sequencer uptime feed, every flow parameter 
 predicted fund-system timelock as its only upgrade authority. The wiring stage binds the fund's FLOW_ROLE to it.
 
 Required env vars (no defaults): ADMIN_ADDRESS, FUND_ADDRESS, EMERGENCY_ADDRESS, KEEPER_ADDRESS, the eighteen
-FLOW_* names below, SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
+required FLOW_* names below, SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
+Optional env vars (default to DEFAULT_CANCEL_BUFFER / DEFAULT_MAX_PAUSE): FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE.
 
 ## Constants
 
@@ -82,6 +83,31 @@ function _readFlowParams() internal view returns (FlowParams memory f);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | f | `FlowParams` |  |
+
+<a id="_envuintmaxordefault-string-uint256-uint256"></a>
+
+### _envUintMaxOrDefault
+
+```solidity
+function _envUintMaxOrDefault(string memory key, uint256 fallbackVal, uint256 max)
+        internal
+        view
+        returns (uint256 v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `string` |  |
+| fallbackVal | `uint256` |  |
+| max | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
 
 <a id="_writedeploymentjson-deployed-flowqueueinit"></a>
 

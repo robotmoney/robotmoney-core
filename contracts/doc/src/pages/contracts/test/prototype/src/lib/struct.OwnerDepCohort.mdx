@@ -1,0 +1,29 @@
+---
+title: "OwnerDepCohort"
+description: "Coalesced per-owner active deposit cohort in `matchCycle` & `expiryEpoch` (at most `maxRoll + 1`)."
+---
+
+# OwnerDepCohort
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+Coalesced per-owner active deposit cohort in `matchCycle` & `expiryEpoch` (at most `maxRoll + 1`).
+
+```solidity
+struct OwnerDepCohort {
+    uint64 expiryEpoch;
+    uint256 matchCycle;
+    uint256 startMatchId;
+    uint256 normBasis;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| expiryEpoch | `uint64` |  |
+| matchCycle | `uint256` |  |
+| startMatchId | `uint256` |  |
+| normBasis | `uint256` |  |
+

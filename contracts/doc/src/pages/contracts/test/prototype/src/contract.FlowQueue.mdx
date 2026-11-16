@@ -1,28 +1,20 @@
 ---
 title: "FlowQueue"
-description: "The entry point for timed deposits and redemptions of the one fund (E1, E2). See `IFlowQueue`."
+description: "The entry point for timed, netted, forward-priced deposits and redemptions of the one fund (Step 3f)."
 ---
 
 # FlowQueue
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowQueue.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/FlowQueue.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IFlowQueue](/contracts/test/prototype/src/interfaces/interface.IFlowQueue)
 
 **Title:** FlowQueue
 
-The entry point for timed deposits and redemptions of the one fund (E1, E2). See `IFlowQueue`.
+The entry point for timed, netted, forward-priced deposits and redemptions of the one fund (Step 3f).
 
-Built by the `queue` agent (scaffold plan §7.3, 2026-11-11). This contract holds roles, the reentrancy
-lock, the parameters and the getters; the logic lives in three linked libraries so the queue stays
-under EIP-170, 24,576 bytes (G1):
-- `FlowCheckLib`: checks 1 to 7 of §5.9.3, the bound prices (E12), `checkSettle`, the quotes (E21).
-- `FlowSettleLib`: `settle` (walk, caps, eligibility) and the two sides (checks 8 to 12), each side in
-its own self-call (`settleRedeemSide`, `settleDepositSide`) so a failed side changes no state.
-- `FlowClaimLib`: requests, cancel, in-kind exit, expiry, credits, claims, the freeze, the sweep.
-Every function here and in those libraries is implemented, and so is every fund function they call
-(scaffold report §8.1).
-
+Holds roles, reentrancy lock, governance parameters, and getters; delegates logic across four linked
+libraries (`FlowMatchLib`, `FlowCheckLib`, `FlowSettleLib`, `FlowClaimLib`) to stay strictly below EIP-170.
 Runs behind its own ERC-1967 proxy (`GovernedUUPS`), under the same upgrade timelock as the fund (E1).
 
 ## Constants
@@ -70,18 +62,14 @@ function initialize(
 | upgradeTimelock_ | `address` |  |
 | upgradeMode_ | `UpgradeMode` |  |
 
-<a id="requestdeposit-uint256-uint256-address"></a>
+<a id="requestdeposit-uint256-address"></a>
 
 ### requestDeposit
 
-Pull `usdc` from the caller into escrow and open a deposit request owned by `owner`. Reverts while
-paused, `BelowMinRequest`, `AbovePerDepositCap`, `ZeroAddress`. Never changes an existing request.
+Pull `usdc` from the caller into escrow and open a forward-priced deposit request owned by `owner`.
 
 ```solidity
-function requestDeposit(uint256 usdc, uint256 maxUsdcPerShare, address owner)
-        external
-        nonReentrant
-        returns (uint256);
+function requestDeposit(uint256 usdc, address owner) external nonReentrant returns (uint256);
 ```
 
 **Parameters**
@@ -89,7 +77,6 @@ function requestDeposit(uint256 usdc, uint256 maxUsdcPerShare, address owner)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | usdc | `uint256` |  |
-| maxUsdcPerShare | `uint256` | The most USDC per share the owner accepts (PRICE_SCALE). The request takes part in a<br/>settlement only if the deposit bound price is at or below it (E12, RB-14). |
 | owner | `address` |  |
 
 **Returns**
@@ -98,19 +85,15 @@ function requestDeposit(uint256 usdc, uint256 maxUsdcPerShare, address owner)
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
-<a id="requestredeem-uint256-uint256-address"></a>
+<a id="requestredeem-uint256-address"></a>
 
 ### requestRedeem
 
 Calls the fund's `ledgerCheckpoint(owner)` first (E13, RB-22), then pulls `shares` of the fund from
-the caller into escrow and opens a redemption request owned by `owner`. Reverts while paused,
-`BelowMinRequest` (valued at `lastGoodNav`; a redemption of the caller's whole balance is exempt).
+the caller into escrow and open a forward-priced redemption request owned by `owner`.
 
 ```solidity
-function requestRedeem(uint256 shares, uint256 minUsdcPerShare, address owner)
-        external
-        nonReentrant
-        returns (uint256);
+function requestRedeem(uint256 shares, address owner) external nonReentrant returns (uint256);
 ```
 
 **Parameters**
@@ -118,7 +101,6 @@ function requestRedeem(uint256 shares, uint256 minUsdcPerShare, address owner)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | shares | `uint256` |  |
-| minUsdcPerShare | `uint256` | The least USDC per share after the exit fee the owner accepts (PRICE_SCALE). |
 | owner | `address` |  |
 
 **Returns**
@@ -131,29 +113,11 @@ function requestRedeem(uint256 shares, uint256 minUsdcPerShare, address owner)
 
 ### cancel
 
-The owner cancels the unfilled part of a pending or expired request; it goes to the owner's credit
-(`withdrawCredit`, E22). Ledger hook first for a redemption. Open while paused.
+Owner cancels unfilled escrow before `endOf(epoch) - cancelBuffer`, during a deposit stop (deposits),
+or during wind-down. Credited to `withdrawCredit`.
 
 ```solidity
 function cancel(uint256 requestId) external nonReentrant;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| requestId | `uint256` |  |
-
-<a id="exitinkind-uint256"></a>
-
-### exitInKind
-
-The owner takes the unfilled shares of a redemption request out at once through the fund's
-`redeemInKind(shares, owner, queue)`; the assets go to the owner (E9). Ledger hook first. Open while
-paused and whatever any price says.
-
-```solidity
-function exitInKind(uint256 requestId) external nonReentrant;
 ```
 
 **Parameters**
@@ -166,8 +130,7 @@ function exitInKind(uint256 requestId) external nonReentrant;
 
 ### withdrawExpired
 
-The owner withdraws the escrow of a request that expired after `maxRoll` epochs (E18). Pays the
-owner (pull, E22). Ledger hook first for a redemption.
+Owner withdraws escrow of an expired Deposit request (`cur > expiryEpoch`). Redemptions never expire.
 
 ```solidity
 function withdrawExpired(uint256 requestId) external nonReentrant returns (uint256);
@@ -185,12 +148,88 @@ function withdrawExpired(uint256 requestId) external nonReentrant returns (uint2
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
+<a id="giveredemptionnotice-uint256"></a>
+
+### giveRedemptionNotice
+
+Owner gives post-`maxRoll` redemption notice (`E40`). Returns unfilled shares after `noticeRound` ends.
+
+```solidity
+function giveRedemptionNotice(uint256 requestId) external nonReentrant returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="claimnoticereturn-uint256"></a>
+
+### claimNoticeReturn
+
+Moves unfilled shares of a noticed redemption into `shareCredit` once `noticeRound` has ended.
+
+```solidity
+function claimNoticeReturn(uint256 requestId) external nonReentrant returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="onshutdown"></a>
+
+### onShutdown
+
+Fund-only hook called by `RobotMoneyFund.shutdown()` to release active queue escrows on wind-down.
+
+```solidity
+function onShutdown() external nonReentrant;
+```
+
+<a id="releasewinddown-address"></a>
+
+### releaseWindDown
+
+Releases `owner`'s wind-down queued escrows into `creditOf(owner)` after checkpointing the ledger.
+
+```solidity
+function releaseWindDown(address owner) external nonReentrant returns (uint256, uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="withdrawcredit"></a>
 
 ### withdrawCredit
 
-The caller withdraws every USDC and share credit booked to it (cancels, unused purchase USDC,
-refunds, E22). Reverts `NothingToWithdraw`.
+The caller withdraws every USDC and share credit booked to it (`withdrawCredit`).
 
 ```solidity
 function withdrawCredit() external nonReentrant returns (uint256, uint256);
@@ -207,11 +246,6 @@ function withdrawCredit() external nonReentrant returns (uint256, uint256);
 
 ### sweep
 
-Anyone. Send the USDC and the shares the queue holds above its obligations (pending, owed and credited
-USDC; escrowed, held and credited shares) to the fund: gifts and rounding dust. USDC raises the fund's
-idle USDC (a gift to holders). Shares join the fund's own seed shares, which never move. Booked value
-never moves (item 7).
-
 ```solidity
 function sweep() external nonReentrant returns (uint256, uint256);
 ```
@@ -227,16 +261,7 @@ function sweep() external nonReentrant returns (uint256, uint256);
 
 ### settle
 
-Run the twelve steps of proposal §5.9.3 in one transaction, oldest request first. A failed check
-reverts `SettleBlocked` (or the fund's own error) and changes no state. The inputs only limit this
-call's work (RB-20): the most requests to process and the most USDC of deposits to process.
-Anyone may call again at once to continue.
-
-<i>
-
-`maxUsdc` limits each side separately: the deposit USDC and the redemption value at the feeds.
-
-</i>
+Keeper-only round settlement (`KEEPER_ROLE`). First call books Whole Match `M` O(1); subsequent calls trade net side.
 
 ```solidity
 function settle(uint256 maxRequests, uint256 maxUsdc) external nonReentrant returns (uint256);
@@ -253,14 +278,13 @@ function settle(uint256 maxRequests, uint256 maxUsdc) external nonReentrant retu
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` | The settlement recorded (0 when nothing took part). |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="checksettle"></a>
 
 ### checkSettle
 
-The first check of §5.9.3 that fails right now for the caller `msg.sender`, with the asset index
-(IDLE_INDEX when not asset-specific). Never reverts. `Ok` when every pre-trade check passes.
+The first check of §5.9.3 that fails right now for caller `msg.sender`. Never reverts.
 
 ```solidity
 function checkSettle() external view returns (SettleCheck check, uint256 index);
@@ -277,7 +301,7 @@ function checkSettle() external view returns (SettleCheck check, uint256 index);
 
 ### settleRedeemSide
 
-Self-call of `settle` for the redemption side (FlowSettleLib note). Only the queue may call it.
+Self-call of `settle` for the redemption side. Only the queue may call it.
 
 ```solidity
 function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c)
@@ -318,9 +342,6 @@ function settleDepositSide(
 
 ### deposit
 
-Deliver unlocked, unfrozen deposit shares of `receiver`'s claims, oldest first, up to `assets` of
-their USDC cost. Anyone may call. The shares always go to `receiver`, who must be the claims' owner.
-
 ```solidity
 function deposit(uint256 assets, address receiver)
         external
@@ -339,13 +360,11 @@ function deposit(uint256 assets, address receiver)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| shares | `uint256` | Shares delivered (rounded DOWN within a partly used claim). |
+| shares | `uint256` |  |
 
 <a id="mint-uint256-address"></a>
 
 ### mint
-
-Deliver exactly `shares` unlocked, unfrozen deposit shares of `receiver`'s claims. Anyone may call.
 
 ```solidity
 function mint(uint256 shares, address receiver) external nonReentrant returns (uint256 assets);
@@ -362,14 +381,11 @@ function mint(uint256 shares, address receiver) external nonReentrant returns (u
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| assets | `uint256` | Their USDC cost (rounded UP within a partly used claim). |
+| assets | `uint256` |  |
 
 <a id="redeem-uint256-address-address"></a>
 
 ### redeem
-
-The owner (msg.sender == `owner`) takes the settled USDC of `shares` burned shares of its
-redemption claims, oldest first, paid to `receiver`.
 
 ```solidity
 function redeem(uint256 shares, address receiver, address owner)
@@ -390,7 +406,7 @@ function redeem(uint256 shares, address receiver, address owner)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` | USDC paid (rounded DOWN within a partly used claim). |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="withdraw-uint256-address-address"></a>
 
@@ -420,8 +436,7 @@ function withdraw(uint256, address, address) external pure returns (uint256);
 
 ### freezeSettlement
 
-EMERGENCY_ROLE. Freeze the deposit shares of settlement `id` while they are in their hold, until
-at most `now + maxFreeze`. A freeze ends by itself.
+EMERGENCY_ROLE. Freeze deposit shares of settlement `id` while in hold (`&lt;= maxFreeze`, max 1 per `maxFreeze`).
 
 ```solidity
 function freezeSettlement(uint256 id) external onlyRole(EMERGENCY_ROLE) nonReentrant;
@@ -437,7 +452,7 @@ function freezeSettlement(uint256 id) external onlyRole(EMERGENCY_ROLE) nonReent
 
 ### releaseSettlement
 
-ADMIN_ROLE. End the freeze of settlement `id`. Its claims deliver normally after their unlock time.
+ADMIN_ROLE. End the freeze of settlement `id`.
 
 ```solidity
 function releaseSettlement(uint256 id) external onlyRole(ADMIN_ROLE) nonReentrant;
@@ -449,51 +464,11 @@ function releaseSettlement(uint256 id) external onlyRole(ADMIN_ROLE) nonReentran
 | ---- | ---- | ----------- |
 | id | `uint256` |  |
 
-<a id="allowreturn-uint256"></a>
-
-### allowReturn
-
-ADMIN_ROLE. Let each depositor of the frozen settlement `id` take its own slice back in kind
-(`takeReturn`). Nobody else can receive it.
-
-```solidity
-function allowReturn(uint256 id) external onlyRole(ADMIN_ROLE) nonReentrant;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| id | `uint256` |  |
-
-<a id="takereturn-uint256"></a>
-
-### takeReturn
-
-The owner of deposit claim `claimId` of a settlement under `allowReturn` takes its undelivered
-shares out through the fund's `redeemInKind(shares, owner, queue)`.
-
-```solidity
-function takeReturn(uint256 claimId) external nonReentrant;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| claimId | `uint256` |  |
-
 <a id="pausequeue"></a>
 
 ### pauseQueue
 
-EMERGENCY_ROLE. Pause requests and settlement (cancel, in-kind exit and withdrawals stay open).
-
-<i>
-
-Under the one reentrancy lock like every other entry point (eng plan §3.1).
-
-</i>
+Self-expiring pause (`now + maxPause`); reverts `PauseOnCooldown` before `end + maxPause` (E39).
 
 ```solidity
 function pauseQueue() external onlyRole(EMERGENCY_ROLE) nonReentrant;
@@ -503,7 +478,7 @@ function pauseQueue() external onlyRole(EMERGENCY_ROLE) nonReentrant;
 
 ### unpauseQueue
 
-ADMIN_ROLE.
+ADMIN_ROLE. Clears `queuePausedUntil` early (cooldown still applies from previous end).
 
 ```solidity
 function unpauseQueue() external onlyRole(ADMIN_ROLE) nonReentrant;
@@ -513,18 +488,7 @@ function unpauseQueue() external onlyRole(ADMIN_ROLE) nonReentrant;
 
 ### setFlowParams
 
-ADMIN_ROLE (timelock), inside the hard bounds of FlowTypes. Under the reentrancy lock, so no callback
-inside a settlement can change the parameters that settlement reads.
-
-<i>
-
-No change can stall settlement or orphan a request (step 3 finish plan §3.1 item 3). A new `epochLength`
-applies from the end of the epoch in progress; every open epoch keeps its own end and its index
-(`FlowEpochs`), so open requests settle at the end of their own windows and expire after `maxRoll`
-epochs as before. Any change also resets the walk (the oldest-epoch hint and every cursor), so a larger
-`maxRoll` cannot leave a revived request behind a stale position (`FlowSettleLib.applyParams`).
-
-</i>
+ADMIN_ROLE, inside hard bounds of FlowTypes (`E51`).
 
 ```solidity
 function setFlowParams(FlowParams calldata params) external onlyRole(ADMIN_ROLE) nonReentrant;
@@ -540,15 +504,6 @@ function setFlowParams(FlowParams calldata params) external onlyRole(ADMIN_ROLE)
 
 ### _setFlowParams
 
-<i>
-
-Hard bounds (eng plan §2). `field` in `FlowParamOutOfBounds` is the struct position, 0-based. The
-combination rules refuse values that would stop every settlement: `quorum` above `slices`, a window
-that does not split into whole slices of at least `MIN_SLICE_SECONDS`, and a window plus grace that
-ends after a request expires (field 7, see below).
-
-</i>
-
 ```solidity
 function _setFlowParams(FlowParams memory p) private;
 ```
@@ -559,14 +514,50 @@ function _setFlowParams(FlowParams memory p) private;
 | ---- | ---- | ----------- |
 | p | `FlowParams` |  |
 
+<a id="_hasactivebasket-irobotmoneyfundfull"></a>
+
+### _hasActiveBasket
+
+```solidity
+function _hasActiveBasket(IRobotMoneyFundFull f) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_requirefundedpoolsfixedfee-irobotmoneyfundfull"></a>
+
+### _requireFundedPoolsFixedFee
+
+<i>
+
+Rule 6 (E43, plan section 3.3 item 4): every basket asset the plan funds must sit on a fixed-fee pool.
+An unfunded asset (target 0) is exempt, as it is at plan open.
+
+</i>
+
+```solidity
+function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+
 <a id="setflowlevers-flowlevers"></a>
 
 ### setFlowLevers
-
-ADMIN_ROLE (timelock). The attack-finding levers of step 3 finish plan §3.2 (`FlowLevers`), appended
-by `levers` 2026-11-12. `initialize` sets the decided defaults (`DEFAULT_BASKET_CALL_BPS`, stricter-of-both);
-all zero is the design as §5.9 first wrote it. Under the reentrancy lock like
-`setFlowParams`. Changes nothing else: no cursor, epoch or reference moves.
 
 ```solidity
 function setFlowLevers(FlowLevers calldata l) external onlyRole(ADMIN_ROLE) nonReentrant;
@@ -582,8 +573,6 @@ function setFlowLevers(FlowLevers calldata l) external onlyRole(ADMIN_ROLE) nonR
 
 ### flowLevers
 
-The attack-finding levers in force (from `initialize`: the 5 bps per-call cap, stricter-of-both).
-
 ```solidity
 function flowLevers() external view returns (FlowLevers memory);
 ```
@@ -598,8 +587,6 @@ function flowLevers() external view returns (FlowLevers memory);
 
 ### share
 
-ERC-7575: the fund (the share token).
-
 ```solidity
 function share() external view returns (address);
 ```
@@ -613,8 +600,6 @@ function share() external view returns (address);
 <a id="asset"></a>
 
 ### asset
-
-ERC-7575: USDC.
 
 ```solidity
 function asset() external view returns (address);
@@ -640,11 +625,37 @@ function flowParams() external view returns (FlowParams memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `FlowParams` |  |
 
+<a id="cancelbuffer"></a>
+
+### cancelBuffer
+
+```solidity
+function cancelBuffer() external view returns (uint32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+
+<a id="maxpause"></a>
+
+### maxPause
+
+```solidity
+function maxPause() external view returns (uint32);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint32` |  |
+
 <a id="feeds"></a>
 
 ### feeds
-
-The USDC / USD feed, its maximum age, and the sequencer uptime feed.
 
 ```solidity
 function feeds()
@@ -675,11 +686,37 @@ function queuePaused() external view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
+<a id="queuepauseduntil"></a>
+
+### queuePausedUntil
+
+```solidity
+function queuePausedUntil() external view returns (uint64);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="liveness"></a>
+
+### liveness
+
+```solidity
+function liveness() external view returns (QueueLiveness memory l);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| l | `QueueLiveness` |  |
+
 <a id="currentepoch"></a>
 
 ### currentEpoch
-
-The epoch in progress (`FlowEpochs.current`: indices only grow, also across a new `epochLength`).
 
 ```solidity
 function currentEpoch() external view returns (uint64);
@@ -694,8 +731,6 @@ function currentEpoch() external view returns (uint64);
 <a id="settleableat-uint64"></a>
 
 ### settleableAt
-
-When `epoch`'s settlement window ends: its own end (`FlowEpochs.endOf`) plus `settleWindow`.
 
 ```solidity
 function settleableAt(uint64 epoch) external view returns (uint64);
@@ -797,8 +832,6 @@ function getSettlement(uint256 settlementId) external view returns (Settlement m
 
 ### epochRequests
 
-Request ids made in `epoch`, in order (E18).
-
 ```solidity
 function epochRequests(uint64 epoch) external view returns (uint256[] memory);
 ```
@@ -861,8 +894,6 @@ function settlementCount() external view returns (uint256);
 
 ### creditOf
 
-USDC and share credits of `owner` waiting for `withdrawCredit`.
-
 ```solidity
 function creditOf(address owner) external view returns (uint256 usdc, uint256 shares);
 ```
@@ -883,8 +914,6 @@ function creditOf(address owner) external view returns (uint256 usdc, uint256 sh
 <a id="periodflow-uint256"></a>
 
 ### periodFlow
-
-USDC used on each side in clock-time period `period` (`timestamp / epochLength`, E20).
 
 ```solidity
 function periodFlow(uint256 period)
@@ -910,8 +939,7 @@ function periodFlow(uint256 period)
 
 ### queuedSharesOf
 
-Reads `queuedShares`, which every change of an owner's escrowed or held shares must keep exact
-(E13, RB-22). The fund's `ledgerBalanceOf` reads this.
+Queued shares held for `account` at the current match index (escrowed + matched deposit + held + credits).
 
 ```solidity
 function queuedSharesOf(address account) external view returns (uint256);
@@ -929,15 +957,60 @@ function queuedSharesOf(address account) external view returns (uint256);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
 
+<a id="currentmatchindexes"></a>
+
+### currentMatchIndexes
+
+Current match indexes `(depIdx, redIdx)` stored by `FundExclusionLedger` when an exclusion opens (E52).
+
+```solidity
+function currentMatchIndexes()
+        external
+        view
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
+
+<a id="queuedsharesofat-address-uint256-2-uint256-2"></a>
+
+### queuedSharesOfAt
+
+Historical queued shares of `account` evaluated at stored indexes `(depIdx, redIdx)` (E52, RB-22).
+
+```solidity
+function queuedSharesOfAt(
+        address account,
+        uint256[2] calldata depIdx,
+        uint256[2] calldata redIdx
+    ) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="settlecursor-bool-requestkind"></a>
 
 ### settleCursor
 
-Where `settle` continues on side `kind`: the keeper's own position (`keeperClass`) or everyone else's.
-`epoch == 0`: the next call starts a new pass at the oldest epoch (item 2).
-
 ```solidity
-function settleCursor(bool keeperClass, RequestKind kind)
+function settleCursor(bool, RequestKind kind)
         external
         view
         returns (uint64 epoch, uint256 index);
@@ -947,7 +1020,7 @@ function settleCursor(bool keeperClass, RequestKind kind)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| keeperClass | `bool` |  |
+| _ | `bool` |  |
 | kind | `RequestKind` |  |
 
 **Returns**
@@ -960,8 +1033,6 @@ function settleCursor(bool keeperClass, RequestKind kind)
 <a id="books"></a>
 
 ### books
-
-The queue's own books (conservation, eng plan §4.3). See `FlowBooks`.
 
 ```solidity
 function books() external view returns (FlowBooks memory b);
@@ -977,8 +1048,7 @@ function books() external view returns (FlowBooks memory b);
 
 ### quoteDeposit
 
-E21: worst case for a deposit of `usdc` made now. Never better than what a settlement in this block
-would allow.
+Terms for a deposit of `usdc` made now: fee, cancel cutoff, earliest settle, hold end, and guard bands.
 
 ```solidity
 function quoteDeposit(uint256 usdc) external view returns (Quote memory);
@@ -1000,7 +1070,7 @@ function quoteDeposit(uint256 usdc) external view returns (Quote memory);
 
 ### quoteRedeem
 
-E21: worst case for a redemption of `shares` made now.
+Terms for a redemption of `shares` made now: fee, cancel cutoff, earliest settle, hold end, and guard bands.
 
 ```solidity
 function quoteRedeem(uint256 shares) external view returns (Quote memory);
@@ -1021,8 +1091,6 @@ function quoteRedeem(uint256 shares) external view returns (Quote memory);
 <a id="pendingdepositrequest-uint256-address"></a>
 
 ### pendingDepositRequest
-
-ERC-7540: unfilled USDC of a pending deposit request of `controller` (its owner).
 
 ```solidity
 function pendingDepositRequest(uint256 requestId, address controller)
@@ -1048,8 +1116,6 @@ function pendingDepositRequest(uint256 requestId, address controller)
 
 ### claimableDepositRequest
 
-ERC-7540: USDC cost of the unlocked, unfrozen, undelivered shares of that request's claims.
-
 ```solidity
 function claimableDepositRequest(uint256 requestId, address controller)
         external
@@ -1073,8 +1139,6 @@ function claimableDepositRequest(uint256 requestId, address controller)
 <a id="pendingredeemrequest-uint256-address"></a>
 
 ### pendingRedeemRequest
-
-ERC-7540: unfilled shares of a pending redemption request.
 
 ```solidity
 function pendingRedeemRequest(uint256 requestId, address controller)
@@ -1100,8 +1164,6 @@ function pendingRedeemRequest(uint256 requestId, address controller)
 
 ### claimableRedeemRequest
 
-ERC-7540: burned shares of that request's claims whose USDC is not yet taken.
-
 ```solidity
 function claimableRedeemRequest(uint256 requestId, address controller)
         external
@@ -1125,8 +1187,6 @@ function claimableRedeemRequest(uint256 requestId, address controller)
 <a id="maxdeposit-address"></a>
 
 ### maxDeposit
-
-ERC-7540 claim limits: what `deposit` / `mint` / `redeem` can take for `owner` now.
 
 ```solidity
 function maxDeposit(address owner) external view returns (uint256 assets);

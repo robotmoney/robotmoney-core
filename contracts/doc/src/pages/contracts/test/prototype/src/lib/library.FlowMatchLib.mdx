@@ -1,0 +1,941 @@
+---
+title: "FlowMatchLib"
+description: "Linked library holding Step 3f's O(1) whole-match booking, running match indexes, lazy per-owner claim materialization, post-`maxRoll` redemption notice returns, wind-down release, and index-historical share views for `FundExclusionLedger` (E24, E35, E38, E40, E52)."
+---
+
+# FlowMatchLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/lib/FlowMatchLib.sol)
+
+**Title:** FlowMatchLib
+
+Linked library holding Step 3f's O(1) whole-match booking, running match indexes, lazy per-owner
+claim materialization, post-`maxRoll` redemption notice returns, wind-down release, and
+index-historical share views for `FundExclusionLedger` (E24, E35, E38, E40, E52).
+
+## Constants
+
+### MATCH_SCALE
+
+<i>
+
+Precision scale for factor ratios (1e30 leaves > 1e12 headroom up to 1e30 shares without rounding collapse).
+
+</i>
+
+```solidity
+uint256 internal constant MATCH_SCALE = 1e30;
+```
+
+### ACC_SCALE
+
+<i>
+
+Precision scale for cumulative matched USDC per unit normalized redemption basis.
+
+</i>
+
+```solidity
+uint256 internal constant ACC_SCALE = 1e36;
+```
+
+## Functions
+
+<a id="ensureinitialized-flowstate"></a>
+
+### ensureInitialized
+
+Ensure Step 3f cycle/era counters are initialized (`>= 1`).
+
+```solidity
+function ensureInitialized(FlowState storage s) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+<a id="registercreated-flowstate-uint256-address-requestkind-uint64-uint256"></a>
+
+### registerCreated
+
+```solidity
+function registerCreated(
+        FlowState storage s,
+        uint256 requestId,
+        address owner,
+        RequestKind kind,
+        uint64 epoch,
+        uint256 amount
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| kind | `RequestKind` |  |
+| epoch | `uint64` |  |
+| amount | `uint256` |  |
+
+<a id="haspendingforround-flowstate-uint64-uint64"></a>
+
+### hasPendingForRound
+
+True when round `roundEpoch` has any enrolled live work or unenrolled live requests in `e &lt;= roundEpoch`.
+
+```solidity
+function hasPendingForRound(FlowState storage s, uint64 roundEpoch, uint64 cur)
+        public
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| roundEpoch | `uint64` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="hasunfilledinpool-flowstate-bool-uint64"></a>
+
+### hasUnfilledInPool
+
+True when there are still locked unfilled requests after `bookMatch` on either or net side.
+
+```solidity
+function hasUnfilledInPool(FlowState storage s, bool depositsOpen, uint64 cur)
+        public
+        view
+        returns (bool hasRed, bool hasDep);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| depositsOpen | `bool` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hasRed | `bool` |  |
+| hasDep | `bool` |  |
+
+<a id="evictexpireddepbuckets-flowstate-uint64"></a>
+
+### evictExpiredDepBuckets
+
+Evict any expired deposit bucket (`expiryEpoch &lt; cur`) before booking a round's match.
+
+```solidity
+function evictExpiredDepBuckets(FlowState storage s, uint64 cur) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| cur | `uint64` |  |
+
+<a id="enrollepochs-flowstate-uint64-uint64"></a>
+
+### enrollEpochs
+
+Enroll all closed epochs `&lt;= maxEpoch` once. Checkpoints owners on the exclusion ledger first (RB-22).
+
+```solidity
+function enrollEpochs(FlowState storage s, uint64 maxEpoch, uint64 cur) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| maxEpoch | `uint64` |  |
+| cur | `uint64` |  |
+
+<a id="_enrolldeposit-flowstate-request"></a>
+
+### _enrollDeposit
+
+```solidity
+function _enrollDeposit(FlowState storage s, Request storage r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| r | `Request` |  |
+
+<a id="_mergeownerdepcohort-flowstate-address-uint64-uint256-uint256"></a>
+
+### _mergeOwnerDepCohort
+
+```solidity
+function _mergeOwnerDepCohort(
+        FlowState storage s,
+        address owner,
+        uint64 expiryEpoch,
+        uint256 cyc,
+        uint256 nb
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+| expiryEpoch | `uint64` |  |
+| cyc | `uint256` |  |
+| nb | `uint256` |  |
+
+<a id="_enrollredeem-flowstate-request"></a>
+
+### _enrollRedeem
+
+```solidity
+function _enrollRedeem(FlowState storage s, Request storage r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| r | `Request` |  |
+
+<a id="bookmatch-flowstate-settlecontext-uint64-address"></a>
+
+### bookMatch
+
+Book the whole match `M` between locked deposits (`D`) and locked redemptions (`R`) at TWAP `S`.
+
+```solidity
+function bookMatch(
+        FlowState storage s,
+        SettleContext memory c,
+        uint64 roundEpoch,
+        address feeRecipient
+    ) public returns (uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| roundEpoch | `uint64` |  |
+| feeRecipient | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+<a id="_reservematchcap-flowstate-uint256-uint256-uint256-uint256"></a>
+
+### _reserveMatchCap
+
+```solidity
+function _reserveMatchCap(FlowState storage s, uint256 navFeed, uint256 D, uint256 R, uint256 S)
+        private
+        returns (uint256 M, uint256 matchedUsdc, uint256 matchDust);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| navFeed | `uint256` |  |
+| D | `uint256` |  |
+| R | `uint256` |  |
+| S | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| M | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| matchDust | `uint256` |  |
+
+<a id="_advancedepositmatchindex-flowstate-uint64-uint64-uint256-uint256-uint256-uint256"></a>
+
+### _advanceDepositMatchIndex
+
+```solidity
+function _advanceDepositMatchIndex(
+        FlowState storage s,
+        uint64 roundEpoch,
+        uint64 settlementId,
+        uint256 M,
+        uint256 matchedUsdc,
+        uint256 D,
+        uint256 matchDust
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| roundEpoch | `uint64` |  |
+| settlementId | `uint64` |  |
+| M | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| D | `uint256` |  |
+| matchDust | `uint256` |  |
+
+<a id="_advanceredeemmatchindex-flowstate-uint64-uint256-uint256-uint256-address"></a>
+
+### _advanceRedeemMatchIndex
+
+```solidity
+function _advanceRedeemMatchIndex(
+        FlowState storage s,
+        uint64 settlementId,
+        uint256 M,
+        uint256 matchedUsdc,
+        uint256 R,
+        address feeRecipient
+    ) private returns (uint256 totalFee);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint64` |  |
+| M | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| R | `uint256` |  |
+| feeRecipient | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalFee | `uint256` |  |
+
+<a id="syncownerdeposits-flowstate-address"></a>
+
+### syncOwnerDeposits
+
+Materialize all newly matched Deposit claims for `owner`.
+Caller must have checkpointed `owner` on the exclusion ledger if subsequent mutation occurs.
+
+```solidity
+function syncOwnerDeposits(FlowState storage s, address owner) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+
+<a id="_settledepmatchshares-flowstate-depmatchrecord-uint256-uint256"></a>
+
+### _settleDepMatchShares
+
+<i>
+
+Book one participant's floor share of a deposit match record. Each participant syncs a record exactly
+once with the normBasis it held at booking (consume paths sync first), so `remainingNormBasis` reaches
+zero when the last participant syncs; the floor-rounding leftover then has no owner and moves from held
+shares to `dustShares`, keeping the books exact.
+
+</i>
+
+```solidity
+function _settleDepMatchShares(
+        FlowState storage s,
+        DepMatchRecord storage rec,
+        uint256 nb,
+        uint256 cShares
+    ) private returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rec | `DepMatchRecord` |  |
+| nb | `uint256` |  |
+| cShares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="syncownerredeems-flowstate-address"></a>
+
+### syncOwnerRedeems
+
+Materialize all newly matched Redeem claims for `owner`.
+
+```solidity
+function syncOwnerRedeems(FlowState storage s, address owner) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+
+<a id="consumedeposit-flowstate-uint256-uint256-bool"></a>
+
+### consumeDeposit
+
+Consume `consumed` USDC of deposit request `rId` (from net fill, cancel, expiry, or wind-down).
+Assumes `syncOwnerDeposits(s, r.owner)` ALREADY ran immediately prior!
+
+```solidity
+function consumeDeposit(FlowState storage s, uint256 rId, uint256 consumed, bool keepLeftover)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rId | `uint256` |  |
+| consumed | `uint256` |  |
+| keepLeftover | `bool` |  |
+
+<a id="_consumeevicteddeposit-flowstate-depbucket-request-uint256-uint256-uint256"></a>
+
+### _consumeEvictedDeposit
+
+```solidity
+function _consumeEvictedDeposit(
+        FlowState storage s,
+        DepBucket storage b,
+        Request storage r,
+        uint256 prevRem,
+        uint256 consumed,
+        uint256 leftover
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| b | `DepBucket` |  |
+| r | `Request` |  |
+| prevRem | `uint256` |  |
+| consumed | `uint256` |  |
+| leftover | `uint256` |  |
+
+<a id="_consumeactivedeposit-flowstate-depbucket-request-uint256-uint256-uint256"></a>
+
+### _consumeActiveDeposit
+
+```solidity
+function _consumeActiveDeposit(
+        FlowState storage s,
+        DepBucket storage b,
+        Request storage r,
+        uint256 consumed,
+        uint256 newNb,
+        uint256 F
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| b | `DepBucket` |  |
+| r | `Request` |  |
+| consumed | `uint256` |  |
+| newNb | `uint256` |  |
+| F | `uint256` |  |
+
+<a id="consumeredeem-flowstate-uint256-uint256-bool"></a>
+
+### consumeRedeem
+
+Consume `consumed` shares of redemption request `rId` (from net burn, cancel, notice, or wind-down).
+Assumes `syncOwnerRedeems(s, r.owner)` ALREADY ran immediately prior!
+
+```solidity
+function consumeRedeem(FlowState storage s, uint256 rId, uint256 consumed, bool keepLeftover)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rId | `uint256` |  |
+| consumed | `uint256` |  |
+| keepLeftover | `bool` |  |
+
+<a id="_consumeactiveredeempool-flowstate-redcyclestate-request-uint256-uint256-uint256-uint256"></a>
+
+### _consumeActiveRedeemPool
+
+```solidity
+function _consumeActiveRedeemPool(
+        FlowState storage s,
+        RedCycleState storage rc,
+        Request storage r,
+        uint256 consumed,
+        uint256 oldNb,
+        uint256 newNb,
+        uint256 curF
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rc | `RedCycleState` |  |
+| r | `Request` |  |
+| consumed | `uint256` |  |
+| oldNb | `uint256` |  |
+| newNb | `uint256` |  |
+| curF | `uint256` |  |
+
+<a id="_flushemptyredeemtier-flowstate-redcyclestate-uint16"></a>
+
+### _flushEmptyRedeemTier
+
+```solidity
+function _flushEmptyRedeemTier(FlowState storage s, RedCycleState storage rc, uint16 feeBps)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rc | `RedCycleState` |  |
+| feeBps | `uint16` |  |
+
+<a id="_retireredeemnormbasis-flowstate-redcyclestate-uint16-uint256"></a>
+
+### _retireRedeemNormBasis
+
+```solidity
+function _retireRedeemNormBasis(
+        FlowState storage s,
+        RedCycleState storage rc,
+        uint16 feeBps,
+        uint256 nb
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rc | `RedCycleState` |  |
+| feeBps | `uint16` |  |
+| nb | `uint256` |  |
+
+<a id="_closedepositreq-flowstate-uint256-request"></a>
+
+### _closeDepositReq
+
+```solidity
+function _closeDepositReq(FlowState storage s, uint256 rId, Request storage r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rId | `uint256` |  |
+| r | `Request` |  |
+
+<a id="_closeredeemreq-flowstate-uint256-request"></a>
+
+### _closeRedeemReq
+
+```solidity
+function _closeRedeemReq(FlowState storage s, uint256 rId, Request storage r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rId | `uint256` |  |
+| r | `Request` |  |
+
+<a id="_markclosedcount-flowstate-request"></a>
+
+### _markClosedCount
+
+```solidity
+function _markClosedCount(FlowState storage s, Request storage r) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| r | `Request` |  |
+
+<a id="_pushclaim-flowstate-claim"></a>
+
+### _pushClaim
+
+```solidity
+function _pushClaim(FlowState storage s, Claim memory cl) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| cl | `Claim` |  |
+
+<a id="registernotice-flowstate-uint256-uint64"></a>
+
+### registerNotice
+
+```solidity
+function registerNotice(FlowState storage s, uint256 requestId, uint64 targetRound) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+| targetRound | `uint64` |  |
+
+<a id="isnoticeroundended-flowstate-uint64"></a>
+
+### isNoticeRoundEnded
+
+```solidity
+function isNoticeRoundEnded(FlowState storage s, uint64 roundEpoch) public view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| roundEpoch | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="finalizeendednotices-flowstate"></a>
+
+### finalizeEndedNotices
+
+Process all ended notice rounds. Safe to run in `settle()` or `withdrawCredit()`.
+
+```solidity
+function finalizeEndedNotices(FlowState storage s) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+<a id="claimnoticereturn-flowstate-uint256"></a>
+
+### claimNoticeReturn
+
+```solidity
+function claimNoticeReturn(FlowState storage s, uint256 requestId)
+        public
+        returns (uint256 returned);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| returned | `uint256` |  |
+
+<a id="_returnnoticedrequest-flowstate-uint256"></a>
+
+### _returnNoticedRequest
+
+```solidity
+function _returnNoticedRequest(FlowState storage s, uint256 requestId)
+        private
+        returns (uint256 returned);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| returned | `uint256` |  |
+
+<a id="onshutdown-flowstate"></a>
+
+### onShutdown
+
+O(1) shutdown hook from `RobotMoneyFund.shutdown()`: closes active match pools to future rounds.
+
+```solidity
+function onShutdown(FlowState storage s) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+<a id="releasewinddown-flowstate-address"></a>
+
+### releaseWindDown
+
+Checkpoint `owner` on the exclusion ledger first (E52), sync matched fills, and release any
+unfilled wind-down escrow for `owner` into credits (`usdcCredit` / `shareCredit`).
+
+```solidity
+function releaseWindDown(FlowState storage s, address owner)
+        public
+        returns (uint256 usdcReleased, uint256 sharesReleased);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcReleased | `uint256` |  |
+| sharesReleased | `uint256` |  |
+
+<a id="currentmatchindexes-flowstate"></a>
+
+### currentMatchIndexes
+
+```solidity
+function currentMatchIndexes(FlowState storage s)
+        public
+        view
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
+
+<a id="queuedsharesof-flowstate-address"></a>
+
+### queuedSharesOf
+
+```solidity
+function queuedSharesOf(FlowState storage s, address account) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="queuedsharesofat-flowstate-address-uint256-2-uint256-2"></a>
+
+### queuedSharesOfAt
+
+```solidity
+function queuedSharesOfAt(
+        FlowState storage s,
+        address account,
+        uint256[2] memory depIdx,
+        uint256[2] memory redIdx
+    ) public view returns (uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| account | `address` |  |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+
+<a id="currentrequestremaining-flowstate-uint256"></a>
+
+### currentRequestRemaining
+
+Live unfilled escrow of `requestId` right now (accounting for booked matches not yet materialized).
+
+```solidity
+function currentRequestRemaining(FlowState storage s, uint256 requestId)
+        public
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="previewunsynceddepdeliverable-flowstate-address-uint256-bool"></a>
+
+### previewUnsyncedDepDeliverable
+
+Unmaterialized unlocked deposit `(usdc, shares)` for one request or whole owner.
+
+```solidity
+function previewUnsyncedDepDeliverable(
+        FlowState storage s,
+        address owner,
+        uint256 onlyRequestId,
+        bool isShutdown
+    ) public view returns (uint256 deliverableUsdc, uint256 deliverableShares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+| onlyRequestId | `uint256` |  |
+| isShutdown | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deliverableUsdc | `uint256` |  |
+| deliverableShares | `uint256` |  |
+
+<a id="previewunsyncedredclaimable-flowstate-address-uint256"></a>
+
+### previewUnsyncedRedClaimable
+
+Unmaterialized matched redemption shares whose USDC has not yet been claimed.
+
+```solidity
+function previewUnsyncedRedClaimable(FlowState storage s, address owner, uint256 onlyRequestId)
+        public
+        view
+        returns (uint256 sharesClaimable);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+| onlyRequestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesClaimable | `uint256` |  |
+

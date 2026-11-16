@@ -4,7 +4,7 @@ title: "FundTypes Constants"
 
 # FundTypes Constants
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/FundTypes.sol)
 
 ## BPS
 
@@ -126,18 +126,6 @@ Ceiling on `toleranceBps` (suggested start 50 bps).
 
 ```solidity
 uint16 constant MAX_TOLERANCE_BPS = 500;
-```
-
-## MAX_KEEPER_GRACE
-
-<i>
-
-Ceiling on `keeperGrace` (suggested start 6 hours).
-
-</i>
-
-```solidity
-uint32 constant MAX_KEEPER_GRACE = 7 days;
 ```
 
 ## MAX_OVERRUN
@@ -263,7 +251,7 @@ uint256 constant POSITION_UNITS_PER_USDC = 1e18;
 
 <i>
 
-The in-kind allowance of proposal §5.9.4 and E20, held by the fund (coordinator ruling 6, §5.9.5 "the fund
+The in-kind allowance of proposal §5.9.4 and E20, held by the fund, applied only in a wind-down (E29) (coordinator ruling 6, §5.9.5 "the fund
 stores ... the in-kind allowance"). Per period of `inKindPeriod` seconds, in-kind exits take lending USDC up
 to `max(inKindBps × lending holdings / 10 000, inKindFloorUsdc)`, counted in the venues' own USDC amounts.
 Defaults equal the queue's flow-cap defaults (§5.9.5: 500 bps, 250 000 USDC, a 6 h epoch); ADMIN_ROLE keeps

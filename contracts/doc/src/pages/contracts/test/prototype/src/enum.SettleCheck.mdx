@@ -1,15 +1,16 @@
 ---
 title: "SettleCheck"
-description: "The checks of proposal §5.9.3, in order (E7). `checkSettle` returns the first that fails; `settle` reverts `SettleBlocked` with it. `Ok` means every check that can be evaluated before trading passes. RedeemLeg, DepositLeg, Proportion and RealizedPrice can only fail inside a settlement."
+description: "The checks of proposal §5.9.3 and §5.11.4, in order (E7, E33, E34, E36). `checkSettle` returns the first that fails; `settle` reverts `SettleBlocked` with it. `Ok` means every pre-trade check passes. `LendRate` no longer gates `settle` (E36/SAFE-09: it closes deposits/match for the round while redemptions still settle); `market()` and `checkSettle()` keep `SettleCheck.LendRate` informational for quotes/views."
 ---
 
 # SettleCheck
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/FlowTypes.sol)
 
-The checks of proposal §5.9.3, in order (E7). `checkSettle` returns the first that fails; `settle`
-reverts `SettleBlocked` with it. `Ok` means every check that can be evaluated before trading passes.
-RedeemLeg, DepositLeg, Proportion and RealizedPrice can only fail inside a settlement.
+The checks of proposal §5.9.3 and §5.11.4, in order (E7, E33, E34, E36). `checkSettle` returns the first
+that fails; `settle` reverts `SettleBlocked` with it. `Ok` means every pre-trade check passes.
+`LendRate` no longer gates `settle` (E36/SAFE-09: it closes deposits/match for the round while redemptions
+still settle); `market()` and `checkSettle()` keep `SettleCheck.LendRate` informational for quotes/views.
 
 ```solidity
 enum SettleCheck {
@@ -17,19 +18,19 @@ enum SettleCheck {
     Ok,
     /// @dev Check 1: no epoch with a pending request has its settlement window ended.
     Window,
-    /// @dev Check 1: the caller is not the keeper and `keeperGrace` has not passed.
+    /// @dev Check 1: caller does not hold `KEEPER_ROLE` (E34).
     Caller,
-    /// @dev Check 1: the queue is paused.
+    /// @dev Check 1: the queue is paused or the fund is in wind-down.
     Paused,
     /// @dev Check 2: the sequencer feed reports down or is inside `sequencerGrace`.
     Sequencer,
-    /// @dev Check 2: a basket asset's feed is stale, not positive, incomplete or unreadable. `index` names it.
+    /// @dev Check 2: a non-`inSale` basket asset's feed is stale, not positive, incomplete or unreadable.
     Feed,
     /// @dev Check 2: the USDC / USD feed is unhealthy or outside `usdcPegBandBps`.
     UsdcPeg,
     /// @dev Check 3: fewer than `quorum` slices sit within `dispersionBps` of the median. `index` names the asset.
     TwapQuorum,
-    /// @dev Check 4: a TWAP is more than `refBandBps` from its feed. `index` names the asset.
+    /// @dev Check 4: a non-`inSale` TWAP is more than `refBandBps` from its feed. `index` names the asset.
     TwapVsFeed,
     /// @dev Check 5: a lending venue's rate per unit grew more than `maxLendRateGrowthBps` per day.
     LendRate,
@@ -41,7 +42,7 @@ enum SettleCheck {
     DepositLeg,
     /// @dev Check 10: the fund's proportion check failed (raised by the fund as `ProportionViolated`).
     Proportion,
-    /// @dev Check 11: the realized price is outside a bound price.
+    /// @dev Check 11: the net-side realized price is outside the per-swap limits (E33).
     RealizedPrice
 }
 ```

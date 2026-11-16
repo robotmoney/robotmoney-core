@@ -5,7 +5,7 @@ description: "One-vault experiment, step 3d: the whole life of the fund on the t
 
 # EndToEndTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/EndToEnd.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/EndToEnd.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -212,9 +212,8 @@ function _hpDepositRequest(uint256 usdc) private;
 
 <i>
 
-§5.9.2 step 4 and §5.9.3: after the window, the keeper settles. One claim for alice with its unlock
-time; its price is inside alice's limit and at or below the bound plus its own rounding allowance (RB-14).
-The unused USDC is alice's credit (E22). Check 10 from outside: no held amount per share fell.
+§5.9.2 step 4 and §5.9.3: only the keeper settles in Step 3f (E34). One claim for alice with its
+unlock time; unused USDC becomes alice's credit (E22). Check 10 from outside: no held amount per share fell.
 
 </i>
 
@@ -772,6 +771,107 @@ function _assertBooks(string memory label) private view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | label | `string` |  |
+
+<a id="_settleandclaimallredeemproceeds-uint256-uint256-address-address"></a>
+
+### _settleAndClaimAllRedeemProceeds
+
+```solidity
+function _settleAndClaimAllRedeemProceeds(uint256 idA, uint256 idB, address uA, address uB)
+        private
+        returns (uint256 cashA, uint256 cashB);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idA | `uint256` |  |
+| idB | `uint256` |  |
+| uA | `address` |  |
+| uB | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cashA | `uint256` |  |
+| cashB | `uint256` |  |
+
+<a id="_claimqueuedusdc-address"></a>
+
+### _claimQueuedUsdc
+
+```solidity
+function _claimQueuedUsdc(address user) private returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="_assertsettledmultiuserclaims-uint256-uint256-uint256-bool"></a>
+
+### _assertSettledMultiUserClaims
+
+```solidity
+function _assertSettledMultiUserClaims(
+        uint256 index,
+        uint256 aRedeem,
+        uint256 bRedeem,
+        bool checkEmptyAfter
+    ) private returns (uint256 netA, uint256 netB);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| aRedeem | `uint256` |  |
+| bRedeem | `uint256` |  |
+| checkEmptyAfter | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| netA | `uint256` |  |
+| netB | `uint256` |  |
+
+<a id="test_step3f_queueoriginateddelistclaimsmultiuser"></a>
+
+### test_step3f_queueOriginatedDelistClaimsMultiUser
+
+Step 3f (E53, D19/D30): multi-user queue redemptions through `FlowQueue.settle()` ->
+`sellForFlowBatch` split delist claims pro-rata, keep deposits blocked while inSale, liquidate
+via `rebalancer.stepDelisted()`, and let anyone call `settleClaim` per owner.
+
+```solidity
+function test_step3f_queueOriginatedDelistClaimsMultiUser() public fixtureCovered;
+```
+
+<a id="test_step3f_queueoriginatedlendingclaimsrebalancerskipandsettleclaim"></a>
+
+### test_step3f_queueOriginatedLendingClaimsRebalancerSkipAndSettleClaim
+
+Step 3f (E37, E54, RB-37): multi-user queue redemptions under Aave shortfall record pro-rata
+lending claims (`positionClaimOf`) without blocking healthy proceeds, block `Rebalancer` and
+`executeStep` from selling Aave (`E54`), and unblock immediately after permissionless `settleClaim`.
+
+```solidity
+function test_step3f_queueOriginatedLendingClaimsRebalancerSkipAndSettleClaim()
+        public
+        fixtureCovered;
+```
 
 ## Structs
 

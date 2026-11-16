@@ -1,0 +1,383 @@
+---
+title: "KeeperAccount"
+description: "The one `KEEPER_ROLE` holder (E56, D36): a team-operated smart account. Its owners add and remove bot keys without the fund timelock, so a broken or leaked bot key is replaced in one transaction and the fund is not left without a keeper for the length of a timelock delay. A bot key can only forward a call through `execute`. The account holds no funds and no role other than `KEEPER_ROLE`, so a forwarded call can only do what that role allows (`settle` on the queue, `step` on the rebalancer). A bot key cannot change the owners or the bot keys, because `execute` never targets the account itself."
+---
+
+# KeeperAccount
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/KeeperAccount.sol)
+
+**Title:** KeeperAccount
+
+The one `KEEPER_ROLE` holder (E56, D36): a team-operated smart account. Its owners add and remove bot keys
+without the fund timelock, so a broken or leaked bot key is replaced in one transaction and the fund is
+not left without a keeper for the length of a timelock delay. A bot key can only forward a call through
+`execute`. The account holds no funds and no role other than `KEEPER_ROLE`, so a forwarded call can only
+do what that role allows (`settle` on the queue, `step` on the rebalancer). A bot key cannot change the
+owners or the bot keys, because `execute` never targets the account itself.
+
+`owners()` and `botKeys()` are the views the verifier reads (publish-contracts verify/fund.ts), so the
+deploy tool can compare them with the sheet.
+
+## State Variables
+
+### _owners
+
+```solidity
+address[] private _owners;
+```
+
+### _botKeys
+
+```solidity
+address[] private _botKeys;
+```
+
+### _isOwner
+
+```solidity
+mapping(address => bool) private _isOwner;
+```
+
+### _isBotKey
+
+```solidity
+mapping(address => bool) private _isBotKey;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address[] memory initialOwners, address[] memory initialBotKeys);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| initialOwners | `address[]` |  |
+| initialBotKeys | `address[]` |  |
+
+<a id="onlyowner"></a>
+
+### onlyOwner
+
+```solidity
+modifier onlyOwner();
+```
+
+<a id="owners"></a>
+
+### owners
+
+```solidity
+function owners() external view returns (address[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="botkeys"></a>
+
+### botKeys
+
+```solidity
+function botKeys() external view returns (address[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="isowner-address"></a>
+
+### isOwner
+
+```solidity
+function isOwner(address who) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="isbotkey-address"></a>
+
+### isBotKey
+
+```solidity
+function isBotKey(address who) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="addbotkey-address"></a>
+
+### addBotKey
+
+```solidity
+function addBotKey(address key) external onlyOwner;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `address` |  |
+
+<a id="removebotkey-address"></a>
+
+### removeBotKey
+
+```solidity
+function removeBotKey(address key) external onlyOwner;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `address` |  |
+
+<a id="addowner-address"></a>
+
+### addOwner
+
+```solidity
+function addOwner(address who) external onlyOwner;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="removeowner-address"></a>
+
+### removeOwner
+
+```solidity
+function removeOwner(address who) external onlyOwner;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="execute-address-bytes"></a>
+
+### execute
+
+Forward `data` to `target` as the account (the `KEEPER_ROLE` holder). A bot key or an owner may call it.
+No value is sent. A revert of the target is passed up inside `CallFailed`.
+
+```solidity
+function execute(address target, bytes calldata data) external returns (bytes memory ret);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `address` |  |
+| data | `bytes` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ret | `bytes` |  |
+
+<a id="_addowner-address"></a>
+
+### _addOwner
+
+```solidity
+function _addOwner(address who) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="_addbotkey-address"></a>
+
+### _addBotKey
+
+```solidity
+function _addBotKey(address key) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `address` |  |
+
+<a id="_remove-address-address"></a>
+
+### _remove
+
+```solidity
+function _remove(address[] storage list, address who) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| list | `address[]` |  |
+| who | `address` |  |
+
+## Events
+
+### OwnerAdded
+
+```solidity
+event OwnerAdded(address indexed owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+### OwnerRemoved
+
+```solidity
+event OwnerRemoved(address indexed owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+### BotKeyAdded
+
+```solidity
+event BotKeyAdded(address indexed key);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `address` |  |
+
+### BotKeyRemoved
+
+```solidity
+event BotKeyRemoved(address indexed key);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `address` |  |
+
+### Executed
+
+```solidity
+event Executed(address indexed caller, address indexed target, bytes4 selector);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| target | `address` |  |
+| selector | `bytes4` |  |
+
+## Errors
+
+### NotOwner
+
+The caller is not an owner.
+
+```solidity
+error NotOwner();
+```
+
+### NotBotKey
+
+The caller is neither a bot key nor an owner.
+
+```solidity
+error NotBotKey();
+```
+
+### InvalidAccount
+
+A zero address, a duplicate, or an empty owner set.
+
+```solidity
+error InvalidAccount();
+```
+
+### LastOwner
+
+The last owner cannot be removed: nobody could rotate a bot key after that.
+
+```solidity
+error LastOwner();
+```
+
+### SelfCall
+
+`execute` cannot call the account itself.
+
+```solidity
+error SelfCall();
+```
+
+### CallFailed
+
+The forwarded call reverted. `data` is its revert data.
+
+```solidity
+error CallFailed(bytes data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `bytes` |  |
+

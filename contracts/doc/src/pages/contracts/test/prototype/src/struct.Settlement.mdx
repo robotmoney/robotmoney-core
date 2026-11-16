@@ -1,26 +1,27 @@
 ---
 title: "Settlement"
-description: "One `settle` call that traded (proposal §5.9.3 check 12 \"record\")."
+description: "One round settlement or match record (proposal §5.9.3 check 12, §5.11.4, E24, E49)."
 ---
 
 # Settlement
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/FlowTypes.sol)
 
-One `settle` call that traded (proposal §5.9.3 check 12 "record").
+One round settlement or match record (proposal §5.9.3 check 12, §5.11.4, E24, E49).
 
 ```solidity
 struct Settlement {
     uint64 time;
     address settler;
-    uint256 depositBoundPrice;
-    uint256 redeemBoundPrice;
+    uint256 matchedShares;
+    uint256 matchedUsdc;
+    uint256 matchSharePrice;
     uint256 usdcIn;
     uint256 sharesMinted;
     uint256 sharesBurned;
     uint256 usdcOut;
     uint64 frozenUntil;
-    bool returnAllowed;
+    uint64 freezeSetAt;
     uint64 holdEndsAt;
 }
 ```
@@ -29,15 +30,16 @@ struct Settlement {
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| time | `uint64` | `block.timestamp` of the settlement. |
-| settler | `address` | The caller. |
-| depositBoundPrice | `uint256` | The most a depositor could pay per share (PRICE_SCALE, rounded UP), from the per-swap<br/>limits (E12). 0 when no deposit took part. |
-| redeemBoundPrice | `uint256` | The least a redeemer could receive per share (PRICE_SCALE, rounded DOWN). 0 when no<br/>redemption took part. |
-| usdcIn | `uint256` | USDC spent by the deposits (sum of fills). |
-| sharesMinted | `uint256` | Shares minted to the queue for the deposits. |
-| sharesBurned | `uint256` | Shares burned for the redemptions. |
-| usdcOut | `uint256` | USDC paid to the queue for the redemptions, net of the exit fee. |
-| frozenUntil | `uint64` | 0 when not frozen; else the freeze ends by itself at this time (E17, RB-18). |
-| returnAllowed | `bool` | ADMIN let each depositor of this settlement pull its slice in kind (`takeReturn`). |
-| holdEndsAt | `uint64` | Appended by `queue`: `time + minHold` at the settlement, the unlock time of every deposit<br/>claim it made. `freezeSettlement` is allowed only before it (shares in their hold). |
+| time | `uint64` |  |
+| settler | `address` |  |
+| matchedShares | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| matchSharePrice | `uint256` |  |
+| usdcIn | `uint256` |  |
+| sharesMinted | `uint256` |  |
+| sharesBurned | `uint256` |  |
+| usdcOut | `uint256` |  |
+| frozenUntil | `uint64` |  |
+| freezeSetAt | `uint64` |  |
+| holdEndsAt | `uint64` |  |
 

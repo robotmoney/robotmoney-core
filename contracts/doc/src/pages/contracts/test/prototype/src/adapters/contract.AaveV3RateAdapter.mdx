@@ -5,7 +5,7 @@ description: "Test copy of the production `AaveV3Adapter` (step 3d, E15): every 
 
 # AaveV3RateAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/AaveV3RateAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/src/adapters/AaveV3RateAdapter.sol)
 
 **Inherits:** [AaveV3Adapter](/contracts/adapters/contract.AaveV3Adapter), [ILendingRateAdapter](/contracts/test/prototype/src/interfaces/interface.ILendingRateAdapter)
 
@@ -69,4 +69,27 @@ function ratePerUnit() external view returns (uint256 rate1e18);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | rate1e18 | `uint256` |  |
+
+<a id="availableliquidity"></a>
+
+### availableLiquidity
+
+Currently withdrawable underlying liquidity on the venue (may understate, never overstate).
+
+<i>
+
+Underlying USDC held by the aToken contract, capped at this adapter's aToken balance,
+or 0 when the reserve is inactive or paused (`venueWithdrawable()`).
+
+</i>
+
+```solidity
+function availableLiquidity() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
