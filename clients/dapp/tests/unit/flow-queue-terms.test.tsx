@@ -114,7 +114,7 @@ describe("FlowQueueTerms", () => {
     );
     const paused = screen.getByTestId("flow-stop-queue-paused").textContent ?? "";
     expect(paused).toContain("Ends 2027-01-15 21:53 UTC");
-    expect(paused).toContain("Cancel a locked deposit until 2027-01-15 08:00 UTC");
+    expect(paused).toContain("Cancel this request until 2027-01-15 08:00 UTC");
     expect(screen.getByTestId("flow-stop-deposits-stopped").textContent).toContain(
       "No end time is set",
     );

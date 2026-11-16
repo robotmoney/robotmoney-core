@@ -15,13 +15,14 @@ export function FlowQueueTermsReadState(props: {
   readonly loading: boolean;
   readonly stale: boolean;
   readonly error: boolean;
+  readonly kind?: "deposit" | "redeem";
 }) {
   if (props.error || props.stale) {
     return <p role="alert">Queue terms are unavailable or stale. Refresh before continuing.</p>;
   }
   if (props.loading) return <p>Loading queue terms…</p>;
   if (!props.quote || !props.liveness) return <p role="alert">Queue terms are unavailable.</p>;
-  return <FlowQueueTerms quote={props.quote} liveness={props.liveness} />;
+  return <FlowQueueTerms quote={props.quote} liveness={props.liveness} kind={props.kind} />;
 }
 
 /**
@@ -32,10 +33,14 @@ export function FlowQueueTermsReadState(props: {
 export function FlowQueueTerms(props: {
   readonly quote: FlowQuote;
   readonly liveness: FlowLiveness;
+  readonly kind?: "deposit" | "redeem";
 }) {
   const view = resolveFlowTerms(props.quote, props.liveness);
   return (
-    <section data-testid="flow-queue-terms" aria-label="Deposit terms">
+    <section
+      data-testid="flow-queue-terms"
+      aria-label={props.kind === "redeem" ? "Redemption terms" : "Deposit terms"}
+    >
       {view.stops.map((s) => (
         <p
           key={s.kind}
@@ -46,7 +51,7 @@ export function FlowQueueTerms(props: {
         >
           {s.cause}
           {s.endsAt !== null ? ` Ends ${formatUnixUtc(s.endsAt)}.` : " No end time is set."} Cancel
-          a locked deposit until {formatUnixUtc(view.cancelDeadline)}.
+          this request until {formatUnixUtc(view.cancelDeadline)}.
         </p>
       ))}
       <dl>

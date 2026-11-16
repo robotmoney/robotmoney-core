@@ -37,6 +37,14 @@ vi.mock("wagmi", () => ({
         refBandBps: 90,
         legBandBps: 100,
       },
+      quoteRedeem: {
+        feeBps: 20n,
+        cancelCutoff: 1800000000n,
+        earliestSettle: 1800003600n,
+        holdEnds: 1800003600n,
+        refBandBps: 90,
+        legBandBps: 100,
+      },
       liveness: {
         keeperConfigured: true,
         queuePausedNow: false,
@@ -113,6 +121,7 @@ describe("one-vault", () => {
     );
     expect(screen.getByText(/oldest eligible/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Action"), { target: { value: "redeem" } });
+    expect(screen.getByTestId("flow-fee").textContent).toBe("20 bps");
     fireEvent.click(screen.getByRole("button", { name: "Request redeem" }));
     expect(mock.send).toHaveBeenLastCalledWith(
       expect.objectContaining({ functionName: "requestRedeem", args: [1250000n, USER] }),

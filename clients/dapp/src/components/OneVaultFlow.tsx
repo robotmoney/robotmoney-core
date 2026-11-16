@@ -133,10 +133,10 @@ export function OneVaultFlow({
   const quote = useReadContract({
     address: queue,
     abi: FLOW_QUEUE_TERMS_ABI,
-    functionName: "quoteDeposit",
-    args: [kind === "deposit" && value ? value : 0n],
+    functionName: kind === "deposit" ? "quoteDeposit" : "quoteRedeem",
+    args: [value ?? 0n],
     query: {
-      enabled: enabled && kind === "deposit" && !!value,
+      enabled: enabled && !!value,
       staleTime: 20_000,
       refetchInterval: 12_000,
     },
@@ -192,7 +192,7 @@ export function OneVaultFlow({
     !quote.isStale &&
     !live.isStale &&
     !live.data.queuePausedNow &&
-    !live.data.depositsStoppedNow &&
+    (kind === "redeem" || !live.data.depositsStoppedNow) &&
     !live.data.windDownActive &&
     !quote.isFetching &&
     !live.isFetching;
@@ -267,15 +267,16 @@ export function OneVaultFlow({
         Amount ({kind === "deposit" ? "USDC" : "shares"}){" "}
         <input value={amount} onChange={(e) => setAmount(e.target.value)} />
       </label>
-      {kind === "deposit" && (
+      {
         <FlowQueueTermsReadState
+          kind={kind}
           quote={quote.data}
           liveness={live.data}
           loading={quote.isLoading || live.isLoading}
           stale={quote.isStale || live.isStale || quote.isFetching || live.isFetching}
           error={quote.isError || live.isError}
         />
-      )}
+      }
       <button
         type="button"
         disabled={
@@ -297,7 +298,7 @@ export function OneVaultFlow({
           allowance.isError ||
           allowance.isFetching ||
           allowance.data < (value ?? 0n) ||
-          (kind === "deposit" && !goodTerms)
+          !goodTerms
         }
         onClick={() => send(kind === "deposit" ? "requestDeposit" : "requestRedeem")}
       >
