@@ -95,8 +95,8 @@ describe("one-vault", () => {
       }),
     );
     fireEvent.change(screen.getByLabelText("Request ID"), { target: { value: "42" } });
-    expect(screen.getByText("2")).toBeTruthy();
-    expect(screen.getByText("3")).toBeTruthy();
+    expect(screen.getByText("0.000002 USDC")).toBeTruthy();
+    expect(screen.getByText("0.000003 USDC")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel selected request" }));
     expect(mock.send).toHaveBeenLastCalledWith(
       expect.objectContaining({ functionName: "cancel", args: [42n] }),

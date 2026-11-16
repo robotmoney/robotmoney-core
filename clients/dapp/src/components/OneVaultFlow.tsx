@@ -5,7 +5,7 @@ import { isAddress, parseAbi, parseAbiItem, type Address, type Hash } from "viem
 import { useAccount, usePublicClient, useReadContract, useWaitForTransactionReceipt } from "wagmi";
 import { useGuardedWriteContract } from "../lib/useGuardedWriteContract";
 import { FLOW_QUEUE_TERMS_ABI } from "../lib/flowQueueTerms";
-import { parseTokenAmount } from "../lib/format";
+import { formatTokenBalance, parseTokenAmount } from "../lib/format";
 import { FlowQueueTermsReadState } from "./FlowQueueTerms";
 import { WriteStatus } from "./WriteStatus";
 
@@ -106,6 +106,12 @@ export function OneVaultFlow({
   const asset = useReadContract({ address: queue, abi, functionName: "asset", query: { enabled } });
   const share = useReadContract({ address: queue, abi, functionName: "share", query: { enabled } });
   const token = kind === "deposit" ? asset.data : share.data;
+  const shareDecimals = useReadContract({
+    address: share.data,
+    abi: tokenAbi,
+    functionName: "decimals",
+    query: { enabled: enabled && !!share.data },
+  });
   const decimalsRead = useReadContract({
     address: token,
     abi: tokenAbi,
@@ -327,14 +333,22 @@ export function OneVaultFlow({
           <p role="alert">Request state unavailable.</p>
         ) : (
           <dl>
-            <dt>Pending deposit (raw USDC)</dt>
-            <dd>{pd.data?.toString() ?? "Loading"}</dd>
-            <dt>Claimable deposit (raw USDC)</dt>
-            <dd>{cd.data?.toString() ?? "Loading"}</dd>
-            <dt>Pending redemption (raw shares)</dt>
-            <dd>{pr.data?.toString() ?? "Loading"}</dd>
-            <dt>Claimable redemption (raw shares)</dt>
-            <dd>{cr.data?.toString() ?? "Loading"}</dd>
+            <dt>Pending deposit</dt>
+            <dd>{formatTokenBalance(pd.data, 6, "USDC")}</dd>
+            <dt>Claimable deposit</dt>
+            <dd>{formatTokenBalance(cd.data, 6, "USDC")}</dd>
+            <dt>Pending redemption</dt>
+            <dd>
+              {shareDecimals.data === undefined || shareDecimals.isError
+                ? "Unavailable"
+                : formatTokenBalance(pr.data, shareDecimals.data, "shares")}
+            </dd>
+            <dt>Claimable redemption</dt>
+            <dd>
+              {shareDecimals.data === undefined || shareDecimals.isError
+                ? "Unavailable"
+                : formatTokenBalance(cr.data, shareDecimals.data, "shares")}
+            </dd>
           </dl>
         ))}
       <button
@@ -350,7 +364,9 @@ export function OneVaultFlow({
       ) : (
         <p>
           Credit:{" "}
-          {credit.data ? `${credit.data[0]} raw USDC, ${credit.data[1]} raw shares` : "Loading"}
+          {credit.data
+            ? `${formatTokenBalance(credit.data[0], 6, "USDC")}, ${shareDecimals.data === undefined || shareDecimals.isError ? "shares unavailable" : formatTokenBalance(credit.data[1], shareDecimals.data, "shares")}`
+            : "Loading"}
         </p>
       )}
       <button
