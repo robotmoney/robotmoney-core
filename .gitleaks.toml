@@ -76,10 +76,19 @@ regexes = [
 #     committed anywhere in this fixture family. gitleaks' generic-api-key
 #     entropy heuristic flags them only because 32- and 64-byte base64 blobs are
 #     high-entropy. Delete this entry if the fixtures are removed.
+#   - one-vault prototype replay fixtures (commit b0b001db1):
+#     contracts/test/prototype/fixtures/base-state.manifest.json and
+#     contracts/test/prototype/fixtures/base-state.passes.json contain
+#     deterministic replay fixture data — base64-encoded EVM account/slot
+#     bitmaps (`"accounts"`) and SHA-256 test-pass cache keys (`"key"`), never
+#     real credentials. gitleaks' generic-api-key entropy heuristic flags those
+#     high-entropy blobs in git history (commit b0b001db1). Delete this entry
+#     only if history is rewritten to drop that commit.
 paths = [
   '''\.env\.example$''',
   '''(^|/)example\.env$''',
   '''(^|/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|Cargo\.lock)$''',
   '''\.abi\.json$''',
   '''(^|/)tests/fixtures/consensus-receipt\.[^/]+$''',
+  '''^contracts/test/prototype/fixtures/base-state\.(manifest|passes)\.json$''',
 ]
