@@ -12,7 +12,7 @@
     "lint": "eslint . --ext ts,tsx --max-warnings 0",
     "fmt": "prettier --check \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",
     "fmt:fix": "prettier --write \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",
-    "test": "vitest run --passWithNoTests=false && vitest run --passWithNoTests=false tests/unit/flow-queue-terms.test.tsx && vitest run --passWithNoTests=false tests/unit/one-vault-flow.test.tsx",
+    "test": "vitest run --passWithNoTests=false && vitest run --passWithNoTests=false tests/unit/flow-queue-terms.test.tsx && vitest run --passWithNoTests=false tests/unit/one-vault-flow.test.tsx && vitest run --passWithNoTests=false tests/unit/router-deposit-tab.test.tsx",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:public": "playwright test -c playwright.public.config.ts",
