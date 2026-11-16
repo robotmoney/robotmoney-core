@@ -128,13 +128,17 @@ export function OneVaultFlow({
     abi: FLOW_QUEUE_TERMS_ABI,
     functionName: "quoteDeposit",
     args: [kind === "deposit" && value ? value : 0n],
-    query: { enabled: enabled && kind === "deposit" && !!value },
+    query: {
+      enabled: enabled && kind === "deposit" && !!value,
+      staleTime: 20_000,
+      refetchInterval: 12_000,
+    },
   });
   const live = useReadContract({
     address: queue,
     abi: FLOW_QUEUE_TERMS_ABI,
     functionName: "liveness",
-    query: { enabled },
+    query: { enabled, staleTime: 20_000, refetchInterval: 12_000 },
   });
   const args = id !== undefined && account.address ? ([id, account.address] as const) : undefined;
   const credit = useReadContract({
@@ -178,6 +182,11 @@ export function OneVaultFlow({
     !!live.data &&
     !quote.isError &&
     !live.isError &&
+    !quote.isStale &&
+    !live.isStale &&
+    !live.data.queuePausedNow &&
+    !live.data.depositsStoppedNow &&
+    !live.data.windDownActive &&
     !quote.isFetching &&
     !live.isFetching;
   const ready =
@@ -256,7 +265,7 @@ export function OneVaultFlow({
           quote={quote.data}
           liveness={live.data}
           loading={quote.isLoading || live.isLoading}
-          stale={quote.isFetching || live.isFetching}
+          stale={quote.isStale || live.isStale || quote.isFetching || live.isFetching}
           error={quote.isError || live.isError}
         />
       )}

@@ -53,6 +53,7 @@ vi.mock("wagmi", () => ({
     return {
       data: reads[functionName],
       isError: mock.fail === functionName,
+      isStale: mock.fail === `stale-${functionName}`,
       isFetching: false,
       isLoading: false,
     };
@@ -141,6 +142,14 @@ describe("one-vault", () => {
     expect(screen.getByTestId("one-vault-write-status").textContent).toContain(
       "confirm in your wallet",
     );
+  });
+  it("refuses stale queue terms", () => {
+    mock.fail = "stale-liveness";
+    setup();
+    expect(
+      (screen.getByRole("button", { name: "Request deposit" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByRole("alert").textContent).toContain("stale");
   });
   it("shows rejected transactions", () => {
     mock.fail = "write";
