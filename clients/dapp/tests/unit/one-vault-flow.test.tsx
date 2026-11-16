@@ -12,9 +12,10 @@ const mock = vi.hoisted(() => ({
   pending: false,
   receipt: "",
   logs: false,
+  head: 1n,
   getLogs: vi.fn(),
 }));
-const client = { getBlockNumber: async () => 1n, getLogs: mock.getLogs };
+const client = { getBlockNumber: async () => mock.head, getLogs: mock.getLogs };
 vi.mock("wagmi", () => ({
   useAccount: () => ({ isConnected: true, address: USER, chainId: mock.chain }),
   usePublicClient: () => (mock.logs ? client : undefined),
@@ -75,6 +76,7 @@ beforeEach(() => {
   mock.pending = false;
   mock.receipt = "";
   mock.logs = false;
+  mock.head = 1n;
   mock.getLogs.mockReset();
 });
 function setup() {
@@ -168,6 +170,13 @@ describe("one-vault", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Request 42" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Request 42" }));
     expect((screen.getByLabelText("Request ID") as HTMLInputElement).value).toBe("42");
+  });
+  it("reports a deployment block beyond the chain head", async () => {
+    mock.logs = true;
+    mock.head = 0n;
+    setup();
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Could not load"));
+    expect(mock.getLogs).not.toHaveBeenCalled();
   });
   it("pins custody taking requests and validates configuration", () => {
     expect(pinnedWriteTarget({ address: QUEUE, functionName: "requestDeposit" })).toBe(QUEUE);

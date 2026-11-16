@@ -72,6 +72,7 @@ export function OneVaultFlow({
     void (async () => {
       try {
         const head = await client.getBlockNumber();
+        if (head < fromBlock) throw new Error("Queue deployment block is after the chain head");
         const found: bigint[] = [];
         for (let start = fromBlock; start <= head; start += 10000n) {
           const end = start + 9999n < head ? start + 9999n : head;
