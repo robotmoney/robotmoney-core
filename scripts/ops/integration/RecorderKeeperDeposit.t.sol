@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {BasketVault} from "../../../contracts/vaults/BasketVault.sol";
+import {UniswapV4SwapAdapter} from "../../../contracts/adapters/UniswapV4SwapAdapter.sol";
 import {TwapTickMath} from "../../../contracts/lib/TwapTickMath.sol";
 
 /// @dev Clean room (core 1490, QA plan v1 E10): the rmAGENT vault and its recorder come from the Deploy 2
@@ -41,11 +42,22 @@ contract RecorderKeeperDepositTest is Test {
         deal(usdc, depositor, 1e6);
         vm.startPrank(depositor);
         IERC20(usdc).approve(address(vault), 1e6);
-        uint256 shares = vault.deposit(1e6, depositor);
-        vm.stopPrank();
-        assertGt(shares, 0, "1 USDC deposit mints shares");
-        assertEq(vault.balanceOf(depositor), shares, "returned shares equal credited shares");
-        assertEq(IERC20(usdc).balanceOf(depositor), 0, "deposit spent the USDC");
-        emit log_named_uint("deposit shares", shares);
+        string memory shortlistJson = vm.readFile("config/agent-token-shortlist.json");
+        bool rmParked = vm.keyExistsJson(shortlistJson, ".parked.entries[0]")
+            && token == vm.parseJsonAddress(shortlistJson, ".parked.entries[0].token");
+        if (rmParked) {
+            // RM_PARKED (core issue 1903, ADR-0015): the live RM/USDC pool is too thin for a 1 USDC swap
+            // without breaching the adapter's slippage bound, so deposit reverts SlippageExceeded.
+            vm.expectPartialRevert(UniswapV4SwapAdapter.SlippageExceeded.selector);
+            vault.deposit(1e6, depositor);
+            vm.stopPrank();
+        } else {
+            uint256 shares = vault.deposit(1e6, depositor);
+            vm.stopPrank();
+            assertGt(shares, 0, "1 USDC deposit mints shares");
+            assertEq(vault.balanceOf(depositor), shares, "returned shares equal credited shares");
+            assertEq(IERC20(usdc).balanceOf(depositor), 0, "deposit spent the USDC");
+            emit log_named_uint("deposit shares", shares);
+        }
     }
 }
