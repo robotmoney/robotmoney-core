@@ -222,7 +222,12 @@ export function implementationPinsFor(
  */
 export function pinnedWriteTarget(variables: unknown, gateway?: string): string | undefined {
   const v = (variables ?? {}) as { address?: unknown; functionName?: unknown; args?: unknown };
-  if (v.functionName === "deposit" || v.functionName === "mint") {
+  if (
+    v.functionName === "deposit" ||
+    v.functionName === "mint" ||
+    v.functionName === "requestDeposit" ||
+    v.functionName === "requestRedeem"
+  ) {
     return typeof v.address === "string" ? v.address : "";
   }
   if (v.functionName === "approve" || v.functionName === "increaseAllowance") {

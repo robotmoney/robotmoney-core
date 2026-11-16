@@ -1292,7 +1292,7 @@ cross-feature interactions actually land.
   Every branch that opens a PR into `dev` runs the full heavy battery before it
   can land.
 
-Branch protection is not used (a won't-fix owner decision), so no check blocks a merge by GitHub setting.
+The default-branch ruleset requires the `dapp-lint-build` GitHub Actions check before merge.
 The deploy gate is `check-sha-green` (below): it reads a deploy sha's check-runs before any approval.
 
 Structural conventions (kept by convention; a prior static tier-guard workflow
@@ -1440,6 +1440,6 @@ bun scripts/ci/check-sha-green.ts <sha> [--repo owner/name] [--config path] [--a
 
 The release policy (`docs/operations/contract-release-runbooks.md` sections 2 and 3) names two branch families. `releases-A.B.x` takes a scope pull request, the squash of a passed QA branch and the frozen-counts record. `qa/A.B.x-<YYYY-MM-DD>` takes every patch of one QA session and is never rewritten. Every CI workflow that runs on a push to `dev` runs on a push to `releases-*` and to `qa/**`, so the commit QA runs and the squash commit each carry their own green CI. The storage-layout gate (`scripts/ci/check-core-storage-layout.sh`) extends the layout of the commit the live implementation was built from, append-only, at every QA commit.
 
-### Branch protection (won't fix)
+### Branch protection
 
-Branch protection is a won't-fix owner decision: no check is a GitHub status check that blocks a merge. `smoke-test-twin-publish` is path-gated on pull requests and runs on every push to `dev`, so a deploy sha always carries it. `scripts/ci/required-checks.json` lists it with class `required-on-deploy-paths` for `check-sha-green`, which enforces it at deploy time only. The `smoke-test-changes` job and the job itself keep their names, because `check-sha-green` matches the check-run name.
+The default-branch ruleset requires the `dapp-lint-build` status check from GitHub Actions. `smoke-test-twin-publish` is path-gated on pull requests and runs on every push to `dev`, so a deploy sha always carries it. `scripts/ci/required-checks.json` lists it with class `required-on-deploy-paths` for `check-sha-green`, which enforces it at deploy time only. The `smoke-test-changes` job and the job itself keep their names, because `check-sha-green` matches the check-run name.

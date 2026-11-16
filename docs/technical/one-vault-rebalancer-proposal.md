@@ -940,6 +940,16 @@ These are the invariants the experiment must prove (gate G3). They join §8 of t
 
 ## 8. Off-chain changes
 
+The dapp's one-vault tab is opt-in: its build must supply
+`VITE_ONE_VAULT_QUEUE_ADDRESS`, `VITE_ONE_VAULT_CHAIN_ID`, and
+`VITE_ONE_VAULT_DEPLOY_BLOCK`. The deployment block bounds the request-event scan;
+an incorrect later block can omit older requests. The queue address and chain must
+refer to the reviewed 0.9.0 queue, whose request ABI differs from the older
+prototype. On mainnet the queue also needs the existing build-time code and
+implementation pins before approvals or custody-taking requests can pass the
+guard. Cancellation credits must be withdrawn. Claims consume the owner's oldest
+eligible claims and can span requests.
+
 - **Receipt "applied" state** (architecture §4.9.3) compares the receipt with
   the fund's target instead of the router vector. A new third state,
   **converged**, comes from the plan status. The dapp shows recorded → applied

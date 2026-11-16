@@ -32,6 +32,7 @@ const VAULT_A = "0x1111111111111111111111111111111111111111" as Address;
 const VAULT_B = "0x2222222222222222222222222222222222222222" as Address;
 const GATEWAY = "0x6666666666666666666666666666666666666666" as Address;
 const USER = "0x3333333333333333333333333333333333333333" as Address;
+const guardedWrite = vi.hoisted(() => vi.fn());
 
 const ctx: RouterPreviewContext = {
   gateway: GATEWAY,
@@ -157,7 +158,7 @@ vi.mock("wagmi", () => ({
     return { data: undefined, error: null };
   },
   useWriteContract: () => ({
-    writeContract: vi.fn(),
+    writeContract: guardedWrite,
     isPending: false,
     data: undefined,
   }),
@@ -188,6 +189,21 @@ describe("RouterDepositTab shows per-leg split preview", () => {
     expect(screen.getByTestId("router-deposit-tab")).toBeDefined();
     expect(screen.getByTestId("router-deposit-tab-amount")).toBeDefined();
     expect(screen.getByTestId("router-deposit-tab-submit")).toBeDefined();
+  });
+
+  it("submits the router deposit rather than a one-vault request", () => {
+    guardedWrite.mockReset();
+    mockState.legsOpen = true;
+    mockState.depositSim = {
+      request: { address: ROUTER, functionName: "deposit", args: [10000000n, []] },
+    };
+    renderTab();
+    fireEvent.change(screen.getByTestId("router-deposit-tab-amount"), { target: { value: "10" } });
+    fireEvent.click(screen.getByTestId("router-deposit-tab-submit"));
+    expect(guardedWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: "deposit", address: ROUTER }),
+      undefined,
+    );
   });
 
   it("renders without crashing with active legs", () => {
