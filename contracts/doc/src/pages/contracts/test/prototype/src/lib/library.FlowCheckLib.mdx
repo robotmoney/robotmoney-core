@@ -5,7 +5,7 @@ description: "Pre-trade oracle, TWAP, venue liquidity, and breaker checks (Steps
 
 # FlowCheckLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/lib/FlowCheckLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/854b4d5ac1cc7a38f10bfa034312970aa1d1ad04/contracts/test/prototype/src/lib/FlowCheckLib.sol)
 
 **Title:** FlowCheckLib
 
@@ -474,6 +474,66 @@ function _terms(FlowState storage s, bool isDeposit) private view returns (Quote
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | q | `Quote` |  |
+
+<a id="checkflowparams-flowstate-flowparams"></a>
+
+### checkFlowParams
+
+The hard bounds of FlowTypes (E51) plus the basket fixed-fee rule (E43), run by `setFlowParams`
+before `FlowSettleLib.applyParams` writes the params. Lives in the linked library so the queue
+itself stays under EIP-170 (proposal §6.1).
+
+```solidity
+function checkFlowParams(FlowState storage s, FlowParams memory p) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| p | `FlowParams` |  |
+
+<a id="_hasactivebasket-irobotmoneyfundfull"></a>
+
+### _hasActiveBasket
+
+```solidity
+function _hasActiveBasket(IRobotMoneyFundFull f) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_requirefundedpoolsfixedfee-irobotmoneyfundfull"></a>
+
+### _requireFundedPoolsFixedFee
+
+<i>
+
+Rule 6 (E43, plan section 3.3 item 4): every basket asset the plan funds must sit on a fixed-fee pool.
+An unfunded asset (target 0) is exempt, as it is at plan open.
+
+</i>
+
+```solidity
+function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
 
 ## Structs
 
