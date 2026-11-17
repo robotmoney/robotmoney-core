@@ -8,6 +8,11 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {
@@ -35,6 +40,7 @@ import {
     Claim,
     FlowBooks,
     FlowParams,
+    FlowQueueInit,
     IFlowEvents,
     Quote,
     Request,
@@ -44,6 +50,7 @@ import {
     SettleCheck
 } from "./src/FlowTypes.sol";
 import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
+import {FlowQueue} from "./src/FlowQueue.sol";
 import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
 import {IAavePoolRate} from "./src/adapters/AaveV3RateAdapter.sol";
 import {FundExclusionLedger} from "./src/FundExclusionLedger.sol";
@@ -51,6 +58,7 @@ import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
 import {FeedLib} from "./src/lib/FeedLib.sol";
 import {TwapSlicesLib} from "./src/lib/TwapSlicesLib.sol";
 import {TwapTickMath} from "../../lib/TwapTickMath.sol";
+import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MechAaveAdapter} from "./mocks/MechAaveAdapter.sol";
 import {MechReentry} from "./mocks/MechReentry.sol";
@@ -4030,6 +4038,273 @@ interface IUniswapV3PoolMint {
         uint128 amount,
         bytes calldata data
     ) external returns (uint256 amount0, uint256 amount1);
+}
+
+/// @notice EIP-2612 mock of USDC (6 decimals, mintable) for the `requestDepositWithPermit` tests: Base USDC has no
+///         `permit`, so a valid-signature deposit needs a permitting token. Created by each test; never touched by
+///         the harness queue.
+contract PermitUsdc is ERC20, ERC20Permit {
+    constructor() ERC20("Mock USDC", "mUSDC") ERC20Permit("Mock USDC") {}
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+}
+
+/// @title FlowQueuePermitTest
+/// @notice `requestDepositWithPermit` on its own FlowQueue bound to `PermitUsdc`: a valid EIP-2612 signature opens a
+///         deposit in one transaction; a front-run permit is absorbed and the deposit succeeds on the front-run
+///         allowance; an invalid or expired permit without any allowance fails on `safeTransferFrom`; and the zero
+///         amount, below-`minRequestUsdc`, above-`perDepositCap`, paused-queue and shutdown-fund gates revert
+///         identically to `requestDeposit` (they fire before the permit call, so a dummy signature proves parity).
+contract FlowQueuePermitTest is FlowQueueBase {
+    bytes32 internal constant PERMIT_TYPEHASH = keccak256(
+        "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+    );
+
+    /// @dev The permit signer's private key (`vm.addr(SIGNER_KEY)` is the depositor).
+    uint256 internal constant SIGNER_KEY = 0xA11CE;
+    uint256 internal constant AMOUNT = 1_000e6;
+
+    /// @notice A fresh queue on its own `PermitUsdc`, same fund, feeds and §5.9.5 defaults as the harness queue.
+    function _permitQueue() internal returns (PermitUsdc usdc, FlowQueue pq) {
+        usdc = new PermitUsdc();
+        FlowQueueInit memory p = FlowQueueInit({
+            fund: address(fund),
+            usdc: address(usdc),
+            admin: address(this),
+            emergency: emergency,
+            keeper: keeper,
+            usdcFeed: FEED_USDC,
+            usdcFeedMaxAge: DAY_FEED_MAX_AGE,
+            sequencerFeed: FEED_SEQUENCER,
+            params: defaultFlowParams()
+        });
+        FlowQueue impl = new FlowQueue();
+        pq = FlowQueue(
+            address(
+                new ERC1967Proxy(
+                    address(impl),
+                    abi.encodeCall(
+                        FlowQueue.initialize,
+                        (p, address(timelock), GovernedUUPS.UpgradeMode.Upgradeable)
+                    )
+                )
+            )
+        );
+        vm.label(address(usdc), "permitUsdc");
+        vm.label(address(pq), "permitQueue");
+    }
+
+    function _signer() internal view returns (address) {
+        return vm.addr(SIGNER_KEY);
+    }
+
+    /// @notice Sign a valid EIP-2612 permit typed-data message for `value` (the OZ ERC20Permit digest construction).
+    function _permitSig(
+        PermitUsdc usdc,
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline
+    ) internal view returns (uint8 v, bytes32 r, bytes32 s) {
+        bytes32 structHash = keccak256(
+            abi.encode(PERMIT_TYPEHASH, owner, spender, value, usdc.nonces(owner), deadline)
+        );
+        bytes32 digest =
+            keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
+        (v, r, s) = vm.sign(SIGNER_KEY, digest);
+    }
+
+    /// @notice Some amounts and states revert identically on `requestDeposit` and `requestDepositWithPermit`
+    ///         (the gates fire before the permit, so the garbage signature never runs): assert the exact same
+    ///         revert payload for both entry points on the same queue.
+    function _expectDepositParityRevert(
+        FlowQueue pq,
+        address user,
+        uint256 usdc,
+        bytes memory expected
+    ) internal {
+        vm.startPrank(user);
+        vm.expectRevert(expected);
+        pq.requestDeposit(usdc, user);
+        vm.expectRevert(expected);
+        pq.requestDepositWithPermit(
+            usdc, user, block.timestamp + 1 hours, 1, bytes32(uint256(1)), bytes32(uint256(2))
+        );
+        vm.stopPrank();
+    }
+
+    /// @notice EIP-2612 acceptance: a valid off-chain signature authorizes and submits the deposit in ONE
+    ///         transaction, creating the Request and emitting `DepositRequested` exactly as `requestDeposit`.
+    function test_permit_validSignatureOpensDepositInOneTransaction() public fixtureCovered {
+        (PermitUsdc usdc, FlowQueue pq) = _permitQueue();
+        address signer = _signer();
+        uint256 amount = AMOUNT;
+        uint256 deadline = block.timestamp + 1 hours;
+        usdc.mint(signer, amount);
+
+        (uint8 v, bytes32 r, bytes32 s) = _permitSig(usdc, signer, address(pq), amount, deadline);
+        uint64 epoch = uint64(block.timestamp / defaultFlowParams().epochLength);
+        vm.expectEmit(true, true, true, true);
+        emit IFlowEvents.DepositRequested(1, signer, signer, amount, epoch);
+
+        vm.prank(signer);
+        uint256 id = pq.requestDepositWithPermit(amount, signer, deadline, v, r, s);
+
+        assertEq(id, 1, "first request");
+        Request memory rq = pq.getRequest(id);
+        assertEq(rq.owner, signer, "owner");
+        assertEq(uint8(rq.kind), uint8(RequestKind.Deposit), "kind");
+        assertEq(rq.amount, amount, "amount");
+        assertEq(rq.remaining, amount, "remaining");
+        assertEq(usdc.balanceOf(signer), 0, "pulled from the signer");
+        assertEq(usdc.balanceOf(address(pq)), amount, "escrowed in the queue");
+        assertEq(usdc.allowance(signer, address(pq)), 0, "allowance fully spent");
+        assertEq(pq.books().pendingUsdc, amount, "pending book");
+        assertEq(pq.requestCount(), 1, "one request");
+    }
+
+    /// @notice Front-run resilience: the same permit signature is spent in the mempool before the deposit lands,
+    ///         so the in-tx permit reverts; try/catch absorbs it and the deposit succeeds on the front-run allowance.
+    function test_permit_frontRunPermitIsAbsorbedAndDepositSucceeds() public fixtureCovered {
+        (PermitUsdc usdc, FlowQueue pq) = _permitQueue();
+        address signer = _signer();
+        uint256 amount = AMOUNT;
+        uint256 deadline = block.timestamp + 1 hours;
+        usdc.mint(signer, amount);
+
+        (uint8 v, bytes32 r, bytes32 s) = _permitSig(usdc, signer, address(pq), amount, deadline);
+        vm.prank(signer);
+        usdc.permit(signer, address(pq), amount, deadline, v, r, s);
+        assertEq(usdc.allowance(signer, address(pq)), amount, "front-run allowance");
+
+        uint64 epoch = uint64(block.timestamp / defaultFlowParams().epochLength);
+        vm.expectEmit(true, true, true, true);
+        emit IFlowEvents.DepositRequested(1, signer, signer, amount, epoch);
+
+        vm.prank(signer);
+        uint256 id = pq.requestDepositWithPermit(amount, signer, deadline, v, r, s);
+
+        assertEq(pq.getRequest(id).amount, amount, "request created on the front-run allowance");
+        assertEq(usdc.balanceOf(signer), 0, "front-run allowance pulled");
+        assertEq(usdc.balanceOf(address(pq)), amount, "escrowed in the queue");
+        assertEq(pq.books().pendingUsdc, amount, "pending book");
+    }
+
+    /// @notice An expired permit (validly signed over a past deadline) reverts, is absorbed, and with no prior
+    ///         allowance the pull fails on `safeTransferFrom` with `ERC20InsufficientAllowance`: nothing is booked.
+    function test_permit_expiredPermitWithoutAllowanceRevertsOnTransfer() public fixtureCovered {
+        (PermitUsdc usdc, FlowQueue pq) = _permitQueue();
+        address signer = _signer();
+        uint256 amount = AMOUNT;
+        uint256 deadline = block.timestamp - 1;
+        usdc.mint(signer, amount);
+
+        (uint8 v, bytes32 r, bytes32 s) = _permitSig(usdc, signer, address(pq), amount, deadline);
+        vm.prank(signer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientAllowance.selector, address(pq), 0, amount
+            )
+        );
+        pq.requestDepositWithPermit(amount, signer, deadline, v, r, s);
+
+        assertEq(pq.requestCount(), 0, "no request on revert");
+        assertEq(usdc.balanceOf(signer), amount, "nothing pulled");
+        assertEq(usdc.balanceOf(address(pq)), 0, "queue got nothing");
+        assertEq(pq.books().pendingUsdc, 0, "pending book untouched");
+    }
+
+    /// @notice An invalid signature reverts the permit (absorbed), and with no prior allowance the pull fails on
+    ///         `safeTransferFrom`: a bad signature can spend nothing.
+    function test_permit_invalidSignatureWithoutAllowanceRevertsOnTransfer() public fixtureCovered {
+        (PermitUsdc usdc, FlowQueue pq) = _permitQueue();
+        address signer = _signer();
+        uint256 amount = AMOUNT;
+        uint256 deadline = block.timestamp + 1 hours;
+        usdc.mint(signer, amount);
+
+        vm.prank(signer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientAllowance.selector, address(pq), 0, amount
+            )
+        );
+        pq.requestDepositWithPermit(
+            amount, signer, deadline, 1, bytes32(uint256(0xdeadbeef)), bytes32(uint256(0xfeedface))
+        );
+
+        assertEq(pq.requestCount(), 0, "no request on revert");
+        assertEq(usdc.balanceOf(signer), amount, "nothing pulled");
+    }
+
+    /// @notice `usdc == 0` reverts `ZeroAmount` identically to `requestDeposit`.
+    function test_permit_parity_zeroAmountRevertsLikeRequestDeposit() public fixtureCovered {
+        (, FlowQueue pq) = _permitQueue();
+        _expectDepositParityRevert(
+            pq, _signer(), 0, abi.encodeWithSelector(IFlowEvents.ZeroAmount.selector)
+        );
+        assertEq(pq.requestCount(), 0, "no request");
+    }
+
+    /// @notice A deposit under `minRequestUsdc` reverts `BelowMinRequest` identically to `requestDeposit`.
+    function test_permit_parity_belowMinRequestRevertsLikeRequestDeposit() public fixtureCovered {
+        (, FlowQueue pq) = _permitQueue();
+        FlowParams memory p = pq.flowParams();
+        uint256 below = p.minRequestUsdc - 1;
+        _expectDepositParityRevert(
+            pq,
+            _signer(),
+            below,
+            abi.encodeWithSelector(IFlowEvents.BelowMinRequest.selector, below, p.minRequestUsdc)
+        );
+        assertEq(pq.requestCount(), 0, "no request");
+    }
+
+    /// @notice A deposit over the per-deposit cap reverts `AbovePerDepositCap` identically to `requestDeposit`.
+    function test_permit_parity_abovePerDepositCapRevertsLikeRequestDeposit()
+        public
+        fixtureCovered
+    {
+        (, FlowQueue pq) = _permitQueue();
+        (, uint256 perDepositCap,,) = fund.config();
+        uint256 above = perDepositCap + 1;
+        _expectDepositParityRevert(
+            pq,
+            _signer(),
+            above,
+            abi.encodeWithSelector(IFlowEvents.AbovePerDepositCap.selector, above, perDepositCap)
+        );
+        assertEq(pq.requestCount(), 0, "no request");
+    }
+
+    /// @notice A paused queue reverts `QueueIsPaused` identically to `requestDeposit`.
+    function test_permit_parity_pausedQueueRevertsLikeRequestDeposit() public fixtureCovered {
+        (, FlowQueue pq) = _permitQueue();
+        vm.prank(emergency);
+        pq.pauseQueue();
+        assertTrue(pq.queuePaused(), "paused");
+        _expectDepositParityRevert(
+            pq, _signer(), AMOUNT, abi.encodeWithSelector(IFlowEvents.QueueIsPaused.selector)
+        );
+        assertEq(pq.requestCount(), 0, "no request");
+    }
+
+    /// @notice A shut-down fund reverts `FundIsShutdown` identically to `requestDeposit`.
+    function test_permit_parity_shutdownFundRevertsLikeRequestDeposit() public fixtureCovered {
+        (, FlowQueue pq) = _permitQueue();
+        timelockExecute(address(fund), abi.encodeCall(fund.shutdown, ()));
+        assertTrue(fund.isShutdown(), "shutdown");
+        _expectDepositParityRevert(
+            pq, _signer(), AMOUNT, abi.encodeWithSelector(IFlowEvents.FundIsShutdown.selector)
+        );
+        assertEq(pq.requestCount(), 0, "no request");
+    }
 }
 
 /// @title FlowQueueSeedTest

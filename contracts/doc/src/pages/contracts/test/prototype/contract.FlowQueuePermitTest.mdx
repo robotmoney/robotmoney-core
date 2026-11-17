@@ -1,0 +1,236 @@
+---
+title: "FlowQueuePermitTest"
+description: "`requestDepositWithPermit` on its own FlowQueue bound to `PermitUsdc`: a valid EIP-2612 signature opens a deposit in one transaction; a front-run permit is absorbed and the deposit succeeds on the front-run allowance; an invalid or expired permit without any allowance fails on `safeTransferFrom`; and the zero amount, below-`minRequestUsdc`, above-`perDepositCap`, paused-queue and shutdown-fund gates revert identically to `requestDeposit` (they fire before the permit call, so a dummy signature proves parity)."
+---
+
+# FlowQueuePermitTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/521a5ab8f5ed47b51a888e5ae30c5781ecfe3bbd/contracts/test/prototype/FlowQueue.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** FlowQueuePermitTest
+
+`requestDepositWithPermit` on its own FlowQueue bound to `PermitUsdc`: a valid EIP-2612 signature opens a
+deposit in one transaction; a front-run permit is absorbed and the deposit succeeds on the front-run
+allowance; an invalid or expired permit without any allowance fails on `safeTransferFrom`; and the zero
+amount, below-`minRequestUsdc`, above-`perDepositCap`, paused-queue and shutdown-fund gates revert
+identically to `requestDeposit` (they fire before the permit call, so a dummy signature proves parity).
+
+## Constants
+
+### PERMIT_TYPEHASH
+
+```solidity
+bytes32 internal constant PERMIT_TYPEHASH = keccak256(
+        "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+    );
+```
+
+### SIGNER_KEY
+
+<i>
+
+The permit signer's private key (`vm.addr(SIGNER_KEY)` is the depositor).
+
+</i>
+
+```solidity
+uint256 internal constant SIGNER_KEY = 0xA11CE;
+```
+
+### AMOUNT
+
+```solidity
+uint256 internal constant AMOUNT = 1_000e6;
+```
+
+## Functions
+
+<a id="_permitqueue"></a>
+
+### _permitQueue
+
+A fresh queue on its own `PermitUsdc`, same fund, feeds and §5.9.5 defaults as the harness queue.
+
+```solidity
+function _permitQueue() internal returns (PermitUsdc usdc, FlowQueue pq);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `PermitUsdc` |  |
+| pq | `FlowQueue` |  |
+
+<a id="_signer"></a>
+
+### _signer
+
+```solidity
+function _signer() internal view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_permitsig-permitusdc-address-address-uint256-uint256"></a>
+
+### _permitSig
+
+Sign a valid EIP-2612 permit typed-data message for `value` (the OZ ERC20Permit digest construction).
+
+```solidity
+function _permitSig(
+        PermitUsdc usdc,
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline
+    ) internal view returns (uint8 v, bytes32 r, bytes32 s);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `PermitUsdc` |  |
+| owner | `address` |  |
+| spender | `address` |  |
+| value | `uint256` |  |
+| deadline | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint8` |  |
+| r | `bytes32` |  |
+| s | `bytes32` |  |
+
+<a id="_expectdepositparityrevert-flowqueue-address-uint256-bytes"></a>
+
+### _expectDepositParityRevert
+
+Some amounts and states revert identically on `requestDeposit` and `requestDepositWithPermit`
+(the gates fire before the permit, so the garbage signature never runs): assert the exact same
+revert payload for both entry points on the same queue.
+
+```solidity
+function _expectDepositParityRevert(
+        FlowQueue pq,
+        address user,
+        uint256 usdc,
+        bytes memory expected
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pq | `FlowQueue` |  |
+| user | `address` |  |
+| usdc | `uint256` |  |
+| expected | `bytes` |  |
+
+<a id="test_permit_validsignatureopensdepositinonetransaction"></a>
+
+### test_permit_validSignatureOpensDepositInOneTransaction
+
+EIP-2612 acceptance: a valid off-chain signature authorizes and submits the deposit in ONE
+transaction, creating the Request and emitting `DepositRequested` exactly as `requestDeposit`.
+
+```solidity
+function test_permit_validSignatureOpensDepositInOneTransaction() public fixtureCovered;
+```
+
+<a id="test_permit_frontrunpermitisabsorbedanddepositsucceeds"></a>
+
+### test_permit_frontRunPermitIsAbsorbedAndDepositSucceeds
+
+Front-run resilience: the same permit signature is spent in the mempool before the deposit lands,
+so the in-tx permit reverts; try/catch absorbs it and the deposit succeeds on the front-run allowance.
+
+```solidity
+function test_permit_frontRunPermitIsAbsorbedAndDepositSucceeds() public fixtureCovered;
+```
+
+<a id="test_permit_expiredpermitwithoutallowancerevertsontransfer"></a>
+
+### test_permit_expiredPermitWithoutAllowanceRevertsOnTransfer
+
+An expired permit (validly signed over a past deadline) reverts, is absorbed, and with no prior
+allowance the pull fails on `safeTransferFrom` with `ERC20InsufficientAllowance`: nothing is booked.
+
+```solidity
+function test_permit_expiredPermitWithoutAllowanceRevertsOnTransfer() public fixtureCovered;
+```
+
+<a id="test_permit_invalidsignaturewithoutallowancerevertsontransfer"></a>
+
+### test_permit_invalidSignatureWithoutAllowanceRevertsOnTransfer
+
+An invalid signature reverts the permit (absorbed), and with no prior allowance the pull fails on
+`safeTransferFrom`: a bad signature can spend nothing.
+
+```solidity
+function test_permit_invalidSignatureWithoutAllowanceRevertsOnTransfer() public fixtureCovered;
+```
+
+<a id="test_permit_parity_zeroamountrevertslikerequestdeposit"></a>
+
+### test_permit_parity_zeroAmountRevertsLikeRequestDeposit
+
+`usdc == 0` reverts `ZeroAmount` identically to `requestDeposit`.
+
+```solidity
+function test_permit_parity_zeroAmountRevertsLikeRequestDeposit() public fixtureCovered;
+```
+
+<a id="test_permit_parity_belowminrequestrevertslikerequestdeposit"></a>
+
+### test_permit_parity_belowMinRequestRevertsLikeRequestDeposit
+
+A deposit under `minRequestUsdc` reverts `BelowMinRequest` identically to `requestDeposit`.
+
+```solidity
+function test_permit_parity_belowMinRequestRevertsLikeRequestDeposit() public fixtureCovered;
+```
+
+<a id="test_permit_parity_aboveperdepositcaprevertslikerequestdeposit"></a>
+
+### test_permit_parity_abovePerDepositCapRevertsLikeRequestDeposit
+
+A deposit over the per-deposit cap reverts `AbovePerDepositCap` identically to `requestDeposit`.
+
+```solidity
+function test_permit_parity_abovePerDepositCapRevertsLikeRequestDeposit()
+        public
+        fixtureCovered;
+```
+
+<a id="test_permit_parity_pausedqueuerevertslikerequestdeposit"></a>
+
+### test_permit_parity_pausedQueueRevertsLikeRequestDeposit
+
+A paused queue reverts `QueueIsPaused` identically to `requestDeposit`.
+
+```solidity
+function test_permit_parity_pausedQueueRevertsLikeRequestDeposit() public fixtureCovered;
+```
+
+<a id="test_permit_parity_shutdownfundrevertslikerequestdeposit"></a>
+
+### test_permit_parity_shutdownFundRevertsLikeRequestDeposit
+
+A shut-down fund reverts `FundIsShutdown` identically to `requestDeposit`.
+
+```solidity
+function test_permit_parity_shutdownFundRevertsLikeRequestDeposit() public fixtureCovered;
+```
+

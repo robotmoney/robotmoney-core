@@ -18,9 +18,36 @@ import {
     LEG_PRICE_FEED_ONLY,
     LEG_PRICE_TWAP_ONLY,
     PRICE_KIND_BASKET,
-    PRICE_KIND_LENDING
+    PRICE_KIND_LENDING,
+    MIN_EPOCH_LENGTH,
+    MAX_EPOCH_LENGTH,
+    MIN_SETTLE_WINDOW,
+    MAX_SETTLE_WINDOW,
+    MIN_HOLD,
+    MAX_HOLD,
+    MAX_EPOCH_FLOW_BPS,
+    MAX_EPOCH_FLOW_FLOOR_USDC,
+    MAX_SHARE_PRICE_MOVE_BPS,
+    MAX_ROLL,
+    MAX_MIN_REQUEST_USDC,
+    MIN_FREEZE,
+    MAX_FREEZE,
+    MIN_SLICES,
+    MAX_SLICES,
+    MIN_SLICE_SECONDS,
+    MAX_DISPERSION_BPS,
+    MAX_REF_BAND_BPS,
+    MAX_LEG_BAND_BPS,
+    MAX_SEQUENCER_GRACE,
+    MAX_USDC_PEG_BAND_BPS,
+    MAX_LEND_RATE_GROWTH_BPS,
+    MIN_CANCEL_BUFFER,
+    MAX_CANCEL_BUFFER,
+    TIMELOCK_DELAY_REFERENCE,
+    MIN_MAX_PAUSE,
+    MAX_PAUSE_DURATION
 } from "../FlowTypes.sol";
-import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
+import {IExactOutSwapAdapter, ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
 import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
 import {FeedLib, FeedStatus} from "./FeedLib.sol";
 import {TwapSlicesLib} from "./TwapSlicesLib.sol";
@@ -469,5 +496,110 @@ library FlowCheckLib {
         }
         q.refBandBps = p.refBandBps;
         q.legBandBps = p.legBandBps;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Flow Param Bounds (E51): setFlowParams before applyParams
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// @notice The hard bounds of FlowTypes (E51) plus the basket fixed-fee rule (E43), run by `setFlowParams`
+    ///         before `FlowSettleLib.applyParams` writes the params. Lives in the linked library so the queue
+    ///         itself stays under EIP-170 (proposal §6.1).
+    function checkFlowParams(FlowState storage s, FlowParams memory p) public view {
+        if (p.epochLength < MIN_EPOCH_LENGTH || p.epochLength > MAX_EPOCH_LENGTH) {
+            revert IFlowEvents.FlowParamOutOfBounds(0);
+        }
+        if (p.settleWindow < MIN_SETTLE_WINDOW || p.settleWindow > MAX_SETTLE_WINDOW) {
+            revert IFlowEvents.FlowParamOutOfBounds(1);
+        }
+        if (p.minHold < MIN_HOLD || p.minHold > MAX_HOLD) {
+            revert IFlowEvents.FlowParamOutOfBounds(2);
+        }
+        // Field 3 (`keeperGrace`) is retired in Step 3f (E34) and kept unconstrained for tuple compatibility.
+        if (p.maxEpochFlowBps == 0 || p.maxEpochFlowBps > MAX_EPOCH_FLOW_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(4);
+        }
+        if (p.epochFlowFloorUsdc > MAX_EPOCH_FLOW_FLOOR_USDC) {
+            revert IFlowEvents.FlowParamOutOfBounds(5);
+        }
+        if (p.maxSharePriceMoveBps == 0 || p.maxSharePriceMoveBps > MAX_SHARE_PRICE_MOVE_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(6);
+        }
+        if (
+            p.maxRoll == 0 || p.maxRoll > MAX_ROLL
+                || p.settleWindow >= uint256(p.maxRoll) * p.epochLength
+                || uint256(p.maxRoll) * p.epochLength > TIMELOCK_DELAY_REFERENCE
+        ) revert IFlowEvents.FlowParamOutOfBounds(7);
+        if (p.minRequestUsdc == 0 || p.minRequestUsdc > MAX_MIN_REQUEST_USDC) {
+            revert IFlowEvents.FlowParamOutOfBounds(8);
+        }
+        if (p.maxFreeze < MIN_FREEZE || p.maxFreeze > MAX_FREEZE) {
+            revert IFlowEvents.FlowParamOutOfBounds(9);
+        }
+        if (
+            p.slices < MIN_SLICES || p.slices > MAX_SLICES || p.settleWindow % p.slices != 0
+                || p.settleWindow / p.slices < MIN_SLICE_SECONDS
+        ) revert IFlowEvents.FlowParamOutOfBounds(10);
+        if (p.quorum == 0 || p.quorum > p.slices) revert IFlowEvents.FlowParamOutOfBounds(11);
+        if (p.dispersionBps == 0 || p.dispersionBps > MAX_DISPERSION_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(12);
+        }
+        if (p.refBandBps == 0 || p.refBandBps > MAX_REF_BAND_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(13);
+        }
+        if (p.legBandBps == 0 || p.legBandBps > MAX_LEG_BAND_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(14);
+        }
+        if (s.fund != address(0)) {
+            IRobotMoneyFundFull f = IRobotMoneyFundFull(s.fund);
+            if (_hasActiveBasket(f) && p.legBandBps <= f.maxPoolFeeBps() + f.feeMarginBps()) {
+                revert IFlowEvents.FlowParamOutOfBounds(14);
+            }
+            _requireFundedPoolsFixedFee(f);
+        }
+        if (p.sequencerGrace > MAX_SEQUENCER_GRACE) revert IFlowEvents.FlowParamOutOfBounds(15);
+        if (p.usdcPegBandBps == 0 || p.usdcPegBandBps > MAX_USDC_PEG_BAND_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(16);
+        }
+        if (p.maxLendRateGrowthBps == 0 || p.maxLendRateGrowthBps > MAX_LEND_RATE_GROWTH_BPS) {
+            revert IFlowEvents.FlowParamOutOfBounds(17);
+        }
+        if (
+            p.cancelBuffer < MIN_CANCEL_BUFFER || p.cancelBuffer > MAX_CANCEL_BUFFER
+                || p.cancelBuffer >= p.epochLength
+        ) revert IFlowEvents.FlowParamOutOfBounds(18);
+        if (
+            p.maxPause < MIN_MAX_PAUSE || p.maxPause > MAX_PAUSE_DURATION
+                || p.maxPause < uint256(TIMELOCK_DELAY_REFERENCE) + p.epochLength
+        ) revert IFlowEvents.FlowParamOutOfBounds(19);
+        if (p.matchBandBps == 0 || p.matchBandBps > p.refBandBps) {
+            revert IFlowEvents.FlowParamOutOfBounds(20);
+        }
+    }
+
+    function _hasActiveBasket(IRobotMoneyFundFull f) private view returns (bool) {
+        AssetConfig[] memory cfgs = f.assetConfigs();
+        for (uint256 i; i < cfgs.length; ++i) {
+            if (cfgs[i].active && cfgs[i].kind == AssetKind.Basket) return true;
+        }
+        return false;
+    }
+
+    /// @dev Rule 6 (E43, plan section 3.3 item 4): every basket asset the plan funds must sit on a fixed-fee pool.
+    ///      An unfunded asset (target 0) is exempt, as it is at plan open.
+    function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view {
+        AssetConfig[] memory cfgs = f.assetConfigs();
+        uint16[] memory targets = f.targetBps();
+        for (uint256 i; i < cfgs.length; ++i) {
+            if (!cfgs[i].active || cfgs[i].kind != AssetKind.Basket) continue;
+            if (i >= targets.length || targets[i] == 0) continue;
+            bool fixedFee;
+            try IExactOutSwapAdapter(cfgs[i].adapter).isFixedFeePool(cfgs[i].pool) returns (
+                bool b
+            ) {
+                fixedFee = b;
+            } catch {}
+            if (!fixedFee) revert IFlowEvents.FlowParamOutOfBounds(14);
+        }
     }
 }
