@@ -13,8 +13,9 @@
 #     step_failed, sends nothing, and exits 1;
 #   - the venue open: the keeper sends step() through KeeperAccount.execute, and USDC moves into the lending asset;
 #   - a basket asset with a holding, put into sale by delistAsset: a failed stepDelisted send alerts delist_step_failed and
-#     exits 1 with the asset still in sale, then the same tick sends stepDelisted through KeeperAccount.execute and the
-#     asset leaves sale.
+#     exits 1 with the asset still in sale; a closed venue makes the simulated stepDelisted return false, and the keeper
+#     alerts without sending; a real failed attempt leaves a backoff, and the next tick is a backoff skip with no alert;
+#     the venue reopens, and the due stepDelisted is sent and the asset leaves sale.
 # Real time passes on anvil (evm_increaseTime) for the glide path. No cheatcode skips a check.
 # This test FAILS LOUDLY (exit 1) when anvil, forge, cast, python3 or curl is absent, or when a contract does not deploy.
 # It never skips.
@@ -300,18 +301,44 @@ check "a due step is sent through KeeperAccount.execute and moves USDC into the 
 # ─── Delist: a basket holding put into sale, then sold by stepDelisted ──────
 # The holding is minted straight to the fund, a test setup step. delistAsset is the real admin call that puts it in sale.
 in_sale() { cast call "$FUND" "isAssetInSale(uint256)(bool)" "$BASKET_INDEX" --rpc-url "$RPC_URL" | awk '{print $1}'; }
+backoff_until() { cast call "$REBALANCER" "assetBackoffUntil(uint256)(uint64)" "$BASKET_INDEX" --rpc-url "$RPC_URL" | awk '{print $1}'; }
 send_from "$DEPLOYER" "$BASKET_TOKEN" "mint(address,uint256)" "$FUND" 1000000000
 refresh_feeds
 send_from "$DEPLOYER" "$FUND" "delistAsset(uint256)" "$BASKET_INDEX"
 refresh_feeds
 check "the basket asset is in sale after delistAsset" '[[ "$(in_sale)" == "true" ]]'
 
+# Case A: the send itself fails (the shim). The simulation passes, so the keeper sends and the send alerts.
 : >"$FLAGS/fail-send"
 RC=$(run_keeper_once "$WORK/delistfail.err" PATH="$WORK/shim:$PATH")
 rm -f "$FLAGS/fail-send"
-check "a failed stepDelisted alerts delist_step_failed, exits 1, and leaves the asset in sale" \
+check "a failed stepDelisted send alerts delist_step_failed, exits 1, and leaves the asset in sale" \
     'grep -q "\"alert\":\"delist_step_failed\"" "$WORK/delistfail.err" && [[ "$RC" == "1" && "$(in_sale)" == "true" ]]'
 
+# Case B: the router is closed. The simulated stepDelisted returns false with no backoff recorded, so the keeper checks the
+# sale step itself. It reverts there, so the keeper alerts and sends nothing. The backoff stays at zero, because nothing
+# was sent.
+send_from "$DEPLOYER" "$BASKET_ROUTER" "setPaused(bool)" true
+RC=$(run_keeper_once "$WORK/simfalse.err")
+check "a simulated false stepDelisted in sale alerts delist_step_failed, sends nothing, and exits 1" \
+    'grep -q "\"alert\":\"delist_step_failed\"" "$WORK/simfalse.err" && [[ "$RC" == "1" && "$(in_sale)" == "true" && "$(backoff_until)" == "0" ]] && ! grep -q "sent stepDelisted" "$WORK/simfalse.err"'
+
+# Case C: a real stepDelisted sent through KeeperAccount while the router is closed. The call returns false and records a
+# backoff. The next tick is a backoff skip: it logs, sends nothing, and raises no alert.
+cast send "$KEEPER_ACCOUNT" "execute(address,bytes)" "$REBALANCER" "$(cast calldata "stepDelisted(uint256)" "$BASKET_INDEX")" \
+    --rpc-url "$RPC_URL" --keystore "$KEEPER_KEYSTORE" --password-file "$KEEPER_PASSWORD_FILE" >/dev/null
+BACKOFF="$(backoff_until)"
+NOW="$(cast block latest --rpc-url "$RPC_URL" -f timestamp | awk '{print $1}')"
+check "a closed router leaves a backoff on the asset after a real attempt" '(( BACKOFF > NOW ))'
+RC=$(run_keeper_once "$WORK/backoff.err")
+check "a backoff skip logs, raises no alert, and exits 0" \
+    'grep -q "in backoff until" "$WORK/backoff.err" && ! grep -q "\"alert\"" "$WORK/backoff.err" && [[ "$RC" == "0" ]]'
+
+# Case D: the router opens and the backoff ends. The due stepDelisted is sent through KeeperAccount.execute, and the
+# asset leaves sale.
+send_from "$DEPLOYER" "$BASKET_ROUTER" "setPaused(bool)" false
+warp $(( BACKOFF - NOW + 1 ))
+refresh_feeds
 RC=$(run_keeper_once "$WORK/delistok.err")
 check "a due stepDelisted is sent through KeeperAccount.execute and the asset leaves sale" \
     'grep -q "sent stepDelisted(uint256) to" "$WORK/delistok.err" && [[ "$RC" == "0" && "$(in_sale)" == "false" ]]'

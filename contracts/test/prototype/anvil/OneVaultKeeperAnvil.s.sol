@@ -150,6 +150,19 @@ contract OneVaultMockV3Pool {
 ///         and buy legs through the adapter's inherited `swap`) and exact output. It fills at one for one and pays USDC
 ///         from its own balance, which the deploy funds.
 contract OneVaultMockSwapRouter {
+    address public immutable OWNER;
+    bool public paused;
+
+    constructor() {
+        OWNER = msg.sender;
+    }
+
+    /// @notice Closes the venue: every fill reverts, the way a paused router refuses a swap.
+    function setPaused(bool p) external {
+        require(msg.sender == OWNER, "OneVaultMockSwapRouter: not owner");
+        paused = p;
+    }
+
     struct ExactInputSingleParams {
         address tokenIn;
         address tokenOut;
@@ -183,6 +196,7 @@ contract OneVaultMockSwapRouter {
     }
 
     function _fill(address tokenIn, address tokenOut, address recipient, uint256 amountIn, uint256 amountOut) private {
+        require(!paused, "OneVaultMockSwapRouter: paused");
         require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "OneVaultMockSwapRouter: in");
         require(IERC20(tokenOut).transfer(recipient, amountOut), "OneVaultMockSwapRouter: out");
     }
@@ -209,7 +223,8 @@ contract OneVaultKeeperAnvil is Script {
         vm.startBroadcast();
         Rebalancer rebalancer = _deployRebalancer(fund, timelock, keeper);
         (address pool, address aToken, address lendingAdapter) = _addLending(fund, rebalancer, usdc);
-        (address basketToken, address basketFeed, uint256 basketIndex) = _addBasket(fund, rebalancer, usdc);
+        (address basketToken, address basketFeed, uint256 basketIndex, address basketRouter) =
+            _addBasket(fund, rebalancer, usdc);
         vm.stopBroadcast();
 
         string memory body = string.concat(
@@ -233,6 +248,9 @@ contract OneVaultKeeperAnvil is Script {
             "\n",
             "BASKET_INDEX=",
             vm.toString(basketIndex),
+            "\n",
+            "BASKET_ROUTER=",
+            vm.toString(basketRouter),
             "\n"
         );
         vm.writeFile(outPath, body);
@@ -299,15 +317,15 @@ contract OneVaultKeeperAnvil is Script {
     /// @dev One basket asset, with no holding and a zero target. The test puts a holding in place and then delists it.
     function _addBasket(address fund, Rebalancer rebalancer, address usdc)
         internal
-        returns (address token, address feed, uint256 index)
+        returns (address token, address feed, uint256 index, address router)
     {
         OneVaultMockBasketToken basket = new OneVaultMockBasketToken();
         OneVaultMockV3Pool basketPool = new OneVaultMockV3Pool(address(basket), usdc);
         MockAggregator basketFeed = new MockAggregator();
         basketFeed.setRound(8, 1e8, block.timestamp, block.timestamp);
-        OneVaultMockSwapRouter router = new OneVaultMockSwapRouter();
-        TestERC20(usdc).mint(address(router), 1_000_000e6);
-        UniswapV3ExactOutSwapAdapter swap = new UniswapV3ExactOutSwapAdapter(address(router));
+        OneVaultMockSwapRouter swapRouter = new OneVaultMockSwapRouter();
+        TestERC20(usdc).mint(address(swapRouter), 1_000_000e6);
+        UniswapV3ExactOutSwapAdapter swap = new UniswapV3ExactOutSwapAdapter(address(swapRouter));
         IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(swap).codehash, true);
         index = IRobotMoneyFundFull(fund).addAsset(
             AssetConfig({
@@ -325,6 +343,6 @@ contract OneVaultKeeperAnvil is Script {
             })
         );
         rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 100));
-        return (address(basket), address(basketFeed), index);
+        return (address(basket), address(basketFeed), index, address(swapRouter));
     }
 }

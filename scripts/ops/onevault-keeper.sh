@@ -69,6 +69,7 @@ SLEEP_CMD="${SLEEP_CMD:-sleep}"
 
 ALERTS=0
 KEEPER_ADDR=""
+UINT_MAX=115792089237316195423570985008687907853269984665640564039457584007913129639935
 
 die() {
     echo "onevault-keeper: $1" >&2
@@ -125,6 +126,38 @@ forward() {
     }
     echo "onevault-keeper: sent $sig to $target" >&2
     return 0
+}
+
+# Decides whether stepDelisted(index) should be sent. Returns 0 to send, 1 to skip. An alert is raised inside (and counted)
+# only for a real failure. The simulation runs as KeeperAccount, which holds KEEPER_ROLE, so a send would run the same call.
+#   - stepDelisted reverts in simulation: delist_step_failed, skip.
+#   - it returns true: send.
+#   - it returns false and the asset's backoff is still active: a backoff skip, logged, no alert.
+#   - it returns false with no backoff: the fund's sale step is simulated as the Rebalancer. If that reverts, the sale
+#     failed and the Rebalancer caught it, so delist_step_failed, skip. If it succeeds, the false comes from the
+#     Rebalancer's interval or cap, so an interval skip, logged, no alert.
+delist_gate() {
+    local fund="$1" idx="$2" sim now
+    if ! sim=$(cast call "$REBALANCER_ADDRESS" "stepDelisted(uint256)(bool)" "$idx" --from "$KEEPER_ACCOUNT_ADDRESS" \
+        --rpc-url "$RPC_URL" 2>&1); then
+        alert "delist_step_failed" "simulated stepDelisted($idx) reverted: ${sim:0:300}"
+        return 1
+    fi
+    [[ "$(printf '%s\n' "$sim" | awk '{print $1}')" == "true" ]] && return 0
+    read_call "$REBALANCER_ADDRESS" "assetBackoffUntil(uint256)(uint64)" "$idx" || return 1
+    now=$(cast block latest --rpc-url "$RPC_URL" -f timestamp 2>/dev/null) \
+        || { alert "rpc_unreadable" "cast block latest failed"; return 1; }
+    if (( READ_OUT >= now )); then
+        echo "onevault-keeper: stepDelisted($idx) in backoff until $READ_OUT, not sent" >&2
+        return 1
+    fi
+    if sim=$(cast call "$fund" "executeDelistStep(uint256,uint256)(bool,uint256,uint256)" "$idx" "$UINT_MAX" \
+        --from "$REBALANCER_ADDRESS" --rpc-url "$RPC_URL" 2>&1); then
+        echo "onevault-keeper: stepDelisted($idx) skipped by the rebalancer interval or cap, not sent" >&2
+    else
+        alert "delist_step_failed" "the sale of asset $idx would revert, and the rebalancer catches it: ${sim:0:300}"
+    fi
+    return 1
 }
 
 tick() {
@@ -197,7 +230,13 @@ tick() {
         [[ "$in_sale" == "true" ]] && delisted+=("$i")
     done
 
-    local due=$((settle_due + step_due + ${#delisted[@]}))
+    local -a delist_send=()
+    local i
+    for i in "${delisted[@]}"; do
+        if delist_gate "$fund" "$i"; then delist_send+=("$i"); fi
+    done
+
+    local due=$((settle_due + step_due + ${#delist_send[@]}))
     if (( due == 0 )); then
         echo "onevault-keeper: nothing due" >&2
         [[ $ALERTS -eq 0 ]]
@@ -216,7 +255,7 @@ tick() {
         forward step_failed "$REBALANCER_ADDRESS" "step()" || true
     fi
     local idx
-    for idx in "${delisted[@]}"; do
+    for idx in "${delist_send[@]}"; do
         forward delist_step_failed "$REBALANCER_ADDRESS" "stepDelisted(uint256)" "$idx" || true
     done
 
