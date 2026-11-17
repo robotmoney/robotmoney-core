@@ -90,3 +90,25 @@ jobs:
 
       - name: Recorder keeper self-test
         run: bash scripts/ops/test-recorder-keeper.sh
+
+  onevault-share-delivery-keeper-selftest:
+    name: onevault-share-delivery-keeper-selftest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Core 2026: runs the real share-delivery keeper against the one-vault prototype fund and queue deployed on a local
+    # anvil chain (contracts/test/prototype/anvil). The test fails loudly when anvil, forge or cast is missing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI_CLASS: system-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+
+      - name: Share-delivery keeper self-test
+        run: bash scripts/ops/test-onevault-share-delivery-keeper.sh
