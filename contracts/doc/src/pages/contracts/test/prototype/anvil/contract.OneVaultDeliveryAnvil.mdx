@@ -1,0 +1,205 @@
+---
+title: "OneVaultDeliveryAnvil"
+description: "Local anvil stack for the share-delivery keeper self-test. Parameters follow PrototypeHarness. Env: KEEPER_ADDRESS (the KEEPER_ROLE holder), EMERGENCY_ADDRESS, ONEVAULT_ANVIL_OUT (a path under ./out/prototype)."
+---
+
+# OneVaultDeliveryAnvil
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/14d88418f3b68543c38815238b524ef41f08dd70/contracts/test/prototype/anvil/OneVaultDeliveryAnvil.s.sol)
+
+**Inherits:** Script
+
+**Title:** OneVaultDeliveryAnvil
+
+Local anvil stack for the share-delivery keeper self-test. Parameters follow PrototypeHarness.
+Env: KEEPER_ADDRESS (the KEEPER_ROLE holder), EMERGENCY_ADDRESS, ONEVAULT_ANVIL_OUT (a path under ./out/prototype).
+
+## Constants
+
+### TVL_CAP
+
+```solidity
+uint256 internal constant TVL_CAP = 10_000_000e6;
+```
+
+### PER_DEPOSIT_CAP
+
+```solidity
+uint256 internal constant PER_DEPOSIT_CAP = 1_000_000e6;
+```
+
+### EXIT_FEE_BPS
+
+```solidity
+uint256 internal constant EXIT_FEE_BPS = 10;
+```
+
+### MAX_SLIPPAGE_BPS
+
+```solidity
+uint256 internal constant MAX_SLIPPAGE_BPS = 200;
+```
+
+### NAV_DEVIATION_BPS
+
+```solidity
+uint256 internal constant NAV_DEVIATION_BPS = 200;
+```
+
+### SEED_USDC
+
+```solidity
+uint256 internal constant SEED_USDC = 100_000e6;
+```
+
+### DAY_FEED_MAX_AGE
+
+```solidity
+uint32 internal constant DAY_FEED_MAX_AGE = 86_700;
+```
+
+### TIMELOCK_DELAY
+
+```solidity
+uint256 internal constant TIMELOCK_DELAY = 60;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+```solidity
+function run() external;
+```
+
+<a id="_deploy-address-address"></a>
+
+### _deploy
+
+```solidity
+function _deploy(address keeper, address emergency) internal returns (Stack memory a);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| keeper | `address` |  |
+| emergency | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Stack` |  |
+
+<a id="_deployfund-stack-address"></a>
+
+### _deployFund
+
+```solidity
+function _deployFund(Stack memory a, address emergency) internal returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Stack` |  |
+| emergency | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_deployqueue-stack-address-address"></a>
+
+### _deployQueue
+
+```solidity
+function _deployQueue(Stack memory a, address keeper, address emergency)
+        internal
+        returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Stack` |  |
+| keeper | `address` |  |
+| emergency | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_write-stack-string"></a>
+
+### _write
+
+```solidity
+function _write(Stack memory a, string memory outPath) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Stack` |  |
+| outPath | `string` |  |
+
+<a id="_flowparams"></a>
+
+### _flowParams
+
+<i>
+
+The §5.9.5 working defaults, as PrototypeHarness.defaultFlowParams.
+
+</i>
+
+```solidity
+function _flowParams() internal pure returns (FlowParams memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `FlowParams` |  |
+
+## Structs
+
+### Stack
+
+```solidity
+struct Stack {
+        address deployer;
+        address usdc;
+        address fund;
+        address queue;
+        address usdcFeed;
+        address sequencerFeed;
+        address timelock;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| deployer | `address` |  |
+| usdc | `address` |  |
+| fund | `address` |  |
+| queue | `address` |  |
+| usdcFeed | `address` |  |
+| sequencerFeed | `address` |  |
+| timelock | `address` |  |
+
