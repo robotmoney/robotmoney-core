@@ -5,7 +5,7 @@ description: "A pool whose in-range liquidity is `L` except for one stretch `[th
 
 # ThinStretchPool
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/2e1997131e58d2aeb047277dce870cd794f04ed7/contracts/test/prototype/ReviewFixes.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/ReviewFixes.t.sol)
 
 A pool whose in-range liquidity is `L` except for one stretch `[thinFrom, thinTo)` (seconds before now) at
 liquidity 1, the way Uniswap V3 accumulates `secondsPerLiquidity` (`dt × 2^128 / max(1, L)`). Constant
