@@ -70,7 +70,10 @@ contract OneVaultMockAavePool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16) external {
         require(!paused, "OneVaultMockAavePool: paused");
         require(asset == USDC, "OneVaultMockAavePool: asset");
-        require(IERC20(USDC).transferFrom(msg.sender, address(this), amount), "OneVaultMockAavePool: transfer");
+        require(
+            IERC20(USDC).transferFrom(msg.sender, address(this), amount),
+            "OneVaultMockAavePool: transfer"
+        );
         ATOKEN.mint(onBehalfOf, amount);
     }
 
@@ -140,21 +143,22 @@ contract OneVaultKeeperAnvil is Script {
         AaveV3RateAdapter adapter =
             new AaveV3RateAdapter(address(pool), usdc, address(pool.ATOKEN()), fund);
         IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        uint256 index = IRobotMoneyFundFull(fund).addAsset(
-            AssetConfig({
-                kind: AssetKind.Lending,
-                active: true,
-                capBps: LENDING_CAP_BPS,
-                adapter: address(adapter),
-                token: address(0),
-                pool: address(0),
-                poolFee: 0,
-                twapWindow: 0,
-                venue: Venue.V3,
-                feed: address(0),
-                maxFeedAge: 0
-            })
-        );
+        uint256 index = IRobotMoneyFundFull(fund)
+            .addAsset(
+                AssetConfig({
+                    kind: AssetKind.Lending,
+                    active: true,
+                    capBps: LENDING_CAP_BPS,
+                    adapter: address(adapter),
+                    token: address(0),
+                    pool: address(0),
+                    poolFee: 0,
+                    twapWindow: 0,
+                    venue: Venue.V3,
+                    feed: address(0),
+                    maxFeedAge: 0
+                })
+            );
         rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
         vm.stopBroadcast();
 
