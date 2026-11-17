@@ -214,7 +214,7 @@ check "an idle queue exits 0 with nothing sent" '[[ "$RC" == "0" ]] && grep -q "
 
 # ─── Case 2: a request, then settle forwarded through KeeperAccount.execute ──
 request_deposit
-warp 172800
+warp 28800  # 8 h: one 6 h epoch plus the 1 h settle window. Longer spans exceed maxRoll and expire the request.
 refresh_feeds
 # shellcheck disable=SC2034 # read by the check strings
 SETTLED_BEFORE="$(call_q "settlementCount()(uint256)")"
@@ -226,7 +226,7 @@ check "the settle send names the queue through KeeperAccount" 'grep -q "sent set
 
 # ─── Case 3: a request, then low gas: alert, nothing sent ───────────────────
 request_deposit
-warp 172800
+warp 28800  # 8 h: one 6 h epoch plus the 1 h settle window. Longer spans exceed maxRoll and expire the request.
 refresh_feeds
 # shellcheck disable=SC2034 # read by the check strings
 SETTLED_BEFORE="$(call_q "settlementCount()(uint256)")"
