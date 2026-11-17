@@ -5,7 +5,7 @@ description: "The lending adapter test copies of step 3d (E15, check 5): the pro
 
 # ILendingRateAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/interfaces/IFlowAdapters.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/interfaces/IFlowAdapters.sol)
 
 **Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter)
 
@@ -32,4 +32,20 @@ function ratePerUnit() external view returns (uint256 rate1e18);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | rate1e18 | `uint256` |  |
+
+<a id="availableliquidity"></a>
+
+### availableLiquidity
+
+Currently withdrawable underlying liquidity on the venue (may understate, never overstate).
+
+```solidity
+function availableLiquidity() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 

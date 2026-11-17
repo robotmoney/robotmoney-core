@@ -5,7 +5,7 @@ description: "ERC-7201 namespaced location of `FundState` (`robotmoney.storage.R
 
 # FundStorage
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/lib/FundStorage.sol)
 
 **Title:** FundStorage
 
@@ -79,6 +79,72 @@ uint256 internal constant MAX_SLIPPAGE_BPS = 500;
 
 ```solidity
 uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
+
+### DEFAULT_MIN_POOL_DEPTH_USDC
+
+<i>
+
+Step 3f Gate 0 / §4.5 working defaults & claim accumulator precision scales.
+
+</i>
+
+```solidity
+uint256 internal constant DEFAULT_MIN_POOL_DEPTH_USDC = 2_000_000e6;
+```
+
+### DEFAULT_FEE_MARGIN_BPS
+
+```solidity
+uint16 internal constant DEFAULT_FEE_MARGIN_BPS = 20;
+```
+
+### DEFAULT_DELIST_BAND_BPS
+
+```solidity
+uint16 internal constant DEFAULT_DELIST_BAND_BPS = 300;
+```
+
+### DEFAULT_DELIST_BUDGET_BPS
+
+```solidity
+uint16 internal constant DEFAULT_DELIST_BUDGET_BPS = 300;
+```
+
+### DEFAULT_MAX_BASKET_BPS
+
+```solidity
+uint16 internal constant DEFAULT_MAX_BASKET_BPS = 10_000;
+```
+
+### DEFAULT_MAX_PAUSE
+
+```solidity
+uint32 internal constant DEFAULT_MAX_PAUSE = 72 hours;
+```
+
+### DELIST_UNIT_SCALE
+
+```solidity
+uint256 internal constant DELIST_UNIT_SCALE = 1e12;
+```
+
+### DELIST_ACC_SCALE
+
+```solidity
+uint256 internal constant DELIST_ACC_SCALE = 1e30;
+```
+
+### LENDING_ACC_NORM
+
+```solidity
+uint256 internal constant LENDING_ACC_NORM = 1e24;
+```
+
+### LENDING_ACC_SCALE
+
+```solidity
+uint256 internal constant LENDING_ACC_SCALE = 1e36;
 ```
 
 ## Functions

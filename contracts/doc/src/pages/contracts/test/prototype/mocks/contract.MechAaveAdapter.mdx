@@ -5,7 +5,7 @@ description: "A lending venue for `FlowQueue.t.sol` that `vm.etch` places over t
 
 # MechAaveAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/mocks/MechAaveAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/mocks/MechAaveAdapter.sol)
 
 **Inherits:** [MechReentry](/contracts/test/prototype/mocks/abstract.MechReentry), [ILendingRateAdapter](/contracts/test/prototype/src/interfaces/interface.ILendingRateAdapter)
 
@@ -112,6 +112,34 @@ uint256 public lastSupplyAsked;
 uint256 public lastSupplyCredited;
 ```
 
+### liquidityOverridden
+
+Explicit override for `availableLiquidity()` (`E36` / `A34` venue-check tests).
+
+```solidity
+bool public liquidityOverridden;
+```
+
+### liquidityOverride
+
+```solidity
+uint256 public liquidityOverride;
+```
+
+### shortfallBps
+
+Independent short-pay controls appended for `A34` tests (bps and/or fixed units).
+
+```solidity
+uint16 public shortfallBps;
+```
+
+### shortPayAmount
+
+```solidity
+uint256 public shortPayAmount;
+```
+
 ## Functions
 
 <a id="onlyvault"></a>
@@ -155,6 +183,64 @@ function setMode(uint8 mode_, uint256 param_) external;
 | ---- | ---- | ----------- |
 | mode_ | `uint8` |  |
 | param_ | `uint256` |  |
+
+<a id="setavailableliquidity-uint256"></a>
+
+### setAvailableLiquidity
+
+Override `availableLiquidity()` for pre-match liquidity tests (`E36`) or `A34` overstatement.
+
+```solidity
+function setAvailableLiquidity(uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="clearavailableliquidity"></a>
+
+### clearAvailableLiquidity
+
+Clear the `availableLiquidity()` override and revert to real Aave pool cash reads.
+
+```solidity
+function clearAvailableLiquidity() external;
+```
+
+<a id="setshortfallbps-uint16"></a>
+
+### setShortfallBps
+
+Set an explicit withdrawal shortfall in basis points (`A34`, composable with any `mode`).
+
+```solidity
+function setShortfallBps(uint16 bps) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+
+<a id="setshortpayamount-uint256"></a>
+
+### setShortPayAmount
+
+Set a fixed-unit withdrawal shortfall in USDC units (`A34`, composable with any `mode`).
+
+```solidity
+function setShortPayAmount(uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
 
 <a id="deploy-uint256"></a>
 
@@ -291,6 +377,22 @@ function _reported() private view returns (uint256);
 
 ```solidity
 function ratePerUnit() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="availableliquidity"></a>
+
+### availableLiquidity
+
+Currently withdrawable underlying liquidity on the venue (may understate, never overstate).
+
+```solidity
+function availableLiquidity() external view returns (uint256);
 ```
 
 **Returns**

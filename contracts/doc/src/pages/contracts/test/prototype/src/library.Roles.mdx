@@ -5,7 +5,7 @@ description: "Role identifiers shared by the three prototype contracts. Contract
 
 # Roles
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/FundTypes.sol)
 
 **Title:** Roles
 
@@ -18,15 +18,15 @@ Role identifiers shared by the three prototype contracts. Contracts re-export th
 | EMERGENCY_ROLE     | emergency hot key           | fund (pauses), rebalancer none |
 | GOVERNANCE_ROLE    | RebalanceGovernance proxy   | fund (`setTargetAndOpenPlan`)  |
 | REBALANCER_ROLE    | Rebalancer proxy            | fund (`executeStep`, conclude) |
-| KEEPER_ROLE        | keeper bot                  | rebalancer (`step` pre-grace)  |
+| KEEPER_ROLE        | keeper bot                  | rebalancer (`step`, E34)       |
 | TARGET_SETTER_ROLE | TimelockController          | governance (`applyReceipt`)    |
 | FLOW_ROLE          | FlowQueue proxy             | fund (`mintInKind`, `sellForFlow`, `ledgerCheckpoint`) |
 
 On the fund, EMERGENCY_ROLE holds only `pauseRebalance` and `pauseDeposits`; `shutdown` and `emergencyUnwind`
 are ADMIN_ROLE's (the timelock), owner 2026-11-13.
-On the FlowQueue: ADMIN_ROLE (timelock: params, release, allowReturn, unpause), EMERGENCY_ROLE (pause,
+On the FlowQueue: ADMIN_ROLE (timelock: params, release, unpause), EMERGENCY_ROLE (pause,
 freezeSettlement: pause-class, it only delays one settlement's held shares, ends by itself after
-`maxFreeze` and moves no value) and KEEPER_ROLE (`settle` before `keeperGrace`).
+`maxFreeze` and moves no value) and KEEPER_ROLE (`settle`, keeper-only, E34).
 
 ## Constants
 

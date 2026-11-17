@@ -63,6 +63,7 @@ contracts/script/abstract.BasketVaultDeployBase.mdx
 contracts/script/abstract.CoreTimelockHandover.mdx
 contracts/script/abstract.ExpectedChainGuard.mdx
 contracts/script/abstract.FundSystemBase.mdx
+contracts/script/abstract.FundTimelockPolicy.mdx
 contracts/script/abstract.UpgradeAuthority.mdx
 contracts/script/constants.DeployVault.s.mdx
 contracts/script/contract.DeployAgentTokenVault.mdx
@@ -75,6 +76,7 @@ contracts/script/contract.DeployFundTimelock.mdx
 contracts/script/contract.DeployFundWiring.mdx
 contracts/script/contract.DeployGateway.mdx
 contracts/script/contract.DeployHardAssetsVault.mdx
+contracts/script/contract.DeployKeeperAccount.mdx
 contracts/script/contract.DeployLibs.mdx
 contracts/script/contract.DeployPortfolioRouter.mdx
 contracts/script/contract.DeployProtocolAssetVault.mdx
@@ -191,6 +193,7 @@ contracts/test/contract.FeatureFlagsTest.mdx
 contracts/test/contract.FeeOnTransferUSDC.mdx
 contracts/test/contract.FixedLiquidityPool.mdx
 contracts/test/contract.FourVaultInitialStateForkTest.mdx
+contracts/test/contract.FundPredictionHarness.mdx
 contracts/test/contract.GasBurningAdapter.mdx
 contracts/test/contract.GasMeteredStubVault.mdx
 contracts/test/contract.GasUSDC.mdx
@@ -496,6 +499,7 @@ contracts/test/prototype/contract.FlowLibsHarness.mdx
 contracts/test/prototype/contract.FlowLibsPinTest.mdx
 contracts/test/prototype/contract.FlowLibsTest.mdx
 contracts/test/prototype/contract.FlowQueueFixesTest.mdx
+contracts/test/prototype/contract.FlowQueueGapsTest.mdx
 contracts/test/prototype/contract.FlowQueueOldestFirstInvariant.mdx
 contracts/test/prototype/contract.FlowQueueRandomSeedFuzzTest.mdx
 contracts/test/prototype/contract.FlowQueueRealFeedsTest.mdx
@@ -508,10 +512,19 @@ contracts/test/prototype/contract.FundExtrasTest.mdx
 contracts/test/prototype/contract.FxMockAggregator.mdx
 contracts/test/prototype/contract.HarnessSmokeTest.mdx
 contracts/test/prototype/contract.Invariants.mdx
+contracts/test/prototype/contract.KeeperAccountDeployTest.mdx
+contracts/test/prototype/contract.KeeperAccountFlowTest.mdx
+contracts/test/prototype/contract.KeeperAccountUnitTest.mdx
+contracts/test/prototype/contract.LocalAToken.mdx
+contracts/test/prototype/contract.LocalAavePool.mdx
+contracts/test/prototype/contract.LocalMintableErc20.mdx
+contracts/test/prototype/contract.LocalSwapRouter.mdx
+contracts/test/prototype/contract.LocalUniV3Pool.mdx
 contracts/test/prototype/contract.OddDeltaPool.mdx
 contracts/test/prototype/contract.OwnerDefaultsTest.mdx
 contracts/test/prototype/contract.QueueMockAggregator.mdx
 contracts/test/prototype/contract.QueueMockObservablePool.mdx
+contracts/test/prototype/contract.RebalancerGapsTest.mdx
 contracts/test/prototype/contract.ReviewFixesDepthTest.mdx
 contracts/test/prototype/contract.ReviewFixesQueueTest.mdx
 contracts/test/prototype/contract.ReviewFixesRebalancerTest.mdx
@@ -525,6 +538,7 @@ contracts/test/prototype/interface.IAavePool.mdx
 contracts/test/prototype/interface.IAeroCLFactoryRead.mdx
 contracts/test/prototype/interface.IAeroCLPoolRead.mdx
 contracts/test/prototype/interface.IAtkAavePool.mdx
+contracts/test/prototype/interface.IAtkAdapterAssets.mdx
 contracts/test/prototype/interface.IAtkLendingAdapter.mdx
 contracts/test/prototype/interface.IAtkPool.mdx
 contracts/test/prototype/interface.IAtkRateAdapter.mdx
@@ -532,6 +546,7 @@ contracts/test/prototype/interface.IAtkRouter.mdx
 contracts/test/prototype/interface.IComet.mdx
 contracts/test/prototype/interface.ICometExtensionDelegate.mdx
 contracts/test/prototype/interface.IERC20Like.mdx
+contracts/test/prototype/interface.IFeed.mdx
 contracts/test/prototype/interface.IFxV3Pool.mdx
 contracts/test/prototype/interface.IHarnessSwapRouter02.mdx
 contracts/test/prototype/interface.IHarnessV3Pool.mdx
@@ -552,6 +567,7 @@ contracts/test/prototype/sim/abstract.TimedSimBase.mdx
 contracts/test/prototype/sim/contract.AttackSimBaselineTest.mdx
 contracts/test/prototype/sim/contract.AttackSimTimedTest.mdx
 contracts/test/prototype/sim/contract.RebalanceSimTest.mdx
+contracts/test/prototype/sim/contract.TimedFlowFaultSimTest.mdx
 contracts/test/prototype/sim/contract.TimedFlowSimLeversTest.mdx
 contracts/test/prototype/sim/contract.TimedFlowSimTest.mdx
 contracts/test/prototype/sim/interface.IAtkSimRouter.mdx
@@ -574,6 +590,7 @@ contracts/test/prototype/src/constants.FlowTypes.mdx
 contracts/test/prototype/src/constants.FundTypes.mdx
 contracts/test/prototype/src/contract.FlowQueue.mdx
 contracts/test/prototype/src/contract.FundExclusionLedger.mdx
+contracts/test/prototype/src/contract.KeeperAccount.mdx
 contracts/test/prototype/src/contract.RebalanceGovernance.mdx
 contracts/test/prototype/src/contract.Rebalancer.mdx
 contracts/test/prototype/src/contract.RobotMoneyFund.mdx
@@ -588,6 +605,7 @@ contracts/test/prototype/src/enum.StepFeedCheck.mdx
 contracts/test/prototype/src/enum.Venue.mdx
 contracts/test/prototype/src/error.NotImplemented.mdx
 contracts/test/prototype/src/interface.IFlowEvents.mdx
+contracts/test/prototype/src/interface.IFlowQueueSnapshot.mdx
 contracts/test/prototype/src/interface.IFundEvents.mdx
 contracts/test/prototype/src/interface.IFundLedgerSource.mdx
 contracts/test/prototype/src/interfaces/interface.IChainlinkAggregator.mdx
@@ -605,9 +623,11 @@ contracts/test/prototype/src/lib/library.FeedLib.mdx
 contracts/test/prototype/src/lib/library.FlowCheckLib.mdx
 contracts/test/prototype/src/lib/library.FlowClaimLib.mdx
 contracts/test/prototype/src/lib/library.FlowEpochs.mdx
+contracts/test/prototype/src/lib/library.FlowMatchLib.mdx
 contracts/test/prototype/src/lib/library.FlowSettleLib.mdx
 contracts/test/prototype/src/lib/library.FlowStorage.mdx
 contracts/test/prototype/src/lib/library.FundAdminLib.mdx
+contracts/test/prototype/src/lib/library.FundDelistLib.mdx
 contracts/test/prototype/src/lib/library.FundFlowsLib.mdx
 contracts/test/prototype/src/lib/library.FundPositionLib.mdx
 contracts/test/prototype/src/lib/library.FundStepLib.mdx
@@ -615,8 +635,17 @@ contracts/test/prototype/src/lib/library.FundStorage.mdx
 contracts/test/prototype/src/lib/library.FundValuationLib.mdx
 contracts/test/prototype/src/lib/library.StepFeedLib.mdx
 contracts/test/prototype/src/lib/library.TwapSlicesLib.mdx
+contracts/test/prototype/src/lib/struct.DelistClaimAccount.mdx
+contracts/test/prototype/src/lib/struct.DepBucket.mdx
+contracts/test/prototype/src/lib/struct.DepMatchRecord.mdx
 contracts/test/prototype/src/lib/struct.FlowState.mdx
 contracts/test/prototype/src/lib/struct.FundState.mdx
+contracts/test/prototype/src/lib/struct.LendingClaimAccount.mdx
+contracts/test/prototype/src/lib/struct.LendingClaimEpoch.mdx
+contracts/test/prototype/src/lib/struct.OwnerDepCohort.mdx
+contracts/test/prototype/src/lib/struct.OwnerRedState.mdx
+contracts/test/prototype/src/lib/struct.RedCycleState.mdx
+contracts/test/prototype/src/lib/struct.RoundState.mdx
 contracts/test/prototype/src/lib/struct.WalkCursor.mdx
 contracts/test/prototype/src/library.PlanMath.mdx
 contracts/test/prototype/src/library.Roles.mdx
@@ -633,6 +662,7 @@ contracts/test/prototype/src/struct.FundInitParams.mdx
 contracts/test/prototype/src/struct.Plan.mdx
 contracts/test/prototype/src/struct.PlanParams.mdx
 contracts/test/prototype/src/struct.PlanPreviewRow.mdx
+contracts/test/prototype/src/struct.QueueLiveness.mdx
 contracts/test/prototype/src/struct.Quote.mdx
 contracts/test/prototype/src/struct.Request.mdx
 contracts/test/prototype/src/struct.SettleContext.mdx

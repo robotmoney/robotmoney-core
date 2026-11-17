@@ -5,7 +5,7 @@ description: "The Aerodrome exact-output adapter copy (`AerodromeExactOutSwapAda
 
 # AdaptersTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Adapters.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/Adapters.t.sol)
 
 **Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
 
@@ -295,4 +295,250 @@ fund's TWAP uses), lands near the pool's spot, and refuses a pool the Aerodrome 
 ```solidity
 function test_aerodromeExactOut_inheritedTwapPriceReadsThePool() public fixtureCovered;
 ```
+
+<a id="test_e43_feeclassification_unifixedandaeromutable"></a>
+
+### test_e43_feeClassification_uniFixedAndAeroMutable
+
+Step 3f (E43, §4.5 rule 6): `isFixedFeePool` distinguishes immutable Uniswap V3 pools from
+mutable-fee Aerodrome Slipstream pools, and `poolFeeBps` reports fee in bps rounded up.
+
+```solidity
+function test_e43_feeClassification_uniFixedAndAeroMutable() public fixtureCovered;
+```
+
+<a id="_refreshsandboxfeeds-shortpaysandbox"></a>
+
+### _refreshSandboxFeeds
+
+```solidity
+function _refreshSandboxFeeds(ShortPaySandbox memory sb) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+
+<a id="_deployshortpaysandbox"></a>
+
+### _deployShortPaySandbox
+
+```solidity
+function _deployShortPaySandbox() private returns (ShortPaySandbox memory sb);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+
+<a id="_sbbuylimits-shortpaysandbox-uint256"></a>
+
+### _sbBuyLimits
+
+```solidity
+function _sbBuyLimits(ShortPaySandbox memory sb, uint256 sharesOut)
+        private
+        view
+        returns (uint256[] memory lims, uint256 maxUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+| sharesOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lims | `uint256[]` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="_sbmintasqueue-shortpaysandbox-uint256-uint256-uint256"></a>
+
+### _sbMintAsQueue
+
+```solidity
+function _sbMintAsQueue(
+        ShortPaySandbox memory sb,
+        uint256 sharesOut,
+        uint256 maxU,
+        uint256[] memory lims
+    ) private returns (uint256 spent);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+| sharesOut | `uint256` |  |
+| maxU | `uint256` |  |
+| lims | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| spent | `uint256` |  |
+
+<a id="test_step3f_rb34_mechswapunderdeliverrejectedbyfund"></a>
+
+### test_step3f_rb34_mechSwapUnderDeliverRejectedByFund
+
+Step 3f (RB-34, RB-13): `RobotMoneyFund.mintInKind` rejects an under-delivering `MechSwapAdapter`
+via Check 10 (`ProportionViolated`) even while reporting honest spent USDC, under `fixtureCovered`.
+
+```solidity
+function test_step3f_rb34_mechSwapUnderDeliverRejectedByFund() public fixtureCovered;
+```
+
+<a id="lastbasketstepat"></a>
+
+### lastBasketStepAt
+
+```solidity
+function lastBasketStepAt() external pure returns (uint64);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+
+<a id="_sbmintsupplymultiple-shortpaysandbox-uint256"></a>
+
+### _sbMintSupplyMultiple
+
+```solidity
+function _sbMintSupplyMultiple(ShortPaySandbox memory sb, uint256 div)
+        private
+        returns (uint256 lot);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+| div | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lot | `uint256` |  |
+
+<a id="_checkshortpaysellandclaim-shortpaysandbox"></a>
+
+### _checkShortPaySellAndClaim
+
+```solidity
+function _checkShortPaySellAndClaim(ShortPaySandbox memory sb)
+        private
+        returns (uint256 claimUnits);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimUnits | `uint256` |  |
+
+<a id="_checkshortpayexclusionanddeferred-shortpaysandbox"></a>
+
+### _checkShortPayExclusionAndDeferred
+
+```solidity
+function _checkShortPayExclusionAndDeferred(ShortPaySandbox memory sb) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sb | `ShortPaySandbox` |  |
+
+<a id="test_step3f_rb34_a34_mechaaveshortpayclaimandexclusionrecovery"></a>
+
+### test_step3f_rb34_a34_mechAaveShortPayClaimAndExclusionRecovery
+
+Step 3f (RB-34, A34): fund-level custody checks under `MechAaveAdapter` short-pay and partial pool
+payout: `sellForFlow` never drains stayers' idle, `claimPosition` reverts `DeferredShortfall`,
+zero-liquidity `settleClaim` leaves claim units intact, and exclusion recovery only books actual
+USDC delta while refusing closure (`AssetStillHeld`) until the venue releases trapped collateral.
+
+```solidity
+function test_step3f_rb34_a34_mechAaveShortPayClaimAndExclusionRecovery()
+        public
+        fixtureCovered;
+```
+
+<a id="test_step3f_a34_queuevenueliquiditystopsdepositswithoutblockingredemptions"></a>
+
+### test_step3f_a34_queueVenueLiquidityStopsDepositsWithoutBlockingRedemptions
+
+Step 3f (A34, E36): `FlowQueue.settle()` blocks deposits for the round (`DepositStoppedForRound(..., 3)`)
+when a lending venue reports insufficient `availableLiquidity()`, while redemptions still settle.
+
+```solidity
+function test_step3f_a34_queueVenueLiquidityStopsDepositsWithoutBlockingRedemptions()
+        public
+        fixtureCovered;
+```
+
+## Structs
+
+### ShortPaySandbox
+
+```solidity
+struct ShortPaySandbox {
+        LocalMintableErc20 mUsdc;
+        LocalMintableErc20 mWeth;
+        LocalAavePool pool;
+        LocalUniV3Pool v3Pool;
+        LocalSwapRouter router;
+        MockAggregator usdcFeed;
+        MockAggregator ethFeed;
+        MockAggregator seqFeed;
+        int256 ethPrice8;
+        uint256 seqStartedAt;
+        IRobotMoneyFundFull fund;
+        FlowQueue queue;
+        MechAaveAdapter mechAave;
+        MechSwapAdapter mechSwap;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mUsdc | `LocalMintableErc20` |  |
+| mWeth | `LocalMintableErc20` |  |
+| pool | `LocalAavePool` |  |
+| v3Pool | `LocalUniV3Pool` |  |
+| router | `LocalSwapRouter` |  |
+| usdcFeed | `MockAggregator` |  |
+| ethFeed | `MockAggregator` |  |
+| seqFeed | `MockAggregator` |  |
+| ethPrice8 | `int256` |  |
+| seqStartedAt | `uint256` |  |
+| fund | `IRobotMoneyFundFull` |  |
+| queue | `FlowQueue` |  |
+| mechAave | `MechAaveAdapter` |  |
+| mechSwap | `MechSwapAdapter` |  |
 

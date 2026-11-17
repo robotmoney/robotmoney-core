@@ -5,7 +5,7 @@ description: "One test per error the adversarial review of 2026-11-12 found in t
 
 # ReviewFixesQueueTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/ReviewFixes.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/ReviewFixes.t.sol)
 
 **Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
 
@@ -78,7 +78,9 @@ function test_QF3_aRevokeThenReallowBetweenSettlementsDoesNotTripTheBreaker()
 
 ### test_QF4_anAllowedReturnEndsWithTheFreeze
 
-Q-F4: an allowed early return does not outlive a freeze that ran out by itself (RB-11).
+Q-F4 (Step 3f E49, RB-18): `allowReturn` / `takeReturn` are retired; a freeze ends by itself at
+`maxFreeze` even when `maxFreeze > minHold`, with cooldown preventing back-to-back freezes and
+normal FIFO share delivery resuming automatically once `frozenUntil` passes.
 
 ```solidity
 function test_QF4_anAllowedReturnEndsWithTheFreeze() public fixtureCovered;

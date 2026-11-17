@@ -5,7 +5,7 @@ description: "Events and errors shared by the fund and the rebalancer. Both inhe
 
 # IFundEvents
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FundTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/FundTypes.sol)
 
 **Title:** IFundEvents
 
@@ -305,4 +305,19 @@ error BoundAtOrBelowPoolFee(uint256 index, uint256 boundBps, uint256 poolFeeBps)
 | index | `uint256` |  |
 | boundBps | `uint256` |  |
 | poolFeeBps | `uint256` |  |
+
+### BasketCapExceeded
+
+Step 3f (D38, E57): sum of basket asset targets (`sum`) exceeds `maxBasketBps` (`cap`).
+
+```solidity
+error BasketCapExceeded(uint256 sum, uint256 cap);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sum | `uint256` |  |
+| cap | `uint256` |  |
 

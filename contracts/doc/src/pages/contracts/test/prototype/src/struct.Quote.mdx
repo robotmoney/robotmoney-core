@@ -1,21 +1,22 @@
 ---
 title: "Quote"
-description: "`quoteDeposit` / `quoteRedeem` (E21): the worst case the protocol's own limits allow right now."
+description: "Terms returned by `quoteDeposit` / `quoteRedeem` (E31, FLOW-08): fee, cutoff, timing, and guard bands. No price."
 ---
 
 # Quote
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/FlowTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/FlowTypes.sol)
 
-`quoteDeposit` / `quoteRedeem` (E21): the worst case the protocol's own limits allow right now.
+Terms returned by `quoteDeposit` / `quoteRedeem` (E31, FLOW-08): fee, cutoff, timing, and guard bands. No price.
 
 ```solidity
 struct Quote {
-    uint256 boundPrice;
-    uint256 worstAmount;
     uint256 feeBps;
+    uint64 cancelCutoff;
     uint64 earliestSettle;
     uint64 holdEnds;
+    uint16 refBandBps;
+    uint16 legBandBps;
 }
 ```
 
@@ -23,9 +24,10 @@ struct Quote {
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| boundPrice | `uint256` | Deposit: the most USDC per share (rounded UP); Redeem: the least USDC per share after the<br/>exit fee (rounded DOWN). PRICE_SCALE units. |
-| worstAmount | `uint256` | Deposit: the fewest shares the USDC would buy at `boundPrice` (rounded DOWN). Redeem: the<br/>least USDC the shares would pay (rounded DOWN). |
-| feeBps | `uint256` | Deposit: 0 (the users of a settlement pay the purchase cost, there is no fee class).<br/>Redeem: the fund's `exitFeeBps`. |
-| earliestSettle | `uint64` | Earliest time a request made now can settle (its epoch's end plus `settleWindow`). |
-| holdEnds | `uint64` | Deposit: `earliestSettle + minHold`. Redeem: `earliestSettle` (USDC claimable at once). |
+| feeBps | `uint256` |  |
+| cancelCutoff | `uint64` |  |
+| earliestSettle | `uint64` |  |
+| holdEnds | `uint64` |  |
+| refBandBps | `uint16` |  |
+| legBandBps | `uint16` |  |
 

@@ -1,0 +1,35 @@
+---
+title: "DelistClaimAccount"
+description: "Every piece of `RobotMoneyFund` state outside the OpenZeppelin namespaces, in one struct so the delegatecall-linked fund libraries (`FundValuationLib`, `FundFlowsLib`, `FundAdminLib`) take one storage reference per call (§6.1: logic lives in linked libraries to keep the fund under EIP-170)."
+---
+
+# DelistClaimAccount
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/lib/FundStorage.sol)
+
+Every piece of `RobotMoneyFund` state outside the OpenZeppelin namespaces, in one struct so the
+delegatecall-linked fund libraries (`FundValuationLib`, `FundFlowsLib`, `FundAdminLib`) take one
+storage reference per call (§6.1: logic lives in linked libraries to keep the fund under EIP-170).
+
+Step 3d (proposal §4.5, §5.9; eng plan E1, E9, E13, E14, E19, E20). Appended after `rolesBound`:
+
+Appended by fund-extras (scaffold plan §7.4):
+
+Accumulator state for one claim owner (or linked fee share) on a delisting sale.
+
+```solidity
+struct DelistClaimAccount {
+    uint256 scaled;
+    uint256 usdcDebt;
+    uint256 pendingUsdc;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| scaled | `uint256` |  |
+| usdcDebt | `uint256` |  |
+| pendingUsdc | `uint256` |  |
+

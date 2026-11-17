@@ -1,0 +1,39 @@
+---
+title: "RedCycleState"
+description: "Running match cycle accumulators for redemptions (O(1) per owner, multi-fee-tier exact)."
+---
+
+# RedCycleState
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/lib/FlowStorage.sol)
+
+Running match cycle accumulators for redemptions (O(1) per owner, multi-fee-tier exact).
+
+```solidity
+struct RedCycleState {
+    uint256 unmatchedFactor;
+    uint256 totalNormBasis;
+    uint64 lastMatchTime;
+    uint64 lastSettlementId;
+    uint16[] feeTiers;
+    mapping(uint16 feeBps => bool) tierActive;
+    mapping(uint16 feeBps => uint256) tierNormBasis;
+    mapping(uint16 feeBps => uint256) cumNetPerBasisScaled;
+    mapping(uint16 feeBps => uint256) tierOwedTracked;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| unmatchedFactor | `uint256` |  |
+| totalNormBasis | `uint256` |  |
+| lastMatchTime | `uint64` |  |
+| lastSettlementId | `uint64` |  |
+| feeTiers | `uint16[]` |  |
+| tierActive | `mapping(uint16 feeBps => bool)` |  |
+| tierNormBasis | `mapping(uint16 feeBps => uint256)` |  |
+| cumNetPerBasisScaled | `mapping(uint16 feeBps => uint256)` |  |
+| tierOwedTracked | `mapping(uint16 feeBps => uint256)` |  |
+

@@ -5,7 +5,7 @@ description: "Test copy of the production `AerodromeSwapAdapter` (step 3d): the 
 
 # AerodromeExactOutSwapAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/adapters/AerodromeExactOutSwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/adapters/AerodromeExactOutSwapAdapter.sol)
 
 **Inherits:** [AerodromeSwapAdapter](/contracts/adapters/contract.AerodromeSwapAdapter), [IExactOutSwapAdapter](/contracts/test/prototype/src/interfaces/interface.IExactOutSwapAdapter)
 
@@ -77,4 +77,71 @@ function swapExactOut(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | amountIn | `uint256` | The input actually spent (≤ `maxAmountIn`). |
+
+<a id="isfixedfeepool-address"></a>
+
+### isFixedFeePool
+
+True when `pool` is a fixed-fee pool recognized by this adapter (e.g. Uniswap V3).
+
+<i>
+
+Aerodrome Slipstream `CLPool` fees can be changed by the factory / fee module (`E43`, §4.5 rule 6),
+so Slipstream pools are never fixed-fee pools.
+
+</i>
+
+```solidity
+function isFixedFeePool(address) external pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="poolfeebps-address"></a>
+
+### poolFeeBps
+
+Fee of pool in bps rounded up (e.g. 100 pips = 1 bps, 500 pips = 5 bps).
+
+```solidity
+function poolFeeBps(address pool) external view returns (uint24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
+
+## Errors
+
+### InvalidPoolFee
+
+Pool did not return a valid `uint24` `fee()` reading.
+
+```solidity
+error InvalidPoolFee(address pool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
 

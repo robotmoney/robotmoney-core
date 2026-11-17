@@ -1,0 +1,135 @@
+---
+title: "KeeperAccountUnitTest"
+description: "The account's own rules. No fork state is read."
+---
+
+# KeeperAccountUnitTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/KeeperAccountUnit.t.sol)
+
+**Inherits:** Test
+
+**Title:** KeeperAccountUnitTest
+
+The account's own rules. No fork state is read.
+
+## State Variables
+
+### acct
+
+```solidity
+KeeperAccount internal acct;
+```
+
+### ownerA
+
+```solidity
+address internal ownerA = makeAddr("ownerA");
+```
+
+### ownerB
+
+```solidity
+address internal ownerB = makeAddr("ownerB");
+```
+
+### bot1
+
+```solidity
+address internal bot1 = makeAddr("bot1");
+```
+
+### bot2
+
+```solidity
+address internal bot2 = makeAddr("bot2");
+```
+
+### stranger
+
+```solidity
+address internal stranger = makeAddr("stranger");
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_constructorrefusesbadsets"></a>
+
+### test_constructorRefusesBadSets
+
+```solidity
+function test_constructorRefusesBadSets() public;
+```
+
+<a id="test_viewsmatchwhattheverifierreads"></a>
+
+### test_viewsMatchWhatTheVerifierReads
+
+```solidity
+function test_viewsMatchWhatTheVerifierReads() public view;
+```
+
+<a id="test_ownersrotatebotkeyswithoutanytimelock"></a>
+
+### test_ownersRotateBotKeysWithoutAnyTimelock
+
+```solidity
+function test_ownersRotateBotKeysWithoutAnyTimelock() public;
+```
+
+<a id="test_onlyownersrotate"></a>
+
+### test_onlyOwnersRotate
+
+```solidity
+function test_onlyOwnersRotate() public;
+```
+
+<a id="test_lastownerstays"></a>
+
+### test_lastOwnerStays
+
+```solidity
+function test_lastOwnerStays() public;
+```
+
+<a id="test_executeneedsabotkeyoranowner"></a>
+
+### test_executeNeedsABotKeyOrAnOwner
+
+```solidity
+function test_executeNeedsABotKeyOrAnOwner() public;
+```
+
+<a id="test_executenevercallstheaccountitself"></a>
+
+### test_executeNeverCallsTheAccountItself
+
+```solidity
+function test_executeNeverCallsTheAccountItself() public;
+```
+
+<a id="test_arevertispassedupwithitsdata"></a>
+
+### test_aRevertIsPassedUpWithItsData
+
+```solidity
+function test_aRevertIsPassedUpWithItsData() public;
+```
+
+<a id="alwaysreverts"></a>
+
+### alwaysReverts
+
+```solidity
+function alwaysReverts() external pure;
+```
+

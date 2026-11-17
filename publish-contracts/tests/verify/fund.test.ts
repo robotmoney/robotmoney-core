@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
 import { loadStageTable, scopeTable } from "../../src/stage-table.ts";
@@ -34,7 +35,7 @@ import type { Address, ChainReader, ExpectedFundAsset, Hex, LogEntry, VerifyOpti
 import { REPO_ROOT } from "../repo-root.ts";
 
 const TABLE = loadStageTable(REPO_ROOT);
-const SCRATCH_PARENT = "/drive2/home/lucas/tmp";
+const SCRATCH_PARENT = tmpdir();
 const TEMP_DIRS: string[] = [];
 
 function mkWorkDir(prefix: string): string {

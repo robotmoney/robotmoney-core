@@ -1,0 +1,609 @@
+---
+title: "TimedFlowFaultSimTest"
+description: "Step 3f, work package 11 (eng plan §8.4, E48): the scenarios the timed sim did not measure. Each test is one fault on the live fund at 1M USDC, seed 0, the SEQ market, with the sim's own background flows and the keeper's schedule. No rebalance plan runs: the fault is the thing measured."
+---
+
+# TimedFlowFaultSimTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/sim/TimedFlowSim.t.sol)
+
+**Inherits:** [TimedFlowSimTest](/contracts/test/prototype/sim/contract.TimedFlowSimTest)
+
+Step 3f, work package 11 (eng plan §8.4, E48): the scenarios the timed sim did not measure. Each test is
+one fault on the live fund at 1M USDC, seed 0, the SEQ market, with the sim's own background flows and the
+keeper's schedule. No rebalance plan runs: the fault is the thing measured.
+
+A fault window opens at t0, right after genesis and one quiet slot. At t0 two probe requests are made:
+a depositor (0.20 % of NAV) and a genesis holder's redemption (0.20 % of supply). The run goes on in
+30-minute slots until both probes are done and the fault is over, or the horizon (10 days) ends.
+
+Reported per scenario (stdout and `out/prototype/&lt;run>-timed-e48/e48-&lt;name>-s&lt;k>.json`):
+- the probes' waits: request to settlement (redemption: USDC claimable then; deposit: shares usable,
+which is settlement plus the hold, plus a freeze if one applies), in hours;
+- the longest wait over every request the sim made (done or still open, open ones counted to the end);
+- what each holder can do, tried at the middle of the fault and at its end: cancel the deposit, withdraw it
+as expired, give notice on the redemption, exit in kind, deliver the shares, withdraw credit. Each try
+runs inside a snapshot and is reverted, so it changes nothing.
+
+Opt-in like the rest of the timed sim: PROTO_SIM=1 and PROTO_SIM_FLOWS=timed. Nothing here sends a
+transaction to make a check pass. A fault is a feed answer, a keeper that stops, the emergency key's own
+pause or freeze, or the venue's own answer (mocked, as in A14 and A30).
+
+## Constants
+
+### F_NONE
+
+```solidity
+uint8 internal constant F_NONE = 0;
+```
+
+### F_SEQ
+
+```solidity
+uint8 internal constant F_SEQ = 1;
+```
+
+### F_DEPEG
+
+```solidity
+uint8 internal constant F_DEPEG = 2;
+```
+
+### F_DEPEG_STUCK
+
+```solidity
+uint8 internal constant F_DEPEG_STUCK = 3;
+```
+
+### F_KEEPER
+
+```solidity
+uint8 internal constant F_KEEPER = 4;
+```
+
+### F_PAUSE
+
+```solidity
+uint8 internal constant F_PAUSE = 5;
+```
+
+### F_FREEZE
+
+```solidity
+uint8 internal constant F_FREEZE = 6;
+```
+
+### F_VENUE
+
+```solidity
+uint8 internal constant F_VENUE = 7;
+```
+
+### F_LEND
+
+```solidity
+uint8 internal constant F_LEND = 8;
+```
+
+### SLOT_S
+
+```solidity
+uint256 internal constant SLOT_S = 1800;
+```
+
+### HORIZON_S
+
+```solidity
+uint256 internal constant HORIZON_S = 10 days;
+```
+
+### PROBE_BPS
+
+```solidity
+uint256 internal constant PROBE_BPS = 20;
+```
+
+### N_ACTIONS
+
+```solidity
+uint256 internal constant N_ACTIONS = 6;
+```
+
+### DEPEG_PX8
+
+```solidity
+uint256 internal constant DEPEG_PX8 = 97_000_000;
+```
+
+### DEPEG_STUCK_PX8
+
+```solidity
+uint256 internal constant DEPEG_STUCK_PX8 = 95_000_000;
+```
+
+### LEND_SPIKE_BPS
+
+```solidity
+uint256 internal constant LEND_SPIKE_BPS = 12_000;
+```
+
+## State Variables
+
+### pDep
+
+```solidity
+address internal pDep;
+```
+
+### pRed
+
+```solidity
+address internal pRed;
+```
+
+### pDepId
+
+```solidity
+uint256 internal pDepId;
+```
+
+### pRedId
+
+```solidity
+uint256 internal pRedId;
+```
+
+### fT0
+
+```solidity
+uint256 internal fT0;
+```
+
+### fEnd
+
+```solidity
+uint256 internal fEnd;
+```
+
+### depClosedAt
+
+```solidity
+uint256 internal depClosedAt;
+```
+
+### depUsableAt
+
+```solidity
+uint256 internal depUsableAt;
+```
+
+### redClosedAt
+
+```solidity
+uint256 internal redClosedAt;
+```
+
+### freezeUntil
+
+```solidity
+uint256 internal freezeUntil;
+```
+
+### freezeDone
+
+```solidity
+bool internal freezeDone;
+```
+
+### midActions
+
+```solidity
+uint256 internal midActions;
+```
+
+### endActions
+
+```solidity
+uint256 internal endActions;
+```
+
+### midDone
+
+```solidity
+bool internal midDone;
+```
+
+### endDone
+
+```solidity
+bool internal endDone;
+```
+
+## Functions
+
+<a id="_run-uint256-uint256-uint256"></a>
+
+### _run
+
+<i>
+
+The inherited scored-sim tests are not this contract's job.
+
+</i>
+
+```solidity
+function _run(uint256, uint256, uint256) internal override;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `uint256` |  |
+| _ | `uint256` |  |
+| _ | `uint256` |  |
+
+<a id="test_e48_none_s0"></a>
+
+### test_e48_none_s0
+
+```solidity
+function test_e48_none_s0() public fixtureCovered;
+```
+
+<a id="test_e48_sequenceroutage_s0"></a>
+
+### test_e48_sequencerOutage_s0
+
+```solidity
+function test_e48_sequencerOutage_s0() public fixtureCovered;
+```
+
+<a id="test_e48_usdcdepeg_s0"></a>
+
+### test_e48_usdcDepeg_s0
+
+```solidity
+function test_e48_usdcDepeg_s0() public fixtureCovered;
+```
+
+<a id="test_e48_usdcdepegstuck_s0"></a>
+
+### test_e48_usdcDepegStuck_s0
+
+```solidity
+function test_e48_usdcDepegStuck_s0() public fixtureCovered;
+```
+
+<a id="test_e48_keeperstopped_s0"></a>
+
+### test_e48_keeperStopped_s0
+
+```solidity
+function test_e48_keeperStopped_s0() public fixtureCovered;
+```
+
+<a id="test_e48_pause_s0"></a>
+
+### test_e48_pause_s0
+
+```solidity
+function test_e48_pause_s0() public fixtureCovered;
+```
+
+<a id="test_e48_freeze_s0"></a>
+
+### test_e48_freeze_s0
+
+```solidity
+function test_e48_freeze_s0() public fixtureCovered;
+```
+
+<a id="test_e48_venuefullyborrowed_s0"></a>
+
+### test_e48_venueFullyBorrowed_s0
+
+```solidity
+function test_e48_venueFullyBorrowed_s0() public fixtureCovered;
+```
+
+<a id="test_e48_lendratespike_s0"></a>
+
+### test_e48_lendRateSpike_s0
+
+```solidity
+function test_e48_lendRateSpike_s0() public fixtureCovered;
+```
+
+<a id="test_e48_lendratecalibration_s0"></a>
+
+### test_e48_lendRateCalibration_s0
+
+SAFE-09 calibration: 14 days of the SEQ market with the sim's own flows and no fault, under the
+`maxLendRateGrowthBps` the run is given (`PROTO_SIM_FLOW_MAX_LEND_RATE_GROWTH_BPS` and a
+`PROTO_SIM_TAG`). It counts the rounds check 5 stopped for deposits and the match, the fastest venue
+rate growth any call saw, and the longest request waits. Run once per candidate value.
+
+```solidity
+function test_e48_lendRateCalibration_s0() public fixtureCovered;
+```
+
+<a id="_faultname-uint8"></a>
+
+### _faultName
+
+```solidity
+function _faultName(uint8 f) internal pure returns (string memory);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `string` |  |
+
+<a id="_faultspan-uint8"></a>
+
+### _faultSpan
+
+<i>
+
+How long the fault is on (seconds). Pause and freeze end by themselves (`maxPause`, `maxFreeze`).
+
+</i>
+
+```solidity
+function _faultSpan(uint8 f) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_fault-uint8-uint256"></a>
+
+### _fault
+
+```solidity
+function _fault(uint8 f, uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+| k | `uint256` |  |
+
+<a id="faultopen-uint8"></a>
+
+### faultOpen
+
+Self-call: start the fault and place the two probes.
+
+```solidity
+function faultOpen(uint8 f) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+<a id="_faultset-uint8-bool"></a>
+
+### _faultSet
+
+```solidity
+function _faultSet(uint8 f, bool on) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+| on | `bool` |  |
+
+<a id="faultslot-uint8"></a>
+
+### faultSlot
+
+Self-call: one 30-minute slot (the sim's own, no plan), then the fault's own events and the probes.
+
+```solidity
+function faultSlot(uint8 f) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+<a id="_track-uint8"></a>
+
+### _track
+
+<i>
+
+Probe bookkeeping after each slot. The freeze fault waits for the probe deposit to settle, goes to the
+last second of its hold (the longest wait, A16) and has the emergency key freeze that settlement.
+
+</i>
+
+```solidity
+function _track(uint8 f) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+<a id="_faultdone-uint8"></a>
+
+### _faultDone
+
+```solidity
+function _faultDone(uint8 f) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="faultclose-uint8"></a>
+
+### faultClose
+
+Self-call: finish and report.
+
+```solidity
+function faultClose(uint8 f) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+
+<a id="_stats"></a>
+
+### _stats
+
+<i>
+
+Waits over every request the sim made: done ones to their settlement (a deposit to its unlock), open ones
+to the end of the run (so an open request's wait is a floor). Attempts by outcome.
+
+</i>
+
+```solidity
+function _stats() internal view returns (FaultStats memory st);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| st | `FaultStats` |  |
+
+<a id="_writefault-uint8-faultstats"></a>
+
+### _writeFault
+
+```solidity
+function _writeFault(uint8 f, FaultStats memory st) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `uint8` |  |
+| st | `FaultStats` |  |
+
+<a id="_tryactions"></a>
+
+### _tryActions
+
+<i>
+
+Bit i is set if action i succeeds now. Each try is reverted, so the run is not changed.
+
+</i>
+
+```solidity
+function _tryActions() internal returns (uint256 bits);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bits | `uint256` |  |
+
+<a id="_try-uint256"></a>
+
+### _try
+
+```solidity
+function _try(uint256 i) internal returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+## Structs
+
+### FaultStats
+
+```solidity
+struct FaultStats {
+        uint256 maxRed;
+        uint256 maxDep;
+        uint256 openRed;
+        uint256 openDep;
+        uint256 expiredDep;
+        uint256 nRed;
+        uint256 nDep;
+        uint256 ok;
+        uint256 noop;
+        uint256 blocked;
+        uint256 other;
+        uint256 firstBlocked;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxRed | `uint256` |  |
+| maxDep | `uint256` |  |
+| openRed | `uint256` |  |
+| openDep | `uint256` |  |
+| expiredDep | `uint256` |  |
+| nRed | `uint256` |  |
+| nDep | `uint256` |  |
+| ok | `uint256` |  |
+| noop | `uint256` |  |
+| blocked | `uint256` |  |
+| other | `uint256` |  |
+| firstBlocked | `uint256` |  |
+

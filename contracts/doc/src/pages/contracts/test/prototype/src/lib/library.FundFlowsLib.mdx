@@ -5,7 +5,7 @@ description: "Every value-moving path of `RobotMoneyFund` except the share mint/
 
 # FundFlowsLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/src/lib/FundFlowsLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/src/lib/FundFlowsLib.sol)
 
 **Title:** FundFlowsLib
 
@@ -30,6 +30,42 @@ first share costs par (`PRICE_SCALE / 1e18`).
 
 ```solidity
 uint256 internal constant SEED_SHARES_PER_USDC = 1e18;
+```
+
+### FLOW_CLAIM_DEFERRED
+
+```solidity
+uint8 internal constant FLOW_CLAIM_DEFERRED = 0;
+```
+
+### FLOW_CLAIM_POSITION
+
+```solidity
+uint8 internal constant FLOW_CLAIM_POSITION = 1;
+```
+
+### FLOW_SETTLE_CLAIM
+
+```solidity
+uint8 internal constant FLOW_SETTLE_CLAIM = 2;
+```
+
+### FLOW_EMERGENCY_UNWIND
+
+```solidity
+uint8 internal constant FLOW_EMERGENCY_UNWIND = 3;
+```
+
+### FLOW_EMERGENCY_UNWIND_ASSET
+
+```solidity
+uint8 internal constant FLOW_EMERGENCY_UNWIND_ASSET = 4;
+```
+
+### FLOW_SWEEP_FOREIGN
+
+```solidity
+uint8 internal constant FLOW_SWEEP_FOREIGN = 5;
 ```
 
 ## Functions
@@ -113,30 +149,51 @@ function mintInKind(
 | ---- | ---- | ----------- |
 | spent | `uint256` |  |
 
-<a id="sellforflow-fundstate-address-uint256-uint256-uint256"></a>
+<a id="sellforflow-fundstate-sellflowctx-uint256"></a>
 
 ### sellForFlow
 
-Body of `IRobotMoneyFund.sellForFlow` (E4, proposal §5.9.3 step 8) after the burn. The fund checks
-FLOW_ROLE, holds `nonReentrant` and has already burned `shares` of `caller` (burn before any external
-call). Never gated by plan state, pause or shutdown (RB-6).
-1. `LegLimitsLength`. Check 7 snapshot (the burn moved no asset).
-2. Realize `shares / supplyBefore` of every counted holding, each rounded DOWN: the idle part; each
-Lending position withdraws its part less `LENDING_ROUNDING_UNITS` (nothing when that is ≤ 0),
-measured by the fund's USDC delta; each Basket token sells its part through the production
-exact-input `swap` with `minUsdcPerLeg[i]` as the floor (check 8, `FlowLegLimit` if the delta is
-below it). A venue that cannot pay reverts the call, so the queue leaves redemptions pending.
-3. `exitFeeBps` of the realized gross (rounded down) to `feeRecipient`, the rest to `caller`.
-4. Check 10 with `supplyAfter = supplyBefore − shares`. Emits `SoldForFlow`.
+Body of `IRobotMoneyFund.sellForFlow`, `sellForFlowGross`, and `sellForFlowBatch` after the burn.
+The fund checks FLOW_ROLE, holds `nonReentrant`, and has already burned `shares` of `caller`.
+Net mode (`!ctx.grossOnly && !ctx.batch`) deducts `s.exitFeeBps`; gross mode transfers gross
+and tags `ctx.feeBps` onto emitted claims; batch mode splits any claims directly onto `ctx.owners`
+with linked fees at `ctx.ownerFeeBps`.
 
 ```solidity
 function sellForFlow(
         FundState storage s,
+        SellFlowCtx memory ctx,
+        uint256[] memory minUsdcPerLeg
+    ) public returns (uint256 payout);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| ctx | `SellFlowCtx` |  |
+| minUsdcPerLeg | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| payout | `uint256` |  |
+
+<a id="sellforflowgross-fundstate-address-uint256-uint256-uint256-uint256"></a>
+
+### sellForFlowGross
+
+```solidity
+function sellForFlowGross(
+        FundState storage s,
         address caller,
         uint256 shares,
         uint256[] memory minUsdcPerLeg,
-        uint256 supplyBefore
-    ) public returns (uint256 net);
+        uint256 supplyBefore,
+        uint256 claimFeeBps
+    ) public returns (uint256 payout);
 ```
 
 **Parameters**
@@ -147,13 +204,88 @@ function sellForFlow(
 | caller | `address` |  |
 | shares | `uint256` |  |
 | minUsdcPerLeg | `uint256[]` |  |
-| supplyBefore | `uint256` | The fund's `totalSupply()` before the burn. |
+| supplyBefore | `uint256` |  |
+| claimFeeBps | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| net | `uint256` | USDC paid to `caller`. |
+| payout | `uint256` |  |
+
+<a id="_sellforflow-fundstate-sellflowctx-uint256"></a>
+
+### _sellForFlow
+
+```solidity
+function _sellForFlow(
+        FundState storage s,
+        SellFlowCtx memory ctx,
+        uint256[] memory minUsdcPerLeg
+    ) private returns (uint256 payout);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| ctx | `SellFlowCtx` |  |
+| minUsdcPerLeg | `uint256[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| payout | `uint256` |  |
+
+<a id="_sellflowleg-fundstate-sellflowctx-uint256-uint256-uint256"></a>
+
+### _sellFlowLeg
+
+```solidity
+function _sellFlowLeg(
+        FundState storage s,
+        SellFlowCtx memory ctx,
+        uint256 i,
+        uint256 amt,
+        uint256 minOut
+    ) private returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| ctx | `SellFlowCtx` |  |
+| i | `uint256` |  |
+| amt | `uint256` |  |
+| minOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_recorddelistbatch-fundstate-uint256-uint256-sellflowctx"></a>
+
+### _recordDelistBatch
+
+```solidity
+function _recordDelistBatch(FundState storage s, uint256 i, uint256 amt, SellFlowCtx memory ctx)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amt | `uint256` |  |
+| ctx | `SellFlowCtx` |  |
 
 <a id="_supplyleg-fundstate-uint256-uint256"></a>
 
@@ -222,16 +354,14 @@ function _buyExact(
 | ---- | ---- | ----------- |
 | amountIn | `uint256` |  |
 
-<a id="sweepforeign-fundstate-address-address"></a>
+<a id="_sweepforeign-fundstate-address-address"></a>
 
-### sweepForeign
+### _sweepForeign
 
-Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2). Reverts
-`ProtectedToken` for USDC, the share token, every asset token (active or not) and every Lending
-adapter address. Emits `ForeignTokenSwept`.
+Permissionless foreign-token sweep to the fixed quarantine address (INV-1/INV-2).
 
 ```solidity
-function sweepForeign(FundState storage s, address token, address caller) public;
+function _sweepForeign(FundState storage s, address token, address caller) private;
 ```
 
 **Parameters**
@@ -370,9 +500,9 @@ function _inKindBasket(
 | shares | `uint256` |  |
 | supplyBefore | `uint256` |  |
 
-<a id="claimdeferred-fundstate-uint256-address-address"></a>
+<a id="_claimdeferred-fundstate-uint256-address-address"></a>
 
-### claimDeferred
+### _claimDeferred
 
 Pay `account` everything it is owed from asset `index` (`IRobotMoneyFund.claimDeferred`), to
 `to` (the account's own choice, as an ERC-4626 receiver). Basket: transfer the tokens. Lending:
@@ -381,8 +511,8 @@ the claim stays whole) and transfer it. Works whatever the asset's status (inact
 the claim was fixed at exit time. Reverts `NothingDeferred` when nothing is owed.
 
 ```solidity
-function claimDeferred(FundState storage s, uint256 index, address account, address to)
-        public
+function _claimDeferred(FundState storage s, uint256 index, address account, address to)
+        private
         returns (uint256 amount);
 ```
 
@@ -500,9 +630,9 @@ function executeStep(FundState storage s, StepOrder memory o)
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `StepResult` |  |
 
-<a id="emergencyunwind-fundstate"></a>
+<a id="flowaction-fundstate-uint8-uint256-address-address"></a>
 
-### emergencyUnwind
+### flowAction
 
 Move every holding to idle USDC. Lending: drain the holders' part of each active adapter, tolerant
 of a failing adapter (`RobotMoneyVaultOps._emergencyPull`), leaving the position claims' part in
@@ -514,8 +644,36 @@ zero floor is dust and is skipped; a leg whose TWAP read fails is skipped and st
 is no configured-floor override here, see the fund's NatSpec). A swap below its floor reverts
 the whole unwind, as on BasketVault. Returns the USDC that reached idle.
 
+Consolidated non-reentrant claim / unwind / sweep dispatcher called via one `DELEGATECALL` site.
+
 ```solidity
-function emergencyUnwind(FundState storage s) public returns (uint256 recovered);
+function flowAction(FundState storage s, uint8 op, uint256 index, address addr, address caller)
+        public
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `uint8` |  |
+| index | `uint256` |  |
+| addr | `address` |  |
+| caller | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_emergencyunwind-fundstate"></a>
+
+### _emergencyUnwind
+
+```solidity
+function _emergencyUnwind(FundState storage s) private returns (uint256 recovered);
 ```
 
 **Parameters**
@@ -529,6 +687,153 @@ function emergencyUnwind(FundState storage s) public returns (uint256 recovered)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | recovered | `uint256` |  |
+
+<a id="_emergencyunwindinsale-fundstate-uint256-assetconfig-address"></a>
+
+### _emergencyUnwindInSale
+
+```solidity
+function _emergencyUnwindInSale(
+        FundState storage s,
+        uint256 i,
+        AssetConfig memory a,
+        address usdc
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| a | `AssetConfig` |  |
+| usdc | `address` |  |
+
+<a id="_swapandmeasuresold-assetconfig-address-uint256-uint256"></a>
+
+### _swapAndMeasureSold
+
+```solidity
+function _swapAndMeasureSold(
+        AssetConfig memory a,
+        address usdc,
+        uint256 amountIn,
+        uint256 minOut
+    ) private returns (uint256 sold, uint256 usdcGot);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| usdc | `address` |  |
+| amountIn | `uint256` |  |
+| minOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sold | `uint256` |  |
+| usdcGot | `uint256` |  |
+
+<a id="executedeliststep-fundstate-uint256-uint256"></a>
+
+### executeDelistStep
+
+Step 3f (`IRobotMoneyFund.executeDelistStep`): execute one bounded delisting swap on `index`.
+
+```solidity
+function executeDelistStep(FundState storage s, uint256 index, uint256 maxUsdcNotional)
+        public
+        returns (bool executed, uint256 tokensSold, uint256 usdcReceived);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| maxUsdcNotional | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| executed | `bool` |  |
+| tokensSold | `uint256` |  |
+| usdcReceived | `uint256` |  |
+
+<a id="_emergencyunwindasset-fundstate-uint256"></a>
+
+### _emergencyUnwindAsset
+
+Step 3f (`IRobotMoneyFund.emergencyUnwind(uint256)`): single-asset unwind without halting other assets.
+
+```solidity
+function _emergencyUnwindAsset(FundState storage s, uint256 index)
+        private
+        returns (uint256 recoveredUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| recoveredUsdc | `uint256` |  |
+
+<a id="_emergencyunwindsingleswap-fundstate-uint256-assetconfig"></a>
+
+### _emergencyUnwindSingleSwap
+
+```solidity
+function _emergencyUnwindSingleSwap(FundState storage s, uint256 index, AssetConfig memory a)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| a | `AssetConfig` |  |
+
+<a id="_settleclaim-fundstate-uint256-address"></a>
+
+### _settleClaim
+
+Step 3f (`IRobotMoneyFund.settleClaim`): permissionlessly settle `owner`'s lending or delisting claim.
+
+```solidity
+function _settleClaim(FundState storage s, uint256 index, address owner)
+        private
+        returns (uint256 netUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| netUsdc | `uint256` |  |
 
 <a id="_swap-assetconfig-address-address-uint256-uint256"></a>
 
@@ -618,4 +923,38 @@ function _haircut(uint256 value, uint256 bps) private pure returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+## Structs
+
+### SellFlowCtx
+
+```solidity
+struct SellFlowCtx {
+        address caller;
+        uint256 shares;
+        uint256 supplyBefore;
+        uint256 feeBps;
+        address usdc;
+        bool grossOnly;
+        bool batch;
+        address[] owners;
+        uint256[] ownerShares;
+        uint16[] ownerFeeBps;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| caller | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+| feeBps | `uint256` |  |
+| usdc | `address` |  |
+| grossOnly | `bool` |  |
+| batch | `bool` |  |
+| owners | `address[]` |  |
+| ownerShares | `uint256[]` |  |
+| ownerFeeBps | `uint16[]` |  |
 

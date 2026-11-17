@@ -5,7 +5,7 @@ description: "A swap venue for `FlowQueue.t.sol` that `vm.etch` places over the 
 
 # MechSwapAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/mocks/MechSwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/mocks/MechSwapAdapter.sol)
 
 **Inherits:** [MechReentry](/contracts/test/prototype/mocks/abstract.MechReentry), [IExactOutSwapAdapter](/contracts/test/prototype/src/interfaces/interface.IExactOutSwapAdapter)
 
@@ -63,6 +63,28 @@ uint8 public mode;
 uint16 public underDeliverBps;
 ```
 
+### nonFixedFeePool
+
+When true, `isFixedFeePool` returns false (`E43` negative tests).
+
+```solidity
+bool public nonFixedFeePool;
+```
+
+### hasPoolFeeOverride
+
+When true, `poolFeeBps` returns `poolFeeBpsOverride` instead of reading `pool.fee()`.
+
+```solidity
+bool public hasPoolFeeOverride;
+```
+
+### poolFeeBpsOverride
+
+```solidity
+uint24 public poolFeeBpsOverride;
+```
+
 ## Functions
 
 <a id="constructor-address"></a>
@@ -95,6 +117,108 @@ function setMode(uint8 mode_, uint16 underDeliverBps_) external;
 | ---- | ---- | ----------- |
 | mode_ | `uint8` |  |
 | underDeliverBps_ | `uint16` |  |
+
+<a id="setfixedfeepool-bool"></a>
+
+### setFixedFeePool
+
+Test knob for `isFixedFeePool` (`E43`, default true when unset).
+
+```solidity
+function setFixedFeePool(bool fixed_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fixed_ | `bool` |  |
+
+<a id="setpoolfeebps-uint24"></a>
+
+### setPoolFeeBps
+
+Test knob to force `poolFeeBps` directly in basis points (`E43`).
+
+```solidity
+function setPoolFeeBps(uint24 feeBps_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feeBps_ | `uint24` |  |
+
+<a id="setpoolfeepips-uint24"></a>
+
+### setPoolFeePips
+
+Test knob to force `poolFeeBps` from hundredths of a bip (pips, rounded up).
+
+```solidity
+function setPoolFeePips(uint24 feePips_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feePips_ | `uint24` |  |
+
+<a id="clearpoolfeebps"></a>
+
+### clearPoolFeeBps
+
+Clear the `poolFeeBps` override and fall back to `pool.fee()` (or 5 bps).
+
+```solidity
+function clearPoolFeeBps() external;
+```
+
+<a id="isfixedfeepool-address"></a>
+
+### isFixedFeePool
+
+True when `pool` is a fixed-fee pool recognized by this adapter (e.g. Uniswap V3).
+
+```solidity
+function isFixedFeePool(address pool) external view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="poolfeebps-address"></a>
+
+### poolFeeBps
+
+Fee of pool in bps rounded up (e.g. 100 pips = 1 bps, 500 pips = 5 bps).
+
+```solidity
+function poolFeeBps(address pool) external view returns (uint24);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint24` |  |
 
 <a id="swap-address-address-uint24-uint256-uint256-address-uint256"></a>
 

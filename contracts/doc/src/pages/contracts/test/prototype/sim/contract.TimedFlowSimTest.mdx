@@ -5,7 +5,7 @@ description: "One-vault experiment, steps 3d and 3e: the rebalance simulation wi
 
 # TimedFlowSimTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/TimedFlowSim.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/ac79d56728a2dea0587577373d21e1769e9b563b/contracts/test/prototype/sim/TimedFlowSim.t.sol)
 
 **Inherits:** [TimedSimBase](/contracts/test/prototype/sim/abstract.TimedSimBase)
 
@@ -223,6 +223,18 @@ uint256 internal pinTimestamp;
 
 ```solidity
 uint256 internal depNonce;
+```
+
+### stepsHeld
+
+<i>
+
+Keeper slots on which the step was held back by the ordering rule (`_holdSteps`).
+
+</i>
+
+```solidity
+uint256 internal stepsHeld;
 ```
 
 ### planIndex
@@ -462,7 +474,7 @@ function test_timed_JUMP_UP_1M_s2() public fixtureCovered;
 ### _run
 
 ```solidity
-function _run(uint256 scn, uint256 fundM, uint256 k) internal;
+function _run(uint256 scn, uint256 fundM, uint256 k) internal virtual;
 ```
 
 **Parameters**
@@ -659,6 +671,30 @@ function simSlot(bool withKeeper) external;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | withKeeper | `bool` |  |
+
+<a id="_holdsteps"></a>
+
+### _holdSteps
+
+<i>
+
+The one ordering rule (E42, RB-30): the round's first `settle` call reverts `StepInWindow` if a step that
+traded a basket pool is younger than `settleWindow`. So the keeper sends no step from an epoch's close to
+its round's end, and none while that first call is still being retried, if a request of a closed epoch is
+still open (a round has work). Before the close a step is harmless: the round's call comes `settleWindow` after it.
+The first scored 3f run had no such rule in the sim keeper and failed 6,455 of 6,752 calls on it.
+
+</i>
+
+```solidity
+function _holdSteps() internal view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="_keeper"></a>
 

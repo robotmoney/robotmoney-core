@@ -3,7 +3,7 @@
 # existing deployment, as v0.6.0's upgrade flow ran against Deploy 3: the record of the live run (releases/v0.7.0-onevault.yaml, Deploy 4) is copied, never edited.
 # A full copy of template.yaml's steps, unchanged and in order, plus the steps this release adds, each `added: v0.8.0-onevault-upgrade` and `flow: fund-upgrade`.
 # The release runs only the fund-upgrade flow (flows: below), so no template step runs. scripts/runbook/validate-contract-qa.ts checks it; scripts/runbook/run.ts runs it.
-# The rc tag of the code is v0.8.0-onevault's: release/v0.8.0-onevault-rc.N-rehearsal.
+# The rc tag of the code is release/v0.8.0-rc.N-rehearsal (RC_TAG_PATTERN in publish-contracts/src/release-gate.ts, decision D4-13).
 release: v0.8.0-onevault-upgrade
 template: contract-qa
 productionReady: false
