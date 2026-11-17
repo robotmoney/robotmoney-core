@@ -1,0 +1,168 @@
+---
+title: "OneVaultMockAavePool"
+description: "Test-only Aave pool: supply and withdraw move USDC one for one into an aToken. `setPaused` makes it refuse supply and withdraw, and reports the reserve as paused, so the venue is closed the way a real pool would show it."
+---
+
+# OneVaultMockAavePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/e3d4d744a459cd40eabde44ac2e4ec68b02431fc/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
+
+Test-only Aave pool: supply and withdraw move USDC one for one into an aToken. `setPaused` makes it refuse
+supply and withdraw, and reports the reserve as paused, so the venue is closed the way a real pool would show it.
+
+## Constants
+
+### ACTIVE_BIT
+
+```solidity
+uint256 internal constant ACTIVE_BIT = 1 << 56;
+```
+
+### PAUSED_BIT
+
+```solidity
+uint256 internal constant PAUSED_BIT = 1 << 60;
+```
+
+### USDC
+
+```solidity
+address public immutable USDC;
+```
+
+### OWNER
+
+```solidity
+address public immutable OWNER;
+```
+
+### ATOKEN
+
+```solidity
+OneVaultMockAToken public immutable ATOKEN;
+```
+
+## State Variables
+
+### paused
+
+```solidity
+bool public paused;
+```
+
+## Functions
+
+<a id="constructor-address-address"></a>
+
+### constructor
+
+```solidity
+constructor(address usdc, address owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+| owner | `address` |  |
+
+<a id="setpaused-bool"></a>
+
+### setPaused
+
+```solidity
+function setPaused(bool p) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `bool` |  |
+
+<a id="supply-address-uint256-address-uint16"></a>
+
+### supply
+
+```solidity
+function supply(address asset, uint256 amount, address onBehalfOf, uint16) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| onBehalfOf | `address` |  |
+| _ | `uint16` |  |
+
+<a id="withdraw-address-uint256-address"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| asset | `address` |  |
+| amount | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="getconfiguration-address"></a>
+
+### getConfiguration
+
+```solidity
+function getConfiguration(address) external view returns (uint256 data);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| data | `uint256` |  |
+
+<a id="getreservenormalizedincome-address"></a>
+
+### getReserveNormalizedIncome
+
+<i>
+
+One ray: the rate stays flat, so the lending NAV moves only with deposits.
+
+</i>
+
+```solidity
+function getReserveNormalizedIncome(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
