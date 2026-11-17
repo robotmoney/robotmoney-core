@@ -636,7 +636,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P1.81-upg-deploy-fund-impl"
     standing: ["4.12"]
-    description: "The deployer deploys the new fund implementation (RobotMoneyFund of the v0.9.0-onevault build {runDir}/v090) with deploy-implementation --system fund: forge pinned, the release gate of the live sha and the rc gate of the new build on 8453, the proxy unfrozen, the new storage layout snapshot extending the deployed one append-only, the live implementation the live build's (so its library links can be read), every library link filled with the address the live implementation links (no library changes code between the two builds), and the new code read back against the build. The new implementation is not the live one"
+    description: "The deployer deploys the new fund implementation (RobotMoneyFund of the v0.9.0-onevault build {runDir}/v090) with deploy-implementation --system fund: forge pinned, the release gate of the live sha and the rc gate of the new build on 8453, the proxy unfrozen, the new storage layout snapshot extending the deployed one append-only, the live implementation the live build's (so its library links can be read), each matching existing library reused only after recursive code verification, changed or new libraries deployed in dependency order and individually verified and recorded, and the new code read back against the build. The new implementation is not the live one"
     host: "control"
     phase: 1
     cmds:
@@ -649,7 +649,8 @@ steps:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
-    irreversible: false
+    irreversible: true
+    notBefore: {"afterStep": "P1.80-upg-record-go", "hours": 0}
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     gateAbsent: "{runDir}/state/done-fund-upgrade"
@@ -658,7 +659,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P1.82-upg-deploy-queue-impl"
     standing: ["4.12"]
-    description: "The deployer deploys the new queue implementation (FlowQueue of the v0.9.0-onevault build {runDir}/v090) with deploy-implementation --system fund: forge pinned, the release gate of the live sha and the rc gate of the new build on 8453, the proxy unfrozen, the new storage layout snapshot extending the deployed one append-only, the live implementation the live build's (so its library links can be read), every library link filled with the address the live implementation links (no library changes code between the two builds), and the new code read back against the build. The new implementation is not the live one"
+    description: "The deployer deploys the new queue implementation (FlowQueue of the v0.9.0-onevault build {runDir}/v090) with deploy-implementation --system fund: forge pinned, the release gate of the live sha and the rc gate of the new build on 8453, the proxy unfrozen, the new storage layout snapshot extending the deployed one append-only, the live implementation the live build's (so its library links can be read), each matching existing library reused only after recursive code verification, changed or new libraries deployed in dependency order and individually verified and recorded, and the new code read back against the build. The new implementation is not the live one"
     host: "control"
     phase: 1
     cmds:
@@ -671,7 +672,8 @@ steps:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts: []
-    irreversible: false
+    irreversible: true
+    notBefore: {"afterStep": "P1.80-upg-record-go", "hours": 0}
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     gateAbsent: "{runDir}/state/done-queue-upgrade"

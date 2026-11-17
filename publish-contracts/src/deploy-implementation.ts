@@ -38,6 +38,7 @@ import { artifactJson, compareCode, ERC1967_IMPLEMENTATION_SLOT, linkedLibraries
 import { viemReader } from "./verify/reader.ts";
 import { layoutId, proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
 import { proxyBuildDirsOf, UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
+import { upgradeLibraries } from "./upgrade-libraries.ts";
 
 export const DEPLOY_IMPL_VERB = "deploy-implementation";
 
@@ -242,13 +243,30 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   }
   let art: any;
   try { art = artifactJson(outDir, contract); } catch (e) { refuse(`${(e as Error).message}: run forge build in the upgrade build first`); }
-  const linked = linkCreationCode(art, libraries, contract);
-  if (!linked.code) refuse(linked.problems.join("; "), { problems: linked.problems, expected: libraries });
-
   const deployer = await ctx.signer.address();
   if (lc(deployer) !== lc(ctx.sheet.admin)) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}: the deployer deploys the implementation`);
-  ctx.log.log("info", "deploy_implementation.preview", { proxy: spec.name, proxy_address: proxy, contract, build, live_implementation: live, libraries });
-  await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}, linked to ${Object.entries(libraries).map(([n, a]) => `${n} ${a}`).join(", ") || "no library"}`);
+  let candidateLibraries = libraries;
+  if (fund) {
+    const candidates = { ...libraries };
+    const libsPath = join(manifestDir(ctx), "fund-libs.json");
+    if (existsSync(libsPath)) {
+      const old = JSON.parse(readFileSync(libsPath, "utf8"));
+      for (const l of [...t.libraries, ...(t.create2Libraries ?? [])]) {
+        const key = l.artifact.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+        if (typeof old[key] === "string") candidates[l.artifact] = getAddress(old[key]);
+      }
+    }
+    const recorded = ((manifest as any).upgrade_libraries ??= []);
+    let confirmed = false;
+    candidateLibraries = await upgradeLibraries({ contract, out: outDir, build, candidates, recorded, getCode: (a) => api.getCode(a), create: (code) => api.create(code), link: linkCreationCode,
+      beforeCreate: async (name) => { if (!confirmed) { await confirmStage(ctx, DEPLOY_IMPL_VERB, `deploy verified libraries and ${contract} from ${outDir} for ${spec.name}; first new library ${name}`); confirmed = true; } },
+      record: async (entry) => { recorded.push(entry); saveRunManifest(ctx.evidenceDir, manifest); },
+    });
+    if (!confirmed) await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}`);
+  } else await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}`);
+  const linked = linkCreationCode(art, candidateLibraries, contract);
+  if (!linked.code) refuse(linked.problems.join("; "), { problems: linked.problems, expected: candidateLibraries });
+  ctx.log.log("info", "deploy_implementation.preview", { proxy: spec.name, proxy_address: proxy, contract, build, live_implementation: live, libraries: candidateLibraries });
   const sent = await api.create(linked.code!);
   if (!sent.status || !sent.address) throw new PublishError("BROADCAST", `the ${contract} deploy ${sent.txHash} reverted or created no contract. No entry was recorded.`, { tx: sent.txHash });
   const implementation = getAddress(sent.address) as Address;
@@ -258,7 +276,7 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
 
   const entry: ImplementationDeploy = {
     step: DEPLOY_IMPL_VERB, proxy_name: spec.name, proxy, contract, build, live_implementation: live, implementation,
-    code_hash: keccak256(await api.getCode(implementation)), libraries, deploy_tx: sent.txHash, deployer, core_sha: ctx.coreSha, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
+    code_hash: keccak256(await api.getCode(implementation)), libraries: candidateLibraries, deploy_tx: sent.txHash, deployer, core_sha: ctx.coreSha, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
     ...(fund ? { system: "fund" as const } : {}),
   };
   manifest.implementation_deploys = [...list.filter((e) => e !== prior), entry];
