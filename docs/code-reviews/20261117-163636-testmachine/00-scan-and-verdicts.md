@@ -3,7 +3,7 @@
 **Scan:** TestMachine automated scan, `robotmoney/robotmoney-core`, finished
 `2026-11-17T03:48:00.730421Z`. Critical 0 · High 0 · Medium 0 · Low 19 · Info 4 · Total 23.
 
-**Reviewed source:** `d4a43e6d21efed208816698d2b32f0decea45451` (`release-0.9.0`).
+**Reviewed source:** `d4a43e6d21efed208816698d2b32f0decea45451` (the `release-0.9.0` review pin; the branch later advanced to `da7594306` with fund upgrade-library tooling changes only).
 The audit's quoted snippets match this commit; its cited line numbers drift by a
 few lines because the code was extracted into libraries (e.g. `BasketSwaps.sol`).
 

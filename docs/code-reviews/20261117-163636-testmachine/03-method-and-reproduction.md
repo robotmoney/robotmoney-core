@@ -2,14 +2,14 @@
 
 ## Scope and setup
 
-- Reviewed source: `d4a43e6d21efed208816698d2b32f0decea45451` (`release-0.9.0`).
+- Reviewed source: `d4a43e6d21efed208816698d2b32f0decea45451` (the `release-0.9.0` review pin; the branch later advanced to `da7594306` with fund upgrade-library tooling changes only).
 - Verification branch: `audit/reproduce-findings-0.9.0`, worktree
   `~/tmp/superfield-worktrees/robotmoney-core/audit-repro-findings-090`.
 - Principal checkout (`dev`) was left clean and untouched.
 - Submodules initialised and `forge build` completed; `forge` 1.8.3, solc 0.8.24.
-- No production source modified — analysis only. Raw scan text and the consolidated
-  verdict table are committed at the repository root as `AUDIT_FINDINGS.md` and
-  `AUDIT_REPRODUCTION_REPORT.md`.
+- No production source modified — analysis only. The raw scan snapshot is
+  [05-raw-scan.md](05-raw-scan.md); the canonical summary is
+  [docs/code-review/20261117-review-testmachine-verification.md](../../code-review/20261117-review-testmachine-verification.md).
 
 ## Method
 

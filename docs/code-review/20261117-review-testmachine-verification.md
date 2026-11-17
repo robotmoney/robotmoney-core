@@ -1,9 +1,9 @@
 # Audit finding reproduction / rejection report
 
 **Branch:** `audit/reproduce-findings-0.9.0`
-**Commit verified:** `d4a43e6d21efed208816698d2b32f0decea45451` (= `release-0.9.0`)
+**Commit verified:** `d4a43e6d21efed208816698d2b32f0decea45451` (the `release-0.9.0` review pin; the branch later advanced to `da7594306` with fund upgrade-library tooling changes only)
 **Date:** 2026-11-17
-**Scope:** all 23 findings in `AUDIT_FINDINGS.md` (19 Low + 4 Info)
+**Scope:** all 23 findings in the [raw scan snapshot](../code-reviews/20261117-163636-testmachine/05-raw-scan.md) (19 Low + 4 Info). Full evidence: [docs/code-reviews/20261117-163636-testmachine/](../code-reviews/20261117-163636-testmachine/).
 
 ## Verdict summary
 
