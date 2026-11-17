@@ -53,7 +53,7 @@ contract CompoundV3RateAdapter is CompoundV3Adapter, ILendingRateAdapter {
 
     /// @inheritdoc ILendingRateAdapter
     /// @dev Underlying USDC held by Comet, capped at this adapter's Comet supply balance,
-    ///      or 0 when withdrawals are paused (`venueWithdrawable()`).
+    ///      or 0 when `venueWithdrawable()` returns false.
     function availableLiquidity() external view returns (uint256) {
         if (!venueWithdrawable()) return 0;
         uint256 cash = IERC20(USDC).balanceOf(address(COMET));
