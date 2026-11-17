@@ -9,7 +9,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {AdminFloorAccessControl} from "../../../lib/AdminFloorAccessControl.sol";
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
-import {AssetConfig, AssetKind, Roles} from "./FundTypes.sol";
+import {Roles} from "./FundTypes.sol";
 import {
     FlowBooks,
     FlowParams,
@@ -24,35 +24,8 @@ import {
     SettleContext,
     Fill,
     RequestKind,
-    MIN_EPOCH_LENGTH,
-    MAX_EPOCH_LENGTH,
-    MIN_SETTLE_WINDOW,
-    MAX_SETTLE_WINDOW,
-    MIN_HOLD,
-    MAX_HOLD,
-    MIN_CANCEL_BUFFER,
-    MAX_CANCEL_BUFFER,
     DEFAULT_CANCEL_BUFFER,
-    TIMELOCK_DELAY_REFERENCE,
-    MIN_MAX_PAUSE,
-    MAX_PAUSE_DURATION,
     DEFAULT_MAX_PAUSE,
-    MAX_EPOCH_FLOW_BPS,
-    MAX_EPOCH_FLOW_FLOOR_USDC,
-    MAX_SHARE_PRICE_MOVE_BPS,
-    MAX_ROLL,
-    MAX_MIN_REQUEST_USDC,
-    MIN_FREEZE,
-    MAX_FREEZE,
-    MIN_SLICES,
-    MAX_SLICES,
-    MIN_SLICE_SECONDS,
-    MAX_DISPERSION_BPS,
-    MAX_REF_BAND_BPS,
-    MAX_LEG_BAND_BPS,
-    MAX_SEQUENCER_GRACE,
-    MAX_USDC_PEG_BAND_BPS,
-    MAX_LEND_RATE_GROWTH_BPS,
     FlowLevers,
     MAX_BASKET_CALL_BPS,
     DEFAULT_BASKET_CALL_BPS,
@@ -60,7 +33,6 @@ import {
     LEG_PRICE_FEED_ONLY
 } from "./FlowTypes.sol";
 import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
-import {IExactOutSwapAdapter} from "./interfaces/IFlowAdapters.sol";
 import {IRobotMoneyFundFull} from "./interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState, FlowStorage, WalkCursor} from "./lib/FlowStorage.sol";
 import {FlowCheckLib} from "./lib/FlowCheckLib.sol";
@@ -122,7 +94,9 @@ contract FlowQueue is
         FlowParams memory fp = p.params;
         if (fp.cancelBuffer == 0) fp.cancelBuffer = DEFAULT_CANCEL_BUFFER;
         if (fp.maxPause == 0) fp.maxPause = DEFAULT_MAX_PAUSE;
-        _setFlowParams(fp);
+        FlowCheckLib.checkFlowParams(_s(), fp);
+        FlowSettleLib.applyParams(_s(), fp);
+        emit FlowParamsSet(fp);
         FlowLevers memory l =
             FlowLevers({basketCallBps: DEFAULT_BASKET_CALL_BPS, legPriceMode: LEG_PRICE_STRICTER});
         s.levers = l;
@@ -304,96 +278,9 @@ contract FlowQueue is
 
     /// @inheritdoc IFlowQueue
     function setFlowParams(FlowParams calldata params) external onlyRole(ADMIN_ROLE) nonReentrant {
-        _setFlowParams(params);
-    }
-
-    function _setFlowParams(FlowParams memory p) private {
-        if (p.epochLength < MIN_EPOCH_LENGTH || p.epochLength > MAX_EPOCH_LENGTH) {
-            revert FlowParamOutOfBounds(0);
-        }
-        if (p.settleWindow < MIN_SETTLE_WINDOW || p.settleWindow > MAX_SETTLE_WINDOW) {
-            revert FlowParamOutOfBounds(1);
-        }
-        if (p.minHold < MIN_HOLD || p.minHold > MAX_HOLD) revert FlowParamOutOfBounds(2);
-        // Field 3 (`keeperGrace`) is retired in Step 3f (E34) and kept unconstrained for tuple compatibility.
-        if (p.maxEpochFlowBps == 0 || p.maxEpochFlowBps > MAX_EPOCH_FLOW_BPS) {
-            revert FlowParamOutOfBounds(4);
-        }
-        if (p.epochFlowFloorUsdc > MAX_EPOCH_FLOW_FLOOR_USDC) revert FlowParamOutOfBounds(5);
-        if (p.maxSharePriceMoveBps == 0 || p.maxSharePriceMoveBps > MAX_SHARE_PRICE_MOVE_BPS) {
-            revert FlowParamOutOfBounds(6);
-        }
-        if (
-            p.maxRoll == 0 || p.maxRoll > MAX_ROLL
-                || p.settleWindow >= uint256(p.maxRoll) * p.epochLength
-                || uint256(p.maxRoll) * p.epochLength > TIMELOCK_DELAY_REFERENCE
-        ) revert FlowParamOutOfBounds(7);
-        if (p.minRequestUsdc == 0 || p.minRequestUsdc > MAX_MIN_REQUEST_USDC) {
-            revert FlowParamOutOfBounds(8);
-        }
-        if (p.maxFreeze < MIN_FREEZE || p.maxFreeze > MAX_FREEZE) revert FlowParamOutOfBounds(9);
-        if (
-            p.slices < MIN_SLICES || p.slices > MAX_SLICES || p.settleWindow % p.slices != 0
-                || p.settleWindow / p.slices < MIN_SLICE_SECONDS
-        ) revert FlowParamOutOfBounds(10);
-        if (p.quorum == 0 || p.quorum > p.slices) revert FlowParamOutOfBounds(11);
-        if (p.dispersionBps == 0 || p.dispersionBps > MAX_DISPERSION_BPS) {
-            revert FlowParamOutOfBounds(12);
-        }
-        if (p.refBandBps == 0 || p.refBandBps > MAX_REF_BAND_BPS) revert FlowParamOutOfBounds(13);
-        if (p.legBandBps == 0 || p.legBandBps > MAX_LEG_BAND_BPS) revert FlowParamOutOfBounds(14);
-        address fundAddr = _s().fund;
-        if (fundAddr != address(0)) {
-            IRobotMoneyFundFull f = IRobotMoneyFundFull(fundAddr);
-            if (_hasActiveBasket(f) && p.legBandBps <= f.maxPoolFeeBps() + f.feeMarginBps()) {
-                revert FlowParamOutOfBounds(14);
-            }
-            _requireFundedPoolsFixedFee(f);
-        }
-        if (p.sequencerGrace > MAX_SEQUENCER_GRACE) revert FlowParamOutOfBounds(15);
-        if (p.usdcPegBandBps == 0 || p.usdcPegBandBps > MAX_USDC_PEG_BAND_BPS) {
-            revert FlowParamOutOfBounds(16);
-        }
-        if (p.maxLendRateGrowthBps == 0 || p.maxLendRateGrowthBps > MAX_LEND_RATE_GROWTH_BPS) {
-            revert FlowParamOutOfBounds(17);
-        }
-        if (
-            p.cancelBuffer < MIN_CANCEL_BUFFER || p.cancelBuffer > MAX_CANCEL_BUFFER
-                || p.cancelBuffer >= p.epochLength
-        ) revert FlowParamOutOfBounds(18);
-        if (
-            p.maxPause < MIN_MAX_PAUSE || p.maxPause > MAX_PAUSE_DURATION
-                || p.maxPause < uint256(TIMELOCK_DELAY_REFERENCE) + p.epochLength
-        ) revert FlowParamOutOfBounds(19);
-        if (p.matchBandBps == 0 || p.matchBandBps > p.refBandBps) revert FlowParamOutOfBounds(20);
-        FlowSettleLib.applyParams(_s(), p);
-        emit FlowParamsSet(p);
-    }
-
-    function _hasActiveBasket(IRobotMoneyFundFull f) private view returns (bool) {
-        AssetConfig[] memory cfgs = f.assetConfigs();
-        for (uint256 i; i < cfgs.length; ++i) {
-            if (cfgs[i].active && cfgs[i].kind == AssetKind.Basket) return true;
-        }
-        return false;
-    }
-
-    /// @dev Rule 6 (E43, plan section 3.3 item 4): every basket asset the plan funds must sit on a fixed-fee pool.
-    ///      An unfunded asset (target 0) is exempt, as it is at plan open.
-    function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view {
-        AssetConfig[] memory cfgs = f.assetConfigs();
-        uint16[] memory targets = f.targetBps();
-        for (uint256 i; i < cfgs.length; ++i) {
-            if (!cfgs[i].active || cfgs[i].kind != AssetKind.Basket) continue;
-            if (i >= targets.length || targets[i] == 0) continue;
-            bool fixedFee;
-            try IExactOutSwapAdapter(cfgs[i].adapter).isFixedFeePool(cfgs[i].pool) returns (
-                bool b
-            ) {
-                fixedFee = b;
-            } catch {}
-            if (!fixedFee) revert FlowParamOutOfBounds(14);
-        }
+        FlowCheckLib.checkFlowParams(_s(), params);
+        FlowSettleLib.applyParams(_s(), params);
+        emit FlowParamsSet(params);
     }
 
     function setFlowLevers(FlowLevers calldata l) external onlyRole(ADMIN_ROLE) nonReentrant {

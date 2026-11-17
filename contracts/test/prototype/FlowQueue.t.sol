@@ -4062,8 +4062,9 @@ contract PermitUsdc is ERC20, ERC20Permit {
 ///         amount, below-`minRequestUsdc`, above-`perDepositCap`, paused-queue and shutdown-fund gates revert
 ///         identically to `requestDeposit` (they fire before the permit call, so a dummy signature proves parity).
 contract FlowQueuePermitTest is FlowQueueBase {
-    bytes32 internal constant PERMIT_TYPEHASH =
-        keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+    bytes32 internal constant PERMIT_TYPEHASH = keccak256(
+        "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+    );
 
     /// @dev The permit signer's private key (`vm.addr(SIGNER_KEY)` is the depositor).
     uint256 internal constant SIGNER_KEY = 0xA11CE;
@@ -4111,9 +4112,11 @@ contract FlowQueuePermitTest is FlowQueueBase {
         uint256 value,
         uint256 deadline
     ) internal view returns (uint8 v, bytes32 r, bytes32 s) {
-        bytes32 structHash =
-            keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, usdc.nonces(owner), deadline));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
+        bytes32 structHash = keccak256(
+            abi.encode(PERMIT_TYPEHASH, owner, spender, value, usdc.nonces(owner), deadline)
+        );
+        bytes32 digest =
+            keccak256(abi.encodePacked("\x19\x01", usdc.DOMAIN_SEPARATOR(), structHash));
         (v, r, s) = vm.sign(SIGNER_KEY, digest);
     }
 
@@ -4264,7 +4267,10 @@ contract FlowQueuePermitTest is FlowQueueBase {
     }
 
     /// @notice A deposit over the per-deposit cap reverts `AbovePerDepositCap` identically to `requestDeposit`.
-    function test_permit_parity_abovePerDepositCapRevertsLikeRequestDeposit() public fixtureCovered {
+    function test_permit_parity_abovePerDepositCapRevertsLikeRequestDeposit()
+        public
+        fixtureCovered
+    {
         (, FlowQueue pq) = _permitQueue();
         (, uint256 perDepositCap,,) = fund.config();
         uint256 above = perDepositCap + 1;

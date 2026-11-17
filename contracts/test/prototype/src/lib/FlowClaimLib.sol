@@ -63,7 +63,7 @@ library FlowClaimLib {
     ) public returns (uint256 requestId) {
         uint16 exitFeeBps = _checkDeposit(s, usdc, owner);
         try IERC20Permit(s.usdc).permit(msg.sender, address(this), usdc, deadline, v, r, sigS) {}
-        catch {}
+            catch {}
         requestId = _createDeposit(s, owner, usdc, exitFeeBps);
         _pullUsdc(s, usdc);
     }
