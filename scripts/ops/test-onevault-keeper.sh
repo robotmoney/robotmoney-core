@@ -11,10 +11,11 @@
 #     keeper_unconfigured, and rpc_unreadable on the Rebalancer;
 #   - a plan with a lending target, the mock venue closed: the simulated step() returns StepFailed, so the keeper alerts
 #     step_failed, sends nothing, and exits 1;
-#   - the venue open: the keeper sends step() through KeeperAccount.execute, and USDC moves into the lending asset.
+#   - the venue open: the keeper sends step() through KeeperAccount.execute, and USDC moves into the lending asset;
+#   - a basket asset with a holding, put into sale by delistAsset: a failed stepDelisted send alerts delist_step_failed and
+#     exits 1 with the asset still in sale, then the same tick sends stepDelisted through KeeperAccount.execute and the
+#     asset leaves sale.
 # Real time passes on anvil (evm_increaseTime) for the glide path. No cheatcode skips a check.
-# step_failed for a failed transaction (a send that reverts) is not separately exercised: the simulation catches the same
-# failure first. delist_step_failed is not exercised: no asset is in sale.
 # This test FAILS LOUDLY (exit 1) when anvil, forge, cast, python3 or curl is absent, or when a contract does not deploy.
 # It never skips.
 
@@ -205,6 +206,16 @@ refresh_feeds() {
     t=$(cast block latest --rpc-url "$RPC_URL" -f timestamp | awk '{print $1}')
     send_from "$DEPLOYER" "$USDC_FEED" "setRound(uint8,int256,uint256,uint256)" 8 100000000 "$t" "$t"
     send_from "$DEPLOYER" "$SEQUENCER_FEED" "setRound(uint8,int256,uint256,uint256)" 0 0 "$((t - 86400))" "$t"
+    send_from "$DEPLOYER" "$BASKET_FEED" "setRound(uint8,int256,uint256,uint256)" 8 100000000 "$t" "$t"
+}
+# The queue settles the most recent epoch whose window has ended. Epochs are 6 h (21600 s) from zero, and an epoch's
+# window ends 1 h after the next epoch starts. So move the chain to 1 h 5 min past the next epoch start: the request's
+# epoch is then the settleable round, and no later epoch has ended.
+wait_for_round() {
+    local t next
+    t=$(cast block latest --rpc-url "$RPC_URL" -f timestamp | awk '{print $1}')
+    next=$(( (t / 21600 + 1) * 21600 ))
+    warp $(( next + 3900 - t ))
 }
 # A deposit request that the keeper can settle once its window has ended.
 request_deposit() {
@@ -219,7 +230,7 @@ check "an idle queue exits 0 with nothing sent" '[[ "$RC" == "0" ]] && grep -q "
 
 # ─── Case 2: a request, then settle forwarded through KeeperAccount.execute ──
 request_deposit
-warp 28800  # 8 h: one 6 h epoch plus the 1 h settle window. Longer spans exceed maxRoll and expire the request.
+wait_for_round
 refresh_feeds
 # shellcheck disable=SC2034 # read by the check strings
 SETTLED_BEFORE="$(call_q "settlementCount()(uint256)")"
@@ -231,7 +242,7 @@ check "the settle send names the queue through KeeperAccount" 'grep -q "sent set
 
 # ─── Case 3: a request, then low gas: alert, nothing sent ───────────────────
 request_deposit
-warp 28800  # 8 h: one 6 h epoch plus the 1 h settle window. Longer spans exceed maxRoll and expire the request.
+wait_for_round
 refresh_feeds
 # shellcheck disable=SC2034 # read by the check strings
 SETTLED_BEFORE="$(call_q "settlementCount()(uint256)")"
@@ -274,7 +285,7 @@ lending_balance() { cast call "$A_TOKEN" "balanceOf(address)(uint256)" "$LENDING
 send_from "$DEPLOYER" "$LENDING_POOL" "setPaused(bool)" true
 refresh_feeds
 send_from "$DEPLOYER" "$FUND" "setTargetAndOpenPlan(address[],uint256[],(uint64,uint16),bytes32)" \
-    "[$LENDING_ADAPTER]" "[10000]" "(86400,30)" "0x0000000000000000000000000000000000000000000000000000000000000000"
+    "[$LENDING_ADAPTER,$BASKET_TOKEN]" "[10000,0]" "(86400,30)" "0x0000000000000000000000000000000000000000000000000000000000000000"
 warp 43200  # half the glide path, so the lending target now differs from the current weight
 refresh_feeds
 RC=$(run_keeper_once "$WORK/stepfail.err")
@@ -285,6 +296,25 @@ send_from "$DEPLOYER" "$LENDING_POOL" "setPaused(bool)" false
 RC=$(run_keeper_once "$WORK/stepok.err")
 check "a due step is sent through KeeperAccount.execute and moves USDC into the lending asset" \
     '[[ "$RC" == "0" ]] && grep -q "sent step()" "$WORK/stepok.err" && [[ "$(lending_balance)" != "0" ]]'
+
+# ─── Delist: a basket holding put into sale, then sold by stepDelisted ──────
+# The holding is minted straight to the fund, a test setup step. delistAsset is the real admin call that puts it in sale.
+in_sale() { cast call "$FUND" "isAssetInSale(uint256)(bool)" "$BASKET_INDEX" --rpc-url "$RPC_URL" | awk '{print $1}'; }
+send_from "$DEPLOYER" "$BASKET_TOKEN" "mint(address,uint256)" "$FUND" 1000000000
+refresh_feeds
+send_from "$DEPLOYER" "$FUND" "delistAsset(uint256)" "$BASKET_INDEX"
+refresh_feeds
+check "the basket asset is in sale after delistAsset" '[[ "$(in_sale)" == "true" ]]'
+
+: >"$FLAGS/fail-send"
+RC=$(run_keeper_once "$WORK/delistfail.err" PATH="$WORK/shim:$PATH")
+rm -f "$FLAGS/fail-send"
+check "a failed stepDelisted alerts delist_step_failed, exits 1, and leaves the asset in sale" \
+    'grep -q "\"alert\":\"delist_step_failed\"" "$WORK/delistfail.err" && [[ "$RC" == "1" && "$(in_sale)" == "true" ]]'
+
+RC=$(run_keeper_once "$WORK/delistok.err")
+check "a due stepDelisted is sent through KeeperAccount.execute and the asset leaves sale" \
+    'grep -q "sent stepDelisted(uint256) to" "$WORK/delistok.err" && [[ "$RC" == "0" && "$(in_sale)" == "false" ]]'
 
 echo "passed=$PASS failed=$FAIL"
 [[ $PASS -gt 0 && $FAIL -eq 0 ]]

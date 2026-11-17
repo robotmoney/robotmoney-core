@@ -17,8 +17,11 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
+import {TestERC20} from "../../helpers/TestERC20.sol";
+import {MockAggregator} from "../mocks/MockAggregator.sol";
 import {Rebalancer} from "../src/Rebalancer.sol";
 import {AaveV3RateAdapter} from "../src/adapters/AaveV3RateAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../src/adapters/UniswapV3ExactOutSwapAdapter.sol";
 import {AssetConfig, AssetKind, AssetStepParams, StepParams, Venue} from "../src/FundTypes.sol";
 import {IRobotMoneyFundFull} from "../src/interfaces/IRobotMoneyFund.sol";
 
@@ -96,6 +99,95 @@ contract OneVaultMockAavePool {
     }
 }
 
+/// @notice Test-only basket token, six decimals like USDC. Anyone may mint it, so the test can put the fund's holding in place.
+contract OneVaultMockBasketToken is ERC20 {
+    constructor() ERC20("Mock Basket", "mBASK") {}
+
+    function decimals() public pure override returns (uint8) {
+        return 6;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
+/// @notice Test-only pool for a basket token against USDC. Price is one at tick 0 (equal decimals), the TWAP is flat, and the
+///         observation history is deep enough for the admission guard. It answers the reads the fund and the guard make.
+contract OneVaultMockV3Pool {
+    address public immutable token0;
+    address public immutable token1;
+    uint24 public constant fee = 500;
+
+    constructor(address a, address b) {
+        (token0, token1) = a < b ? (a, b) : (b, a);
+    }
+
+    function liquidity() external pure returns (uint128) {
+        return 1e24;
+    }
+
+    function slot0() external pure returns (uint160, int24, uint16, uint16, uint16, uint8, bool) {
+        return (uint160(1) << 96, 0, 0, 1_000, 1_000, 0, true);
+    }
+
+    function observe(uint32[] calldata secondsAgos)
+        external
+        pure
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
+    {
+        tickCumulatives = new int56[](secondsAgos.length);
+        secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);
+        // Liquidity 2^64 in every slice: seconds per liquidity grow by dt / 2^64 per dt, in X128. The depth then
+        // comes out large, so the basket step cap is the governed maxStepUsdc and not zero.
+        for (uint256 i; i < secondsAgos.length; ++i) {
+            secondsPerLiquidityCumulativeX128s[i] = uint160((uint256(1_000_000) - secondsAgos[i]) << 64);
+        }
+    }
+}
+
+/// @notice Test-only swap router with the two entry points the basket swap adapter calls: exact input (the fund's sale
+///         and buy legs through the adapter's inherited `swap`) and exact output. It fills at one for one and pays USDC
+///         from its own balance, which the deploy funds.
+contract OneVaultMockSwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata p) external payable returns (uint256 amountOut) {
+        amountOut = p.amountIn;
+        require(amountOut >= p.amountOutMinimum, "OneVaultMockSwapRouter: min out");
+        _fill(p.tokenIn, p.tokenOut, p.recipient, p.amountIn, amountOut);
+    }
+
+    function exactOutputSingle(ExactOutputSingleParams calldata p) external payable returns (uint256 amountIn) {
+        amountIn = p.amountOut;
+        require(amountIn <= p.amountInMaximum, "OneVaultMockSwapRouter: max in");
+        _fill(p.tokenIn, p.tokenOut, p.recipient, amountIn, p.amountOut);
+    }
+
+    function _fill(address tokenIn, address tokenOut, address recipient, uint256 amountIn, uint256 amountOut) private {
+        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "OneVaultMockSwapRouter: in");
+        require(IERC20(tokenOut).transfer(recipient, amountOut), "OneVaultMockSwapRouter: out");
+    }
+}
+
 /// @title OneVaultKeeperAnvil
 /// @notice Local anvil Rebalancer and one lending asset for the one-vault keeper self-test. Parameters follow
 ///         PrototypeHarness._deployRebalancer and _addAssets.
@@ -115,6 +207,42 @@ contract OneVaultKeeperAnvil is Script {
         string memory outPath = vm.envString("REBALANCER_ANVIL_OUT");
 
         vm.startBroadcast();
+        Rebalancer rebalancer = _deployRebalancer(fund, timelock, keeper);
+        (address pool, address aToken, address lendingAdapter) = _addLending(fund, rebalancer, usdc);
+        (address basketToken, address basketFeed, uint256 basketIndex) = _addBasket(fund, rebalancer, usdc);
+        vm.stopBroadcast();
+
+        string memory body = string.concat(
+            "REBALANCER=",
+            vm.toString(address(rebalancer)),
+            "\n",
+            "LENDING_POOL=",
+            vm.toString(pool),
+            "\n",
+            "A_TOKEN=",
+            vm.toString(aToken),
+            "\n",
+            "LENDING_ADAPTER=",
+            vm.toString(lendingAdapter),
+            "\n",
+            "BASKET_TOKEN=",
+            vm.toString(basketToken),
+            "\n",
+            "BASKET_FEED=",
+            vm.toString(basketFeed),
+            "\n",
+            "BASKET_INDEX=",
+            vm.toString(basketIndex),
+            "\n"
+        );
+        vm.writeFile(outPath, body);
+    }
+
+    /// @dev Deploys the Rebalancer proxy and binds its rebalance roles. The deployer is the admin and the governance slot.
+    function _deployRebalancer(address fund, address timelock, address keeper)
+        internal
+        returns (Rebalancer)
+    {
         address deployer = msg.sender;
         uint32 interval = uint32(Math.max(30 minutes, IRobotMoneyFundFull(fund).maxTwapWindow()));
         StepParams memory sp = StepParams({
@@ -136,46 +264,67 @@ contract OneVaultKeeperAnvil is Script {
                 )
             )
         );
-        // The fund's rebalance roles bind once. The governance slot takes the deployer, which opens plans in the test.
         IRobotMoneyFundFull(fund).bindRebalanceRoles(deployer, address(rebalancer));
+        return rebalancer;
+    }
 
-        OneVaultMockAavePool pool = new OneVaultMockAavePool(usdc, deployer);
-        AaveV3RateAdapter adapter =
-            new AaveV3RateAdapter(address(pool), usdc, address(pool.ATOKEN()), fund);
-        IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(adapter).codehash, true);
-        uint256 index = IRobotMoneyFundFull(fund)
-            .addAsset(
-                AssetConfig({
-                    kind: AssetKind.Lending,
-                    active: true,
-                    capBps: LENDING_CAP_BPS,
-                    adapter: address(adapter),
-                    token: address(0),
-                    pool: address(0),
-                    poolFee: 0,
-                    twapWindow: 0,
-                    venue: Venue.V3,
-                    feed: address(0),
-                    maxFeedAge: 0
-                })
-            );
-        rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
-        vm.stopBroadcast();
-
-        string memory body = string.concat(
-            "REBALANCER=",
-            vm.toString(address(rebalancer)),
-            "\n",
-            "LENDING_POOL=",
-            vm.toString(address(pool)),
-            "\n",
-            "A_TOKEN=",
-            vm.toString(address(pool.ATOKEN())),
-            "\n",
-            "LENDING_ADAPTER=",
-            vm.toString(address(adapter)),
-            "\n"
+    /// @dev One lending asset over a mock Aave pool. Its plan target is the whole NAV in the test.
+    function _addLending(address fund, Rebalancer rebalancer, address usdc)
+        internal
+        returns (address pool, address aToken, address adapter)
+    {
+        OneVaultMockAavePool mockPool = new OneVaultMockAavePool(usdc, msg.sender);
+        AaveV3RateAdapter lending =
+            new AaveV3RateAdapter(address(mockPool), usdc, address(mockPool.ATOKEN()), fund);
+        IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(lending).codehash, true);
+        uint256 index = IRobotMoneyFundFull(fund).addAsset(
+            AssetConfig({
+                kind: AssetKind.Lending,
+                active: true,
+                capBps: LENDING_CAP_BPS,
+                adapter: address(lending),
+                token: address(0),
+                pool: address(0),
+                poolFee: 0,
+                twapWindow: 0,
+                venue: Venue.V3,
+                feed: address(0),
+                maxFeedAge: 0
+            })
         );
-        vm.writeFile(outPath, body);
+        rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
+        return (address(mockPool), address(mockPool.ATOKEN()), address(lending));
+    }
+
+    /// @dev One basket asset, with no holding and a zero target. The test puts a holding in place and then delists it.
+    function _addBasket(address fund, Rebalancer rebalancer, address usdc)
+        internal
+        returns (address token, address feed, uint256 index)
+    {
+        OneVaultMockBasketToken basket = new OneVaultMockBasketToken();
+        OneVaultMockV3Pool basketPool = new OneVaultMockV3Pool(address(basket), usdc);
+        MockAggregator basketFeed = new MockAggregator();
+        basketFeed.setRound(8, 1e8, block.timestamp, block.timestamp);
+        OneVaultMockSwapRouter router = new OneVaultMockSwapRouter();
+        TestERC20(usdc).mint(address(router), 1_000_000e6);
+        UniswapV3ExactOutSwapAdapter swap = new UniswapV3ExactOutSwapAdapter(address(router));
+        IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(swap).codehash, true);
+        index = IRobotMoneyFundFull(fund).addAsset(
+            AssetConfig({
+                kind: AssetKind.Basket,
+                active: true,
+                capBps: 0,
+                adapter: address(swap),
+                token: address(basket),
+                pool: address(basketPool),
+                poolFee: 500,
+                twapWindow: 1_800,
+                venue: Venue.V3,
+                feed: address(basketFeed),
+                maxFeedAge: 86_700
+            })
+        );
+        rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 100));
+        return (address(basket), address(basketFeed), index);
     }
 }

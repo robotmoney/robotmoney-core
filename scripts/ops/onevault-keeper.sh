@@ -46,7 +46,7 @@
 #   MIN_GAS_WEI             optional, default 1000000000000000 (0.001 ETH).
 #   MAX_REQUESTS            optional, default 100. The settle() cap on requests looked at per call.
 #   MAX_USDC                optional, default 2^256-1 (no USDC cap). The settle() cap on USDC per call.
-#   SLEEP_CMD               optional, default `sleep`. The self-test replaces it to move chain time.
+#   SLEEP_CMD               optional, default `sleep`. Used between ticks of the loop only: --once never sleeps.
 #
 # USAGE
 #   scripts/ops/onevault-keeper.sh          run forever (a supervisor restarts it)
