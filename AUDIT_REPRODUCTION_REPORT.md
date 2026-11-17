@@ -108,3 +108,31 @@ No cap clamp in `rebalancePull` (`RobotMoneyVaultOps.sol:747-773`, equal-weight 
 
 ### #20 — Gateway deposit ignores its caller-supplied share floor — PARTIAL
 The missing min-shares assertion is real (`RobotMoneyGateway.sol:575-582,638-650,716-739`), but NatSpec (`:570-574`) states `minSharesPerLeg` is only an idempotency/payment-ID fingerprint (GW-2), never a slippage promise. The gateway deposits a fixed USDC amount to its own receiver; fewer shares is not a protected expectation. Info-severity, documented non-issue.
+
+---
+
+## Cross-review addendum (second security review, same pin)
+
+Branch `review/security-release-0.9.0-20261117` (`8eb11543f`) reviewed the same pin
+and promoted one medium `TEST_COVERAGE_GAP` plus four advisories. All five were
+independently re-verified and **confirmed**; no verdict among the 23 changes.
+
+| Item | Verdict |
+| --- | --- |
+| Fund timelock Safe-only executor has no executed-in-CI assertion | CONFIRMED, medium advisory (sub-claim corrected) |
+| Same-second receipt liveness | CONFIRMED advisory |
+| `VaultRegistry` hook asymmetry | CONFIRMED advisory (NatSpec cleanup) |
+| Stale router comments | CONFIRMED clarity-only |
+| Live `RS-1019-14` role shape | CONFIRMED must remain Open |
+
+Correction to the second review: `publish-contracts/src/verify/fund.ts:241-243`
+**does** assert the exact on-chain `EXECUTOR_ROLE` state via `chain.read`; the
+narrower surviving defect is that neither the deploy-time `require` nor this
+verifier is wired into any PR CI job. The two reviews are otherwise reconcilable:
+the second applies a stricter "untrusted actor + wrong state + no trusted-role
+precondition" bar, while this report asks whether the described behaviour is
+present and reachable. #17 and #19 are graded differently but factually aligned;
+#13 is a severity dispute with identical code; #1/#23 target a different quarantine
+claim; #14 matches the review's off-chain feature-flag observation. Full evidence,
+corrections and the additive CI recommendation are in
+`docs/code-reviews/20261117-163636-testmachine/04-cross-review-addendum.md`.
