@@ -47,14 +47,7 @@ contract OneVaultKeeperAnvil is Script {
                 impl,
                 abi.encodeCall(
                     Rebalancer.initialize,
-                    (
-                        fund,
-                        deployer,
-                        keeper,
-                        sp,
-                        timelock,
-                        GovernedUUPS.UpgradeMode.Upgradeable
-                    )
+                    (fund, deployer, keeper, sp, timelock, GovernedUUPS.UpgradeMode.Upgradeable)
                 )
             )
         );
