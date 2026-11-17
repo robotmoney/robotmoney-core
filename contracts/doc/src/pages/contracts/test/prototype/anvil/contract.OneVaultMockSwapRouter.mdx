@@ -1,0 +1,179 @@
+---
+title: "OneVaultMockSwapRouter"
+description: "Test-only swap router with the two entry points the basket swap adapter calls: exact input (the fund's sale and buy legs through the adapter's inherited `swap`) and exact output. It fills at one for one and pays USDC from its own balance, which the deploy funds."
+---
+
+# OneVaultMockSwapRouter
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/81c35a6416d1b8242b373c7b27621c69ccd72d24/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
+
+Test-only swap router with the two entry points the basket swap adapter calls: exact input (the fund's sale
+and buy legs through the adapter's inherited `swap`) and exact output. It fills at one for one and pays USDC
+from its own balance, which the deploy funds.
+
+## Constants
+
+### OWNER
+
+```solidity
+address public immutable OWNER;
+```
+
+## State Variables
+
+### closed
+
+```solidity
+bool public closed;
+```
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor();
+```
+
+<a id="setclosed-bool"></a>
+
+### setClosed
+
+Closes the venue: every fill reverts, the way a closed router refuses a swap.
+
+```solidity
+function setClosed(bool c) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `bool` |  |
+
+<a id="exactinputsingle-exactinputsingleparams"></a>
+
+### exactInputSingle
+
+```solidity
+function exactInputSingle(ExactInputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountOut);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ExactInputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountOut | `uint256` |  |
+
+<a id="exactoutputsingle-exactoutputsingleparams"></a>
+
+### exactOutputSingle
+
+```solidity
+function exactOutputSingle(ExactOutputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountIn);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `ExactOutputSingleParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amountIn | `uint256` |  |
+
+<a id="_fill-address-address-address-uint256-uint256"></a>
+
+### _fill
+
+```solidity
+function _fill(
+        address tokenIn,
+        address tokenOut,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOut
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| recipient | `address` |  |
+| amountIn | `uint256` |  |
+| amountOut | `uint256` |  |
+
+## Structs
+
+### ExactInputSingleParams
+
+```solidity
+struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| recipient | `address` |  |
+| amountIn | `uint256` |  |
+| amountOutMinimum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+
+### ExactOutputSingleParams
+
+```solidity
+struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokenIn | `address` |  |
+| tokenOut | `address` |  |
+| fee | `uint24` |  |
+| recipient | `address` |  |
+| amountOut | `uint256` |  |
+| amountInMaximum | `uint256` |  |
+| sqrtPriceLimitX96 | `uint160` |  |
+
