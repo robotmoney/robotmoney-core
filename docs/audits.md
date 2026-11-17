@@ -721,6 +721,16 @@ Internal review of the rmAGENT retirement (`docs/code-review/20261022-code-revie
 | SECURITY-001 | 20260607-code-review-internal-claude-gap-analysis.md | Medium | fixed | SECURITY.md | #1013, #1014 | "No SECURITY.md at repo root" — resolved by creating repo-root `SECURITY.md` (tracking issue #643) |
 | GAP-BACKLOG | 20260607-code-review-internal-claude-gap-analysis.md | Critical–Low | accepted-with-rationale | architecture/security-model/CI/dapp/rmpc surfaces | — | The remaining ~48 gap items (#643–#692, e.g. MAINNET-001, WATCHDOG-001, CSP-001, bug-bounty SECURITY-002) are acknowledged future-work, each tracked by its GitHub issue; a coverage backlog, not a per-contract vulnerability. Re-checked 2026-10-15 (SR-1012-9): FORCEREMOVE-001 (loss path untested) is now covered by `RobotMoneyVault.t.sol::test_forceRemoveAdapter_deactivatesAdapterAndEmitsCorrectLoss`, `test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts` and `SecurityReviewRecheckVaultPoc.t.sol::test_O1a_forceRemoveAllFunded_exiterKeepsFullRecoveryClaim`; the loss attribution is fixed as SR-1012-5 (security round 1) |
 
+### SR-1117 — Security review, release-0.9.0 system smart contracts (2026-11-17, 1 finding; docs/code-review/20261117-review-security-opencode.md)
+
+A five-lane adversarial review at pinned commit `d4a43e6d2` promoted one medium,
+non-blocking test-coverage finding after its follow-up deep-dive. No contract
+security finding survived refutation.
+
+| Finding ID | Source | Severity | Disposition | Checked against | Remediated by (PR) | Rationale |
+|---|---|---|---|---|---|---|
+| SR-1117-1 | SR-1117 | Medium | accepted-with-rationale | contracts/script/DeployFundTimelock.s.sol:146 | — | The fund timelock's Safe-only executor `require` has no executed-in-CI assertion; CREATE2 prediction, TypeScript parity and manifest-string checks are orthogonal to on-chain role holders. The require fails loudly at deploy and the QA runbook re-reads it on chain, so the gap is advisory and non-blocking. |
+
 ## Finding-disposition log
 
 <!--

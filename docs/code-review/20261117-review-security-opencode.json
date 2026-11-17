@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "review": "review-security",
+  "repository": "git@github.com:robotmoney/robotmoney-core.git",
+  "branch": "release-0.9.0",
+  "work_branch": "review/security-release-0.9.0-20261117",
+  "commit": "d4a43e6d21efed208816698d2b32f0decea45451",
+  "reviewed_at": "2026-11-17",
+  "scope": [
+    "Production Solidity under contracts/ at d4a43e6d21efed208816698d2b32f0decea45451: core contracts, gateway/, vaults/, adapters/, lib/, interfaces/ and script/",
+    "Lane 1: gateway, roles, governance and upgrade authority",
+    "Lane 2: vault family, custody, share accounting, ERC-4626 and redemption",
+    "Lane 3: portfolio router, basket swaps, libraries, adapters and oracles",
+    "Lane 4: consensus receipt, vault registry, feature flags and exclusion ledger",
+    "Lane 5: deploy/upgrade scripts, prior findings, test evidence and n-order composition",
+    "Follow-up deep-dive: receipt liveness, registry code-check consistency, test evidence, pin divergence, adapter guard, live deployment state and documentation consistency",
+    "Evidence: tests, CI workflows, canonical architecture and ADRs, docs/audits.md, prior code-review snapshots, receipt canonicalization contract, false-green catalogue",
+    "Excluded: off-chain dapp, rmpc, explorer indexer/API/watchdog, receipt assembler and verifier, third-party protocols, devops repository, GitHub settings, signing-key custody, live chain state, and origin/release-0.9.0 at ffc5e4b0d"
+  ],
+  "verdict": "No contract security finding survived adversarial refutation across five lanes at the pinned commit; no merge-blocking finding. A follow-up deep-dive promoted one medium, non-blocking test-coverage finding: the fund timelock Safe-only executor requirement has no executed-in-CI assertion. Residual contract observations remain advisory and live deployment state is unverified.",
+  "findings": [
+    {
+      "id": "review-security-001",
+      "review": "review-security",
+      "classification": "TEST_COVERAGE_GAP",
+      "severity": "medium",
+      "confidence": "high",
+      "requirement": ".github/workflows/suite-28-core-stages.yml:142-159",
+      "evidence": [
+        "contracts/script/DeployFundTimelock.s.sol:141-203 the Safe-only-executor requires at :146-153 exist but only execute when DeployFundTimelock.run() runs",
+        ".github/workflows/suite-28-core-stages.yml:142-159 the only publishing Twin rehearsal uses vaults-only=true and gateway=true with no fund-system stage",
+        ".github/workflows/suite-01-02-forge-tests.yml:736-746 forge coverage explicitly skips contracts/script/DeployFundTimelock.s.sol",
+        ".github/workflows/suite-13-doc-checks.yml:506-514 validates the contract QA runbook structurally without executing a step against a chain",
+        "contracts/test/UpgradeAuthorityPrediction.t.sol:28-72 checks CREATE2 prediction only, scripts/ci/check-timelock-prediction-parity.ts:27-45 recomputes it, and publish-contracts/src/verify/fund.ts:240 checks a manifest string written by the deploy script; none reads on-chain EXECUTOR_ROLE holders",
+        "docs/runbooks/contract-qa/releases/v0.7.0-onevault.yaml:548-562 executes the fund dry-run only in a human rehearsal with onlyFor=rehearsal and maxMinutes=60"
+      ],
+      "impact": "Assertion integrity: the Safe-only executor property is not proven by an executed CI assertion, so a regression in the fund handover could leave CI green with only the deploy-time require and human QA readback to catch it. No wrong artifact was observed and the deploy gate fails loudly.",
+      "recommendation": "Add a bounded CI job that deploys the fund stages, executes DeployFundTimelock.run() and reads back EXECUTOR_ROLE with a non-zero executed-test floor; keep the item on the release owner's pre-flight checklist until then. Do not treat prediction, parity or manifest-string checks as closing this gap.",
+      "owner": "tests",
+      "related_findings": []
+    }
+  ],
+  "clean_areas": [
+    "Gateway commit/reveal, calldata-bound agent consent, exact rolling-window accounting and full-intent idempotency keys",
+    "Role separation, last-admin and last-proposer floors, and deposits-only pause asymmetry",
+    "Vault share accounting with virtual-share offsets, realised-NAV minting and conservative round directions",
+    "Custody invariants with governed quarantine destinations and holder-paid exclusion claims",
+    "Oracle and venue integrity: per-block snapshots, tick clamp, staleness fail-closed, ORA-3, ORA-4, sell anchor, codehash and pool pinning",
+    "Router redeem authorization, loud leg skipping with floors, shortfall reversion and V4 callback state machine",
+    "Receipt write/release authority, digest binding, monotonic apply watermark and signalling-only boundary",
+    "Registry status/eligibility interlocks and exclusive vault writes to the exclusion ledger",
+    "Governed UUPS upgrade/freeze authority, one-way freeze with implementation and codehash binding, and CI storage-layout anchoring",
+    "Deploy chain guards, CREATE2 authority read-back, Safe configuration checks and cross-language timelock prediction parity",
+    "CI execution honesty: executed-test floors, loud named fork skips with zero-execution red, and mutation self-tests",
+    "Deep-dive closures: two large test bodies read in full without skips or subject-mocking; forge evidence wrapper floor clamped to at least one with seven passing self-tests; both local-only commits reviewed and gate-strengthening"
+  ],
+  "unresolved_decisions": [],
+  "limitations": [
+    "Static review at the pinned commit; no fork, devnet or PR-time CI log was replayed. Execution evidence is locally reproduced forge runs (54, 12 and 44 tests, zero skipped) plus seven evidence-wrapper self-tests",
+    "No CI run for the pinned commit was inspected end-to-end; the no-fund-CI-job conclusion rests on in-tree workflow definitions",
+    "Live deployment state was not verified: proxy implementations, Safe/timelock configuration, migration of the deployed receipt register for RS-1019-14, implementation bytecode versus the pin and freeze state; no RPC endpoint was configured",
+    "Live manifests and publish-run.json are operator-machine state outside the checkout; committed Base manifests are rehearsal or Twin",
+    "No FORK_RPC_URL was available; live pool behaviour, manipulation cost, gas-floor and TWAP-window headroom are not proven under future conditions",
+    "The fund dry-run was not executed: dependencies, frozen counts for the pin, a committed fund sheet and a bounded human rehearsal are absent",
+    "The large 2026-10-15 review and ledger were grepped by finding ID and disposition, not read in full",
+    "The adapter metadata-length bypass remains theoretical; production adapters are locally compiled and codehash-pinned, but no forged-trailer regression test exists",
+    "No formal verification or symbolic execution was performed"
+  ],
+  "unreviewed_surfaces": [
+    "Off-chain rmpc signing, client policy and dapp transaction decoding",
+    "Explorer indexer, explorer API and mint/burn watchdog",
+    "Off-chain receipt assembler, canonicalizer, Ed25519 verifier, URI hosting and small-order point screening",
+    "Adapter internal economics and third-party protocol behaviour",
+    "Devops repository, GitHub repository settings and release credentials",
+    "Runtime reorg and migration behaviour against a live chain"
+  ],
+  "deep_dive": {
+    "receipt_liveness": "advisory - intentional monotonic cap, documented in architecture section 4.9; 12 tests executed",
+    "registry_code_check": "advisory - timelock-only prerequisite, fails closed, router rejects code-less legs; 44 tests executed",
+    "test_evidence": "one TEST_COVERAGE_GAP finding promoted; wrapper self-tests and 54-test run reproduced",
+    "pin_and_adapter": "both local-only commits gate-strengthening; adapter bypass unreachable; nine release-tooling items accepted",
+    "live_state": "RS-1019-14 remains Open; no live evidence or RPC available",
+    "documentation": "two stale comments at clarity level; deadline exclusion accurate"
+  }
+}
