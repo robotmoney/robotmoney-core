@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # Canonical: docs/operations/contract-release-runbooks.md ("One-vault keeper");
-#            docs/technical/one-vault-rebalancer-proposal.md §5.4 and §8
+#            docs/technical/one-vault-rebalancer-proposal.md §5.3 and §5.4
 # Self-test for scripts/ops/onevault-keeper.sh (core issue 2033).
 #
 # Cases that need only anvil run first: the config exit codes, an unreadable queue (rpc_unreadable, exit 1), and the
 # webhook receiving that alert. Then the test deploys KeeperAccount, the one-vault fund and queue
-# (contracts/test/prototype/anvil/OneVaultDeliveryAnvil.s.sol) and a Rebalancer (contracts/test/prototype/anvil/
-# OneVaultKeeperAnvil.s.sol) on a local anvil chain. It then runs the keeper against them: a due settle forwarded through
-# KeeperAccount.execute, low_gas, settle_failed (an injected send failure), queue_paused, keeper_unconfigured, rpc_unreadable
-# on the Rebalancer, and no step() while the fund has no open plan. step_failed and delist_step_failed are not exercised:
-# they need an open rebalance plan, which this stack does not create.
+# (contracts/test/prototype/anvil/OneVaultDeliveryAnvil.s.sol), and a Rebalancer with one lending asset over a mock Aave
+# pool (contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol). It then runs the keeper against them:
+#   - a due settle forwarded through KeeperAccount.execute, low_gas, settle_failed (an injected send failure), queue_paused,
+#     keeper_unconfigured, and rpc_unreadable on the Rebalancer;
+#   - a plan with a lending target, the mock venue closed: the simulated step() returns StepFailed, so the keeper alerts
+#     step_failed, sends nothing, and exits 1;
+#   - the venue open: the keeper sends step() through KeeperAccount.execute, and USDC moves into the lending asset.
+# Real time passes on anvil (evm_increaseTime) for the glide path. No cheatcode skips a check.
+# step_failed for a failed transaction (a send that reverts) is not separately exercised: the simulation catches the same
+# failure first. delist_step_failed is not exercised: no asset is in sale.
 # This test FAILS LOUDLY (exit 1) when anvil, forge, cast, python3 or curl is absent, or when a contract does not deploy.
 # It never skips.
 
@@ -146,15 +151,15 @@ REB_OUT="$REPO_ROOT/out/prototype/onevault-keeper-rebalancer-anvil-$$.env"
 source <(sed 's/^/export /' "$ENV_OUT")
 check "the one-vault queue and fund deploy on anvil" '[[ -n "${QUEUE:-}" && -n "${FUND:-}" && -n "${TIMELOCK:-}" ]]'
 
-(cd "$REPO_ROOT" && FUND_ADDRESS="$FUND" TIMELOCK_ADDRESS="$TIMELOCK" KEEPER_ADDRESS="$KEEPER_ACCOUNT" \
+(cd "$REPO_ROOT" && FUND_ADDRESS="$FUND" TIMELOCK_ADDRESS="$TIMELOCK" KEEPER_ADDRESS="$KEEPER_ACCOUNT" USDC_ADDRESS="$USDC" \
     REBALANCER_ANVIL_OUT="$REB_OUT" \
-    forge script contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol --rpc-url "$RPC_URL" \
+    forge script contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol:OneVaultKeeperAnvil --rpc-url "$RPC_URL" \
     --broadcast --unlocked --sender "$DEPLOYER" --slow >"$WORK/rebalancer.log" 2>&1) \
     || { echo "FAIL: the Rebalancer did not deploy on anvil"; tail -40 "$WORK/rebalancer.log"; exit 1; }
 [[ -s "$REB_OUT" ]] || { echo "FAIL: the Rebalancer deploy wrote no address file"; exit 1; }
 # shellcheck disable=SC1090
 source <(sed 's/^/export /' "$REB_OUT")
-check "the Rebalancer deploys on anvil" '[[ "$REBALANCER" =~ ^0x[0-9a-fA-F]{40}$ ]]'
+check "the Rebalancer and its lending asset deploy on anvil" '[[ "$REBALANCER" =~ ^0x[0-9a-fA-F]{40}$ && "$LENDING_ADAPTER" =~ ^0x[0-9a-fA-F]{40}$ ]]'
 
 # A second bot-less key, for the keeper_unconfigured case.
 mkdir -p "$WORK/ks2"
@@ -260,6 +265,26 @@ check "an unreadable Rebalancer alerts rpc_unreadable and exits 1" 'grep -q "\"a
 
 # step() is not due here: the fund has no open plan, so previewStep reports a skip and the keeper sends no step.
 check "with no open plan the keeper does not send step()" 'grep -q "step not due" "$WORK/idle.err" && ! grep -q "step_failed" "$WORK/settle.err"'
+
+# ─── Step: a plan with a lending target, the venue closed, then open ─────────
+# The glide path starts at the current weights, so the target only moves once time passes. The venue is closed first,
+# so the simulated step() returns StepFailed and the keeper must alert without sending. Then the venue opens and the
+# same tick sends step(), which must move USDC into the lending asset.
+lending_balance() { cast call "$A_TOKEN" "balanceOf(address)(uint256)" "$LENDING_ADAPTER" --rpc-url "$RPC_URL" | awk '{print $1}'; }
+send_from "$DEPLOYER" "$LENDING_POOL" "setPaused(bool)" true
+refresh_feeds
+send_from "$DEPLOYER" "$FUND" "setTargetAndOpenPlan(address[],uint256[],(uint64,uint16),bytes32)" \
+    "[$LENDING_ADAPTER]" "[10000]" "(86400,30)" "0x0000000000000000000000000000000000000000000000000000000000000000"
+warp 43200  # half the glide path, so the lending target now differs from the current weight
+refresh_feeds
+RC=$(run_keeper_once "$WORK/stepfail.err")
+check "a step that fails in simulation alerts step_failed, sends nothing, and exits 1" \
+    'grep -q "\"alert\":\"step_failed\".*simulated step() returned StepFailed" "$WORK/stepfail.err" && [[ "$RC" == "1" && "$(lending_balance)" == "0" ]]'
+
+send_from "$DEPLOYER" "$LENDING_POOL" "setPaused(bool)" false
+RC=$(run_keeper_once "$WORK/stepok.err")
+check "a due step is sent through KeeperAccount.execute and moves USDC into the lending asset" \
+    '[[ "$RC" == "0" ]] && grep -q "sent step()" "$WORK/stepok.err" && [[ "$(lending_balance)" != "0" ]]'
 
 echo "passed=$PASS failed=$FAIL"
 [[ $PASS -gt 0 && $FAIL -eq 0 ]]

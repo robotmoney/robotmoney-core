@@ -16,7 +16,8 @@
 #   2. alerts keeper_unconfigured when the queue has no KEEPER_ROLE holder or the key is not a bot key of the account,
 #   3. alerts queue_paused when the queue is paused, and skips settle() while it is,
 #   4. reads checkSettle(). When it reads Ok, settle(MAX_REQUESTS, MAX_USDC) is due,
-#   5. reads previewStep(). When it reads SkipReason.None, step() is due,
+#   5. reads previewStep(). When it reads SkipReason.None, it simulates step() as KeeperAccount. A simulated None means
+#      step() is due. A simulated StepFailed, or a revert, alerts step_failed and sends nothing,
 #   6. reads fund().isAssetInSale(i) for every asset, and stepDelisted(i) is due for each asset in sale,
 #   7. when anything is due and the key holds less than MIN_GAS_WEI, alerts low_gas and sends nothing,
 #   8. sends each due call as KeeperAccount.execute(target, calldata). A revert alerts settle_failed, step_failed or
@@ -166,7 +167,22 @@ tick() {
     mapfile -t L <<<"$READ_OUT"
     [[ ${#L[@]} -eq 4 ]] || { alert "rpc_unreadable" "previewStep() returned ${#L[@]} values"; return 1; }
     if [[ "${L[0]}" == "0" ]]; then
-        step_due=1
+        # previewStep does not run the fund's step, so a step that would fail (the fund reverts, and step() returns
+        # StepFailed) still reads None. Simulate step() as the KeeperAccount, the caller it needs, before any send.
+        local sim
+        if sim=$(cast call "$REBALANCER_ADDRESS" "step()(bool,uint8)" --from "$KEEPER_ACCOUNT_ADDRESS" --rpc-url "$RPC_URL" 2>&1); then
+            local sim_reason
+            sim_reason=$(printf '%s\n' "$sim" | sed -n 2p | awk '{print $1}')
+            if [[ "$sim_reason" == "0" ]]; then
+                step_due=1
+            elif [[ "$sim_reason" == "6" ]]; then
+                alert "step_failed" "simulated step() returned StepFailed; nothing sent"
+            else
+                echo "onevault-keeper: step simulated to skip, SkipReason $sim_reason" >&2
+            fi
+        else
+            alert "step_failed" "simulated step() reverted: ${sim:0:300}"
+        fi
     else
         echo "onevault-keeper: step not due, SkipReason ${L[0]}" >&2
     fi
