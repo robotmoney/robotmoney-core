@@ -112,3 +112,25 @@ jobs:
 
       - name: Share-delivery keeper self-test
         run: bash scripts/ops/test-onevault-share-delivery-keeper.sh
+
+  onevault-keeper-selftest:
+    name: onevault-keeper-selftest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Core 2033: runs the one-vault keeper against a local anvil chain. The test fails loudly when anvil, forge, cast,
+    # python3 or curl is missing, or when KeeperAccount or the one-vault stack does not deploy. It never skips.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI_CLASS: system-correctness
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+
+      - name: One-vault keeper self-test
+        run: bash scripts/ops/test-onevault-keeper.sh

@@ -65,6 +65,7 @@
     { "name": "assert-basescan-mock-tests", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "recorder-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "onevault-share-delivery-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
+    { "name": "onevault-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
     { "prefix": "erc4626-precondition (", "source": "suite-19-erc4626-demo-tvl-matrix.yml" },
     { "name": "watchdog-unit", "source": "suite-20-watchdog.yml" },
     { "name": "watchdog-integration", "source": "suite-20-watchdog.yml" },
