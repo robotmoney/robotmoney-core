@@ -151,7 +151,8 @@ tick() {
     if [[ "${L[1]}" == "true" ]]; then
         alert "queue_paused" "queue $QUEUE_ADDRESS is paused; settle() skipped"
     else
-        read_call "$QUEUE_ADDRESS" "checkSettle()(uint8,uint256)" || return 1
+        # checkSettle reads msg.sender (check 1 is the keeper caller). The settle call runs as KeeperAccount, so read as it.
+        read_call "$QUEUE_ADDRESS" "checkSettle()(uint8,uint256)" --from "$KEEPER_ACCOUNT_ADDRESS" || return 1
         mapfile -t L <<<"$READ_OUT"
         [[ ${#L[@]} -eq 2 ]] || { alert "rpc_unreadable" "checkSettle() returned ${#L[@]} values"; return 1; }
         if [[ "${L[0]}" == "0" ]]; then
@@ -183,9 +184,11 @@ tick() {
     local due=$((settle_due + step_due + ${#delisted[@]}))
     if (( due == 0 )); then
         echo "onevault-keeper: nothing due" >&2
-        return 0
+        [[ $ALERTS -eq 0 ]]
+        return
     fi
-    if (( gas < MIN_GAS_WEI )); then
+    # Bash integers overflow past 2^63 (about 9.2 ETH in wei), so the gas comparison runs in python.
+    if [[ "$(python3 -I -c 'import sys; print(int(sys.argv[1]) < int(sys.argv[2]))' "$gas" "$MIN_GAS_WEI")" == "True" ]]; then
         alert "low_gas" "key $KEEPER_ADDR holds $gas wei, below MIN_GAS_WEI $MIN_GAS_WEI; nothing sent"
         return 1
     fi
@@ -214,6 +217,7 @@ done
 [[ -f "$KEEPER_PASSWORD_FILE" ]] || die "KEEPER_PASSWORD_FILE is not a file"
 command -v cast >/dev/null || die "cast (foundry) is not installed"
 command -v curl >/dev/null || die "curl is not installed"
+command -v python3 >/dev/null || die "python3 is not installed"
 
 KEEPER_ADDR="$(cast wallet address --keystore "$KEEPER_KEYSTORE" --password-file "$KEEPER_PASSWORD_FILE")" \
     || die "KEEPER_KEYSTORE could not be opened with KEEPER_PASSWORD_FILE"
