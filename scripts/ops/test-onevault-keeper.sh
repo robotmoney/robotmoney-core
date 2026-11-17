@@ -328,6 +328,7 @@ check "a simulated false stepDelisted in sale alerts delist_step_failed, sends n
 cast send "$KEEPER_ACCOUNT" "execute(address,bytes)" "$REBALANCER" "$(cast calldata "stepDelisted(uint256)" "$BASKET_INDEX")" \
     --rpc-url "$RPC_URL" --keystore "$KEEPER_KEYSTORE" --password-file "$KEEPER_PASSWORD_FILE" >/dev/null
 BACKOFF="$(backoff_until)"
+# shellcheck disable=SC2034 # read by the check string
 NOW="$(cast block latest --rpc-url "$RPC_URL" -f timestamp | awk '{print $1}')"
 check "a closed router leaves a backoff on the asset after a real attempt" '(( BACKOFF > NOW ))'
 RC=$(run_keeper_once "$WORK/backoff.err")
@@ -337,7 +338,15 @@ check "a backoff skip logs, raises no alert, and exits 0" \
 # Case D: the router opens and the backoff ends. The due stepDelisted is sent through KeeperAccount.execute, and the
 # asset leaves sale.
 send_from "$DEPLOYER" "$BASKET_ROUTER" "setPaused(bool)" false
-warp $(( BACKOFF - NOW + 1 ))
+check "the router is open before the due case" '[[ "$(cast call "$BASKET_ROUTER" "paused()(bool)" --rpc-url "$RPC_URL" | awk '"'"'{print $1}'"'"')" == "false" ]]'
+# Advance real chain time, one block at a time, until the latest block is past the backoff. Each step is at least 60 s,
+# so a block's timestamp is never left on the backoff second. The loop is bounded, and it fails loudly if time does not pass.
+chain_time() { cast block latest --rpc-url "$RPC_URL" -f timestamp | awk '{print $1}'; }
+for _ in 1 2 3 4 5; do
+    (( $(chain_time) > BACKOFF )) && break
+    warp $(( BACKOFF - $(chain_time) + 60 ))
+done
+check "the chain time is past the backoff window" '(( $(chain_time) > BACKOFF ))'
 refresh_feeds
 RC=$(run_keeper_once "$WORK/delistok.err")
 check "a due stepDelisted is sent through KeeperAccount.execute and the asset leaves sale" \
