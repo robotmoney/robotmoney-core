@@ -36,6 +36,19 @@ interface IFlowQueue is IFlowEvents {
     /// @notice Pull `usdc` from the caller into escrow and open a forward-priced deposit request owned by `owner`.
     function requestDeposit(uint256 usdc, address owner) external returns (uint256 requestId);
 
+    /// @notice EIP-2612 single-transaction deposit: the caller signs an off-chain permit for `usdc` (spender = this
+    ///         queue) and submits only this call. The `permit(msg.sender, address(this), usdc, deadline, v, r, s)`
+    ///         runs inside a try/catch so a front-run of the permit cannot DoS the deposit; the USDC is then pulled
+    ///         via `safeTransferFrom` and a deposit request opens exactly as `requestDeposit` does.
+    function requestDepositWithPermit(
+        uint256 usdc,
+        address owner,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external returns (uint256 requestId);
+
     /// @notice Calls the fund's `ledgerCheckpoint(owner)` first (E13, RB-22), then pulls `shares` of the fund from
     ///         the caller into escrow and open a forward-priced redemption request owned by `owner`.
     function requestRedeem(uint256 shares, address owner) external returns (uint256 requestId);

@@ -5,6 +5,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {
@@ -40,27 +41,31 @@ library FlowClaimLib {
         public
         returns (uint256 requestId)
     {
-        _open(s, owner);
-        if (usdc == 0) revert IFlowEvents.ZeroAmount();
-        if (usdc < s.params.minRequestUsdc) {
-            revert IFlowEvents.BelowMinRequest(usdc, s.params.minRequestUsdc);
-        }
-        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
-        (, uint256 perDepositCap, uint256 exitFeeBps,) = fund.config();
-        if (usdc > perDepositCap) revert IFlowEvents.AbovePerDepositCap(usdc, perDepositCap);
+        uint16 exitFeeBps = _checkDeposit(s, usdc, owner);
+        requestId = _createDeposit(s, owner, usdc, exitFeeBps);
+        _pullUsdc(s, usdc);
+    }
 
-        requestId = _newRequest(s, owner, RequestKind.Deposit, usdc, uint16(exitFeeBps));
-        s.totalPendingUsdc += usdc;
-        {
-            uint256 before = IERC20(s.usdc).balanceOf(address(this));
-            IERC20(s.usdc).safeTransferFrom(msg.sender, address(this), usdc);
-            uint256 received = IERC20(s.usdc).balanceOf(address(this)) - before;
-            if (received != usdc) revert IFlowEvents.FundResultMismatch(usdc, received);
-        }
-
-        uint64 epoch = s.requests[requestId].epoch;
-        FlowMatchLib.registerCreated(s, requestId, owner, RequestKind.Deposit, epoch, usdc);
-        emit IFlowEvents.DepositRequested(requestId, owner, msg.sender, usdc, epoch);
+    /// @notice Body of `FlowQueue.requestDepositWithPermit(usdc, owner, deadline, v, r, s)`: an EIP-2612
+    ///         single-transaction deposit. The caller signs a permit typed-data message (spender = this queue,
+    ///         value = `usdc`) and the queue runs `permit(msg.sender, address(this), usdc, deadline, v, r, s)`
+    ///         inside a try/catch BEFORE the pull, so a mempool front-run of the permit cannot DoS the deposit:
+    ///         the revert is absorbed and the pull succeeds on the front-run allowance. The Request is created
+    ///         identically to `requestDeposit`, sharing its validation and Request-creation/pull helpers.
+    function requestDepositWithPermit(
+        FlowState storage s,
+        uint256 usdc,
+        address owner,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 sigS
+    ) public returns (uint256 requestId) {
+        uint16 exitFeeBps = _checkDeposit(s, usdc, owner);
+        try IERC20Permit(s.usdc).permit(msg.sender, address(this), usdc, deadline, v, r, sigS) {}
+        catch {}
+        requestId = _createDeposit(s, owner, usdc, exitFeeBps);
+        _pullUsdc(s, usdc);
     }
 
     /// @notice Body of `FlowQueue.requestRedeem(shares, owner)` (limit-free, snapshots `exitFeeBps`, never expires).
@@ -476,6 +481,46 @@ library FlowClaimLib {
         }
         if (IRobotMoneyFundFull(s.fund).isShutdown()) revert IFlowEvents.FundIsShutdown();
         if (owner == address(0)) revert IFlowEvents.ZeroAddress();
+    }
+
+    /// @dev Shared deposit validation of `requestDeposit` and `requestDepositWithPermit` (E11): open queue, then
+    ///      the zero / minimum / per-deposit-cap gates, returning the fund's current `exitFeeBps` for the request.
+    function _checkDeposit(FlowState storage s, uint256 usdc, address owner)
+        private
+        view
+        returns (uint16 exitFeeBps)
+    {
+        _open(s, owner);
+        if (usdc == 0) revert IFlowEvents.ZeroAmount();
+        if (usdc < s.params.minRequestUsdc) {
+            revert IFlowEvents.BelowMinRequest(usdc, s.params.minRequestUsdc);
+        }
+        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
+        (, uint256 perDepositCap, uint256 feeBps,) = fund.config();
+        if (usdc > perDepositCap) revert IFlowEvents.AbovePerDepositCap(usdc, perDepositCap);
+        exitFeeBps = uint16(feeBps);
+    }
+
+    /// @dev Shared Request creation of `requestDeposit` and `requestDepositWithPermit`: `_newRequest`, the
+    ///      pending-USDC book, match registration and `DepositRequested`, identically for both entry points.
+    function _createDeposit(FlowState storage s, address owner, uint256 usdc, uint16 exitFeeBps)
+        private
+        returns (uint256 requestId)
+    {
+        requestId = _newRequest(s, owner, RequestKind.Deposit, usdc, exitFeeBps);
+        s.totalPendingUsdc += usdc;
+        uint64 epoch = s.requests[requestId].epoch;
+        FlowMatchLib.registerCreated(s, requestId, owner, RequestKind.Deposit, epoch, usdc);
+        emit IFlowEvents.DepositRequested(requestId, owner, msg.sender, usdc, epoch);
+    }
+
+    /// @dev Shared USDC pull of `requestDeposit` and `requestDepositWithPermit`: `safeTransferFrom` the caller,
+    ///      then require the balance increased by exactly `usdc` (fee-on-transfer guard, shared with deposits).
+    function _pullUsdc(FlowState storage s, uint256 usdc) private {
+        uint256 before = IERC20(s.usdc).balanceOf(address(this));
+        IERC20(s.usdc).safeTransferFrom(msg.sender, address(this), usdc);
+        uint256 received = IERC20(s.usdc).balanceOf(address(this)) - before;
+        if (received != usdc) revert IFlowEvents.FundResultMismatch(usdc, received);
     }
 
     function _newRequest(

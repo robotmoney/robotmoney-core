@@ -139,6 +139,18 @@ contract FlowQueue is
     }
 
     /// @inheritdoc IFlowQueue
+    function requestDepositWithPermit(
+        uint256 usdc,
+        address owner,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external nonReentrant returns (uint256) {
+        return FlowClaimLib.requestDepositWithPermit(_s(), usdc, owner, deadline, v, r, s);
+    }
+
+    /// @inheritdoc IFlowQueue
     function requestRedeem(uint256 shares, address owner) external nonReentrant returns (uint256) {
         return FlowClaimLib.requestRedeem(_s(), shares, owner);
     }
