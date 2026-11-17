@@ -1,6 +1,6 @@
 // Drift test for scripts/runbook/validate-contract-qa.ts: the committed contract QA runbook is clean, and each planted drift fails.
 import { expect, test } from "bun:test";
-import { clearVectorProblems } from "./validate-contract-qa.ts";
+import { clearVectorProblems, rcTagHeaderProblems, rcTagPatternOf } from "./validate-contract-qa.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1090,8 +1090,8 @@ test("v0.9.0 fund-upgrade: every fund-flow rule holds for the upgrade flow, and 
   const direct = { ...r, steps: r.steps.map((s) => (s.id === "P9.82-upg-unpause-execute" ? { ...s, cmds: [...s.cmds, ["bash", "scripts/runbook/cast-send.sh", "{m:fund-timelock.timelock}", "executeBatch(address[],uint256[],bytes[],bytes32,bytes32)", "{cast}"]] } : s)) };
   expect(fundExecuteProblems(direct).join("\n")).toContain("P9.82-upg-unpause-execute calls the fund timelock's execute directly");
   // an execute signed by one owner: refused
-  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P3.82-upg-executor-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
-  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P3.82-upg-executor-execute proposes a fund timelock execute");
+  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P3.81-upg-params-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
+  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P3.81-upg-params-execute proposes a fund timelock execute");
   // the claim inside the hold: refused
   const early = { ...r, steps: r.steps.map((s) => (s.id === "P6.94-upg-claim-deposit" ? { ...s, notBefore: { afterStep: "P6.93-upg-settle-deposit", hours: 0.5 } } : s)) };
   expect(holdWaitProblems(early, sheet).join("\n")).toContain("P6.94-upg-claim-deposit claims deposit shares 0.5 h after");
@@ -1110,13 +1110,13 @@ test("v0.9.0 fund-upgrade: Deploy 4 in-place upgrade constraints (order, live re
     const at = (id: string) => { const i = ids.indexOf(id); expect(i, `${id} on ${target}`).toBeGreaterThanOrEqual(0); return i; };
     expect(at("P2.82-upg-fund-upgrade-execute")).toBeLessThan(at("P3.80-upg-config-schedule"));
     expect(at("P2.83-upg-queue-upgrade-execute")).toBeLessThan(at("P3.80-upg-config-schedule"));
-    expect(at("P3.81-upg-params-execute")).toBeLessThan(at("P3.82-upg-executor-execute"));
     expect(at("P0.85-upg-copy-record")).toBeLessThan(at("P1.80-upg-record-go"));
     expect(at("P9.83-upg-verify-final")).toBeGreaterThan(at("P9.82-upg-unpause-execute"));
   }
   const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
-  // the switch is one batch with the minHold operation as its predecessor
-  expect(j("P3.80-upg-config-schedule")).toContain("--action scheduleBatch --targets {state:target-upg-executor} --datas {state:data-upg-executor} --values 0,0 --salt {state:salt-upg-executor} --predecessor {state:upg-params-op}");
+  // one governed call on the queue; the executor is the Safe only already (v0.8.0-onevault-upgrade), so no timelock batch grants or revokes a role
+  expect(j("P3.80-upg-config-schedule")).toContain("--action schedule --target {state:target-upg-params} --data {state:data-upg-params}");
+  expect(r.steps.some((s) => s.cmds.some((c) => c.join(" ").includes("grantRole(")))).toBe(false);
   // new v0.9.0 build is the upgrade build and the release records the rc tag for 8453
   expect(j("P0.92-upg-new-build")).toContain("{runDir}/v090");
   expect(j("P1.81-upg-deploy-fund-impl")).toContain("--upgrade-build {runDir}/v090");
@@ -1166,4 +1166,54 @@ test("OPS-03: emergency-key revocation is ONE scheduleBatch that lifts pauses an
   expect(emergencyRevocationProblems([rev(lifts), exec], "r")).toEqual([]);
   // a step that revokes some other role is not covered
   expect(emergencyRevocationProblems([{ id: "P9.22-other", cmds: [["bash", "-c", "cast calldata 'revokeRole(bytes32,address)' $(cast keccak KEEPER_ROLE) $K"]] } as never], "r")).toEqual([]);
+});
+
+// ─── v0.9.0 upgrade: the 21-field FlowParams tuple, the header rc tag, the done markers and the word-aware checks ───
+const GATE_SOURCE = (): string => readFileSync(join(ROOT, "publish-contracts", "src", "release-gate.ts"), "utf8");
+const FLOW_TYPES_SOL = join(ROOT, "contracts", "test", "prototype", "src", "FlowTypes.sol");
+/** PURE. The tuple types of `struct FlowParams` in FlowTypes.sol, in declaration order. */
+function flowParamsTypes(sol: string): string[] {
+  const body = /struct FlowParams \{([^}]*)\}/.exec(sol);
+  if (!body) throw new Error("FlowTypes.sol declares no struct FlowParams");
+  return body[1]!.split(";").map((l) => l.trim()).filter(Boolean).map((l) => l.split(/\s+/)[0]!);
+}
+const flowParamsSig = (sol: string): string => `setFlowParams((${flowParamsTypes(sol).join(",")}))`;
+
+test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in FlowTypes.sol, and every setFlowParams in the runbook has that tuple (fails on drift)", async () => {
+  const viem: any = await import(join(ROOT, "publish-contracts", "node_modules", "viem"));
+  const sol = readFileSync(FLOW_TYPES_SOL, "utf8");
+  expect(flowParamsTypes(sol).length).toBe(21);
+  const sig = flowParamsSig(sol);
+  expect(viem.toFunctionSelector(sig)).toBe("0xa0e15366");
+  const runbook = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8");
+  const used = [...runbook.matchAll(/setFlowParams\(\(([^)]*)\)\)/g)].map((m) => `setFlowParams((${m[1]}))`);
+  expect(used.length).toBeGreaterThan(0);
+  for (const u of used) expect(u, "the runbook's setFlowParams tuple").toBe(sig);
+  // a struct that lost the three appended fields has another arity and selector, and the runbook's tuple no longer matches it
+  const drifted = sol.replace(/\s*uint32 cancelBuffer;\n\s*uint32 maxPause;\n\s*uint16 matchBandBps;/, "");
+  expect(flowParamsTypes(drifted).length).toBe(18);
+  expect(viem.toFunctionSelector(flowParamsSig(drifted))).not.toBe("0xa0e15366");
+  expect(used.every((u) => u === flowParamsSig(drifted))).toBe(false);
+});
+
+test("v0.9.0 header: the rc tag is release/v0.9.0-rc.N-rehearsal, which RC_TAG_PATTERN accepts and decision D4-13 names; a planted onevault tag is refused", () => {
+  const pattern = rcTagPatternOf(GATE_SOURCE());
+  const text = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8");
+  const r = parseRelease(text, "v0.9.0-onevault-upgrade");
+  expect(rcTagHeaderProblems(text, "v0.9.0", r.decisions, pattern)).toEqual([]);
+  expect(pattern.test("release/v0.9.0-rc.3-rehearsal")).toBe(true);
+  expect(pattern.test("release/v0.9.0-onevault-rc.3-rehearsal")).toBe(false);
+  const planted = text.replace("# The rc tag of the code is release/v0.9.0-rc.N-rehearsal", "# The rc tag of the code is release/v0.9.0-onevault-rc.N-rehearsal");
+  expect(rcTagHeaderProblems(planted, "v0.9.0", r.decisions, pattern).join("\n")).toContain("release/v0.9.0-onevault-rc.N-rehearsal does not match RC_TAG_PATTERN");
+});
+
+test("v0.9.0 done markers count only this run's build, and P2.84 and P3.81 read flowParams word by word (18 live words, 3 appended)", () => {
+  const r = upgradeRelease090();
+  const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
+  expect(j("P0.93-upg-done-markers")).toContain('--arg b "{runDir}/v090"');
+  expect(j("P0.93-upg-done-markers")).toContain('.build == \\$b');
+  expect(j("P2.84-upg-after-upgrade")).toContain("seq 0 17");
+  expect(j("P2.84-upg-after-upgrade")).toContain('test "${#a}" = 1346');
+  expect(j("P3.81-upg-params-execute")).toContain('test "$(cast to-dec 0x${n:1154:64})" = 900');
+  expect(r.steps.some((x) => x.id === "P3.82-upg-executor-execute" || x.id === "P3.85-upg-epoch-schedule")).toBe(false);
 });

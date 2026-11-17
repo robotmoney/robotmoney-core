@@ -110,6 +110,10 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // deployed from (7c23569f8, release/v0.7.0-onevault-rc.5-rehearsal), made and built by the flow ({runDir}/v070): its out/ is the live code the upgrade tools compare with, and
   // the release gate on 8453 runs at that sha (its tag, its green CI, its committed frozen counts). The new build is the --upgrade-build checkout ({runDir}/v080, the run's sha).
   d4common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v070", "--core-sha", "7c23569f85e96232fc75bbba32ebbd469da31966", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
+  // The v0.9.0 upgrade (releases/v0.9.0-onevault-upgrade.yaml): the LIVE build is v0.8.0-onevault's, contracts-0.8.0 (fa7c47182, upgraded in place on 8453 on 2026-11-14:
+  // docs/technical/one-vault-rebalancer-proposal.md, the Deploy 4 record). Its checkout is {runDir}/v080: the layout baseline and the from_implementation source of
+  // deploy-implementation, and the live build the verifier compares every other proxy with. d4common stays for the pinned v0.8.0-onevault-upgrade record, whose live build is v0.7.0's.
+  d4live: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v080", "--core-sha", "fa7c471821ffdc76e9518b10dda5f420c135ae18", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
 };
 export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "hard-assets-vault", "gateway-handover", "timelock", "safe"];
 /**
@@ -558,6 +562,32 @@ export function decisionProblems(decisions: unknown, where: string): string[] {
       if (typeof d.decidedOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d.decidedOn)) out.push(`${where}: decision ${d.id} is decided but has no decidedOn date (YYYY-MM-DD)`);
       if (typeof d.ref !== "string" || d.ref.trim() === "") out.push(`${where}: decision ${d.id} is decided but names no reference (an issue, ADR or commit)`);
     }
+  }
+  return out;
+}
+
+/** PURE. The RC_TAG_PATTERN literal of publish-contracts/src/release-gate.ts, read as text so the validator does not load the gate's modules. */
+export function rcTagPatternOf(gateSource: string): RegExp {
+  const m = /RC_TAG_PATTERN\s*=\s*(\/.+\/);/.exec(gateSource);
+  if (!m) throw new Error("publish-contracts/src/release-gate.ts declares no RC_TAG_PATTERN literal");
+  const lit = /^\/(.+)\/$/.exec(m[1]!)!;
+  return new RegExp(lit[1]!);
+}
+
+/**
+ * PURE. A release file whose header says `# The rc tag of the code is ...` names the tag its code is released under. Every tag its header names must match
+ * RC_TAG_PATTERN (read with rc.N as rc.1), and decision D4-13 must name each one. A header without that line is not checked.
+ */
+export function rcTagHeaderProblems(text: string, where: string, decisions: readonly { id: string; question?: string; answer?: string }[], pattern: RegExp): string[] {
+  const header = text.split("\n").filter((l) => l.startsWith("#")).join("\n");
+  if (!/^# The rc tag of the code is/m.test(header)) return [];
+  const tags = [...new Set([...header.matchAll(/release\/v\d+\.\d+\.\d+-[\w-]*rc\.[\w-]+/g)].map((m) => m[0]))];
+  if (tags.length === 0) return [`${where}: its header names no rc tag (release/vA.B.C-rc.N[-rehearsal])`];
+  const d = decisions.find((x) => x.id === "D4-13");
+  const out: string[] = [];
+  for (const t of tags) {
+    if (!pattern.test(t.replace("rc.N", "rc.1"))) out.push(`${where}: the header rc tag ${t} does not match RC_TAG_PATTERN (release/vA.B.C-rc.N[-rehearsal])`);
+    if (!d || !`${d.question ?? ""} ${d.answer ?? ""}`.includes(t)) out.push(`${where}: the header rc tag ${t} is not the tag decision D4-13 names`);
   }
   return out;
 }
@@ -1055,6 +1085,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
     try {
       const r = parseRelease(text, name);
       releases.set(name, r);
+      problems.push(...rcTagHeaderProblems(text, `releases/${f}`, r.decisions, rcTagPatternOf(read(root, "publish-contracts/src/release-gate.ts"))));
       problems.push(...unwindGuardProblems(r));
       problems.push(...mainOutProblems(r));
       problems.push(...qaSupersetProblems(r));

@@ -3,7 +3,7 @@
 # existing deployment, as v0.6.0's upgrade flow ran against Deploy 3: the record of the live run (releases/v0.7.0-onevault.yaml, Deploy 4) is copied, never edited.
 # A full copy of template.yaml's steps, unchanged and in order, plus the steps this release adds, each `added: v0.9.0-onevault-upgrade` and `flow: fund-upgrade`.
 # The release runs only the fund-upgrade flow (flows: below), so no template step runs. scripts/runbook/validate-contract-qa.ts checks it; scripts/runbook/run.ts runs it.
-# The rc tag of the code is v0.8.0-onevault's: release/v0.9.0-onevault-rc.N-rehearsal.
+# The rc tag of the code is release/v0.9.0-rc.N-rehearsal (RC_TAG_PATTERN in publish-contracts/src/release-gate.ts, decision D4-13).
 release: v0.9.0-onevault-upgrade
 template: contract-qa
 productionReady: false
@@ -18,7 +18,7 @@ notes: |
   hold wait), which the validator and the runner treat as the fund flow (FUND_FLOWS). production is named only so it does not default to the new flow: every step is
   onlyFor twin or rehearsal, so a production run has no step and is refused.
 
-  What changes on chain (7c23569f8, the live Deploy 4 baseline build, against the v0.9.0-onevault build; publish-contracts' masked runtime comparison, links, immutables and the metadata trailer masked).
+  What changes on chain (fa7c47182, contracts-0.8.0, the live Deploy 4 baseline build since v0.8.0-onevault-upgrade upgraded it in place on 2026-11-14, against the v0.9.0-onevault build; publish-contracts' masked runtime comparison, links, immutables and the metadata trailer masked).
   The implementations whose executable code changes are deployed from the v0.9.0-onevault build ({runDir}/v090) by deploy-implementation --system fund: forge pinned, the release
   gate of the live sha and the rc gate of the new build on 8453, the proxy unfrozen, the new storage layout snapshot extending the deployed one append-only, and the new code
   read back against the build. Libraries whose executable code is unchanged are linked from the live implementations. Storage layouts: deploy-implementation's layout gate checks
@@ -26,10 +26,11 @@ notes: |
 
   The sequence (every governed call a Safe transaction to the fund timelock with two owner signatures, the deployer as gas payer, publish-contracts/src/safe/cli.ts):
   P1.81 and P1.82 deploy the fund and queue implementations from the v0.9.0-onevault build; P2.80 and P2.81 schedule fund.upgradeToAndCall and queue.upgradeToAndCall, ONE
-  operation each; P2.82 and P2.83 execute them, and fund-upgrade-record.ts re-records the run's manifest copy and the run manifest's proxy_upgrades. P3.80 schedules (A)
-  queue.setFlowParams with minHold {sheet:FLOW_MIN_HOLD} and every other field the live value, and (B) the executor switch on the timelock itself, grantRole(EXECUTOR_ROLE, Safe)
-  then revokeRole(EXECUTOR_ROLE, address(0)) in one batch, with A as B's predecessor; P3.81 executes A, P3.82 executes B last and fund-upgrade-record.ts re-records executorPolicy
-  safe-only. Every execute of this file goes through the Safe. The pause drill's unpause (P9.81, P9.82) is the first operation executed under the Safe-only executor.
+  operation each; P2.82 and P2.83 execute them, and fund-upgrade-record.ts re-records the run's manifest copy and the run manifest's proxy_upgrades. P3.80 schedules ONE call,
+  queue.setFlowParams with the 21 fields of the v0.9.0 FlowParams (src/FlowTypes.sol): the 18 the live queue reads (minHold {sheet:FLOW_MIN_HOLD}, 3600, already live; epochLength
+  3600 and settleWindow 720, set on the live system by v0.8.0-onevault-upgrade), and the three appended fields cancelBuffer, maxPause and matchBandBps (decision D4-16, open).
+  P3.81 executes it, then syncs the run sheet copy's epoch lines to the chain. The executor is the Safe only already (v0.8.0-onevault-upgrade, 2026-11-14), so this file
+  changes no timelock role. Every execute of this file goes through the Safe. The pause drill's unpause (P9.81, P9.82) is executed under the Safe-only executor.
 
   The deposits in their hold. Deploy 4 settled three 1 USDC deposit requests of the deployer at the 24 h hold before the upgrade. Each claim's unlockAt was fixed at its
   settlement (FlowSettleLib: unlockAt = settlement time + minHold), so neither the upgrade nor the new minHold moves it: P0.94 snapshots every claim (claims-before.json)
@@ -39,17 +40,17 @@ notes: |
   after that waits until the v0.7.0-onevault run's own claim steps (P6.62, P6.67, P6.68) took them. The rebalance plan Deploy 4 opened is not touched: the fund's plan id
   is read the same after the upgrade.
 
-  Timing. The flow test requests 1 USDC, settles it, waits the 1 h hold, claims, redeems and claims. FLOW_EPOCH_LENGTH (21600) and FLOW_SETTLE_WINDOW (3600) stay: a new
-  epochLength applies only from the end of the epoch in progress (FlowQueue.setFlowParams), so it would not shorten the first settle, and the fund keeps its own copy for
-  the in-kind period (IRobotMoneyFund: the Safe keeps them equal), so a change is two more governed calls for no gain. A settle waits at most 7 h (the epoch's end plus the
-  window), the claim 1 h more, the redemption settles in the next epoch. With the three timelock waits (900 s each) an 8453 run takes about 9 to 14 hours. The Twin
+  Timing. The flow test requests 1 USDC, settles it, waits the 1 h hold, claims, redeems and claims. The live queue already runs
+  epochLength 3600 and settleWindow 720 (set on 8453 by v0.8.0-onevault-upgrade, 2026-11-14). The repo's deploy-4.env still names 21600 and 3600, the values before that
+  upgrade: P3.81 sets the run sheet copy's FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW to the chain's values, after it keeps a copy of the go sheet (sheet-at-go.env). A settle
+  waits at most one epoch plus the window from its request (1 h 12 min at 3600 and 720), the claim 1 h more, the redemption settles in the next epoch. The Twin
   moves its clock instead (decision D4-9: the feed step restates the pin answers; the runner warps the hold and the timelock waits).
 
-  The live record and the run's copy. {liveManifestDir} and {liveEvidenceDir} are the Deploy 4 record (its manifests and publish-run.json) and {liveSheet} its run sheet:
-  read only. P0.85 copies them to {manifestDir} and {evidenceDir} and writes their sha256; P9.83 proves them unchanged. On 8453 run.ts requires {manifestDir} equal to
+  The live record and the run's copy. {liveManifestDir} and {liveEvidenceDir} are the Deploy 4 record as the v0.8.0-onevault-upgrade run left it on 8453 (its manifests and publish-run.json,
+  whose proxy_upgrades holds that run's entries, from fa7c47182) and {liveSheet} its run sheet: read only. P0.85 copies them to {manifestDir} and {evidenceDir} and writes their sha256; P9.83 proves them unchanged. On 8453 run.ts requires {manifestDir} equal to
   {v050ManifestDir} and {evidenceDir} to {v050EvidenceDir}: set both pairs to the run's copies. The CLI runs from this checkout and names the live build with --core-dir
-  {runDir}/v070 and --core-sha 7c23569f8 ({d4common}): the release gate on 8453 runs at the live sha (release/v0.7.0-onevault-rc.5-rehearsal, its green CI, its frozen
-  counts committed in 04d63aa3f), and the new build ({runDir}/v090, the run's sha) is deploy-implementation's --upgrade-build, which the CLI gates on 8453 as an rc build
+  {runDir}/v080 and --core-sha fa7c47182 ({d4live}): the release gate on 8453 runs at the live sha (its annotated rc tag release/v0.8.0-rc.2-rehearsal, its green CI,
+  its frozen counts as committed at that sha), and the new build ({runDir}/v090, the run's sha) is deploy-implementation's --upgrade-build, which the CLI gates on 8453 as an rc build
   (decision D4-13). The verifier compares each upgraded proxy with the build its proxy_upgrades entry names and every other proxy with the live build.
 
   The Twin. A fork of Base at a current block (it holds the live Deploy 4), chain 918453, started by the operator before the run and stopped after it: on this machine
@@ -63,26 +64,24 @@ notes: |
   Counts. The upgrade adds no deployer stage: deploy-implementation is one CREATE outside the stage table, recorded in the run manifest's implementation_deploys, and
   the gate's frozen counts are the live sha's. No counts file is added.
 
-  The pinned records v0.4.0, v0.5.0, v0.6.0, v0.7.0-onevault and v0.8.0-onevault-upgrade are not changed.
+  The pinned records v0.4.0, v0.5.0, v0.6.0, v0.7.0-onevault and v0.8.0-onevault-upgrade are not changed, except that the v0.8.0-onevault-upgrade header's rc tag comment is corrected to the form RC_TAG_PATTERN accepts (a comment only).
 decisions:
   - id: "D4-10"
     question: "Who may execute a ready operation on the fund system's timelock: anyone (ADR-0004's open executor, which the vaults system keeps) or only the fund Safe"
     status: decided
-    answer: "Owner, 2026-11-13: Safe-only executor for the fund timelock. The live Deploy 4 timelock may need the executor switch applied in place: ONE timelock batch, grantRole(EXECUTOR_ROLE, the Safe) and revokeRole(EXECUTOR_ROLE, address(0)), scheduled and executed by the Safe as the upgrade's governed change (P3.80, P3.82)."
+    answer: "Owner, 2026-11-13: Safe-only executor for the fund timelock. Applied on the live Deploy 4 timelock by v0.8.0-onevault-upgrade (2026-11-14): the Safe is the only executor. This file applies nothing new: P0.94 reads the state before any send, and P3.83 verifies it after."
     decidedOn: "2026-11-13"
     ref: "releases/v0.8.0-onevault.yaml D4-10"
   - id: "D4-11"
     question: "How long are deposit shares held after their settlement (FlowQueue minHold)"
     status: decided
-    answer: "Owner, 2026-11-13: minHold 1 hour (the sheet's FLOW_MIN_HOLD). This release sets it via ONE governed setFlowParams (P3.80, P3.81) where required. Claims settled before keep the unlockAt fixed at their settlement."
+    answer: "Owner, 2026-11-13: minHold 1 hour (the sheet's FLOW_MIN_HOLD). Live since v0.8.0-onevault-upgrade (2026-11-14). P3.80 keeps it in its one setFlowParams call. Claims settled before keep the unlockAt fixed at their settlement."
     decidedOn: "2026-11-13"
     ref: "releases/v0.8.0-onevault.yaml D4-11"
   - id: "D4-12"
     question: "Go to broadcast the in-place upgrade of Deploy 4 on Base 8453 to v0.9.0-onevault: run this file on the rehearsal target from the rc tag release/v0.9.0-rc.N-rehearsal at the commit whose Twin run passed"
-    status: "decided"
-    answer: "Owner decision pending at run time; recorded here as decided-for-runnable so twin/rehearsal validation can proceed. The actual 8453 broadcast requires the owner's recorded go per runbook policy 4.14."
-    decidedOn: "2026-11-16"
-    ref: "issue 2029"
+    status: "open"
+    answer: "Open. The owner's recorded go for the 8453 broadcast is not in the repo, and runbook policy 4.14 requires it before any send on 8453. runnableProblems reads no open decision on twin or rehearsal, so this decision does not block those runs."
   - id: "D4-13"
     question: "On 8453 deploy-implementation gates its --upgrade-build as an rc build (tag release/vA.B.C-rc.N[-rehearsal] on origin/releases-A.B.x). Which branch/tag satisfy the gate for this v0.9.0-onevault upgrade build?"
     status: "decided"
@@ -98,16 +97,20 @@ decisions:
   - id: "D4-15"
     question: "Shorten the queue's epochs on the upgraded Deploy 4 for the flow test?"
     status: "decided"
-    answer: "Owner, 2026-11-14 (carried from v0.8.0-upgrade): yes. P3.85 and P3.86 set epochLength 3600 and settleWindow 720 through the Safe and timelock, after the executor switch; it applies from the end of the epoch in progress."
+    answer: "Owner, 2026-11-14 (carried from v0.8.0-upgrade): yes. Done on the live Deploy 4 by v0.8.0-onevault-upgrade (epochLength 3600, settleWindow 720). This file does not change them: P3.81 syncs the run sheet copy's two lines to the chain."
     decidedOn: "2026-11-14"
     ref: "releases/v0.8.0-onevault-upgrade.yaml D4-15"
+  - id: "D4-16"
+    question: "Which values do cancelBuffer, maxPause and matchBandBps take on the live queue? v0.9.0 appends these three fields to FlowParams, so the live queue holds 0 until P3.80 sets them"
+    status: "open"
+    answer: "Open. P3.80 sets working defaults: cancelBuffer 900 s (proposal D39; the owner has not ruled on the value), maxPause 259200 s (D29 and D33: 72 h, at least the timelock delay plus one epoch), matchBandBps 10 (the proposal's table, 2026-11-15 default). The owner confirms or changes them before the 8453 go."
 recovery: |
   Contracts are not rolled back in place by this file, but a governed upgrade back to the live implementation is possible: the fund and queue proxies stay upgradeable
   (UPGRADE_MODE upgradeable) and the live implementations stay on chain (the run manifest's proxy_upgrades names each from_implementation). Before P1.80 nothing is sent:
   fix on the branch and run again. A failed implementation deploy reruns (deploy-implementation reuses a recorded implementation with the build's code). A scheduled
-  operation that must not run is cancelled by the Safe before it is ready (safe/cli.ts propose --action cancel --id). The executor switch (B) cannot run before the minHold
-  change (A): its predecessor is A, so a failed A leaves the open executor in place and B pending; cancel B and schedule both again. After B, every execute needs the Safe:
-  a lost Safe threshold stops every governed change, as for any fund operation. The emergency key still pauses deposits and the queue at once (P9.80); redeem in kind,
+  operation that must not run is cancelled by the Safe before it is ready (safe/cli.ts propose --action cancel --id). A failed P3.80 operation is cancelled by the
+  Safe and scheduled again: the queue keeps its live values, and its three appended fields read 0, until P3.81 executes. Every execute needs the Safe: a lost Safe threshold stops every governed
+  change, as for any fund operation. The emergency key still pauses deposits and the queue at once (P9.80); redeem in kind,
   cancel, the in-kind exit and withdrawals stay open. shutdown and emergencyUnwind now take the Safe and the 900 s delay. The fund holds at most FUND_TVL_CAP (1,000 USDC).
 scope:
   - {pr: 2035, what: "add v0.9.0-onevault-upgrade runbook for Deploy 4: template steps plus v0.9.0 fund-upgrade steps targeting existing Deploy 4 proxies in place with Deploy 4 keys, signers, timelock configuration, and v0.9.0 release artifacts", check: "P0.80-upg-runbook-valid"}
@@ -337,7 +340,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.82-upg-checkout"
     standing: ["4.1"]
-    description: "The tool checkout is clean and its HEAD is the run's sha: on 8453 the rc tag of v0.8.0-onevault, on the Twin the QA commit. The CLIs run from it; the live build is the separate checkout of P0.91, the new build the one of P0.92"
+    description: "The tool checkout is clean and its HEAD is the run's sha: on 8453 the rc tag release/v0.9.0-rc.N-rehearsal, on the Twin the QA commit. The CLIs run from it; the live build is the separate checkout of P0.91, the new build the one of P0.92"
     host: "control"
     phase: 0
     cmds:
@@ -434,11 +437,11 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.89-upg-sheet-is-live"
     standing: ["4.3", "4.15"]
-    description: "The run sheet is the live Deploy 4 run sheet ({liveSheet}) and nothing else changes but the hold: every line equal, except FLOW_MIN_HOLD (86400 live, 3600 here, decision D4-11) and, on the Twin, the chain ids"
+    description: "The run sheet is the live Deploy 4 run sheet ({liveSheet}) and nothing else changes but the hold: every line equal, except FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW (3600 and 720 live since v0.8.0-onevault-upgrade; the committed sheet still names 21600 and 3600, and P3.81 syncs this copy), and, on the Twin, the chain ids. FLOW_MIN_HOLD is 3600 on both (decision D4-11)"
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", "n() { grep -E \"^[A-Z][A-Z0-9_]*=\" \"$1\" | grep -vE \"^(FLOW_MIN_HOLD|CHAIN_ID|EXPECTED_CHAIN_ID)=\" | sort; }; diff <(n {liveSheet}) <(n {sheet}) && grep -qx \"FLOW_MIN_HOLD=86400\" {liveSheet} && grep -qx \"FLOW_MIN_HOLD=3600\" {sheet} && grep -qx \"CHAIN_ID={chainId}\" {sheet}"]
+      - ["bash", "-c", "n() { grep -E \"^[A-Z][A-Z0-9_]*=\" \"$1\" | grep -vE \"^(FLOW_MIN_HOLD|FLOW_EPOCH_LENGTH|FLOW_SETTLE_WINDOW|CHAIN_ID|EXPECTED_CHAIN_ID)=\" | sort; }; diff <(n {liveSheet}) <(n {sheet}) && grep -qx \"FLOW_MIN_HOLD=3600\" {liveSheet} && grep -qx \"FLOW_MIN_HOLD=3600\" {sheet} && grep -qx \"CHAIN_ID={chainId}\" {sheet}"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -460,14 +463,14 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.91-upg-live-build"
     standing: ["4.15"]
-    description: "The live build: a separate clean checkout of 7c23569f8 (release/v0.7.0-onevault-rc.5-rehearsal, the sha Deploy 4 was deployed from) at {runDir}/v070, its submodules cloned from the main checkout's own, built there with --root and --out. Every CLI call of this flow names it with --core-dir ({d4common}): deploy-implementation reads the live implementation's library links and the deployed storage layout from it, and the verifier compares every proxy the upgrade does not move with it"
+    description: "The live build: a separate clean checkout of fa7c47182 (contracts-0.8.0, the sha v0.8.0-onevault-upgrade upgraded Deploy 4 to in place on 2026-11-14) at {runDir}/v080, its submodules cloned from the main checkout's own, built there with --root and --out. Every CLI call of this flow names it with --core-dir ({d4live}): deploy-implementation reads the live implementation's library links and the deployed storage layout from it, and the verifier compares every proxy the upgrade does not move with it"
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", "test -d {runDir}/v070 || git worktree add --detach {runDir}/v070 7c23569f85e96232fc75bbba32ebbd469da31966"]
-      - ["bash", "scripts/runbook/upgrade-submodules.sh", "{runDir}/v070"]
-      - ["bash", "-c", "test \"$(git -C {runDir}/v070 rev-parse HEAD)\" = 7c23569f85e96232fc75bbba32ebbd469da31966 && test -z \"$(git -C {runDir}/v070 status --porcelain)\""]
-      - ["forge", "build", "--root", "{runDir}/v070", "--out", "{runDir}/v070/out"]
+      - ["bash", "-c", "test -d {runDir}/v080 || git worktree add --detach {runDir}/v080 fa7c471821ffdc76e9518b10dda5f420c135ae18"]
+      - ["bash", "scripts/runbook/upgrade-submodules.sh", "{runDir}/v080"]
+      - ["bash", "-c", "test \"$(git -C {runDir}/v080 rev-parse HEAD)\" = fa7c471821ffdc76e9518b10dda5f420c135ae18 && test -z \"$(git -C {runDir}/v080 status --porcelain)\""]
+      - ["forge", "build", "--root", "{runDir}/v080", "--out", "{runDir}/v080/out"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -495,11 +498,11 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.93-upg-done-markers"
     standing: ["4.15"]
-    description: "A done-* marker for each proxy the chain AND the run's manifest copy already show upgraded (a proxy_upgrades entry with an execute transaction whose to_implementation the ERC-1967 slot reads), so a rerun skips that upgrade by its own gate; the markers of an earlier invocation are removed first, and the step runs on every invocation (it only reads)"
+    description: "A done-* marker for each proxy the chain AND the run's manifest copy already show upgraded (a proxy_upgrades entry with an execute transaction whose to_implementation the ERC-1967 slot reads), so a rerun skips that upgrade by its own gate; the markers of an earlier invocation are removed first, and the step runs on every invocation (it only reads). An entry counts only when its build is this run's own upgrade build ({runDir}/v090): the copied live record's entries (the v0.8.0 run's) never mark a proxy done"
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", "e={evidenceDir}/publish-run.json; rm -f {runDir}/state/done-fund-upgrade {runDir}/state/done-queue-upgrade; done_upgrade() { want=$(jq -r --arg p \"$1\" \"[.proxy_upgrades[]? | select(.proxy_name == \\$p and .execute_tx != null)] | last | .to_implementation // empty\" \"$e\" | tr A-F a-f); have=$(cast implementation \"$2\" | tr A-F a-f); test -n \"$want\" && test \"$have\" = \"$want\"; }; if done_upgrade fund {m:fund.fund}; then echo \"fund already upgraded\"; touch {runDir}/state/done-fund-upgrade; fi; if done_upgrade queue {m:queue.queue}; then echo \"queue already upgraded\"; touch {runDir}/state/done-queue-upgrade; fi; true"]
+      - ["bash", "-c", "e={evidenceDir}/publish-run.json; rm -f {runDir}/state/done-fund-upgrade {runDir}/state/done-queue-upgrade; done_upgrade() { want=$(jq -r --arg p \"$1\" --arg b \"{runDir}/v090\" \"[.proxy_upgrades[]? | select(.proxy_name == \\$p and .build == \\$b and .execute_tx != null)] | last | .to_implementation // empty\" \"$e\" | tr A-F a-f); have=$(cast implementation \"$2\" | tr A-F a-f); test -n \"$want\" && test \"$have\" = \"$want\"; }; if done_upgrade fund {m:fund.fund}; then echo \"fund already upgraded\"; touch {runDir}/state/done-fund-upgrade; fi; if done_upgrade queue {m:queue.queue}; then echo \"queue already upgraded\"; touch {runDir}/state/done-queue-upgrade; fi; true"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -512,17 +515,17 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.94-upg-pre-state"
     standing: ["4.15"]
-    description: "The live state before any send, read from the chain into the journal and the run: each of the five proxies runs its manifest implementation, unfrozen, upgradeable only by the fund timelock; the timelock's delay, the Safe as proposer and canceller and the OPEN executor (address(0) holds EXECUTOR_ROLE, so a non-Safe execute is refused only for the operation's state); the Safe's owners and threshold; the queue's flowParams (minHold 86400); every queue claim (claims-before.json: the deposits settled at the 24 h hold, unlockAt fixed at settlement); the fund's supply and plan; and the emergency key still able to call shutdown (a simulation, nothing sent). It runs once"
+    description: "The live state before any send, read from the chain into the journal and the run: each of the five proxies runs its manifest implementation, unfrozen, upgradeable only by the fund timelock; the timelock's delay, the Safe as proposer, canceller and the only executor (EXECUTOR_ROLE on the Safe and not on address(0), as v0.8.0-onevault-upgrade left it); the Safe's owners and threshold; the queue's flowParams (18 words: minHold {sheet:FLOW_MIN_HOLD}, epochLength 3600, settleWindow 720); every queue claim (claims-before.json: the deposits settled at the 24 h hold, unlockAt fixed at settlement); the fund's supply and plan; and the emergency key refused shutdown (a simulation, nothing sent). It runs once"
     host: "control"
     phase: 0
     cmds:
       - ["bash", "-c", "for p in \"{m:fund.fund}:{m:fund.fund_implementation}\" \"{m:queue.queue}:{m:queue.queue_implementation}\" \"{m:rebalancer.rebalancer}:{m:rebalancer.rebalancer_implementation}\" \"{m:fund-governance.governance}:{m:fund-governance.governance_implementation}\" \"{m:fund-receipt.consensus_receipt}:{m:fund-receipt.consensus_receipt_implementation}\"; do x=${p%%:*}; i=${p##*:}; echo \"$x implementation $(cast implementation $x)\"; bun scripts/runbook/qa-assert.ts eq \"$(cast implementation $x)\" \"$i\" && test \"$(cast call $x \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call $x \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\" || exit 1; done"]
-      - ["bash", "-c", "echo \"delay $(cast call {m:fund-timelock.timelock} \"getMinDelay()(uint256)\")\"; echo \"owners $(cast call {m:safe.safe} \"getOwners()(address[])\") threshold $(cast call {m:safe.safe} \"getThreshold()(uint256)\")\"; test \"$(cast call {m:fund-timelock.timelock} \"getMinDelay()(uint256)\")\" = \"{sheet:TIMELOCK_MIN_DELAY}\" && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" \"$(cast keccak PROPOSER_ROLE)\" {m:safe.safe})\" = true && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" \"$(cast keccak CANCELLER_ROLE)\" {m:safe.safe})\" = true && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" $(cast keccak EXECUTOR_ROLE) 0x0000000000000000000000000000000000000000)\" = true && echo \"executor: open (address(0) holds EXECUTOR_ROLE)\""]
-      - ["bash", "-c", "out=$(cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:fund-timelock.timelock} \"execute(address,uint256,bytes,bytes32,bytes32)\" 0x0000000000000000000000000000000000000001 0 0x $(cast hash-zero) $(cast hash-zero) 2>&1); echo \"$out\" | head -n 1; echo \"$out\" | grep -Eq \"TimelockUnexpectedOperationState|0x5ead8eb5\""]
-      - ["bash", "-c", "cast call {m:queue.queue} \"flowParams()\" > {runDir}/state/upg-flow-params-before && r=$(cat {runDir}/state/upg-flow-params-before) && echo \"flowParams $r\" && test \"$(cast to-dec 0x${r:130:64})\" = 86400"]
+      - ["bash", "-c", "echo \"delay $(cast call {m:fund-timelock.timelock} \"getMinDelay()(uint256)\")\"; echo \"owners $(cast call {m:safe.safe} \"getOwners()(address[])\") threshold $(cast call {m:safe.safe} \"getThreshold()(uint256)\")\"; test \"$(cast call {m:fund-timelock.timelock} \"getMinDelay()(uint256)\")\" = \"{sheet:TIMELOCK_MIN_DELAY}\" && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" \"$(cast keccak PROPOSER_ROLE)\" {m:safe.safe})\" = true && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" \"$(cast keccak CANCELLER_ROLE)\" {m:safe.safe})\" = true && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" $(cast keccak EXECUTOR_ROLE) {m:safe.safe})\" = true && test \"$(cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" $(cast keccak EXECUTOR_ROLE) 0x0000000000000000000000000000000000000000)\" = false && echo \"executor: the Safe only\""]
+      - ["bash", "-c", "out=$(cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:fund-timelock.timelock} \"execute(address,uint256,bytes,bytes32,bytes32)\" 0x0000000000000000000000000000000000000001 0 0x $(cast hash-zero) $(cast hash-zero) 2>&1); echo \"$out\" | head -n 1; echo \"$out\" | grep -Eq \"TimelockUnexpectedOperationState|0x5ead8eb5|AccessControlUnauthorizedAccount|0xe2517d3f\""]
+      - ["bash", "-c", "cast call {m:queue.queue} \"flowParams()\" > {runDir}/state/upg-flow-params-before && r=$(cat {runDir}/state/upg-flow-params-before) && echo \"flowParams $r\" && test \"${#r}\" = 1154 && test \"$(cast to-dec 0x${r:2:64})\" = 3600 && test \"$(cast to-dec 0x${r:66:64})\" = 720 && test \"$(cast to-dec 0x${r:130:64})\" = \"{sheet:FLOW_MIN_HOLD}\""]
       - ["bun", "publish-contracts/src/ci/fund-claims.ts", "snapshot", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--out", "{runDir}/claims-before.json"]
       - ["bash", "-c", "echo \"$(cast call {m:fund.fund} \"totalSupply()(uint256)\" | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" {m:fund.fund} | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"currentPlanId()(uint256)\")-$(cast call {m:queue.queue} \"requestCount()(uint256)\")\" > {runDir}/state/upg-fund-before && echo \"supply-seedshares-plan-requests $(cat {runDir}/state/upg-fund-before) planStatus $(cast call {m:fund.fund} \"planStatus()(uint8)\")\""]
-      - ["bash", "-c", "cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"shutdown()\" > /dev/null && echo \"before the upgrade the emergency key can still call shutdown (simulated, nothing sent)\""]
+      - ["bash", "-c", "out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"shutdown()\" 2>&1); echo \"emergency shutdown: $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\" && echo \"before the upgrade the emergency key is refused shutdown (simulated, nothing sent)\""]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -627,7 +630,7 @@ steps:
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "fund", "--upgrade-build", "{runDir}/v090", "{d4common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "fund", "--upgrade-build", "{runDir}/v090", "{d4live}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P1.81-upg-deploy-fund-impl} | tail -n 1 | jq -r .implementation > {runDir}/state/upg-fund-impl"]
       - ["bash", "-c", "! bun scripts/runbook/qa-assert.ts eq \"{state:upg-fund-impl}\" \"{m:fund.fund_implementation}\" && test \"$(cast code \"{state:upg-fund-impl}\" | wc -c)\" -gt 100"]
     env:
@@ -649,7 +652,7 @@ steps:
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "queue", "--upgrade-build", "{runDir}/v090", "{d4common}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "queue", "--upgrade-build", "{runDir}/v090", "{d4live}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P1.82-upg-deploy-queue-impl} | tail -n 1 | jq -r .implementation > {runDir}/state/upg-queue-impl"]
       - ["bash", "-c", "! bun scripts/runbook/qa-assert.ts eq \"{state:upg-queue-impl}\" \"{m:queue.queue_implementation}\" && test \"$(cast code \"{state:upg-queue-impl}\" | wc -c)\" -gt 100"]
     env:
@@ -784,15 +787,15 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P2.84-upg-after-upgrade"
     standing: ["4.12"]
-    description: "The upgrade changed the code and nothing else, and the new rules hold. Unchanged: every queue claim (fund-claims same against claims-before.json: the deposits settled under the 24 h hold keep their unlockAt and stay claimable then), the queue's flowParams, the fund's supply, seed shares, plan id and request count. New (owner 2026-11-13): the emergency key is refused shutdown and emergencyUnwind (AccessControlUnauthorizedAccount, simulated, nothing sent), the timelock may call shutdown, the emergency key still pauses the fund and the queue (simulated), and the queue accepts minHold 3600 from the timelock (simulated: the new floor). The governed upgrades read back from the chain (evidence-check --governed-upgrades: one upgradeToAndCall each, the delay kept)"
+    description: "The upgrade changed the code and nothing else, and the new rules hold. Unchanged: every queue claim (fund-claims same against claims-before.json: the deposits settled under the 24 h hold keep their unlockAt and stay claimable then), the queue's 18 live flowParams words (the upgraded queue returns 21 words; the three appended ones read 0 until P3.81), the fund's supply, seed shares, plan id and request count. New (owner 2026-11-13): the emergency key is refused shutdown and emergencyUnwind (AccessControlUnauthorizedAccount, simulated, nothing sent), the timelock may call shutdown, the emergency key still pauses the fund and the queue (simulated), and the queue accepts the 21-field setFlowParams that P3.80 schedules from the timelock (simulated). The governed upgrades read back from the chain (evidence-check --governed-upgrades: one upgradeToAndCall each, the delay kept)"
     host: "control"
     phase: 2
     cmds:
       - ["bun", "publish-contracts/src/ci/fund-claims.ts", "same", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--snapshot", "{runDir}/claims-before.json"]
-      - ["bash", "-c", "test \"$(cast call {m:queue.queue} \"flowParams()\")\" = \"{state:upg-flow-params-before}\" && test \"$(cast call {m:fund.fund} \"totalSupply()(uint256)\" | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" {m:fund.fund} | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"currentPlanId()(uint256)\")-$(cast call {m:queue.queue} \"requestCount()(uint256)\")\" = \"{state:upg-fund-before}\" && echo \"planStatus $(cast call {m:fund.fund} \"planStatus()(uint8)\")\""]
+      - ["bash", "-c", "a=$(cast call {m:queue.queue} \"flowParams()\"); b={state:upg-flow-params-before}; test \"${#a}\" = 1346 && for i in $(seq 0 17); do test \"${a:$((2+64*i)):64}\" = \"${b:$((2+64*i)):64}\" || exit 1; done && for i in 18 19 20; do test \"$(cast to-dec 0x${a:$((2+64*i)):64})\" = 0 || exit 1; done && echo \"flowParams: the 18 live words unchanged, the 3 appended words read 0 until P3.81\" && test \"$(cast call {m:fund.fund} \"totalSupply()(uint256)\" | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" {m:fund.fund} | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"currentPlanId()(uint256)\")-$(cast call {m:queue.queue} \"requestCount()(uint256)\")\" = \"{state:upg-fund-before}\" && echo \"planStatus $(cast call {m:fund.fund} \"planStatus()(uint8)\")\""]
       - ["bash", "-c", "for fn in \"shutdown()\" \"emergencyUnwind()\"; do out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"$fn\" 2>&1); echo \"emergency $fn: $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\" || exit 1; done"]
       - ["bash", "-c", "cast call --from {m:fund-timelock.timelock} {m:fund.fund} \"shutdown()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"pauseDeposits()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:queue.queue} \"pauseQueue()\" > /dev/null && echo \"the timelock may shut down; the emergency key still pauses (simulated)\""]
-      - ["bash", "-c", "r={state:upg-flow-params-before}; echo \"$(cast sig \"setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16))\")${r:2:128}$(cast to-uint256 {sheet:FLOW_MIN_HOLD} | cut -c3-)${r:194:2000}\" > {runDir}/state/data-upg-params && cast call --from {m:fund-timelock.timelock} {m:queue.queue} \"$(cat {runDir}/state/data-upg-params)\" > /dev/null && echo \"the queue accepts minHold {sheet:FLOW_MIN_HOLD} from the timelock (simulated)\""]
+      - ["bash", "-c", "b={state:upg-flow-params-before}; d() { cast to-dec 0x${b:$((2+64*$1)):64}; }; data=$(cast calldata \"setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16,uint32,uint32,uint16))\" \"($(d 0),$(d 1),{sheet:FLOW_MIN_HOLD},$(d 3),$(d 4),$(d 5),$(d 6),$(d 7),$(d 8),$(d 9),$(d 10),$(d 11),$(d 12),$(d 13),$(d 14),$(d 15),$(d 16),$(d 17),900,259200,10)\") && echo \"$data\" > {runDir}/state/data-upg-params && cast call --from {m:fund-timelock.timelock} {m:queue.queue} \"$data\" > /dev/null && echo \"the queue accepts the v0.9.0 setFlowParams from the timelock (simulated): the live 18 words, cancelBuffer 900, maxPause 259200, matchBandBps 10, minHold {sheet:FLOW_MIN_HOLD}\""]
       - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{evidenceDir}/publish-run.json", "--timelock", "{m:fund-timelock.timelock}", "--deployment-kind", "{deploymentKind}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -887,36 +890,31 @@ steps:
   # ── v0.9.0-onevault-upgrade, flow fund-upgrade, phase 3 ──
   - id: "P3.80-upg-config-schedule"
     standing: ["4.12", "4.10"]
-    description: "The Safe schedules the two config operations on the fund timelock in one sitting: (A) ONE call, queue.setFlowParams(the live flowParams with minHold {sheet:FLOW_MIN_HOLD}: every other field the live value, decision D4-11), and (B) ONE batch on the timelock itself, grantRole(EXECUTOR_ROLE, the Safe) and revokeRole(EXECUTOR_ROLE, address(0)) (decision D4-10 applied to the live timelock), with A as its predecessor: B cannot execute before A, and it is the last governed change of the upgrade. Both through the Safe tool, two owner signatures each"
+    description: "The Safe schedules ONE call on the fund timelock: queue.setFlowParams with the 21 fields of the v0.9.0 FlowParams (src/FlowTypes.sol; the validator test pins its selector and arity): the 18 the live queue reads, unchanged (minHold {sheet:FLOW_MIN_HOLD}, epochLength 3600, settleWindow 720), and the three appended fields cancelBuffer 900, maxPause 259200 and matchBandBps 10 (decision D4-16, open). Through the Safe tool, two owner signatures. The executor is the Safe only already (v0.8.0-onevault-upgrade), so no timelock role changes"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 3
     cmds:
-      - ["bash", "-c", "test \"$(cast call {m:queue.queue} \"flowParams()\")\" = \"{state:upg-flow-params-before}\" && cast keccak \"robotmoney.deploy4-upgrade.params.{runDir}\" > {runDir}/state/salt-upg-params && echo \"{m:queue.queue}\" > {runDir}/state/target-upg-params"]
+      - ["bash", "-c", "a=$(cast call {m:queue.queue} \"flowParams()\"); b={state:upg-flow-params-before}; test \"${a:0:${#b}}\" = \"$b\" && cast keccak \"robotmoney.deploy4-upgrade.params.{runDir}\" > {runDir}/state/salt-upg-params && echo \"{m:queue.queue}\" > {runDir}/state/target-upg-params"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-params}", "--data", "{state:data-upg-params}", "--salt", "{state:salt-upg-params}", "--out", "{runDir}/bundles/params-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/params-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/params-schedule.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/params-schedule.json", "--signer", "{signer}"]
-      - ["bash", "-c", "cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{state:target-upg-params}\" 0 \"{state:data-upg-params}\" $(cast hash-zero) \"{state:salt-upg-params}\" > {runDir}/state/upg-params-op && cast keccak \"robotmoney.deploy4-upgrade.executor.{runDir}\" > {runDir}/state/salt-upg-executor && echo \"{m:fund-timelock.timelock},{m:fund-timelock.timelock}\" > {runDir}/state/target-upg-executor && echo \"$(cast calldata \"grantRole(bytes32,address)\" $(cast keccak EXECUTOR_ROLE) {m:safe.safe}),$(cast calldata \"revokeRole(bytes32,address)\" $(cast keccak EXECUTOR_ROLE) 0x0000000000000000000000000000000000000000)\" > {runDir}/state/data-upg-executor"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "scheduleBatch", "--targets", "{state:target-upg-executor}", "--datas", "{state:data-upg-executor}", "--values", "0,0", "--salt", "{state:salt-upg-executor}", "--predecessor", "{state:upg-params-op}", "--out", "{runDir}/bundles/executor-schedule.json"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/executor-schedule.json", "--signer", "{ownerSigner}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/executor-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/executor-schedule.json", "--signer", "{signer}"]
+      - ["bash", "-c", "cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{state:target-upg-params}\" 0 \"{state:data-upg-params}\" $(cast hash-zero) \"{state:salt-upg-params}\" > {runDir}/state/upg-params-op"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
     receipts:
       - {"dir": "{runDir}/bundles", "pattern": "params-schedule.json", "required": true}
-      - {"dir": "{runDir}/bundles", "pattern": "executor-schedule.json", "required": true}
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["salt-upg-params", "target-upg-params", "upg-params-op", "salt-upg-executor", "target-upg-executor", "data-upg-executor"]
+    writes: ["salt-upg-params", "target-upg-params", "upg-params-op"]
     added: "v0.9.0-onevault-upgrade"
   - id: "P3.81-upg-params-execute"
     standing: ["4.12", "4.10"]
-    description: "After the timelock delay the Safe executes A: the operation reads done, and the queue's flowParams are the live ones with minHold {sheet:FLOW_MIN_HOLD} and nothing else changed (the raw words compared)"
+    description: "After the timelock delay the Safe executes the setFlowParams: the operation reads done, and the queue's flowParams read 21 words: the 18 live ones unchanged (minHold {sheet:FLOW_MIN_HOLD}, epochLength 3600, settleWindow 720), then cancelBuffer 900, maxPause 259200 and matchBandBps 10 (the raw words compared). Then the run sheet copy takes the chain's FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW, after it keeps sheet-at-go.env"
     host: "control"
     phase: 3
     cmds:
@@ -925,7 +923,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/params-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/params-execute.json", "--signer", "{signer}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-params-op}\")\" = true"]
-      - ["bash", "-c", "r={state:upg-flow-params-before}; n=$(cast call {m:queue.queue} \"flowParams()\"); echo \"flowParams $n\"; test \"${n:0:130}\" = \"${r:0:130}\" && test \"${n:194:2000}\" = \"${r:194:2000}\" && test \"$(cast to-dec 0x${n:130:64})\" = \"{sheet:FLOW_MIN_HOLD}\""]
+      - ["bash", "-c", "b={state:upg-flow-params-before}; n=$(cast call {m:queue.queue} \"flowParams()\"); echo \"flowParams $n\"; test \"${#n}\" = 1346 && test \"${n:0:${#b}}\" = \"$b\" && test \"$(cast to-dec 0x${n:130:64})\" = \"{sheet:FLOW_MIN_HOLD}\" && test \"$(cast to-dec 0x${n:1154:64})\" = 900 && test \"$(cast to-dec 0x${n:1218:64})\" = 259200 && test \"$(cast to-dec 0x${n:1282:64})\" = 10 && { test -f {runDir}/sheet-at-go.env || cp {sheet} {runDir}/sheet-at-go.env; } && sed -i -e \"s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=$(cast to-dec 0x${n:2:64})/\" -e \"s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=$(cast to-dec 0x${n:66:64})/\" {sheet} && grep -E \"^FLOW_(EPOCH_LENGTH|SETTLE_WINDOW)=\" {sheet}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -937,38 +935,13 @@ steps:
     notBefore: {"afterStep": "P3.80-upg-config-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
     added: "v0.9.0-onevault-upgrade"
-  - id: "P3.82-upg-executor-execute"
-    standing: ["4.12", "4.10"]
-    description: "Then the Safe executes B, the last governed change: the batch reads done, the Safe holds EXECUTOR_ROLE and address(0) no longer does, the Safe is still the only proposer and canceller, and the deployer holds no timelock role. fund-upgrade-record.ts executor re-records the run's fund-timelock.json executorPolicy safe-only with this operation. From here the timelock refuses any executor but the Safe: the deployer's and the keeper's execute are refused for their role (AccessControlUnauthorizedAccount, simulated), where P0.94 saw only the operation state refuse"
-    host: "control"
-    phase: 3
-    cmds:
-      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "executeBatch", "--targets", "{state:target-upg-executor}", "--datas", "{state:data-upg-executor}", "--values", "0,0", "--salt", "{state:salt-upg-executor}", "--predecessor", "{state:upg-params-op}", "--out", "{runDir}/bundles/executor-execute.json"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/executor-execute.json", "--signer", "{ownerSigner}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/executor-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/executor-execute.json", "--signer", "{signer}"]
-      - ["bash", "-c", "id=$(cast call {m:fund-timelock.timelock} \"hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32)\" \"[{state:target-upg-executor}]\" \"[0,0]\" \"[{state:data-upg-executor}]\" \"{state:upg-params-op}\" \"{state:salt-upg-executor}\") && test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"$id\")\" = true"]
-      - ["bash", "-c", "h() { cast call {m:fund-timelock.timelock} \"hasRole(bytes32,address)(bool)\" \"$1\" \"$2\"; }; test \"$(h $(cast keccak EXECUTOR_ROLE) {m:safe.safe})\" = true && test \"$(h $(cast keccak EXECUTOR_ROLE) 0x0000000000000000000000000000000000000000)\" = false && test \"$(h \"$(cast keccak PROPOSER_ROLE)\" {m:safe.safe})\" = true && test \"$(h \"$(cast keccak CANCELLER_ROLE)\" {m:safe.safe})\" = true && for r in $(cast keccak EXECUTOR_ROLE) \"$(cast keccak PROPOSER_ROLE)\" \"$(cast keccak CANCELLER_ROLE)\" $(cast hash-zero); do test \"$(h \"$r\" \"{sheet:ADMIN_ADDRESS}\")\" = false || exit 1; done && echo \"executor: the Safe only\""]
-      - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "executor", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--schedule-bundle", "{runDir}/bundles/executor-schedule.json", "--execute-bundle", "{runDir}/bundles/executor-execute.json"]
-      - ["bash", "-c", "for a in \"{sheet:ADMIN_ADDRESS}\" \"{sheet:KEEPER_ADDRESS}\"; do out=$(cast call --from \"$a\" {m:fund-timelock.timelock} \"execute(address,uint256,bytes,bytes32,bytes32)\" 0x0000000000000000000000000000000000000001 0 0x $(cast hash-zero) $(cast hash-zero) 2>&1); echo \"$a execute: $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\" || exit 1; done"]
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts:
-      - {"dir": "{runDir}/bundles", "pattern": "executor-execute.json", "required": true}
-    irreversible: false
-    flow: "fund-upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    notBefore: {"afterStep": "P3.80-upg-config-schedule", "hours": "timelockDelay"}
-    maxMinutes: 60
-    added: "v0.9.0-onevault-upgrade"
   - id: "P3.83-upg-verify"
     standing: ["4.3", "4.12"]
-    description: "The fund verifier on the upgraded live system ({d4common}: the live sha's frozen counts and handover nonce): the fund and queue proxies against the v0.9.0 build their recorded upgrade names, every other proxy against the live build, the timelock's executor the Safe alone (decision D4-10, the re-recorded manifest and the chain), every role, the one-time bindings, the fund config and the queue's flowParams against the run sheet (minHold 3600)"
+    description: "The fund verifier on the upgraded live system ({d4live}: the live sha's frozen counts and handover nonce): the fund and queue proxies against the v0.9.0 build their recorded upgrade names, every other proxy against the live build, the timelock's executor the Safe alone (decision D4-10: the copied record's executorPolicy and the chain), every role, the one-time bindings, the fund config and the queue's flowParams against the run sheet (the 21 words: minHold 3600, epochLength and settleWindow as synced by P3.81, cancelBuffer 900, maxPause 259200, matchBandBps 10)"
     host: "control"
     phase: 3
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "verify", "{d4common}", "--system", "fund", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{d4live}", "--system", "fund", "{gate}"]
     env:
       PUBLISH_MANIFEST_DIR: "{manifestDir}"
       YES: "{yes}"
@@ -995,48 +968,6 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     added: "v0.9.0-onevault-upgrade"
   # ── Phase 4, verify again: the post-govern state. ──
-  - id: "P3.85-upg-epoch-schedule"
-    standing: ["4.4"]
-    description: "Owner, 2026-11-14 (D4-15): shorter epochs so the flow test does not wait hours. The Safe schedules queue.setFlowParams with epochLength 3600 (the contract floor, 1 h) and settleWindow 720 (12 slices of 60 s, the shortest window the live slice count allows), every other field as it reads now (minHold 3600 after P3.81). A new epochLength applies from the end of the epoch in progress (FlowQueue.setFlowParams), so no open request moves. The change is simulated from the timelock first"
-    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
-    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
-    host: "control"
-    phase: 3
-    cmds:
-      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "$(cast sig "setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16))")$(cast to-uint256 3600 | cut -c3-)$(cast to-uint256 720 | cut -c3-)${n:130:2000}" > {runDir}/state/data-upg-epoch && cast call --from {m:fund-timelock.timelock} {m:queue.queue} "$(cat {runDir}/state/data-upg-epoch)" > /dev/null && cast keccak "robotmoney.deploy4-upgrade.epoch.{runDir}" > {runDir}/state/salt-upg-epoch && echo "{m:queue.queue}" > {runDir}/state/target-upg-epoch && echo "the queue accepts epochLength 3600 and settleWindow 720 from the timelock (simulated)"']
-      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-epoch}", "--data", "{state:data-upg-epoch}", "--salt", "{state:salt-upg-epoch}", "--out", "{runDir}/bundles/epoch-schedule.json"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-schedule.json", "--signer", "{ownerSigner}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-schedule.json", "--signer", "{signer}"]
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    flow: "fund-upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    writes: ["data-upg-epoch", "salt-upg-epoch", "target-upg-epoch"]
-    added: "v0.9.0-onevault-upgrade"
-  - id: "P3.86-upg-epoch-execute"
-    standing: ["4.4"]
-    description: "After the timelock delay the Safe executes the epoch change (the executor is the Safe only since P3.82). The queue then reads epochLength 3600, settleWindow 720 and minHold unchanged, and the run's sheet copy takes the two new values so every later check compares the chain with what it holds; the live Deploy 4 record is not touched"
-    host: "control"
-    phase: 3
-    cmds:
-      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upg-epoch}", "--data", "{state:data-upg-epoch}", "--salt", "{state:salt-upg-epoch}", "--out", "{runDir}/bundles/epoch-execute.json"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{ownerSigner}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/epoch-execute.json", "--signer", "{signer}"]
-      - ["bash", "-c", 'n=$(cast call {m:queue.queue} "flowParams()"); echo "flowParams $n"; test "$(cast to-dec 0x${n:2:64})" = 3600 && test "$(cast to-dec 0x${n:66:64})" = 720 && test "$(cast to-dec 0x${n:130:64})" = "{sheet:FLOW_MIN_HOLD}" && { test -f {runDir}/sheet-at-go.env || cp {sheet} {runDir}/sheet-at-go.env; } && sed -i -e "s/^FLOW_EPOCH_LENGTH=.*/FLOW_EPOCH_LENGTH=3600/" -e "s/^FLOW_SETTLE_WINDOW=.*/FLOW_SETTLE_WINDOW=720/" {sheet} && grep -E "^FLOW_(EPOCH_LENGTH|SETTLE_WINDOW)=" {sheet}']
-    env:
-      ETH_RPC_URL: "{rpcUrl}"
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    notBefore: {"afterStep": "P3.85-upg-epoch-schedule", "hours": "timelockDelay"}
-    flow: "fund-upgrade"
-    onlyFor: ["twin", "rehearsal"]
-    added: "v0.9.0-onevault-upgrade"
   - id: "P4.01-verify-post-govern"
     standing: ["4.3"]
     description: "Stage 12 again: all four unpause rows executed, all four vaults read depositsPaused false; a manifest that disagrees with the chain fails closed"
@@ -1809,11 +1740,11 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P9.83-upg-verify-final"
     standing: ["4.5", "4.12"]
-    description: "The fund verifier passes again after the flow test and the drill: the upgraded proxies against the v0.8.0 build, every other against the live build, the Safe-only executor, the roles unchanged, the deployer holding no fund share and no role. The claims of claims-before.json still read as before the upgrade, and the live Deploy 4 record ({liveManifestDir}, {liveEvidenceDir}) is byte for byte what P0.85 copied: the run never edited it"
+    description: "The fund verifier passes again after the flow test and the drill: the upgraded proxies against the v0.9.0 build, every other against the live build, the Safe-only executor, the roles unchanged, the deployer holding no fund share and no role. The claims of claims-before.json still read as before the upgrade, and the live Deploy 4 record ({liveManifestDir}, {liveEvidenceDir}) is byte for byte what P0.85 copied: the run never edited it"
     host: "control"
     phase: 9
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "verify", "{d4common}", "--system", "fund", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{d4live}", "--system", "fund", "{gate}"]
       - ["bun", "publish-contracts/src/ci/fund-claims.ts", "same", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--snapshot", "{runDir}/claims-before.json"]
       - ["bash", "-c", "(cd {liveManifestDir} && sha256sum -c --quiet {runDir}/live-manifests.sha256) && (cd {liveEvidenceDir} && sha256sum -c --quiet {runDir}/live-evidence.sha256) && echo 'the live record is unchanged'"]
     env:
@@ -1935,7 +1866,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P10.79-upg-go-sheet"
     standing: ["4.10"]
-    description: "The sheet the go was recorded with ({runDir}/sheet-at-go.env), for the sign-off's basis: P3.86 (D4-15) rewrote FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW in the run sheet after the go. P3.86 keeps a copy before it edits; when it is missing (a run whose P3.86 passed before the copy existed), it is the run sheet with those two lines set back to the committed sheet's values. Either way its sha256 must equal the go record's sheetSha256, so any other difference stops here"
+    description: "The sheet the go was recorded with ({runDir}/sheet-at-go.env), for the sign-off's basis: P3.81 synced FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW in the run sheet to the chain after the go. P3.81 keeps a copy before it edits; when it is missing (a run whose P3.81 passed before the copy existed), it is the run sheet with those two lines set back to the committed sheet's values. Either way its sha256 must equal the go record's sheetSha256, so any other difference stops here"
     host: "control"
     phase: 10
     cmds:
@@ -1966,7 +1897,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bash", "-c", "for d in {runDir}/v070 {runDir}/v090; do if test -d $d; then git worktree remove --force $d; fi; done; git worktree prune"]
+      - ["bash", "-c", "for d in {runDir}/v080 {runDir}/v090; do if test -d $d; then git worktree remove --force $d; fi; done; git worktree prune"]
     expectExit: 0
     receipts: []
     irreversible: false
