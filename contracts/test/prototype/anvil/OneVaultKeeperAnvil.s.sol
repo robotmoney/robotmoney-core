@@ -155,16 +155,16 @@ contract OneVaultMockV3Pool {
 ///         from its own balance, which the deploy funds.
 contract OneVaultMockSwapRouter {
     address public immutable OWNER;
-    bool public paused;
+    bool public closed;
 
     constructor() {
         OWNER = msg.sender;
     }
 
-    /// @notice Closes the venue: every fill reverts, the way a paused router refuses a swap.
-    function setPaused(bool p) external {
+    /// @notice Closes the venue: every fill reverts, the way a closed router refuses a swap.
+    function setClosed(bool c) external {
         require(msg.sender == OWNER, "OneVaultMockSwapRouter: not owner");
-        paused = p;
+        closed = c;
     }
 
     struct ExactInputSingleParams {
@@ -214,7 +214,7 @@ contract OneVaultMockSwapRouter {
         uint256 amountIn,
         uint256 amountOut
     ) private {
-        require(!paused, "OneVaultMockSwapRouter: paused");
+        require(!closed, "OneVaultMockSwapRouter: closed");
         require(
             IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn),
             "OneVaultMockSwapRouter: in"

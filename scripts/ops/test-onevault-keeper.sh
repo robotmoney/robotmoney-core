@@ -318,7 +318,7 @@ check "a failed stepDelisted send alerts delist_step_failed, exits 1, and leaves
 # Case B: the router is closed. The simulated stepDelisted returns false with no backoff recorded, so the keeper checks the
 # sale step itself. It reverts there, so the keeper alerts and sends nothing. The backoff stays at zero, because nothing
 # was sent.
-send_from "$DEPLOYER" "$BASKET_ROUTER" "setPaused(bool)" true
+send_from "$DEPLOYER" "$BASKET_ROUTER" "setClosed(bool)" true
 RC=$(run_keeper_once "$WORK/simfalse.err")
 check "a simulated false stepDelisted in sale alerts delist_step_failed, sends nothing, and exits 1" \
     'grep -q "\"alert\":\"delist_step_failed\"" "$WORK/simfalse.err" && [[ "$RC" == "1" && "$(in_sale)" == "true" && "$(backoff_until)" == "0" ]] && ! grep -q "sent stepDelisted" "$WORK/simfalse.err"'
@@ -337,15 +337,12 @@ check "a backoff skip logs, raises no alert, and exits 0" \
 
 # Case D: the router opens and the backoff ends. The due stepDelisted is sent through KeeperAccount.execute, and the
 # asset leaves sale.
-send_from "$DEPLOYER" "$BASKET_ROUTER" "setPaused(bool)" false
-check "the router is open before the due case" '[[ "$(cast call "$BASKET_ROUTER" "paused()(bool)" --rpc-url "$RPC_URL" | awk '"'"'{print $1}'"'"')" == "false" ]]'
-# Advance real chain time, one block at a time, until the latest block is past the backoff. Each step is at least 60 s,
-# so a block's timestamp is never left on the backoff second. The loop is bounded, and it fails loudly if time does not pass.
+send_from "$DEPLOYER" "$BASKET_ROUTER" "setClosed(bool)" false
+check "the router is open before the due case" '[[ "$(cast call "$BASKET_ROUTER" "closed()(bool)" --rpc-url "$RPC_URL" | awk '"'"'{print $1}'"'"')" == "false" ]]'
+# Warp anvil by the exact delta between the chain time and the backoff the keeper reads. evm_increaseTime plus evm_mine
+# moves the latest block past the backoff in one step, with no fixed step cap.
 chain_time() { cast block latest --rpc-url "$RPC_URL" -f timestamp | awk '{print $1}'; }
-for _ in 1 2 3 4 5; do
-    (( $(chain_time) > BACKOFF )) && break
-    warp $(( BACKOFF - $(chain_time) + 60 ))
-done
+warp $(( BACKOFF - $(chain_time) + 1 ))
 check "the chain time is past the backoff window" '(( $(chain_time) > BACKOFF ))'
 refresh_feeds
 RC=$(run_keeper_once "$WORK/delistok.err")

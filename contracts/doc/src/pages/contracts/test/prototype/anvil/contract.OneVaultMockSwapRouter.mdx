@@ -5,7 +5,7 @@ description: "Test-only swap router with the two entry points the basket swap ad
 
 # OneVaultMockSwapRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a325ae0fead64bd9a153e679e3ea08ea88c7707c/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/81c35a6416d1b8242b373c7b27621c69ccd72d24/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
 
 Test-only swap router with the two entry points the basket swap adapter calls: exact input (the fund's sale
 and buy legs through the adapter's inherited `swap`) and exact output. It fills at one for one and pays USDC
@@ -21,10 +21,10 @@ address public immutable OWNER;
 
 ## State Variables
 
-### paused
+### closed
 
 ```solidity
-bool public paused;
+bool public closed;
 ```
 
 ## Functions
@@ -37,21 +37,21 @@ bool public paused;
 constructor();
 ```
 
-<a id="setpaused-bool"></a>
+<a id="setclosed-bool"></a>
 
-### setPaused
+### setClosed
 
-Closes the venue: every fill reverts, the way a paused router refuses a swap.
+Closes the venue: every fill reverts, the way a closed router refuses a swap.
 
 ```solidity
-function setPaused(bool p) external;
+function setClosed(bool c) external;
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| p | `bool` |  |
+| c | `bool` |  |
 
 <a id="exactinputsingle-exactinputsingleparams"></a>
 

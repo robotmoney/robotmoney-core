@@ -145,10 +145,12 @@ delist_gate() {
     fi
     [[ "$(printf '%s\n' "$sim" | awk '{print $1}')" == "true" ]] && return 0
     read_call "$REBALANCER_ADDRESS" "assetBackoffUntil(uint256)(uint64)" "$idx" || return 1
-    now=$(cast block latest --rpc-url "$RPC_URL" -f timestamp 2>/dev/null) \
+    local backoff="$READ_OUT"
+    now=$(cast block latest --rpc-url "$RPC_URL" -f timestamp 2>/dev/null | awk '{print $1}') \
         || { alert "rpc_unreadable" "cast block latest failed"; return 1; }
-    if (( READ_OUT >= now )); then
-        echo "onevault-keeper: stepDelisted($idx) in backoff until $READ_OUT, not sent" >&2
+    [[ "$now" =~ ^[0-9]+$ ]] || { alert "rpc_unreadable" "cast block latest returned '$now'"; return 1; }
+    if (( backoff >= now )); then
+        echo "onevault-keeper: stepDelisted($idx) in backoff until $backoff, chain time $now, not sent" >&2
         return 1
     fi
     if sim=$(cast call "$fund" "executeDelistStep(uint256,uint256)(bool,uint256,uint256)" "$idx" "$UINT_MAX" \
