@@ -43,7 +43,7 @@ are present too. Executed the unmodified scorer for each variant:
 
 The final variant deletes only the reference-cost field from the reference-only high-cost control. This is a scorer input-validation defect,
 not an on-chain exploit or evidence that existing gate results are wrong.
-Current writers emit these fields (`TimedFlowSim.t.sol:791,839-840`), so a
+Current writers emit these fields (`TimedFlowSim.t.sol:790-794,835-849`), so a
 normal complete output of those writers is not the trigger. A malformed,
 partially transformed, or older evidence file with a complete plan array is.
 The scorer already promises to reject incomplete evidence; this omission
@@ -100,7 +100,7 @@ The shared market model declares a zero-drift reference walk, one or two
 seeded noise swaps per slot, and an arbitrageur with unlimited inventory closing
 50–100% of each gap (`SimMarket.sol:36-53`). The timed simulation explicitly
 records slot ordering, feed update thresholds and heartbeat, an always-up
-sequencer, and a fixed USDC feed (`TimedFlowSim.t.sol:982`). These are disclosed
+sequencer, and a fixed USDC feed (`TimedFlowSim.t.sol:980-985`). These are disclosed
 model assumptions. I did not turn disagreement with those assumptions into
 code defects or treat a deterministic simulation as empirical market proof.
 
