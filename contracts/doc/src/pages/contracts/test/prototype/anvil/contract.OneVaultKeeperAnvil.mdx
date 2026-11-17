@@ -1,17 +1,18 @@
 ---
 title: "OneVaultKeeperAnvil"
-description: "Local anvil Rebalancer for the one-vault keeper self-test. Parameters follow PrototypeHarness._deployRebalancer."
+description: "Local anvil Rebalancer and one lending asset for the one-vault keeper self-test. Parameters follow PrototypeHarness._deployRebalancer and _addAssets."
 ---
 
 # OneVaultKeeperAnvil
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/eb2a652b72aebdd94907a14094fde76231f6dc3f/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/162813b6c9df6fd2bed3de654a97308ae98e1573/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
 
 **Inherits:** Script
 
 **Title:** OneVaultKeeperAnvil
 
-Local anvil Rebalancer for the one-vault keeper self-test. Parameters follow PrototypeHarness._deployRebalancer.
+Local anvil Rebalancer and one lending asset for the one-vault keeper self-test. Parameters follow
+PrototypeHarness._deployRebalancer and _addAssets.
 
 ## Constants
 
@@ -37,6 +38,18 @@ uint16 internal constant TOLERANCE_BPS = 50;
 
 ```solidity
 uint128 internal constant MIN_STEP_USDC = 100e6;
+```
+
+### LENDING_MAX_STEP_USDC
+
+```solidity
+uint128 internal constant LENDING_MAX_STEP_USDC = 500_000e6;
+```
+
+### LENDING_CAP_BPS
+
+```solidity
+uint16 internal constant LENDING_CAP_BPS = 10_000;
 ```
 
 ## Functions
