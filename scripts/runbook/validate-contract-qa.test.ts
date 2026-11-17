@@ -1,6 +1,7 @@
 // Drift test for scripts/runbook/validate-contract-qa.ts: the committed contract QA runbook is clean, and each planted drift fails.
 import { expect, test } from "bun:test";
 import { clearVectorProblems, rcTagHeaderProblems, rcTagPatternOf } from "./validate-contract-qa.ts";
+import { keccak256 } from "../ci/config-check.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1178,13 +1179,14 @@ function flowParamsTypes(sol: string): string[] {
   return body[1]!.split(";").map((l) => l.trim()).filter(Boolean).map((l) => l.split(/\s+/)[0]!);
 }
 const flowParamsSig = (sol: string): string => `setFlowParams((${flowParamsTypes(sol).join(",")}))`;
+/** The 4-byte selector: keccak256 of the signature (the pure keccak in scripts/ci/config-check.ts, so no package install is needed). */
+const selectorOf = (sig: string): string => keccak256(new TextEncoder().encode(sig)).slice(0, 10);
 
-test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in FlowTypes.sol, and every setFlowParams in the runbook has that tuple (fails on drift)", async () => {
-  const viem: any = await import(join(ROOT, "publish-contracts", "node_modules", "viem"));
+test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in FlowTypes.sol, and every setFlowParams in the runbook has that tuple (fails on drift)", () => {
   const sol = readFileSync(FLOW_TYPES_SOL, "utf8");
   expect(flowParamsTypes(sol).length).toBe(21);
   const sig = flowParamsSig(sol);
-  expect(viem.toFunctionSelector(sig)).toBe("0xa0e15366");
+  expect(selectorOf(sig)).toBe("0xa0e15366");
   const runbook = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8");
   const used = [...runbook.matchAll(/setFlowParams\(\(([^)]*)\)\)/g)].map((m) => `setFlowParams((${m[1]}))`);
   expect(used.length).toBeGreaterThan(0);
@@ -1192,7 +1194,7 @@ test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in 
   // a struct that lost the three appended fields has another arity and selector, and the runbook's tuple no longer matches it
   const drifted = sol.replace(/\s*uint32 cancelBuffer;\n\s*uint32 maxPause;\n\s*uint16 matchBandBps;/, "");
   expect(flowParamsTypes(drifted).length).toBe(18);
-  expect(viem.toFunctionSelector(flowParamsSig(drifted))).not.toBe("0xa0e15366");
+  expect(selectorOf(flowParamsSig(drifted))).not.toBe("0xa0e15366");
   expect(used.every((u) => u === flowParamsSig(drifted))).toBe(false);
 });
 
