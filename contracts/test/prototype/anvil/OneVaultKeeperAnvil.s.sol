@@ -134,14 +134,18 @@ contract OneVaultMockV3Pool {
     function observe(uint32[] calldata secondsAgos)
         external
         pure
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
+        returns (
+            int56[] memory tickCumulatives,
+            uint160[] memory secondsPerLiquidityCumulativeX128s
+        )
     {
         tickCumulatives = new int56[](secondsAgos.length);
         secondsPerLiquidityCumulativeX128s = new uint160[](secondsAgos.length);
         // Liquidity 2^64 in every slice: seconds per liquidity grow by dt / 2^64 per dt, in X128. The depth then
         // comes out large, so the basket step cap is the governed maxStepUsdc and not zero.
         for (uint256 i; i < secondsAgos.length; ++i) {
-            secondsPerLiquidityCumulativeX128s[i] = uint160((uint256(1_000_000) - secondsAgos[i]) << 64);
+            secondsPerLiquidityCumulativeX128s[i] =
+                uint160((uint256(1_000_000) - secondsAgos[i]) << 64);
         }
     }
 }
@@ -183,21 +187,38 @@ contract OneVaultMockSwapRouter {
         uint160 sqrtPriceLimitX96;
     }
 
-    function exactInputSingle(ExactInputSingleParams calldata p) external payable returns (uint256 amountOut) {
+    function exactInputSingle(ExactInputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountOut)
+    {
         amountOut = p.amountIn;
         require(amountOut >= p.amountOutMinimum, "OneVaultMockSwapRouter: min out");
         _fill(p.tokenIn, p.tokenOut, p.recipient, p.amountIn, amountOut);
     }
 
-    function exactOutputSingle(ExactOutputSingleParams calldata p) external payable returns (uint256 amountIn) {
+    function exactOutputSingle(ExactOutputSingleParams calldata p)
+        external
+        payable
+        returns (uint256 amountIn)
+    {
         amountIn = p.amountOut;
         require(amountIn <= p.amountInMaximum, "OneVaultMockSwapRouter: max in");
         _fill(p.tokenIn, p.tokenOut, p.recipient, amountIn, p.amountOut);
     }
 
-    function _fill(address tokenIn, address tokenOut, address recipient, uint256 amountIn, uint256 amountOut) private {
+    function _fill(
+        address tokenIn,
+        address tokenOut,
+        address recipient,
+        uint256 amountIn,
+        uint256 amountOut
+    ) private {
         require(!paused, "OneVaultMockSwapRouter: paused");
-        require(IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn), "OneVaultMockSwapRouter: in");
+        require(
+            IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn),
+            "OneVaultMockSwapRouter: in"
+        );
         require(IERC20(tokenOut).transfer(recipient, amountOut), "OneVaultMockSwapRouter: out");
     }
 }
@@ -295,21 +316,22 @@ contract OneVaultKeeperAnvil is Script {
         AaveV3RateAdapter lending =
             new AaveV3RateAdapter(address(mockPool), usdc, address(mockPool.ATOKEN()), fund);
         IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(lending).codehash, true);
-        uint256 index = IRobotMoneyFundFull(fund).addAsset(
-            AssetConfig({
-                kind: AssetKind.Lending,
-                active: true,
-                capBps: LENDING_CAP_BPS,
-                adapter: address(lending),
-                token: address(0),
-                pool: address(0),
-                poolFee: 0,
-                twapWindow: 0,
-                venue: Venue.V3,
-                feed: address(0),
-                maxFeedAge: 0
-            })
-        );
+        uint256 index = IRobotMoneyFundFull(fund)
+            .addAsset(
+                AssetConfig({
+                    kind: AssetKind.Lending,
+                    active: true,
+                    capBps: LENDING_CAP_BPS,
+                    adapter: address(lending),
+                    token: address(0),
+                    pool: address(0),
+                    poolFee: 0,
+                    twapWindow: 0,
+                    venue: Venue.V3,
+                    feed: address(0),
+                    maxFeedAge: 0
+                })
+            );
         rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 0));
         return (address(mockPool), address(mockPool.ATOKEN()), address(lending));
     }
@@ -327,21 +349,22 @@ contract OneVaultKeeperAnvil is Script {
         TestERC20(usdc).mint(address(swapRouter), 1_000_000e6);
         UniswapV3ExactOutSwapAdapter swap = new UniswapV3ExactOutSwapAdapter(address(swapRouter));
         IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(swap).codehash, true);
-        index = IRobotMoneyFundFull(fund).addAsset(
-            AssetConfig({
-                kind: AssetKind.Basket,
-                active: true,
-                capBps: 0,
-                adapter: address(swap),
-                token: address(basket),
-                pool: address(basketPool),
-                poolFee: 500,
-                twapWindow: 1_800,
-                venue: Venue.V3,
-                feed: address(basketFeed),
-                maxFeedAge: 86_700
-            })
-        );
+        index = IRobotMoneyFundFull(fund)
+            .addAsset(
+                AssetConfig({
+                    kind: AssetKind.Basket,
+                    active: true,
+                    capBps: 0,
+                    adapter: address(swap),
+                    token: address(basket),
+                    pool: address(basketPool),
+                    poolFee: 500,
+                    twapWindow: 1_800,
+                    venue: Venue.V3,
+                    feed: address(basketFeed),
+                    maxFeedAge: 86_700
+                })
+            );
         rebalancer.setAssetStepParams(index, AssetStepParams(LENDING_MAX_STEP_USDC, 100));
         return (address(basket), address(basketFeed), index, address(swapRouter));
     }
