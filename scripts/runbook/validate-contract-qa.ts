@@ -110,10 +110,8 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // deployed from (7c23569f8, release/v0.7.0-onevault-rc.5-rehearsal), made and built by the flow ({runDir}/v070): its out/ is the live code the upgrade tools compare with, and
   // the release gate on 8453 runs at that sha (its tag, its green CI, its committed frozen counts). The new build is the --upgrade-build checkout ({runDir}/v080, the run's sha).
   d4common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v070", "--core-sha", "7c23569f85e96232fc75bbba32ebbd469da31966", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
-  // The v0.9.0 upgrade (releases/v0.9.0-onevault-upgrade.yaml): the LIVE build is v0.8.0-onevault's, contracts-0.8.0 (fa7c47182, upgraded in place on 8453 on 2026-11-14:
-  // docs/technical/one-vault-rebalancer-proposal.md, the Deploy 4 record). Its checkout is {runDir}/v080: the layout baseline and the from_implementation source of
-  // deploy-implementation, and the live build the verifier compares every other proxy with. d4common stays for the pinned v0.8.0-onevault-upgrade record, whose live build is v0.7.0's.
-  d4live: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v080", "--core-sha", "fa7c471821ffdc76e9518b10dda5f420c135ae18", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
+  // The v0.9.0 upgrade retains the deployment's original v0.7 SHA; the two previously upgraded proxies use the separately rebuilt v0.8 artifacts recorded in their entries.
+  d4live: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v070", "--core-sha", "7c23569f85e96232fc75bbba32ebbd469da31966", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
 };
 export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "hard-assets-vault", "gateway-handover", "timelock", "safe"];
 /**

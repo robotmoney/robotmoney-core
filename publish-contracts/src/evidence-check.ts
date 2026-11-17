@@ -1023,6 +1023,14 @@ export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader):
       bad(`${w}: CallScheduled calldata is not upgradeToAndCall(${e.to_implementation}, ${e.migration ? `${e.migration.function}(${e.migration.releaser})` : '""'}): ${got ? `it schedules upgradeToAndCall(${got.implementation}, ${got.data === "0x" ? '""' : got.data})` : "it is not an upgradeToAndCall"}`);
     }
     if (typeof e.operation_id === "string" && lc(e.operation_id) !== lc(s.id)) bad(`${w}: operation_id ${e.operation_id} is not the scheduled operation ${s.id}`);
+    if (TX.test(e.execute_tx ?? "")) {
+      try {
+        const ex = await chain.getTransactionReceipt({ hash: e.execute_tx as Hex });
+        if (ex.status !== "success") bad(`${w}: execute receipt on chain is ${ex.status}`);
+        const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted");
+        if (executed.length !== 1 || !executed.some((x) => lc(x.id) === lc(s.id) && lc(x.target) === lc(e.proxy) && lc(x.data) === lc(want))) bad(`${w}: execute tx does not contain exactly one matching CallExecuted event`);
+      } catch (x) { bad(`${w}: execute receipt not readable on chain (${(x as Error).message})`); }
+    }
   }
   return p;
 }

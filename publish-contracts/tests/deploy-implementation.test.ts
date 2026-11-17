@@ -430,6 +430,24 @@ describe("Deploy 4: deploy-implementation --system fund", () => {
     expect(res.entry).toMatchObject({ system: "fund", contract: "Rebalancer" });
   });
 
+  test("a subsequent fund upgrade checks layout against that proxy's last build", async () => {
+    const w = fundWorld();
+    const prior = join(w.ctx.coreDir, "prior-build");
+    for (const f of [RB.layout, FUND_TABLE.upgradeAuthority!.layoutPins]) {
+      mkdirSync(dirname(join(prior, f)), { recursive: true });
+      copyFileSync(join(w.ctx.coreDir, f), join(prior, f));
+    }
+    const file = join(prior, RB.layout);
+    const snapshot = JSON.parse(readFileSync(file, "utf8"));
+    snapshot.storage[0].label = "incompatiblePriorField";
+    writeFileSync(file, JSON.stringify(snapshot));
+    const manifest = loadRunManifest(w.ctx.evidenceDir)! as any;
+    manifest.proxy_upgrades = [{ proxy_name: "rebalancer", build: prior }];
+    saveRunManifest(w.ctx.evidenceDir, manifest);
+    await expect(w.run()).rejects.toMatchObject({ kind: "REFUSED", message: expect.stringContaining("storage layout gate refuses") });
+    expect(w.s.creates).toEqual([]);
+  });
+
   test("every refusal sends nothing and records nothing", async () => {
     const cases: [string, ReturnType<typeof fundWorld>, Parameters<ReturnType<typeof fundWorld>["run"]>[0], string, string][] = [
       ["an unreviewed contract", fundWorld(), { contract: "RebalancerV3" }, "USAGE", "--contract RebalancerV3 is not a reviewed implementation of rebalancer"],

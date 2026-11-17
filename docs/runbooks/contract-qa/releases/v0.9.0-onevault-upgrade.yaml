@@ -49,9 +49,9 @@ notes: |
   The live record and the run's copy. {liveManifestDir} and {liveEvidenceDir} are the Deploy 4 record as the v0.8.0-onevault-upgrade run left it on 8453 (its manifests and publish-run.json,
   whose proxy_upgrades holds that run's entries, from fa7c47182) and {liveSheet} its run sheet: read only. P0.85 copies them to {manifestDir} and {evidenceDir} and writes their sha256; P9.83 proves them unchanged. On 8453 run.ts requires {manifestDir} equal to
   {v050ManifestDir} and {evidenceDir} to {v050EvidenceDir}: set both pairs to the run's copies. The CLI runs from this checkout and names the live build with --core-dir
-  {runDir}/v080 and --core-sha fa7c47182 ({d4live}): the release gate on 8453 runs at the live sha (its annotated rc tag release/v0.8.0-rc.2-rehearsal, its green CI,
-  its frozen counts as committed at that sha), and the new build ({runDir}/v090, the run's sha) is deploy-implementation's --upgrade-build, which the CLI gates on 8453 as an rc build
-  (decision D4-13). The verifier compares each upgraded proxy with the build its proxy_upgrades entry names and every other proxy with the live build.
+  {runDir}/v070 and --core-sha 7c23569f ({d4live}), preserving the original deployment SHA, release gate and frozen counts. The two v0.8 proxy builds are reconstructed at
+  {runDir}/v080; their recorded schedule and execute transactions are checked on chain and their copied build paths relocated with the original paths preserved. The new build
+  ({runDir}/v090, the run's sha) is deploy-implementation's --upgrade-build. The verifier compares each upgraded proxy with its recorded build and every other proxy with v0.7.
 
   The Twin. A fork of Base at a current block (it holds the live Deploy 4), chain 918453, started by the operator before the run and stopped after it: on this machine
   for this rehearsal (owner instruction 2026-11-14), so no step starts or stops it (README Hosts). The Twin signs with the live keystores (the deployer, the keeper, the
@@ -467,14 +467,20 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.91-upg-live-build"
     standing: ["4.15"]
-    description: "The live build: a separate clean checkout of fa7c47182 (contracts-0.8.0, the sha v0.8.0-onevault-upgrade upgraded Deploy 4 to in place on 2026-11-14) at {runDir}/v080, its submodules cloned from the main checkout's own, built there with --root and --out. Every CLI call of this flow names it with --core-dir ({d4live}): deploy-implementation reads the live implementation's library links and the deployed storage layout from it, and the verifier compares every proxy the upgrade does not move with it"
+    description: "Rebuild the original deployment and the v0.8 fund and queue builds, check the prior upgrade operations on chain, and relocate only their copied artifact paths. The deployment SHA and the original recorded paths remain preserved."
     host: "control"
     phase: 0
     cmds:
+      - ["bash", "-c", "test -d {runDir}/v070 || git worktree add --detach {runDir}/v070 7c23569f85e96232fc75bbba32ebbd469da31966"]
+      - ["bash", "scripts/runbook/upgrade-submodules.sh", "{runDir}/v070"]
+      - ["bash", "-c", "test \"$(git -C {runDir}/v070 rev-parse HEAD)\" = 7c23569f85e96232fc75bbba32ebbd469da31966 && test -z \"$(git -C {runDir}/v070 status --porcelain)\""]
+      - ["forge", "build", "--root", "{runDir}/v070", "--out", "{runDir}/v070/out"]
       - ["bash", "-c", "test -d {runDir}/v080 || git worktree add --detach {runDir}/v080 fa7c471821ffdc76e9518b10dda5f420c135ae18"]
       - ["bash", "scripts/runbook/upgrade-submodules.sh", "{runDir}/v080"]
       - ["bash", "-c", "test \"$(git -C {runDir}/v080 rev-parse HEAD)\" = fa7c471821ffdc76e9518b10dda5f420c135ae18 && test -z \"$(git -C {runDir}/v080 status --porcelain)\""]
       - ["forge", "build", "--root", "{runDir}/v080", "--out", "{runDir}/v080/out"]
+      - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{evidenceDir}/publish-run.json", "--timelock", "{m:fund-timelock.timelock}", "--deployment-kind", "{deploymentKind}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
+      - ["bun", "scripts/runbook/relocate-deploy4-v080.ts", "{evidenceDir}/publish-run.json", "{runDir}/v080"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -1901,7 +1907,7 @@ steps:
     host: "control"
     phase: 10
     cmds:
-      - ["bash", "-c", "for d in {runDir}/v080 {runDir}/v090; do if test -d $d; then git worktree remove --force $d; fi; done; git worktree prune"]
+      - ["bash", "-c", "for d in {runDir}/v070 {runDir}/v080 {runDir}/v090; do if test -d $d; then git worktree remove --force $d; fi; done; git worktree prune"]
     expectExit: 0
     receipts: []
     irreversible: false

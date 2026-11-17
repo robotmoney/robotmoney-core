@@ -875,7 +875,7 @@ describe("proxy_upgrades typed migration (issue 1910)", () => {
   const chainOf = (up: any, scheduledData: string, calls = 1): ChainReader => {
     const logs = Array.from({ length: calls }, (_, k) => log("CallScheduled", 6000, 172800n, up.proxy, scheduledData, BigInt(k)));
     return { getChainId: async () => 8453, getTransactionCount: async () => 0, getBlock: async () => ({ timestamp: 1n }), readContract: async () => undefined,
-      getTransactionReceipt: async ({ hash }: { hash: string }) => { if (hash !== up.schedule_tx) throw new Error("not found"); return { status: "success", blockNumber: 1n, logs }; } } as unknown as ChainReader;
+      getTransactionReceipt: async ({ hash }: { hash: string }) => { if (hash === up.execute_tx) return { status: "success", blockNumber: 2n, logs: [log("CallExecuted", 6000, 0n, up.proxy, scheduledData)] }; if (hash !== up.schedule_tx) throw new Error("not found"); return { status: "success", blockNumber: 1n, logs }; } } as unknown as ChainReader;
   };
   test("the scheduled data is read back from the chain and must equal upgradeToAndCall(impl, typed migration data)", async () => {
     const up = upgrade();
@@ -894,5 +894,13 @@ describe("proxy_upgrades typed migration (issue 1910)", () => {
     // another implementation, a batch of two
     expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, upgradeCalldata(a(99), pinnedMigrationData("receipt-submitter-roles", RELEASER))))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
     expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, want, 2))).join("\n")).toContain("2 CallScheduled events");
+  });
+  test("a recorded execution must have a successful matching timelock execution", async () => {
+    const up = upgrade();
+    const want = upgradeCalldata(up.to_implementation, pinnedMigrationData("receipt-submitter-roles", RELEASER));
+    const chain = chainOf(up, want);
+    const read = chain.getTransactionReceipt.bind(chain);
+    chain.getTransactionReceipt = async (args: any) => args.hash === up.execute_tx ? { status: "success", blockNumber: 2n, logs: [] } as any : read(args);
+    expect((await checkGovernedUpgradesOnChain(evOf(up), chain)).join("\n")).toContain("execute tx does not contain exactly one matching CallExecuted event");
   });
 });

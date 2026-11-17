@@ -25,7 +25,7 @@
 // Canonical: docs/technical/contract-upgradeability-plan.md, docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md, docs/operations/contract-release-runbooks.md 4.12.
 import { scopeTable } from "./stage-table.ts";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAddress, keccak256, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { assertPinnedForgeWith } from "./forge-version.ts";
@@ -162,6 +162,10 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   const manifest = loadRunManifest(ctx.evidenceDir);
   if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: ${DEPLOY_IMPL_VERB} deploys into a deployment that exists. Pass the --evidence directory of the run that deployed it.`);
   const u = t.upgradeAuthority;
+  // A fund proxy may have been upgraded since the original deployment. Its
+  // previous build, also used for the runtime-code check, is its layout baseline.
+  const priorOut = fund ? proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")).proxyBuildDirs?.[spec.name] : undefined;
+  const layoutBase = priorOut ? dirname(priorOut) : ctx.coreDir;
   const stageManifest = join(manifestDir(ctx), `${manifestBase(t.stages.find((x) => x.name === spec.stage)!.manifest)}.json`);
   let proxy: Address, recordedLayoutId: string | null | undefined;
   if (!fund) {
@@ -186,7 +190,7 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
     if (m.chain_id !== undefined && Number(m.chain_id) !== ctx.chainId) throw new PublishError("REFUSED", `${stageManifest} is for chain ${m.chain_id}, not ${ctx.chainId}`);
     proxy = getAddress(m[spec.field]) as Address;
     // The deployed snapshot is the DEPLOY_SHA checkout's: the live-code check below refuses a live implementation that is not this checkout's build.
-    if (u && existsSync(join(ctx.coreDir, spec.layout)) && existsSync(join(ctx.coreDir, u.layoutPins))) recordedLayoutId = layoutId(ctx.coreDir, spec.layout, u.layoutPins);
+    if (u && existsSync(join(layoutBase, spec.layout)) && existsSync(join(layoutBase, u.layoutPins))) recordedLayoutId = layoutId(layoutBase, spec.layout, u.layoutPins);
   }
   const refuse = (why: string, details: Record<string, unknown> = {}): never => { throw new PublishError("REFUSED", `${DEPLOY_IMPL_VERB} --proxy ${spec.name}: ${why.replace(/\.$/, "")}. Nothing was sent.`, { proxy: spec.name, ...details }); };
 
@@ -194,12 +198,12 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   const build = o.upgradeBuild ?? ctx.coreDir;
   const outDir = join(build, "out");
   if (!u) refuse("the stage table has no upgradeAuthority (layout pins)");
-  const layout = layoutGateProblems(spec, ctx.coreDir, build, u!.layoutPins, recordedLayoutId);
+  const layout = layoutGateProblems(spec, layoutBase, build, u!.layoutPins, recordedLayoutId);
   // Deploy 4: a second implementation's own pinned snapshot must extend the deployed snapshot too (the base contract's gate above stays).
   if (layout.length === 0 && candidateLayout !== spec.layout) {
     const cand = join(build, candidateLayout);
     if (!existsSync(cand)) layout.push(`${cand} does not exist`);
-    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(ctx.coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract).map((p) => `${contract}: ${p}`));
+    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(layoutBase, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract).map((p) => `${contract}: ${p}`));
   }
   if (layout.length) refuse(`the storage layout gate refuses the build ${build}${contract !== spec.contract ? ` (${contract})` : ""}: ${layout.join("; ")}`, { layout });
   const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e) : upgradeCommand(ctx, e));
