@@ -80,12 +80,14 @@ decisions:
     ref: "releases/v0.8.0-onevault.yaml D4-11"
   - id: "D4-12"
     question: "Go to broadcast the in-place upgrade of Deploy 4 on Base 8453 to v0.9.0-onevault: run this file on the rehearsal target from the rc tag release/v0.9.0-rc.N-rehearsal at the commit whose Twin run passed"
-    status: "open"
-    answer: "Open. The owner's recorded go for the 8453 broadcast is not in the repo, and runbook policy 4.14 requires it before any send on 8453. runnableProblems reads no open decision on twin or rehearsal, so this decision does not block those runs."
+    status: "decided"
+    answer: "Owner, 2026-11-17: execute the in-place Deploy 4 upgrade, subject to the runbook prerequisites."
+    decidedOn: "2026-11-17"
+    ref: "Owner instruction in deployment session, 2026-11-17"
   - id: "D4-13"
     question: "On 8453 deploy-implementation gates its --upgrade-build as an rc build (tag release/vA.B.C-rc.N[-rehearsal] on origin/releases-A.B.x). Which branch/tag satisfy the gate for this v0.9.0-onevault upgrade build?"
     status: "decided"
-    answer: "Expected: branch releases-0.9.x and an annotated tag release/v0.9.0-rc.N-rehearsal on the upgrade build, as assertUpgradeBuildGate requires (same pattern as v0.8.0)."
+    answer: "Branch release-0.9.0 and an annotated tag release/v0.9.0-rc.N-rehearsal on the upgrade build, as assertUpgradeBuildGate requires."
     decidedOn: "2026-11-16"
     ref: "publish-contracts/src/release-gate.ts assertUpgradeBuildGate"
   - id: "D4-14"
@@ -102,8 +104,10 @@ decisions:
     ref: "releases/v0.8.0-onevault-upgrade.yaml D4-15"
   - id: "D4-16"
     question: "Which values do cancelBuffer, maxPause and matchBandBps take on the live queue? v0.9.0 appends these three fields to FlowParams, so the live queue holds 0 until P3.80 sets them"
-    status: "open"
-    answer: "Open. P3.80 sets working defaults: cancelBuffer 900 s (proposal D39; the owner has not ruled on the value), maxPause 259200 s (D29 and D33: 72 h, at least the timelock delay plus one epoch), matchBandBps 10 (the proposal's table, 2026-11-15 default). The owner confirms or changes them before the 8453 go."
+    status: "decided"
+    answer: "Owner, 2026-11-17: accept cancelBuffer 900 s, maxPause 259200 s, and matchBandBps 10."
+    decidedOn: "2026-11-17"
+    ref: "Owner instruction in deployment session, 2026-11-17"
 recovery: |
   Contracts are not rolled back in place by this file, but a governed upgrade back to the live implementation is possible: the fund and queue proxies stay upgradeable
   (UPGRADE_MODE upgradeable) and the live implementations stay on chain (the run manifest's proxy_upgrades names each from_implementation). Before P1.80 nothing is sent:
@@ -437,11 +441,11 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.89-upg-sheet-is-live"
     standing: ["4.3", "4.15"]
-    description: "The run sheet is the live Deploy 4 run sheet ({liveSheet}) and nothing else changes but the hold: every line equal, except FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW (3600 and 720 live since v0.8.0-onevault-upgrade; the committed sheet still names 21600 and 3600, and P3.81 syncs this copy), and, on the Twin, the chain ids. FLOW_MIN_HOLD is 3600 on both (decision D4-11)"
+    description: "The run sheet matches the live Deploy 4 run sheet ({liveSheet}), except the retired REBALANCER_KEEPER_GRACE field, FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW (3600 and 720 live since v0.8.0-onevault-upgrade; P3.81 syncs this copy), and, on the Twin, the chain ids. FLOW_MIN_HOLD is 3600 on both (decision D4-11)"
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", "n() { grep -E \"^[A-Z][A-Z0-9_]*=\" \"$1\" | grep -vE \"^(FLOW_MIN_HOLD|FLOW_EPOCH_LENGTH|FLOW_SETTLE_WINDOW|CHAIN_ID|EXPECTED_CHAIN_ID)=\" | sort; }; diff <(n {liveSheet}) <(n {sheet}) && grep -qx \"FLOW_MIN_HOLD=3600\" {liveSheet} && grep -qx \"FLOW_MIN_HOLD=3600\" {sheet} && grep -qx \"CHAIN_ID={chainId}\" {sheet}"]
+      - ["bash", "-c", "n() { grep -E \"^[A-Z][A-Z0-9_]*=\" \"$1\" | grep -vE \"^(FLOW_MIN_HOLD|FLOW_EPOCH_LENGTH|FLOW_SETTLE_WINDOW|CHAIN_ID|EXPECTED_CHAIN_ID|REBALANCER_KEEPER_GRACE)=\" | sort; }; diff <(n {liveSheet}) <(n {sheet}) && grep -qx \"FLOW_MIN_HOLD=3600\" {liveSheet} && grep -qx \"FLOW_MIN_HOLD=3600\" {sheet} && grep -qx \"CHAIN_ID={chainId}\" {sheet}"]
     expectExit: 0
     receipts: []
     irreversible: false

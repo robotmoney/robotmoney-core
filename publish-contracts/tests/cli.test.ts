@@ -82,6 +82,15 @@ describe("review-security-001: the --upgrade-build rc checkout is gated on 8453 
     expect(x.w.logs().find((l) => l.event === "upgrade_build.release_gate")).toMatchObject({ sha: SHA2, tag: RC });
   });
 
+  test("v0.9.0 uses its release-0.9.0 branch and still requires it", async () => {
+    const x = rcWorld();
+    expect(await x.w.run(deploy(x.rc), x.seams({ tag: "release/v0.9.0-rc.1" }))).toBe(0);
+    expect(x.calls).toContain(`branch:release-0.9.0:${SHA2}`);
+    const rejected = rcWorld();
+    expect(await rejected.w.run(deploy(rejected.rc), rejected.seams({ tag: "release/v0.9.0-rc.1", branch: false }))).toBe(EXIT_CODES.USAGE);
+    expect(rejected.calls).not.toContain("deploy");
+  });
+
   test("the Twin chain and an --upgrade-build that is the --core-dir checkout are not gated again", async () => {
     const twin = rcWorld();
     const t = world();

@@ -356,7 +356,7 @@ export async function assertUpgradeBuildGate(i: UpgradeBuildGateInput): Promise<
   if (!tag) refuse("RELEASE_SHA_UNTAGGED", `HEAD ${sha} carries no annotated rc tag of kind ${i.kind} (release/vA.B.C-rc.N${i.kind === "rehearsal" ? "-rehearsal" : ""}); tags there: ${found.join(", ") || "none"}`, { sha, tags: found });
   await (i.remoteTag ?? ((d, t, s) => verifyCanonicalRemoteTag(d, t, undefined, s)))(i.dir, tag!, sha);
   const m = RC_TAG_PATTERN.exec(tag!)!;
-  const branch = `releases-${m[1]}.${m[2]}.x`;
+  const branch = /^release\/v0\.9\.0-rc\./.test(tag!) ? "release-0.9.0" : `releases-${m[1]}.${m[2]}.x`;
   if (!(await (i.onBranch ?? defaultOnBranch)(i.dir, sha, branch))) refuse("USAGE", `the rc ${tag} at ${sha} is not on origin/${branch} (fetch it, or the tag is on a QA branch or on dev)`, { sha, tag, branch });
   if (ciGateWaiver(i.env, i.kind, sha!) !== undefined) return { sha: sha!, tag: tag! };
   const token = i.env.GITHUB_TOKEN || i.env.GH_TOKEN;
