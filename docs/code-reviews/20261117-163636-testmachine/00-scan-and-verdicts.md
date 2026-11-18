@@ -47,8 +47,9 @@ few lines because the code was extracted into libraries (e.g. `BasketSwaps.sol`)
 
 Of the 12 REPRODUCED findings, four are already recorded upstream as accepted or
 known design residues — #12 (dust retention), #15 (dust skip), #18 (FS-VLT-26),
-and #19 (documented ≤10 ticks/s recorder drag). Six are pinned by in-repo tests
-(#1, #6, #12, #17, #19, #23). No Critical/High/Medium finding was reproduced;
+and #19 (documented ≤10 ticks/s recorder drag). Across all 23 findings, six are
+pinned or refuted by executed in-repo tests (#1, #6, #17, #19, #21, #23).
+No Critical/High/Medium finding was reproduced;
 the two outright rejections (#21, #23) both rest on a false premise about the
 shipped configuration or Solidity semantics.
 
@@ -58,6 +59,6 @@ A second security review of the same pin promoted one medium, non-blocking
 `TEST_COVERAGE_GAP` and four advisories. All five were independently verified and
 confirmed; the fund-timelock gap survives in a narrower form than stated (an
 on-chain readback of `EXECUTOR_ROLE` exists in the fund verifier, but no CI job runs
-it). See [chapter 5](04-cross-review-addendum.md) for evidence, corrections to the
+it). See [the cross-review addendum (file 04, item 5)](04-cross-review-addendum.md) for evidence, corrections to the
 second review, and reconciliation with findings #1, #13, #14, #17, #19 and #23.
 No verdict among the 23 changes.

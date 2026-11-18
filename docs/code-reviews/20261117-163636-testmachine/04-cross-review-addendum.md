@@ -130,12 +130,12 @@ Consequently:
 - **#17** is identical in both: mechanism real and test-pinned, admin-triggered,
   availability-only. Here REPRODUCED (low DoS); there advisory. See item 2 above.
 - **#19** matches: transient-tick mechanic exists but is documented/accepted, with
-  ≤10 ticks/s drag and ORA-4 bounds. Here VERIFIED mechanic with bounded economics.
+  ≤10 ticks/s drag and ORA-4 bounds. Here REPRODUCED mechanic with bounded economics.
 - **#13** is a severity dispute, not a code dispute: the second review calls the
   two-allowance redeem intentional defence-in-depth, while this review notes the
   checked holder→caller allowance is never consumed and the spent holder→router
   allowance is not the one checked, under the explicitly discouraged standing
-  approval (NatSpec `:948-960`). Keep VERIFIED with the stated precondition.
+  approval (NatSpec `:948-960`). Keep REPRODUCED with the stated precondition.
 - **#1 / #23**: the second review refutes a different claim (funds routed to the
   triggerer; active/configured-inactive assets quarantined). Our #23 REJECTED
   agrees. Our #1 PARTIAL acknowledges the degraded-pool quarantine as the designed

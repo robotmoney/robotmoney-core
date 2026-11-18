@@ -13,7 +13,7 @@
 | **REPRODUCED** (behavior genuinely present & reachable) | 12 | #6, #9, #10, #11, #12, #13, #15, #16, #17, #18, #19, #22 |
 | **PARTIAL** (real code observation, but bounded / by-design / premise overstated) | 9 | #1, #2, #3, #4, #5, #7, #8, #14, #20 |
 
-Of the 12 REPRODUCED findings, 4 are already recorded in the repo as accepted/known design residues (#12 documented dust retention, #15 documented dust-skip, #18 accepted FS-VLT-26, #19 documented ≤10 ticks/s drag). 6 have in-repo tests that directly encode the behavior (#1, #6, #12, #17, #19, #23).
+Of the 12 REPRODUCED findings, 4 are already recorded in the repo as accepted/known design residues (#12 documented dust retention, #15 documented dust-skip, #18 accepted FS-VLT-26, #19 documented ≤10 ticks/s drag). Across all 23 findings, 6 are pinned or refuted by executed in-repo tests (#1, #6, #17, #19, #21, #23) — spanning REPRODUCED, PARTIAL and REJECTED outcomes.
 
 ## Reproduction method
 
@@ -22,7 +22,7 @@ Of the 12 REPRODUCED findings, 4 are already recorded in the repo as accepted/kn
   - `BasketVault.t.sol::test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded` → refutes #23
   - `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` → pins #1's fallback
   - `SecurityReviewRevisionAssessment.t.sol::test_assessment_transientTickPersistsForFullWindowWithoutHonestRecord` → pins #19's mechanic
-  - `SecurityReviewPoc.t.sol` / `RobotMoneyVault.t.sol` / `SecurityReviewRecheckVaultPoc.t.sol::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity` → pins #6
+  - `RobotMoneyVault.t.sol::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity` (declared at `RobotMoneyVault.t.sol:1456`; inherited by `SecurityReviewPoc.t.sol`, `SecurityReviewRecheckVaultPoc.t.sol` and `RevisionVaultAssessment` in `SecurityReviewRevisionAssessment.t.sol`) → pins #6
   - `RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtRefused` → pins #17
   - `RecorderSellAnchor.t.sol::test_sellAnchor_youngRecorderUsesItsWholeHistory` → refutes #21's shortened-anchor premise
 
@@ -61,7 +61,7 @@ The premise misreads Solidity `try/catch`. `revert SlippageExceeded()` at `Baske
 `PortfolioRouter.sol:1069` checks holder→caller allowance; `:1077` `vault.redeem(...)` consumes holder→router allowance (router is msg.sender). No `_spendAllowance` on the share token exists in the redeem path. A caller with a small reusable allowance can repeatedly redeem against a larger standing holder→router approval, redirecting proceeds to `assetRecipient`. Precondition: the (explicitly discouraged) standing router approval. No two-allowance PoC exists; docs at `:948-960` acknowledge the risk.
 
 ### #15 — Single-unit basket legs can be skipped during full redemption — REPRODUCED (known/documented)
-`BasketVault.sol:917-920` burns before `_sellProportional`; `:953-964` skips a leg when `sellAmount == 1` because `_slippageFloor(sellAmount - 1) == 0`. No underflow (zero is skipped earlier); skipped active tokens remain counted in NAV and cannot be reabsorbed (`BasketSwaps.sol:165`). After a full redeem supply can be 0 with orphaned value; a next depositor captures it (`BasketVault.t.sol:2511`). Known dust-skip behavior (`docs/technical/smart-contract-invariants.md:122`); capture is a transfer, not free profit for a single actor.
+`BasketVault.sol:917-920` burns before `_sellProportional`; `:953-964` skips a leg when `sellAmount == 1` because `_slippageFloor(sellAmount - 1) == 0`. No underflow (zero is skipped earlier); skipped active tokens remain counted in NAV and cannot be reabsorbed (`BasketSwaps.sol:165`). After a full redeem supply can be 0 with orphaned value; a next depositor captures it. No dedicated test covers that orphan-capture path. Known dust-skip behavior (`docs/technical/smart-contract-invariants.md:122`); capture is a transfer, not free profit for a single actor.
 
 ### #16 — Split in-kind redemptions can avoid per-leg exit fees — REPRODUCED
 `BasketAssetConfigGuard.sol:303-307` floors the exit fee per leg per call (`MAX_EXIT_FEE_BPS = 100`); no cumulative accounting or minimum. Onboarding (`BasketAssetConfigGuard.sol:106-128`) does not constrain decimals/atomic value, so splitting into chunks whose leg amount is `< 10_000 / exitFeeBps` pays zero fee while withdrawing a material position. Analogous stable-vault issue FS-VLT-23 is accepted; no equivalent acceptance for this path.
@@ -131,7 +131,7 @@ narrower surviving defect is that neither the deploy-time `require` nor this
 verifier is wired into any PR CI job. The two reviews are otherwise reconcilable:
 the second applies a stricter "untrusted actor + wrong state + no trusted-role
 precondition" bar, while this report asks whether the described behaviour is
-present and reachable. #17 and #19 are graded differently but factually aligned;
+present and reachable. #17 is graded differently but factually aligned; #19 matches;
 #13 is a severity dispute with identical code; #1/#23 target a different quarantine
 claim; #14 matches the review's off-chain feature-flag observation. Full evidence,
 corrections and the additive CI recommendation are in

@@ -64,8 +64,8 @@ the explicitly discouraged standing router approval (NatSpec `:948-960`).
 when `sellAmount == 1` because `_slippageFloor(sellAmount - 1) == 0`. No underflow
 (zero is skipped earlier); skipped active tokens remain counted in NAV and cannot
 be reabsorbed (`BasketSwaps.sol:165`). After a full redeem, supply can be 0 with
-orphaned value that a next depositor captures (`BasketVault.t.sol:2511`). Known
-dust-skip behaviour (`docs/technical/smart-contract-invariants.md:122`); the
+orphaned value that a next depositor captures. No dedicated test covers that
+orphan-capture path. Known dust-skip behaviour (`docs/technical/smart-contract-invariants.md:122`); the
 capture is a transfer, not free profit for a single actor.
 
 ## #16 — Split in-kind redemptions avoid per-leg exit fees
