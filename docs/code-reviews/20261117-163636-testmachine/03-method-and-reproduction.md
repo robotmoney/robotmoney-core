@@ -49,7 +49,7 @@ Result: 9 tests across 8 suites, 0 failed, 0 skipped. These directly cover:
 | `BasketVault.t.sol::test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded` | #23 | refutes quarantine-on-floor claim |
 | `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` | #1 | pins degraded-oracle fallback |
 | `SecurityReviewRevisionAssessment.t.sol::test_assessment_transientTickPersistsForFullWindowWithoutHonestRecord` | #19 | pins transient-tick mechanic |
-| `SecurityReviewPoc.t.sol` / `RobotMoneyVault.t.sol` / `SecurityReviewRecheckVaultPoc.t.sol::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity` | #6 | pins Morpho/illiquid-adapter redemption failure |
+| `RobotMoneyVault.t.sol::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity` (same test also executed through the `SecurityReviewPoc.t.sol` and `SecurityReviewRecheckVaultPoc.t.sol` suites) | #6 | pins Morpho/illiquid-adapter redemption failure |
 | `RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtRefused` | #17 | pins same-block receipt refusal |
 | `RecorderSellAnchor.t.sol::test_sellAnchor_youngRecorderUsesItsWholeHistory` | #21 | refutes shortened-anchor premise |
 
