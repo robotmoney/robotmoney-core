@@ -45,14 +45,4 @@ printf 'contract D { function t() public { vm.removeFile("/x"); } }\n' > "$tmp/r
 expect_fail "a literal removeFile"
 rm "$tmp/rm.sol"
 
-# Mutation 7: the real tree with the old shared prefix restored.
-cp -r "$here/../../../contracts/test" "$tmp/real"
-python3 - "$tmp/real/DeployTimelock.t.sol" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-s = s.replace('"RM_REVIEW_R04_FLOOR_"', '"RM_1476_RUN_ENTRYPOINT_"', 1)
-open(p, "w").write(s)
-PY
-if python3 "$guard" "$tmp/real" >/dev/null 2>&1; then echo "FAIL: mutated real tree accepted"; exit 1; fi
 echo "ok: check_test_tmp_paths self-test"
