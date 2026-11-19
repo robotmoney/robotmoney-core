@@ -47,6 +47,10 @@ interface IRobotMoneyFund is IFundEvents {
     event AssetAdded(uint256 indexed index, AssetConfig config);
     event AssetDeactivated(uint256 indexed index);
     event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
+    /// @notice ADR-0019: `codeHash` is (or stops being) treated as a governed UUPS adapter proxy.
+    event AdapterProxyCodeHashSet(bytes32 indexed codeHash, bool isProxy);
+    /// @notice ADR-0019: basket asset `index` now swaps and prices through `adapter`.
+    event AssetAdapterSet(uint256 indexed index, address indexed oldAdapter, address indexed adapter);
     event DepositsPaused(address indexed account);
     event DepositsUnpaused(address indexed account);
     event Shutdown();
@@ -684,6 +688,14 @@ interface IRobotMoneyFund is IFundEvents {
     ///         and the (now empty) entry counts again. Exclusion is not confiscation: what the
     ///         adapter later returns belongs to the holders of the snapshot.
     function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed) external;
+
+    /// @notice ADR-0019 (ADMIN_ROLE): mark `codeHash` as a governed UUPS adapter proxy. An adapter with that code hash
+    ///         must also report an implementation whose code hash is allowed, on every use.
+    function setAdapterProxyCodeHash(bytes32 codeHash, bool isProxy) external;
+
+    /// @notice ADR-0019 (ADMIN_ROLE): point active basket asset `index` at another vetted swap adapter. The adapter
+    ///         must report the asset's pool as fixed-fee and the fee band must fit (E43). Moves no tokens.
+    function setAssetAdapter(uint256 index, address adapter) external;
 
     /// @notice Append an asset. ADMIN_ROLE. Checks: adapter codehash allowlisted, Lending adapter
     ///         binds VAULT == fund (`AdapterVaultMismatch`) and USDC == the fund's asset

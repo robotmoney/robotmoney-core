@@ -147,6 +147,11 @@ struct FundState {
     mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingFeeLinked;
 
     address rebalancer;
+
+    /// @dev ADR-0019: adapter runtime code hashes that are governed UUPS proxies. An adapter whose code hash is
+    ///      here is vetted on every use by the code hash of the implementation it reports (`FundAdapterGuard`).
+    ///      Appended (v0.9.0): the storage layout is append-only.
+    mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;
 }
 
 /// @title FundStorage

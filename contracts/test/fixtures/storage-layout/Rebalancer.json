@@ -82,7 +82,8 @@
       "mapping(uint256 index => mapping(uint256 epoch => LendingClaimEpoch)) lendingEpochs;",
       "mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingClaims;",
       "mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingFeeLinked;",
-      "address rebalancer;"
+      "address rebalancer;",
+      "mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;"
     ],
     "robotmoney.storage.RobotMoneyVaultExclusions": [
       "ExclusionLedger ledger;",

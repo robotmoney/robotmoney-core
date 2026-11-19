@@ -29,6 +29,9 @@ notes: |
   operation each; P2.82 and P2.83 execute them, and fund-upgrade-record.ts re-records the run's manifest copy and the run manifest's proxy_upgrades. P3.80 schedules ONE call,
   queue.setFlowParams with the 21 fields of the v0.9.0 FlowParams (src/FlowTypes.sol): the 18 the live queue reads (minHold {sheet:FLOW_MIN_HOLD}, 3600, already live; epochLength
   3600 and settleWindow 720, set on the live system by v0.8.0-onevault-upgrade), and the three appended fields cancelBuffer, maxPause and matchBandBps (decision D4-16, open).
+  Before it, P3.70 deploys the new swap adapter (an ERC1967Proxy over UniswapV3ExactOutSwapAdapterUpgradeable, the fund timelock its upgrade authority) and P3.71 and P3.72
+  schedule and execute ONE batch that allows its two code hashes, marks the proxy hash and moves every basket asset off the legacy adapter, which cannot answer
+  isFixedFeePool (decision D4-17, ADR-0019). P3.72 then simulates the setFlowParams P3.80 schedules.
   P3.81 executes it, then syncs the run sheet copy's epoch lines to the chain. The executor is the Safe only already (v0.8.0-onevault-upgrade, 2026-11-14), so this file
   changes no timelock role. Every execute of this file goes through the Safe. The pause drill's unpause (P9.81, P9.82) is executed under the Safe-only executor.
 
@@ -108,6 +111,12 @@ decisions:
     answer: "Owner, 2026-11-17: accept cancelBuffer 900 s, maxPause 259200 s, and matchBandBps 10."
     decidedOn: "2026-11-17"
     ref: "Owner instruction in deployment session, 2026-11-17"
+  - id: "D4-17"
+    question: "Deploy 4's legacy Uniswap swap adapter has no isFixedFeePool, so the v0.9.0 queue's setFlowParams reverts FlowParamOutOfBounds(14) (E43). How does the upgrade leave it?"
+    status: "decided"
+    answer: "Owner, 2026-11-19: swap adapters become OpenZeppelin UUPS proxies (GovernedUUPS, the fund timelock their upgrade authority), vetted by proxy and implementation code hash on every use; a governed setAssetAdapter moves each basket asset to the new adapter proxy before P3.80 (ADR-0019, steps P3.70 to P3.72). No legacy-adapter special case, no delist."
+    decidedOn: "2026-11-19"
+    ref: "docs/adr/ADR-0019-fund-swap-adapters-governed-uups-proxies.md"
 recovery: |
   Contracts are not rolled back in place by this file, but a governed upgrade back to the live implementation is possible: the fund and queue proxies stay upgradeable
   (UPGRADE_MODE upgradeable) and the live implementations stay on chain (the run manifest's proxy_upgrades names each from_implementation). Before P1.80 nothing is sent:
@@ -799,7 +808,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P2.84-upg-after-upgrade"
     standing: ["4.12"]
-    description: "The upgrade changed the code and nothing else, and the new rules hold. Unchanged: every queue claim (fund-claims same against claims-before.json: the deposits settled under the 24 h hold keep their unlockAt and stay claimable then), the queue's 18 live flowParams words (the upgraded queue returns 21 words; the three appended ones read 0 until P3.81), the fund's supply, seed shares, plan id and request count. New (owner 2026-11-13): the emergency key is refused shutdown and emergencyUnwind (AccessControlUnauthorizedAccount, simulated, nothing sent), the timelock may call shutdown, the emergency key still pauses the fund and the queue (simulated), and the queue accepts the 21-field setFlowParams that P3.80 schedules from the timelock (simulated). The governed upgrades read back from the chain (evidence-check --governed-upgrades: one upgradeToAndCall each, the delay kept)"
+    description: "The upgrade changed the code and nothing else, and the new rules hold. Unchanged: every queue claim (fund-claims same against claims-before.json: the deposits settled under the 24 h hold keep their unlockAt and stay claimable then), the queue's 18 live flowParams words (the upgraded queue returns 21 words; the three appended ones read 0 until P3.81), the fund's supply, seed shares, plan id and request count. New (owner 2026-11-13): the emergency key is refused shutdown and emergencyUnwind (AccessControlUnauthorizedAccount, simulated, nothing sent), the timelock may call shutdown, the emergency key still pauses the fund and the queue (simulated), and the queue has the 21-field setFlowParams calldata P3.80 schedules written (simulated at P3.72, after the adapter swap: the legacy adapter cannot answer isFixedFeePool, ADR-0019). The governed upgrades read back from the chain (evidence-check --governed-upgrades: one upgradeToAndCall each, the delay kept)"
     host: "control"
     phase: 2
     cmds:
@@ -807,7 +816,7 @@ steps:
       - ["bash", "-c", "a=$(cast call {m:queue.queue} \"flowParams()\"); b={state:upg-flow-params-before}; test \"${#a}\" = 1346 && for i in $(seq 0 17); do test \"${a:$((2+64*i)):64}\" = \"${b:$((2+64*i)):64}\" || exit 1; done && for i in 18 19 20; do test \"$(cast to-dec 0x${a:$((2+64*i)):64})\" = 0 || exit 1; done && echo \"flowParams: the 18 live words unchanged, the 3 appended words read 0 until P3.81\" && test \"$(cast call {m:fund.fund} \"totalSupply()(uint256)\" | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" {m:fund.fund} | cut -d\" \" -f1)-$(cast call {m:fund.fund} \"currentPlanId()(uint256)\")-$(cast call {m:queue.queue} \"requestCount()(uint256)\")\" = \"{state:upg-fund-before}\" && echo \"planStatus $(cast call {m:fund.fund} \"planStatus()(uint8)\")\""]
       - ["bash", "-c", "for fn in \"shutdown()\" \"emergencyUnwind()\"; do out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"$fn\" 2>&1); echo \"emergency $fn: $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\" || exit 1; done"]
       - ["bash", "-c", "cast call --from {m:fund-timelock.timelock} {m:fund.fund} \"shutdown()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"pauseDeposits()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:queue.queue} \"pauseQueue()\" > /dev/null && echo \"the timelock may shut down; the emergency key still pauses (simulated)\""]
-      - ["bash", "-c", "b={state:upg-flow-params-before}; d() { cast to-dec 0x${b:$((2+64*$1)):64}; }; data=$(cast calldata \"setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16,uint32,uint32,uint16))\" \"($(d 0),$(d 1),{sheet:FLOW_MIN_HOLD},$(d 3),$(d 4),$(d 5),$(d 6),$(d 7),$(d 8),$(d 9),$(d 10),$(d 11),$(d 12),$(d 13),$(d 14),$(d 15),$(d 16),$(d 17),900,259200,10)\") && echo \"$data\" > {runDir}/state/data-upg-params && cast call --from {m:fund-timelock.timelock} {m:queue.queue} \"$data\" > /dev/null && echo \"the queue accepts the v0.9.0 setFlowParams from the timelock (simulated): the live 18 words, cancelBuffer 900, maxPause 259200, matchBandBps 10, minHold {sheet:FLOW_MIN_HOLD}\""]
+      - ["bash", "-c", "b={state:upg-flow-params-before}; d() { cast to-dec 0x${b:$((2+64*$1)):64}; }; data=$(cast calldata \"setFlowParams((uint32,uint32,uint32,uint32,uint16,uint128,uint16,uint16,uint128,uint32,uint8,uint8,uint16,uint16,uint16,uint32,uint16,uint16,uint32,uint32,uint16))\" \"($(d 0),$(d 1),{sheet:FLOW_MIN_HOLD},$(d 3),$(d 4),$(d 5),$(d 6),$(d 7),$(d 8),$(d 9),$(d 10),$(d 11),$(d 12),$(d 13),$(d 14),$(d 15),$(d 16),$(d 17),900,259200,10)\") && echo \"$data\" > {runDir}/state/data-upg-params && echo \"the v0.9.0 setFlowParams calldata is written (P3.72 simulates it once the basket assets use the new adapter, ADR-0019): the live 18 words, cancelBuffer 900, maxPause 259200, matchBandBps 10, minHold {sheet:FLOW_MIN_HOLD}\""]
       - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{evidenceDir}/publish-run.json", "--timelock", "{m:fund-timelock.timelock}", "--deployment-kind", "{deploymentKind}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -900,6 +909,74 @@ steps:
     notBefore: {"afterStep": "P3.04-register-submitter-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
   # ── v0.9.0-onevault-upgrade, flow fund-upgrade, phase 3 ──
+  - id: "P3.70-upg-adapter-deploy"
+    standing: ["4.12"]
+    description: "ADR-0019. The deployer deploys the fund's new Uniswap V3 swap adapter from the v0.9.0-onevault build ({runDir}/v090) with forge create: the implementation UniswapV3ExactOutSwapAdapterUpgradeable (router {sheet:SWAP_ROUTER}, linked to the fund system's GovernedUpgrade library {m:fund-libs.governed_upgrade}), then an OpenZeppelin ERC1967Proxy over it initialized with the fund timelock as its upgrade authority. A rerun reuses a recorded deployment that has code. Read back: the proxy reports the implementation, names the fund timelock, is not frozen, uses the sheet's router, reports every active basket pool fixed-fee (E43), and accepts an upgradeToAndCall from the timelock (simulated). The two runtime code hashes are written for P3.71. Lending adapters do not change"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "-c", "f={runDir}/state/upg-adapter-impl; if test -s $f && test \"$(cast code $(cat $f))\" != 0x; then echo \"reuse implementation $(cat $f)\"; else cd {runDir}/v090 && forge create --broadcast --rpc-url {rpcUrl} \"$@\" --libraries contracts/lib/GovernedUUPS.sol:GovernedUpgrade:{m:fund-libs.governed_upgrade} contracts/adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol:UniswapV3ExactOutSwapAdapterUpgradeable --constructor-args {sheet:SWAP_ROUTER} --json | tee /dev/stderr | jq -er .deployedTo > $f; fi", "_", "{cast}"]
+      - ["bash", "-c", "f={runDir}/state/upg-adapter-proxy; if test -s $f && test \"$(cast code $(cat $f))\" != 0x; then echo \"reuse proxy $(cat $f)\"; else init=$(cast calldata \"initialize(address)\" {m:fund-timelock.timelock}) && cd {runDir}/v090 && forge create --broadcast --rpc-url {rpcUrl} \"$@\" lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy --constructor-args {state:upg-adapter-impl} $init --json | tee /dev/stderr | jq -er .deployedTo > $f; fi", "_", "{cast}"]
+      - ["bash", "-c", "P={state:upg-adapter-proxy}; I={state:upg-adapter-impl}; bun scripts/runbook/qa-assert.ts eq \"$(cast call $P \"implementation()(address)\")\" \"$I\" && bun scripts/runbook/qa-assert.ts eq \"$(cast call $P \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\" && test \"$(cast call $P \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call $P \"ROUTER()(address)\")\" \"{sheet:SWAP_ROUTER}\" && cast call --from {m:fund-timelock.timelock} $P \"upgradeToAndCall(address,bytes)\" $I 0x > /dev/null && cast keccak $(cast code $I) > {runDir}/state/upg-adapter-impl-hash && cast keccak $(cast code $P) > {runDir}/state/upg-adapter-proxy-hash && echo \"adapter proxy $P implementation $I hashes $(cat {runDir}/state/upg-adapter-proxy-hash) $(cat {runDir}/state/upg-adapter-impl-hash)\""]
+      - ["bash", "-c", "basket() { n=$(cast call {m:fund.fund} \"assetCount()(uint256)\"); for i in $(seq 0 $((n-1))); do r=$(cast call {m:fund.fund} \"assetConfig(uint256)\" $i); test \"${r:65:1}\" = 1 && test \"${r:129:1}\" = 1 && echo \"$i 0x${r:218:40} 0x${r:346:40}\"; done; }; m=0; while read i a p; do test \"$(cast call {state:upg-adapter-proxy} \"isFixedFeePool(address)(bool)\" $p)\" = true || { echo \"asset $i pool $p not fixed-fee\"; exit 1; }; echo \"asset $i pool $p fixed-fee\"; m=$((m+1)); done < <(basket); test $m -gt 0"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    notBefore: {"afterStep": "P2.84-upg-after-upgrade", "hours": 0}
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    writes: ["upg-adapter-impl", "upg-adapter-proxy", "upg-adapter-impl-hash", "upg-adapter-proxy-hash"]
+    added: "v0.9.0-onevault-upgrade"
+  - id: "P3.71-upg-adapter-schedule"
+    standing: ["4.12", "4.10"]
+    description: "ADR-0019. The Safe schedules ONE batch on the fund timelock, in order: setAdapterCodeHashAllowed(implementation hash, true), setAdapterCodeHashAllowed(proxy hash, true), setAdapterProxyCodeHash(proxy hash, true), then setAssetAdapter(i, proxy) for every active basket asset i whose adapter is the legacy swap adapter {m:fund.swap_adapter}. Through the Safe tool, two owner signatures. The fund's lending adapters are not touched"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bash", "-c", "basket() { n=$(cast call {m:fund.fund} \"assetCount()(uint256)\"); for i in $(seq 0 $((n-1))); do r=$(cast call {m:fund.fund} \"assetConfig(uint256)\" $i); test \"${r:65:1}\" = 1 && test \"${r:129:1}\" = 1 && echo \"$i 0x${r:218:40} 0x${r:346:40}\"; done; }; F={m:fund.fund}; P={state:upg-adapter-proxy}; L=$(echo {m:fund.swap_adapter} | tr A-F a-f); t=\"$F,$F,$F\"; d=\"$(cast calldata \"setAdapterCodeHashAllowed(bytes32,bool)\" {state:upg-adapter-impl-hash} true),$(cast calldata \"setAdapterCodeHashAllowed(bytes32,bool)\" {state:upg-adapter-proxy-hash} true),$(cast calldata \"setAdapterProxyCodeHash(bytes32,bool)\" {state:upg-adapter-proxy-hash} true)\"; v=0,0,0; m=0; while read i a p; do test \"$(echo $a | tr A-F a-f)\" = \"$L\" || continue; t=\"$t,$F\"; d=\"$d,$(cast calldata \"setAssetAdapter(uint256,address)\" $i $P)\"; v=\"$v,0\"; m=$((m+1)); echo \"asset $i: $a -> $P\"; done < <(basket); test $m -gt 0 && echo \"$t\" > {runDir}/state/target-upg-adapter && echo \"$d\" > {runDir}/state/data-upg-adapter && echo \"$v\" > {runDir}/state/values-upg-adapter && cast keccak \"robotmoney.deploy4-upgrade.adapter.{runDir}\" > {runDir}/state/salt-upg-adapter"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "scheduleBatch", "--targets", "{state:target-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--values", "{state:values-upg-adapter}", "--salt", "{state:salt-upg-adapter}", "--out", "{runDir}/bundles/adapter-schedule.json"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-schedule.json", "--signer", "{ownerSigner}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-schedule.json", "--signer", "{ownerSigner2}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-schedule.json", "--signer", "{signer}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/bundles", "pattern": "adapter-schedule.json", "required": true}
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["target-upg-adapter", "data-upg-adapter", "values-upg-adapter", "salt-upg-adapter"]
+    added: "v0.9.0-onevault-upgrade"
+  - id: "P3.72-upg-adapter-execute"
+    standing: ["4.12", "4.10"]
+    description: "ADR-0019. After the timelock delay the Safe executes the adapter batch: the operation reads done, the fund allows both hashes and marks the proxy hash, every basket asset that used the legacy adapter now uses the proxy, and NAV reads. Then the queue accepts the 21-field setFlowParams P3.80 schedules, from the timelock (simulated): the check the legacy adapter failed (FlowParamOutOfBounds(14))"
+    host: "control"
+    phase: 3
+    cmds:
+      - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "executeBatch", "--targets", "{state:target-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--values", "{state:values-upg-adapter}", "--salt", "{state:salt-upg-adapter}", "--out", "{runDir}/bundles/adapter-execute.json"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-execute.json", "--signer", "{ownerSigner}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-execute.json", "--signer", "{ownerSigner2}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-execute.json", "--signer", "{signer}"]
+      - ["bash", "-c", "id=$(cast call {m:fund-timelock.timelock} \"hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32)\" \"[{state:target-upg-adapter}]\" \"[{state:values-upg-adapter}]\" \"[{state:data-upg-adapter}]\" $(cast hash-zero) \"{state:salt-upg-adapter}\") && test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"$id\")\" = true"]
+      - ["bash", "-c", "basket() { n=$(cast call {m:fund.fund} \"assetCount()(uint256)\"); for i in $(seq 0 $((n-1))); do r=$(cast call {m:fund.fund} \"assetConfig(uint256)\" $i); test \"${r:65:1}\" = 1 && test \"${r:129:1}\" = 1 && echo \"$i 0x${r:218:40} 0x${r:346:40}\"; done; }; F={m:fund.fund}; P=$(echo {state:upg-adapter-proxy} | tr A-F a-f); L=$(echo {m:fund.swap_adapter} | tr A-F a-f); test \"$(cast call $F \"adapterCodeHashAllowed(bytes32)(bool)\" {state:upg-adapter-impl-hash})\" = true && test \"$(cast call $F \"adapterCodeHashAllowed(bytes32)(bool)\" {state:upg-adapter-proxy-hash})\" = true && m=0 && while read i a p; do a=$(echo $a | tr A-F a-f); test \"$a\" != \"$L\" || { echo \"asset $i still uses the legacy adapter\"; exit 1; }; test \"$a\" = \"$P\" && m=$((m+1)) && echo \"asset $i uses $a\"; done < <(basket) && test $m -gt 0 && echo \"NAV $(cast call $F \"totalAssets()(uint256)\")\""]
+      - ["bash", "-c", "cast call --from {m:fund-timelock.timelock} {m:queue.queue} \"{state:data-upg-params}\" > /dev/null && echo \"the queue accepts the v0.9.0 setFlowParams from the timelock (simulated): cancelBuffer 900, maxPause 259200, matchBandBps 10, minHold {sheet:FLOW_MIN_HOLD}\""]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/bundles", "pattern": "adapter-execute.json", "required": true}
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    notBefore: {"afterStep": "P3.71-upg-adapter-schedule", "hours": "timelockDelay"}
+    maxMinutes: 60
+    added: "v0.9.0-onevault-upgrade"
   - id: "P3.80-upg-config-schedule"
     standing: ["4.12", "4.10"]
     description: "The Safe schedules ONE call on the fund timelock: queue.setFlowParams with the 21 fields of the v0.9.0 FlowParams (src/FlowTypes.sol; the validator test pins its selector and arity): the 18 the live queue reads, unchanged (minHold {sheet:FLOW_MIN_HOLD}, epochLength 3600, settleWindow 720), and the three appended fields cancelBuffer 900, maxPause 259200 and matchBandBps 10 (decision D4-16, open). Through the Safe tool, two owner signatures. The executor is the Safe only already (v0.8.0-onevault-upgrade), so no timelock role changes"
