@@ -286,18 +286,17 @@ describe("stage-table.json", () => {
       expect(cli.stages.find((s) => s.name === fundAuthority)!.proxies).toBeUndefined();
       expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
     });
-    test("the nine proxied core contracts are the contracts the storage-layout gate snapshots, besides the parked AgentTokenVault whose layout stays pinned (ADR-0017)", () => {
+    test("the fund system's proxied contracts are the contracts the storage-layout gate snapshots (the vaults and gateway contracts were deleted, PR 2042)", () => {
       const gate = read("scripts/ci/check-core-storage-layout.sh");
       const gated = [...gate.matchAll(/^\s*"(\w+):contracts\/[\w/]+\.sol"$/gm)].map((m) => m[1]!).sort();
-      // Deploy 4: the fund system's receipt register is the vaults system's contract, so one snapshot pins both
-      const listed = [...new Set(proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)))].sort();
-      // rmAGENT is retired and no stage deploys it, but the live v0.5.0 deployment runs AgentTokenVault behind a governed proxy. A governed upgrade of it must keep its layout, so the gate keeps snapshotting it.
+      const fundStages = proxyStages.filter((s) => s.system === "fund");
+      const listed = [...new Set(fundStages.flatMap((s) => s.proxies!.map((p) => p.contract)))].sort();
       // Deploy 4: RebalancerV2 (helpers/FundUpgradeV2.sol) is the rebalancer's test-only second implementation. No stage deploys it (it is not in `listed`), only
       // deploy-implementation --system fund --contract RebalancerV2 does, and the gate pins its layout so that verb's append-only check reads its real layout.
       expect(listed).not.toContain("RebalancerV2");
-      expect([...listed, "AgentTokenVault", "RebalancerV2"].sort()).toEqual(gated);
-      expect(listed).toHaveLength(13); // nine of the vaults and gateway systems, four of the fund system (Deploy 4)
-      for (const s of proxyStages) for (const p of s.proxies!) {
+      expect([...listed, "RebalancerV2"].sort()).toEqual(gated);
+      expect(listed).toHaveLength(5); // the fund's receipt register, fund, rebalancer, governance and queue
+      for (const s of fundStages) for (const p of s.proxies!) {
         expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);
         expect(p.layout).toBe(`contracts/test/fixtures/storage-layout/${p.contract}.json`);
       }
