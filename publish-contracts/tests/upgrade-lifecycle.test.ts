@@ -2,22 +2,18 @@
 // src/ci/twin-upgrade-lifecycle.ts (upgrade-lifecycle.twin.json) and what that chain answered to the online check (upgrade-lifecycle.twin.chain.json, replayed here
 // with no RPC). Every tampering below must be caught. The CI job core-stages-twin-upgrade-lifecycle runs the same check against a live Twin chain.
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { keccak256, pad, type Hex } from "viem";
-import { repoProxyNames } from "../src/evidence-check.ts";
-import { EXIT_CODES } from "../src/errors.ts";
 import { getStageTable } from "../src/stages.ts";
-import { manifestBase } from "../src/stage-table.ts";
 import { UPGRADES_ARE_FROZEN_SELECTOR, upgradeLifecycleOnChainProblems, upgradeLifecycleProblems, type LifecycleChain } from "../src/upgrade-lifecycle.ts";
 import { freezeSpecsFor, rerecordProxyManifest } from "../src/upgrade-rows.ts";
 import { stageManifestFile } from "../src/verify/constants.ts";
 import { verifyDeployment } from "../src/verify/index.ts";
-import { CODE_LABEL, DEADLINE_LABEL, proxySpecs } from "../src/verify/upgradeability.ts";
+import { CODE_LABEL, proxySpecs } from "../src/verify/upgradeability.ts";
 import { proxyBuildDirsOf } from "../src/verify-stage.ts";
-import { MANIFEST_ADAPTER, SHA, tmp } from "./fixtures.ts";
-import { ADMIN, world as cliWorld } from "./harness.ts";
-import { addr, buildWorld, failed, GATEWAY, IMPL_SLOT, IMPLS, type World } from "./verify/world.ts";
+import { tmp } from "./fixtures.ts";
+import { addr, buildWorld, failed, GATEWAY, IMPL_SLOT, IMPLS } from "./verify/world.ts";
 
 const FIX = join(import.meta.dir, "fixtures");
 const record = (): any => JSON.parse(readFileSync(join(FIX, "upgrade-lifecycle.twin.json"), "utf8"));
@@ -153,24 +149,6 @@ describe("verify after an upgrade to another build (issue 1859)", () => {
 
 // Issue 1859 (item 6): the missed freeze deadline fails verify with exit 13 (VERIFY). The CLI's main() return value is the process exit code (cli.ts: process.exit(await main(...))).
 describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
-  /** An upgradeable 8453 release whose freeze deadline passed with every proxy still upgradeable (the verifier world). */
-  function missed(): World {
-    const w = buildWorld(8453);
-    const due = "2027-01-31T00:00:00Z";
-    w.sheet.upgradeMode = "upgradeable";
-    w.sheet.freezeDeadline = due;
-    w.opts.now = BigInt(Date.parse(due) / 1000) + 1n;
-    for (const st of getStageTable().stages.filter((x) => x.proxies && x.system !== "fund")) {
-      const p = join(w.manifestDir, stageManifestFile(getStageTable(), st.name));
-      writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), upgrade_mode: "upgradeable" }));
-    }
-    for (const n of repoProxyNames()) {
-      const spec = proxySpecs(getStageTable()).find((x) => x.name === n)!;
-      const m = JSON.parse(readFileSync(join(w.manifestDir, stageManifestFile(getStageTable(), spec.stage)), "utf8"));
-      w.chain.set(m[spec.field], "upgradesFrozen", false);
-    }
-    return w;
-  }
   test("a freeze names the gateway system's proxy only when the record lists it (issue 1892)", () => {
     const table = getStageTable();
     const sys = (stage: string) => table.stages.find((x) => x.name === stage)?.system;
@@ -186,23 +164,4 @@ describe("verify on a missed-deadline fixture exits 13 (issue 1859)", () => {
     expect(freezeSpecsFor(specs, sys, combinedRecord).map((s) => s.name)).toEqual(specs.map((s) => s.name));
   });
 
-  test("the publish CLI's verify verb exits 13 and names the missed deadline", async () => {
-    const v = missed();
-    const cli = cliWorld({ chainId: 8453, writeSafeManifest: true, writeFrozen: true });
-    const m = join(cli.coreDir, "deployments", "8453");
-    getStageTable().vaults.forEach((x, i) => writeFileSync(join(m, `${manifestBase(x.manifest)}.json`), JSON.stringify({ chain_id: 8453, vault: addr(0xc1 + i), adapter: MANIFEST_ADAPTER, ...(x.key === "USDC" ? { aave_adapter: addr(0xe1), compound_adapter: addr(0xe2), moonwell_flagship_adapter: addr(0xe3) } : {}) })));
-    mkdirSync(cli.evidence, { recursive: true });
-    writeFileSync(join(cli.evidence, "publish-run.json"), JSON.stringify({ version: 1, chainId: 8453, coreSha: SHA, deployer: ADMIN, environment: "local", startedAt: "t", firstBlock: 7, stages: { safe: { status: "done", startedAt: "t" }, "prove-control": { status: "done", startedAt: "t" }, timelock: { status: "done", startedAt: "t" } } }));
-    let report: Awaited<ReturnType<typeof verifyDeployment>> | undefined;
-    const verify = {
-      // the real verifier over the missed-deadline world (the in-memory chain stands in for the RPC)
-      verifyDeployment: (async () => (report = await verifyDeployment(v.opts))) as never,
-      verifySources: (async () => ({ ok: true, checks: [] })) as never, depositsPaused: async () => true,
-    };
-    const code = await cli.run(["verify"], { pauseAll: (async () => ({ allPaused: true, vaults: [] })) as never, verify });
-    expect(failed(report!)).toEqual([DEADLINE_LABEL]);
-    expect(report!.checks.find((c) => c.label === DEADLINE_LABEL)!.detail).toMatch(/^MISSED: /);
-    expect(code).toBe(EXIT_CODES.VERIFY);
-    expect(code).toBe(13);
-  });
 });

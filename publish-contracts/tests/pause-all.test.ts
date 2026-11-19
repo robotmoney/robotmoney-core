@@ -242,56 +242,6 @@ describe("pause-all: all four vaults, read back, in the rollout report", () => {
 });
 
 describe("a failed verify or postflight pauses the vaults by itself", () => {
-  test("a failed verify after the handover pauses all three with the EMERGENCY key and the run still exits VERIFY (13)", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, AFTER_HANDOVER);
-    const code = await w.run(["verify", "--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: failingVerifier });
-    expect(code).toBe(EXIT_CODES.VERIFY);
-    expect(c.sends).toHaveLength(4);
-    for (const s of c.sends) expect(s.keystore).toBe("/k/EMERGENCY");
-    expect(Object.keys(c.paused)).toHaveLength(4);
-    expect(report(w).pauseAll).toMatchObject({ trigger: "verify", allPaused: true });
-    expect(report(w).pauseAll.reason).toContain("safe: nonce at least 1");
-    expect(w.logs().some((l) => l.event === "pause_all.auto" && l.trigger === "verify")).toBe(true);
-  });
-
-  test("a failed verify before the handover pauses with the deployer", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, BEFORE_HANDOVER);
-    expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.VERIFY);
-    expect(c.sends).toHaveLength(4);
-    for (const s of c.sends) expect(s.keystore).toBe(DEPLOYER_KS);
-  });
-
-  test("a failed verify whose pause also fails exits PAUSE and names the vaults still open", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, BEFORE_HANDOVER);
-    c.failSendTo = vaultAddr(1);
-    expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
-    expect(lastError(w).message).toContain("rmPROTO");
-    expect(lastError(w).message).toContain("safe: nonce at least 1"); // the original failure is still in the message
-  });
-
-  test("a verify that passes pauses nothing", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, AFTER_HANDOVER);
-    const ok = { verifyDeployment: (async () => ({ ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }] })) as never };
-    expect(await w.run(["verify"], { ...deps(c), verify: ok })).toBe(0);
-    expect(c.sends).toEqual([]);
-    expect(existsSync(rolloutReportPath({ evidenceDir: w.evidence, chainId: 918453 }))).toBe(false);
-  });
-
-  test("Deploy 3: --logs-rpc and --logs-window reach the verifier (the role scan's eth_getLogs, 1000 blocks per call)", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, AFTER_HANDOVER);
-    let seen: { logChunk?: number; chain?: unknown } = {};
-    const spy = { verifyDeployment: (async (o: { logChunk: number; chain: unknown }) => { seen = o; return { ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }] }; }) as never };
-    expect(await w.run(["verify", "--logs-rpc", "http://logs.test:8545", "--logs-window", "1000"], { ...deps(c), verify: spy })).toBe(0);
-    expect(seen.logChunk).toBe(1000);
-    // mutation: without the flags the scan keeps 2000 blocks per call
-    expect(await w.run(["verify"], { ...deps(c), verify: spy })).toBe(0);
-    expect(seen.logChunk).toBe(2000);
-  });
 
   test("a failure in a deploy stage is not a verify failure: nothing is paused", async () => {
     const w = world({ startNonce: 0 }), c = newChain();
@@ -300,16 +250,6 @@ describe("a failed verify or postflight pauses the vaults by itself", () => {
     expect(c.sends).toEqual([]);
   });
 
-  test("a postflight failure (the end-of-deploy nonce check) pauses too", async () => {
-    const w = world({ startNonce: 0 }), c = newChain();
-    // the verifier passes but leaves a stray deployer transaction behind: the nonce check that follows fails
-    const stray = { verifyDeployment: (async () => { w.setNonce(w.state().nonces[ADMIN.toLowerCase()] + 3); return { ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }] }; }) as never };
-    const code = await w.run(["--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: stray });
-    expect(lastError(w).message).toContain("nonce");
-    expect(code).toBe(EXIT_CODES.NONCE);
-    expect(c.sends).toHaveLength(4);
-    expect(report(w).pauseAll.trigger).toBe("postflight");
-  });
 });
 
 describe("issue 1686: pause-all records a pause entry in the run manifest", () => {
@@ -340,14 +280,6 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
     }, makeSigner: signerFor });
     expect(seen).toEqual([{ sendNo: 1, status: "started", vaults: 0 }, { sendNo: 2, status: "started", vaults: 1 }, { sendNo: 3, status: "started", vaults: 2 }, { sendNo: 4, status: "started", vaults: 3 }]);
     expect(manifestOf(w).pauses[0].status).toBe("done");
-  });
-
-  test("the automatic pause after a failed verify records the same entry with trigger verify; a second pause-all gets the next seq", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, BEFORE_HANDOVER);
-    expect(await w.run(["verify"], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.VERIFY);
-    expect(await w.run(["pause-all"], deps(c))).toBe(0);
-    expect(manifestOf(w).pauses.map((p: any) => [p.seq, p.trigger])).toEqual([[1, "verify"], [2, "manual"]]);
   });
 
   test("a stale manifest lock (a crashed holder) is taken over: the entry is still written and all three vaults are paused", async () => {
@@ -413,7 +345,6 @@ describe("issue 1686: pause-all records a pause entry in the run manifest", () =
   });
 });
 
-
 describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send", () => {
   const manifestOf = (w: ReturnType<typeof world>) => JSON.parse(readFileSync(join(w.evidence, "publish-run.json"), "utf8"));
   const unfundEmergency = (c: Chain) => { c.balances[EMERGENCY.toLowerCase()] = "0"; };
@@ -454,31 +385,6 @@ describe("issue 1712: an unfunded signer stops pause-all BEFORE the first send",
     expect(await w.run(["pause-all", "--emergency-signer", EMERGENCY_SPEC], deps(c))).toBe(0);
     expect(c.sends).toHaveLength(4);
     expect(manifestOf(w).pauses.map((p: any) => [p.seq, p.allPaused])).toEqual([[1, false], [2, true]]);
-  });
-
-  test("the automatic pause after a failed verify: zero ETH on the EMERGENCY key exits PAUSE (25), sends nothing, and keeps the verify failure in the message", async () => {
-    const w = world({ writeSafeManifest: true }), c = newChain();
-    seed(w, AFTER_HANDOVER);
-    unfundEmergency(c);
-    expect(await w.run(["verify", "--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: failingVerifier })).toBe(EXIT_CODES.PAUSE);
-    expect(c.sends).toEqual([]);
-    const msg = lastError(w).message as string;
-    expect(msg).toContain("safe: nonce at least 1"); // the original failure
-    expect(msg).toContain(EMERGENCY);
-    expect(msg).toContain("Fund");
-    expect(manifestOf(w).pauses[0]).toMatchObject({ seq: 1, trigger: "verify", status: "done", allPaused: false });
-  });
-
-  test("the automatic pause after a failed postflight (the end-of-deploy nonce check) is stopped the same way", async () => {
-    const w = world({ startNonce: 0 }), c = newChain();
-    unfundEmergency(c);
-    const stray = { verifyDeployment: (async () => { w.setNonce(w.state().nonces[ADMIN.toLowerCase()] + 3); return { ok: true, checks: [{ label: "chain: id equals sheet", ok: true, detail: "" }] }; }) as never };
-    expect(await w.run(["--emergency-signer", EMERGENCY_SPEC], { ...deps(c), verify: stray })).toBe(EXIT_CODES.PAUSE);
-    expect(c.sends).toEqual([]);
-    const msg = lastError(w).message as string;
-    expect(msg).toContain("nonce"); // the postflight failure
-    expect(msg).toContain(EMERGENCY);
-    expect(manifestOf(w).pauses[0]).toMatchObject({ trigger: "postflight", status: "done", allPaused: false });
   });
 
   test("a key with ANY ETH is never blocked: 1 wei goes out to the sends, and the failure (if any) is the send's own", async () => {

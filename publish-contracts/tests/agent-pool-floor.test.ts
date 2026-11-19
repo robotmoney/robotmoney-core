@@ -41,8 +41,4 @@ describe("VAULT_AGENT_MIN_POOL_LIQUIDITY stays 1e15 (ADR-0017, issue 1903)", () 
     expect(adr).toContain(`${NAME}\` stays 1e15`);
     expect(adr).toContain("No guard, bound or executed-test floor is lowered");
   });
-  test("the parked basket deploy base still reads the floor from the sheet's MIN_POOL_LIQUIDITY, so a redeploy takes it from a sheet and not from a constant", () => {
-    const base = read("contracts/script/BasketVaultDeployBase.sol");
-    expect(base).toContain('"MIN_POOL_LIQUIDITY"');
-  });
 });

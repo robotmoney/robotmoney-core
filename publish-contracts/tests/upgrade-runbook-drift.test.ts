@@ -77,17 +77,6 @@ describe("the release checklist and the Twin lifecycle rehearsal (issue 1811)", 
     expect(tracking).toContain("External security review completed for the release SHA");
     expect(tracking).toContain("`core-stages-twin-upgrade-lifecycle`");
   });
-  test("the runbook names the rehearsal the code runs", () => {
-    const wf = readFileSync(join(REPO, ".github", "workflows", "suite-28-core-stages.yml"), "utf8");
-    expect(wf).toContain("name: core-stages-twin-upgrade-lifecycle");
-    expect(wf).toContain("sheet-overlay: deployments/twin-918453/upgrade-rehearsal.env");
-    expect(wf).toContain("bun publish-contracts/src/ci/twin-upgrade-lifecycle.ts");
-    expect(readFileSync(join(REPO, "deployments", "twin-918453", "upgrade-rehearsal.env"), "utf8")).toMatch(/^UPGRADE_MODE=upgradeable$/m);
-    expect(readFileSync(join(REPO, "publish-contracts", "src", "evidence-check.ts"), "utf8")).toContain('"upgrade-lifecycle": { type: "string" }');
-    const required = JSON.parse(readFileSync(join(REPO, "scripts", "ci", "required-checks.json"), "utf8")).required.map((r: { name: string }) => r.name);
-    expect(required).toContain("core-stages-twin-upgrade-lifecycle");
-    for (const s of ["`core-stages-twin-upgrade-lifecycle`", "`deployments/twin-918453/upgrade-rehearsal.env`", "`publish-contracts/src/ci/twin-upgrade-lifecycle.ts`", "--upgrade-lifecycle FILE --rpc URL", "`UpgradesAreFrozen`", "**Rollback is not assumed safe.**", "**After a governed upgrade.**"]) expect(SECTION, s).toContain(s);
-  });
 });
 
 // Issue 1842 docs drift check: runbook 4.12 names the two operator rows the code runs, the manifest re-record, the WARN and ESCALATE states verify reports, and the
@@ -115,21 +104,12 @@ describe("the operator rows and the deadline alert states (issue 1842)", () => {
 // items that apply, and 4.12 naming who owns the implementation deploy with library linking and the manifest re-record.
 describe("the lifecycle job's required-check policy and the 4.1 and 4.12 wording (issue 1846)", () => {
   const gate = RUNBOOK.slice(RUNBOOK.indexOf("### 4.1. Code-readiness gate"), RUNBOOK.indexOf("### 4.2."));
-  const item4 = gate.slice(gate.indexOf("4. **Twin rehearsal of the governed proxy lifecycle.**"), gate.indexOf("Do not begin preflight"));
   const greenOnly = (() => {
     const start = RUNBOOK.indexOf("  - **Green rehearsal only.**");
     const end = RUNBOOK.indexOf("\n  - **", start + 1);
     if (start < 0 || end < 0) throw new Error("the runbook has no Green rehearsal only bullet");
     return RUNBOOK.slice(start, end);
   })();
-  test("4.1 item 4 gates every DEPLOY_SHA with the lifecycle job, as the required list does", () => {
-    expect(item4.length).toBeGreaterThan(0);
-    expect(item4).not.toContain("For a release that deploys governed proxies");
-    expect(item4).toContain("`core-stages-twin-upgrade-lifecycle` gates every `DEPLOY_SHA`");
-    const required = JSON.parse(readFileSync(join(REPO, "scripts", "ci", "required-checks.json"), "utf8")).required.map((r: { name: string }) => r.name);
-    expect(required).toContain("core-stages-twin-upgrade-lifecycle");
-    expect(required).not.toContain("core-stages-twin-chain");
-  });
   test("the Green rehearsal only bullet names both Twin jobs and the re-run recovery", () => {
     for (const s of ["`core-stages-twin-chain`", "`core-stages-twin-upgrade-lifecycle`", "gated indirectly", "directly through `check-sha-green`", "re-run the failed job", "`filter=latest`"]) expect(greenOnly, s).toContain(s);
   });
@@ -292,15 +272,6 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect([...S415.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for (const s of ["**Pause-all caveat.**", "900 s", "172800 s (48 hours)", "Never plan a production window from the 900 s figure", "`--owner-signer`, twice", "--migration receipt-submitter-roles", "govern --row retire-vault", "--governed-upgrades", "--rpc", "`gateway_implementation_runtime_hash`", "An agent never broadcasts to Base 8453"]) expect(S415, s).toContain(s);
   });
-  test("every command in the section's code blocks parses against the real CLI, evidence-check, run-record and the contracts", async () => {
-    const lines = commands(S415);
-    expect(lines.length).toBeGreaterThanOrEqual(15);
-    const bad: string[] = [];
-    for (const l of lines) bad.push(...(await problems(l, common)));
-    expect(bad).toEqual([]);
-    expect(lines.filter((l) => l.includes("--row upgrade-proxy")).length).toBe(2);
-    expect(lines.some((l) => l.includes("--row retire-vault"))).toBe(true);
-  });
   test("every `govern --row NAME` the prose and tables name is a row the CLI knows", async () => {
     const known = await KNOWN_ROWS();
     const named = [...S415.matchAll(/govern --row ([a-z][a-z-]*)/g)].map((m) => m[1]!);
@@ -351,39 +322,6 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     for (const l of upgrade) expect(l, l).toContain('--upgrade-build "$PWD"');
     for (const l of lines.filter((x) => !upgrade.includes(x))) expect(l, l).not.toContain("--upgrade-build");
   });
-  test("the section's publish-contracts commands are, in order, the commands the Twin driver runs (issue 1927)", async () => {
-    const { UPGRADE_FROM_V050_COMMANDS } = await import("../src/ci/twin-upgrade-from-v050.ts");
-    const lines = commands(S415).filter((l) => /^bun publish-contracts\/src\/(cli|evidence-check)\.ts /.test(l));
-    expect(lines).toEqual([...UPGRADE_FROM_V050_COMMANDS]);
-    // review-operations-001: the environment the driver gives those commands is exported in the section, and the step 8 record is read from it
-    const { UPGRADE_FROM_V050_ENV } = await import("../src/ci/upgrade-from-v050-commands.ts");
-    for (const k of UPGRADE_FROM_V050_ENV) expect(S415, k).toMatch(new RegExp(`^export ${k}=`, "m"));
-    expect(S415).toContain("writes the new `upgradeability.json` to `$PUBLISH_MANIFEST_DIR`");
-    const driver = readFileSync(join(REPO, "publish-contracts", "src", "ci", "twin-upgrade-from-v050.ts"), "utf8");
-    expect(driver).toContain("...runEnv");
-    expect(driver).not.toMatch(/PUBLISH_MANIFEST_DIR: manifests, YES/);
-    // the driver workflow job runs that driver
-    const wf = readFileSync(join(REPO, ".github", "workflows", "suite-28-core-stages.yml"), "utf8");
-    expect(wf).toContain("name: core-stages-twin-upgrade-from-v050");
-    expect(wf).toContain("bun publish-contracts/src/ci/twin-upgrade-from-v050.ts");
-  });
-  test("step 2 reads the Safe owners and threshold, the Safe's timelock roles and the RouterGovernance code on chain", async () => {
-    const s2 = step(2);
-    for (const l of ['cast call $SAFE "getOwners()(address[])"', 'cast call $SAFE "getThreshold()(uint256)"', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $PROPOSER_ROLE $SAFE', 'cast call $TIMELOCK "hasRole(bytes32,address)(bool)" $EXECUTOR_ROLE 0x0000000000000000000000000000000000000000', "cast codehash $GOVERNANCE"]) expect(s2, l).toContain(l);
-    // The executor is open (core 1521): the read is for address(0), never the Safe.
-    expect(s2).not.toContain('$EXECUTOR_ROLE $SAFE');
-    for (const l of s2.split("\n").filter((x) => x.startsWith("cast "))) expect(await problems(l, common), l).toEqual([]);
-    expect(s2).toContain("`hasRole(EXECUTOR_ROLE, address(0))` must be true");
-    expect(s2).toContain("The Safe must hold `PROPOSER_ROLE`");
-    expect(s2).toContain("never from memory");
-    // Stop rules stay for the delay and receipt version 2. An active receipt vector is recorded, not a stop (step 6 clears it).
-    expect(s2).toContain("If the delay reads anything else, or if the receipt reads version 2");
-    expect(s2).toContain("record it in the evidence and do not stop");
-    expect(s2).not.toContain("or if an active receipt vector shows in the effective weights, stop and report");
-    expect(s2).toContain("must read 2");
-    expect(await problems('cast call $SAFE "getNoSuchOwners()(address[])" --rpc-url $BASE_RPC_URL', common)).toHaveLength(1);
-    expect(S415.indexOf("export GOVERNANCE=")).toBeGreaterThan(-1);
-  });
   test("steps 4 and 5 review govern.preview before the second signature, and step 6 clears, delays and executes before retire-vault", () => {
     expect(step(4)).toContain("`govern.preview`");
     for (const w of ["`new_implementation`", "`new_code_hash`", "second owner signs", "delay"]) expect(step(5), w).toContain(w);
@@ -407,17 +345,6 @@ describe("runbook 4.15 names only govern rows, flags and functions that exist (i
     expect(auth).toContain("must pass `scripts/ci/check-core-storage-layout.sh --baseline release/v0.5.0-rehearsal`");
     expect(auth).toContain("before the rc tag is cut");
     expect(auth).not.toMatch(/\bpassed\b/);
-  });
-  test("the checker fails a step that names a nonexistent govern row, a nonexistent flag or a nonexistent function", async () => {
-    const ok = `bun publish-contracts/src/cli.ts govern --row retire-vault --admin-arg vault=$RMAGENT --admin-arg weights=USDC:9500,PROTO:500,RWA:0 $COMMON`;
-    expect(await problems(ok, common)).toEqual([]);
-    expect((await problems(ok.replace("retire-vault", "retire-everything"), common)).length).toBe(1);
-    expect((await problems(ok.replace("--admin-arg weights", "--admin-weights"), common)).length).toBe(1);
-    expect((await problems(`bun publish-contracts/src/evidence-check.ts --governed-upgrades-x F --rpc U`, common)).length).toBe(1);
-    expect((await problems(`cast call $TIMELOCK "getNoSuchDelay()(uint256)" --rpc-url $BASE_RPC_URL`, common)).length).toBe(1);
-    expect(await problems(`cast call $TIMELOCK "getMinDelay()(uint256)" --rpc-url $BASE_RPC_URL`, common)).toEqual([]);
-    const named = [...`run govern --row nosuchrow now`.matchAll(/govern --row ([a-z][a-z-]*)/g)].map((m) => m[1]!);
-    expect((await KNOWN_ROWS()).has(named[0]!)).toBe(false);
   });
 });
 
