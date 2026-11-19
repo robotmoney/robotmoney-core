@@ -1109,14 +1109,20 @@ test("v0.9.0 fund-upgrade: Deploy 4 in-place upgrade constraints (order, live re
   for (const target of ["twin", "rehearsal"]) {
     const ids = applicableSteps(r, target).map((s) => s.id);
     const at = (id: string) => { const i = ids.indexOf(id); expect(i, `${id} on ${target}`).toBeGreaterThanOrEqual(0); return i; };
-    expect(at("P2.82-upg-fund-upgrade-execute")).toBeLessThan(at("P3.80-upg-config-schedule"));
-    expect(at("P2.83-upg-queue-upgrade-execute")).toBeLessThan(at("P3.80-upg-config-schedule"));
+    // One timelock window (ADR-0019): the upgrades, the adapter batch and the params are scheduled together, chained by predecessor,
+    // and executed in that order.
+    expect(at("P2.81-upg-queue-upgrade-schedule")).toBeLessThan(at("P2.85-upg-adapter-schedule"));
+    expect(at("P2.85-upg-adapter-schedule")).toBeLessThan(at("P2.86-upg-params-schedule"));
+    expect(at("P2.86-upg-params-schedule")).toBeLessThan(at("P2.82-upg-fund-upgrade-execute"));
+    expect(at("P2.83-upg-queue-upgrade-execute")).toBeLessThan(at("P3.72-upg-adapter-execute"));
+    expect(at("P3.72-upg-adapter-execute")).toBeLessThan(at("P3.81-upg-params-execute"));
     expect(at("P0.85-upg-copy-record")).toBeLessThan(at("P1.80-upg-record-go"));
     expect(at("P9.83-upg-verify-final")).toBeGreaterThan(at("P9.82-upg-unpause-execute"));
   }
   const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
   // one governed call on the queue; the executor is the Safe only already (v0.8.0-onevault-upgrade), so no timelock batch grants or revokes a role
-  expect(j("P3.80-upg-config-schedule")).toContain("--action schedule --target {state:target-upg-params} --data {state:data-upg-params}");
+  expect(j("P2.86-upg-params-schedule")).toContain("--action schedule --target {state:target-upg-params} --data {state:data-upg-params} --salt {state:salt-upg-params} --predecessor {state:upg-adapter-op}");
+  expect(j("P2.85-upg-adapter-schedule")).toContain("--predecessor {state:upg-fund-op}");
   expect(r.steps.some((s) => s.cmds.some((c) => c.join(" ").includes("grantRole(")))).toBe(false);
   // new v0.9.0 build is the upgrade build and the release records the rc tag for 8453
   expect(j("P0.92-upg-new-build")).toContain("{runDir}/v090");
