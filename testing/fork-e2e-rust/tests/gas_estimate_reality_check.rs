@@ -47,8 +47,10 @@ const MAX_GAS_APPROVE: u64 = 80_000;
 /// `deposit gasUsed=1080403`. 1,190,000 is that cost plus about 10%.
 const MAX_GAS_DEPOSIT: u64 = 1_190_000;
 
-/// Conservative ceiling for the vault redeem gas.
-const MAX_GAS_REDEEM: u64 = 1_100_000;
+/// Conservative ceiling for the vault redeem gas. The TestMachine audit fixes (finding 6) cap each
+/// adapter pull at its withdrawal liquidity, which adds a probe per adapter; CI then measured
+/// `redeem gasUsed 1188307` against the old 1,100,000. 1,310,000 is that cost plus about 10%.
+const MAX_GAS_REDEEM: u64 = 1_310_000;
 
 /// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`.
 const ERC1967_IMPLEMENTATION_SLOT: B256 =
