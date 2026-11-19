@@ -1,0 +1,47 @@
+---
+title: "IFlowQueueSides"
+---
+
+# IFlowQueueSides
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/lib/FlowSettleLib.sol)
+
+## Functions
+
+<a id="settleredeemside-uint256-fill-settlecontext"></a>
+
+### settleRedeemSide
+
+```solidity
+function settleRedeemSide(uint256 settlementId, Fill[] calldata fills, SettleContext calldata c)
+        external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+
+<a id="settledepositside-uint256-fill-settlecontext"></a>
+
+### settleDepositSide
+
+```solidity
+function settleDepositSide(
+        uint256 settlementId,
+        Fill[] calldata fills,
+        SettleContext calldata c
+    ) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+

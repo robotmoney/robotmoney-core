@@ -1,0 +1,61 @@
+---
+title: "SettleContext"
+description: "Everything `settle` decides before trading (checks 1 to 7 of proposal §5.9.3 & §5.11.4)."
+---
+
+# SettleContext
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/FlowTypes.sol)
+
+Everything `settle` decides before trading (checks 1 to 7 of proposal §5.9.3 & §5.11.4).
+
+```solidity
+struct SettleContext {
+    uint256 supply;
+    uint256 idle;
+    uint256[] held;
+    AssetPrice[] prices;
+    uint256 navFeed;
+    uint256 navTwap;
+    uint256 sharePrice;
+    uint256 matchSharePrice;
+    uint256 exitFeeBps;
+    uint256 tvlCap;
+    bool depositsOpen;
+    bool lendRateOk;
+    uint256 lendRateFailIdx;
+    uint256 lendRateFailDetail;
+    uint64 roundEpoch;
+    uint64 firstEpoch;
+    uint64 lastEpoch;
+    uint256[] lendRates;
+    uint256 excludedMask;
+    uint256 saleMask;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| supply | `uint256` |  |
+| idle | `uint256` |  |
+| held | `uint256[]` |  |
+| prices | `AssetPrice[]` |  |
+| navFeed | `uint256` |  |
+| navTwap | `uint256` |  |
+| sharePrice | `uint256` |  |
+| matchSharePrice | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| tvlCap | `uint256` |  |
+| depositsOpen | `bool` |  |
+| lendRateOk | `bool` |  |
+| lendRateFailIdx | `uint256` |  |
+| lendRateFailDetail | `uint256` |  |
+| roundEpoch | `uint64` |  |
+| firstEpoch | `uint64` |  |
+| lastEpoch | `uint64` |  |
+| lendRates | `uint256[]` |  |
+| excludedMask | `uint256` |  |
+| saleMask | `uint256` |  |
+

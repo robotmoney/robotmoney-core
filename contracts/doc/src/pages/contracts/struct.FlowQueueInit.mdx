@@ -1,0 +1,39 @@
+---
+title: "FlowQueueInit"
+description: "`FlowQueue.initialize` parameters."
+---
+
+# FlowQueueInit
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/FlowTypes.sol)
+
+`FlowQueue.initialize` parameters.
+
+```solidity
+struct FlowQueueInit {
+    address fund;
+    address usdc;
+    address admin;
+    address emergency;
+    address keeper;
+    address usdcFeed;
+    uint32 usdcFeedMaxAge;
+    address sequencerFeed;
+    FlowParams params;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` |  |
+| usdc | `address` |  |
+| admin | `address` |  |
+| emergency | `address` |  |
+| keeper | `address` |  |
+| usdcFeed | `address` |  |
+| usdcFeedMaxAge | `uint32` |  |
+| sequencerFeed | `address` |  |
+| params | `FlowParams` |  |
+

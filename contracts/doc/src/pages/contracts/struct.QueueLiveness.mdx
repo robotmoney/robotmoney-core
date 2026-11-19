@@ -1,0 +1,35 @@
+---
+title: "QueueLiveness"
+description: "Keeper & Safe liveness disclosures surfaced alongside terms (E31, E34, E38, E39, FLOW-08)."
+---
+
+# QueueLiveness
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/FlowTypes.sol)
+
+Keeper & Safe liveness disclosures surfaced alongside terms (E31, E34, E38, E39, FLOW-08).
+
+```solidity
+struct QueueLiveness {
+    bool keeperConfigured;
+    bool queuePausedNow;
+    uint64 queuePausedUntil;
+    bool depositsStoppedNow;
+    bool windDownActive;
+    uint32 cancelBuffer;
+    uint32 maxPause;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| keeperConfigured | `bool` |  |
+| queuePausedNow | `bool` |  |
+| queuePausedUntil | `uint64` |  |
+| depositsStoppedNow | `bool` |  |
+| windDownActive | `bool` |  |
+| cancelBuffer | `uint32` |  |
+| maxPause | `uint32` |  |
+

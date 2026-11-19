@@ -1,0 +1,35 @@
+---
+title: "DepBucket"
+description: "Active or evicted deposit expiry cohort bucket in a deposit cycle."
+---
+
+# DepBucket
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/lib/FlowStorage.sol)
+
+Active or evicted deposit expiry cohort bucket in a deposit cycle.
+
+```solidity
+struct DepBucket {
+    uint256 totalNormBasis;
+    uint256 remainingNormBasis;
+    uint256 evictedUnmatchedUsdc;
+    uint256 finalUnmatchedFactor;
+    uint256 endMatchId;
+    bool evicted;
+    bool activeListed;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalNormBasis | `uint256` |  |
+| remainingNormBasis | `uint256` |  |
+| evictedUnmatchedUsdc | `uint256` |  |
+| finalUnmatchedFactor | `uint256` |  |
+| endMatchId | `uint256` |  |
+| evicted | `bool` |  |
+| activeListed | `bool` |  |
+
