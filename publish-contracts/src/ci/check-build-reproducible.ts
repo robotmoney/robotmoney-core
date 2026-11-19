@@ -28,14 +28,19 @@ export interface Row { target: Target; ok: boolean; detail: string }
 export interface AbsolutePath { artifact: string; where: string; value: string }
 export interface Report { rows: Row[]; absolute: AbsolutePath[] }
 
-/** Every artifact the deploy stages put on chain by CREATE2 or as a proxy implementation, from the stage table. */
+/**
+ * Every artifact the fund system's deploy stages put on chain by CREATE2 or as a proxy implementation, from the stage table. The vaults and gateway
+ * systems' contracts were deleted with the multi-vault code (PR 2042), so their stage rows name nothing this tree can build.
+ */
 export function targetsOf(t: StageTable): Target[] {
   const out: Target[] = [];
   const seen = new Set<string>();
   const add = (x: Target): void => { if (!seen.has(x.name)) { seen.add(x.name); out.push(x); } };
+  const stages = t.stages.filter((s) => s.system === "fund");
+  const fundLibraries = new Set(stages.flatMap((s) => s.create2Libraries ?? []));
   for (const l of t.libraries) add({ name: l.artifact, kind: "library", dir: LINK_DIR });
-  for (const l of t.create2Libraries ?? []) add({ name: l.artifact, kind: "create2-library", dir: IMPL_DIR });
-  for (const s of t.stages) for (const p of s.proxies ?? []) add({ name: p.contract, kind: "implementation", dir: IMPL_DIR });
+  for (const l of t.create2Libraries ?? []) if (fundLibraries.has(l.artifact)) add({ name: l.artifact, kind: "create2-library", dir: IMPL_DIR });
+  for (const s of stages) for (const p of s.proxies ?? []) add({ name: p.contract, kind: "implementation", dir: IMPL_DIR });
   return out;
 }
 

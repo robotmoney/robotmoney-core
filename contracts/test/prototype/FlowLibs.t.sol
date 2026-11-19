@@ -8,13 +8,13 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {BaseFixture} from "./BaseFixture.sol";
 import {TickMath} from "../../lib/TickMath.sol";
-import {FeedStatus} from "./src/FundTypes.sol";
-import {FeedLib} from "./src/lib/FeedLib.sol";
-import {TwapSlicesLib} from "./src/lib/TwapSlicesLib.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
-import {AaveV3RateAdapter} from "./src/adapters/AaveV3RateAdapter.sol";
-import {CompoundV3RateAdapter} from "./src/adapters/CompoundV3RateAdapter.sol";
-import {MorphoRateAdapter} from "./src/adapters/MorphoRateAdapter.sol";
+import {FeedStatus} from "../../FundTypes.sol";
+import {FeedLib} from "../../lib/FeedLib.sol";
+import {TwapSlicesLib} from "../../lib/TwapSlicesLib.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
+import {AaveV3RateAdapter} from "../../adapters/AaveV3RateAdapter.sol";
+import {CompoundV3RateAdapter} from "../../adapters/CompoundV3RateAdapter.sol";
+import {MorphoRateAdapter} from "../../adapters/MorphoRateAdapter.sol";
 
 /// @notice A Chainlink aggregator whose answer the test sets. Etched at a real feed address (E16: "tests move a feed
 ///         with a mock aggregator placed at the feed's address").

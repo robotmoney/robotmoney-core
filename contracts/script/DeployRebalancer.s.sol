@@ -7,9 +7,9 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {Rebalancer} from "../test/prototype/src/Rebalancer.sol";
-import {RobotMoneyFund} from "../test/prototype/src/RobotMoneyFund.sol";
-import {AssetStepParams, StepParams, Roles} from "../test/prototype/src/FundTypes.sol";
+import {Rebalancer} from "../Rebalancer.sol";
+import {RobotMoneyFund} from "../RobotMoneyFund.sol";
+import {AssetStepParams, StepParams, Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployRebalancer

@@ -102,7 +102,10 @@ export const JSON_ADDRESS_SOURCES: { file: string }[] = [
   { file: "config/protocol-assets.json" },
   { file: "config/rwa-assets.json" },
 ];
-/** Solidity deploy scripts: `address ... constant NAME = 0x...;` lines are third-party pins. */
+/**
+ * Solidity deploy scripts: `address ... constant NAME = 0x...;` lines are third-party pins.
+ * The 0.9.0 fund deploy scripts keep their pins in their shared base, FundSystemBase.sol.
+ */
 export const SOLIDITY_SCRIPT_DIR = "contracts/script";
 /** Safe factory, singletons, fallback handler and MultiSend: the pinned set the Safe checker already holds. */
 export const SAFE_SET_FILE = "scripts/devnet/safe-set.ts";
@@ -143,7 +146,7 @@ export function collectThirdPartyAddresses(repoRoot: string, _chainId?: number):
   if (existsSync(scriptDir)) {
     const re = /address\s+(?:public\s+|internal\s+|private\s+)?constant\s+([A-Za-z0-9_]+)\s*=\s*(0x[0-9a-fA-F]{40})\s*;/g;
     for (const f of readdirSync(scriptDir).sort()) {
-      if (!/^Deploy.*\.s\.sol$/.test(f) || f.startsWith("DeployDemo")) continue;
+      if (!(/^Deploy.*\.s\.sol$/.test(f) || f === "FundSystemBase.sol") || f.startsWith("DeployDemo")) continue;
       const text = readFileSync(join(scriptDir, f), "utf8");
       for (const m of text.matchAll(re)) found.push({ address: m[2].toLowerCase(), label: m[1], source: `${SOLIDITY_SCRIPT_DIR}/${f}` });
     }

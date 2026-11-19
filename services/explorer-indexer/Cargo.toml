@@ -53,13 +53,5 @@ hex = "0.4"
 # Postgres-in-Docker for integration tests; skips cleanly when Docker is missing.
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
-# The Twin chain fixture: deploys our own vault through the deploy scripts (core 1498, 1496).
-smoke-test = { path = "../../testing/smoke-test" }
 which = "6"
 tempfile = "3"
-# Issue #1790: fork_indexer.rs ingests a chain through `run_once`, then
-# serves the explorer-api router over the same database to check what the dapp
-# renders. A dev-dependency cycle (explorer-api depends on this crate) is legal:
-# integration tests link the one regular build of this library.
-explorer-api = { path = "../../clients/explorer-api" }
-axum = { version = "0.7", default-features = false, features = ["http1", "tokio"] }

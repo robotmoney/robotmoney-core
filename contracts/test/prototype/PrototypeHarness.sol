@@ -17,15 +17,15 @@ import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 import {ConsensusRecommendationReceipt} from "../../ConsensusRecommendationReceipt.sol";
 
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {Rebalancer} from "./src/Rebalancer.sol";
-import {RebalanceGovernance} from "./src/RebalanceGovernance.sol";
-import {FlowQueue} from "./src/FlowQueue.sol";
-import {AaveV3RateAdapter} from "./src/adapters/AaveV3RateAdapter.sol";
-import {CompoundV3RateAdapter} from "./src/adapters/CompoundV3RateAdapter.sol";
-import {MorphoRateAdapter} from "./src/adapters/MorphoRateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "./src/adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {IRobotMoneyFundFull} from "./src/interfaces/IRobotMoneyFund.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {Rebalancer} from "../../Rebalancer.sol";
+import {RebalanceGovernance} from "../../RebalanceGovernance.sol";
+import {FlowQueue} from "../../FlowQueue.sol";
+import {AaveV3RateAdapter} from "../../adapters/AaveV3RateAdapter.sol";
+import {CompoundV3RateAdapter} from "../../adapters/CompoundV3RateAdapter.sol";
+import {MorphoRateAdapter} from "../../adapters/MorphoRateAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {IRobotMoneyFundFull} from "../../interfaces/IRobotMoneyFund.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -38,7 +38,7 @@ import {
     Venue,
     Roles,
     BPS
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 import {
     Claim,
     DEFAULT_CANCEL_BUFFER,
@@ -49,8 +49,8 @@ import {
     Request,
     RequestKind,
     SettleCheck
-} from "./src/FlowTypes.sol";
-import {PlanMath} from "./src/PlanMath.sol";
+} from "../../FlowTypes.sol";
+import {PlanMath} from "../../PlanMath.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 
 interface IHarnessSwapRouter02 {

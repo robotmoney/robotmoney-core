@@ -226,7 +226,7 @@ on-chain-delta half re-closed by #1233's replay.** The asserter-side half
 still executes: `test_transcript_asserter_provenance.py` runs in the keyless
 `asserter-tests` job on every trigger and pins both branches of the
 plugin-provenance check. The on-chain half is real again: the replay deposit
-job's `Assert deposit on-chain delta` step runs `assert_headless_deposit_delta.py`
+job's `Assert deposit on-chain delta` step runs the deposit-delta check (deleted with the multi-vault system, PR 2042)
 against real pre/post `rmpc get-vault` snapshots around a real replayed
 deposit, so a silent gateway no-op fails loudly again. The `--plugin` /
 in-repo-plugin-loading claim this gap originally made cannot be closed by any
@@ -258,7 +258,7 @@ actually changed — a silent gateway no-op would also pass.
   transcript event whose resolved plugin path equals
   `$GITHUB_WORKSPACE/plugins/robotmoney-user`, and reject any path matching
   an ambient/global opencode plugin location.
-- Round-trip script: `.github/scripts/assert_headless_deposit_delta.py`.
+- Round-trip script: the deposit-delta check (deleted with the multi-vault system, PR 2042).
 - Pytest module: `.github/scripts/tests/test_transcript_asserter_provenance.py`
   pins both positive and negative branches of the provenance check.
 - Negative control: **withdrawn (issue #1235).** This closure previously
@@ -280,7 +280,7 @@ actually changed — a silent gateway no-op would also pass.
 replay.** Every assertable step in the table below now runs again inside
 suite-11b's `deposit` job: a fresh keypair is generated, the on-chain
 authorization check (`agentOwner` / `hasRole`) runs before the deposit, and
-`assert_headless_deposit_sender.py` confirms the deposit tx was signed by that
+the deposit-sender check (deleted with the multi-vault system, PR 2042) confirms the deposit tx was signed by that
 same generated key — all real, all against a fresh live devnet, driven by the
 replay harness in place of a live model. The negative control
 (`negative_control_keystore_generate_flag.sh`) continues to run on every
@@ -315,8 +315,8 @@ against the same freshly-generated key, one assertable step at a time:
 | 3 | rmpc built and configured | `cargo build --release ... --bin rmpc` and a generated `config.toml` pinning the devnet chain id, RPC, gateway/vault/USDC addresses, gateway runtime hash, and the freshly-generated keystore path. |
 | 4 | Fresh keypair + keystore | `cast wallet new --json` produces a secp256k1 keypair; the private key is fed via `RMPC_IMPORT_PRIVKEY_HEX` + `RMPC_KEYSTORE_PASSPHRASE` into `rmpc-keystore-import <output-path>`. Step fails unless the keystore file exists, the printed address matches `^0x[0-9a-fA-F]{40}$`, and the keystore-derived address equals the cast-wallet address. |
 | 5 | On-chain authorization | The deploy authorizes no agent (core 1527): `DeployGateway.s.sol` reads no `AGENT_*` variable. First assert that `agentOwner(generatedKey)` is zero and `hasRole(AGENT_ROLE, generatedKey)` is false. The required sequence is agent `commitAuthorization` over the depositor and exact reveal calldata, depositor `commitAuthorization`, then three-argument `revealAuthorization(agent, salt, policy)` in a later block while both commitments are live. The policy names the depositor as share receiver, explicitly allows the selected vault, and zeros retired withdrawal fields. After reveal, assert the depositor owns the key and it holds `AGENT_ROLE`, before depositing. |
-| 6 | Deposit signs with generated key | The headless deposit reads the generated keystore via `config.toml`; `.github/scripts/assert_headless_deposit_sender.py` parses the deposit `tx_hash` from the transcript, calls `eth_getTransactionByHash`, and asserts `from == AGENT_ADDRESS`. |
-| 7 | On-chain vault delta | `.github/scripts/assert_headless_deposit_delta.py` confirms `vault.total_assets` increased by the transcript-reported amount (pre-existing from #461). |
+| 6 | Deposit signs with generated key | The headless deposit reads the generated keystore via `config.toml`; the deposit-sender check (deleted with the multi-vault system, PR 2042) parses the deposit `tx_hash` from the transcript, calls `eth_getTransactionByHash`, and asserts `from == AGENT_ADDRESS`. |
+| 7 | On-chain vault delta | the deposit-delta check (deleted with the multi-vault system, PR 2042) confirms `vault.total_assets` increased by the transcript-reported amount (pre-existing from #461). |
 
 **Authorization migration gap (2026-10-20, `48923e37`).** The workflow uses
 commit-based agent consent, not the former EIP-712 signature. However,
@@ -337,7 +337,7 @@ the harness with RS-1019-1, RS-1019-12 and RS-1019-15.
   via `cast call` BEFORE the deposit, writes a `config.toml` wiring `keystore_path` to the generated
   keystore, and asserts the deposit transaction's `from` field equals the
   generated key.
-- Assertion script: `.github/scripts/assert_headless_deposit_sender.py`
+- Assertion script: the deposit-sender check (deleted with the multi-vault system, PR 2042)
   pins the deposit-sender invariant.
 - Negative control: `.github/scripts/tests/negative_control_keystore_generate_flag.sh`
   invokes the binary with the historical broken argv shape

@@ -7,9 +7,9 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
-import {RobotMoneyFund} from "../test/prototype/src/RobotMoneyFund.sol";
-import {Roles} from "../test/prototype/src/FundTypes.sol";
-import {KeeperAccount} from "../test/prototype/src/KeeperAccount.sol";
+import {RobotMoneyFund} from "../RobotMoneyFund.sol";
+import {Roles} from "../FundTypes.sol";
+import {KeeperAccount} from "../KeeperAccount.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFundWiring

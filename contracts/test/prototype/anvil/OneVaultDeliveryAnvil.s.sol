@@ -14,17 +14,17 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
 import {TestERC20} from "../../helpers/TestERC20.sol";
 import {MockAggregator} from "../mocks/MockAggregator.sol";
-import {RobotMoneyFund} from "../src/RobotMoneyFund.sol";
-import {FlowQueue} from "../src/FlowQueue.sol";
-import {FundInitParams} from "../src/FundTypes.sol";
+import {RobotMoneyFund} from "../../../RobotMoneyFund.sol";
+import {FlowQueue} from "../../../FlowQueue.sol";
+import {FundInitParams} from "../../../FundTypes.sol";
 import {
     FlowParams,
     FlowQueueInit,
     DEFAULT_CANCEL_BUFFER,
     DEFAULT_MAX_PAUSE,
     DEFAULT_MATCH_BAND_BPS
-} from "../src/FlowTypes.sol";
-import {IRobotMoneyFundFull} from "../src/interfaces/IRobotMoneyFund.sol";
+} from "../../../FlowTypes.sol";
+import {IRobotMoneyFundFull} from "../../../interfaces/IRobotMoneyFund.sol";
 
 /// @title OneVaultDeliveryAnvil
 /// @notice Local anvil stack for the share-delivery keeper self-test. Parameters follow PrototypeHarness.

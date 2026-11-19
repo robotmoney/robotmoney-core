@@ -4,7 +4,7 @@
 // Experiment prototype only (contracts/test/prototype/). Not a production test.
 pragma solidity ^0.8.24;
 
-import {Roles} from "./src/FundTypes.sol";
+import {Roles} from "../../FundTypes.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {
     FlowParams,
@@ -15,7 +15,7 @@ import {
     Settlement,
     SettleCheck,
     TIMELOCK_DELAY_REFERENCE
-} from "./src/FlowTypes.sol";
+} from "../../FlowTypes.sol";
 import {FlowQueueBase} from "./FlowQueue.t.sol";
 
 /// @title FlowQueueGapsTest

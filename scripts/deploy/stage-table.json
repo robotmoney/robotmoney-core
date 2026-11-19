@@ -976,57 +976,57 @@
     {
       "name": "FundPositionLib",
       "artifact": "FundPositionLib",
-      "path": "contracts/test/prototype/src/lib/FundPositionLib.sol"
+      "path": "contracts/lib/FundPositionLib.sol"
     },
     {
       "name": "FundValuationLib",
       "artifact": "FundValuationLib",
-      "path": "contracts/test/prototype/src/lib/FundValuationLib.sol"
+      "path": "contracts/lib/FundValuationLib.sol"
     },
     {
       "name": "FundAdminLib",
       "artifact": "FundAdminLib",
-      "path": "contracts/test/prototype/src/lib/FundAdminLib.sol"
+      "path": "contracts/lib/FundAdminLib.sol"
     },
     {
       "name": "FundFlowsLib",
       "artifact": "FundFlowsLib",
-      "path": "contracts/test/prototype/src/lib/FundFlowsLib.sol"
+      "path": "contracts/lib/FundFlowsLib.sol"
     },
     {
       "name": "FundStepLib",
       "artifact": "FundStepLib",
-      "path": "contracts/test/prototype/src/lib/FundStepLib.sol"
+      "path": "contracts/lib/FundStepLib.sol"
     },
     {
       "name": "FundDelistLib",
       "artifact": "FundDelistLib",
-      "path": "contracts/test/prototype/src/lib/FundDelistLib.sol"
+      "path": "contracts/lib/FundDelistLib.sol"
     },
     {
       "name": "StepFeedLib",
       "artifact": "StepFeedLib",
-      "path": "contracts/test/prototype/src/lib/StepFeedLib.sol"
+      "path": "contracts/lib/StepFeedLib.sol"
     },
     {
       "name": "FlowCheckLib",
       "artifact": "FlowCheckLib",
-      "path": "contracts/test/prototype/src/lib/FlowCheckLib.sol"
+      "path": "contracts/lib/FlowCheckLib.sol"
     },
     {
       "name": "FlowMatchLib",
       "artifact": "FlowMatchLib",
-      "path": "contracts/test/prototype/src/lib/FlowMatchLib.sol"
+      "path": "contracts/lib/FlowMatchLib.sol"
     },
     {
       "name": "FlowSettleLib",
       "artifact": "FlowSettleLib",
-      "path": "contracts/test/prototype/src/lib/FlowSettleLib.sol"
+      "path": "contracts/lib/FlowSettleLib.sol"
     },
     {
       "name": "FlowClaimLib",
       "artifact": "FlowClaimLib",
-      "path": "contracts/test/prototype/src/lib/FlowClaimLib.sol"
+      "path": "contracts/lib/FlowClaimLib.sol"
     }
   ],
   "artifacts": {

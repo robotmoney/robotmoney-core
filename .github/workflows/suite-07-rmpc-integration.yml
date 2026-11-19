@@ -1,17 +1,10 @@
 # Canonical: docs/development/ci-suites.md §7
 #
 # WHY THIS SUITE EXISTS
-# rmpc must work end-to-end against real Base state, not against a hand-built chain. The Twin
-# chain (id 918453) is a pinned lazy fork of real Base made with anvil (core 1498, 1496): real
-# Aave V3, Compound V3, Morpho, Uniswap and USDC. The e2e binaries deploy their OWN vault through
-# the "publish contracts" runbook (publish-contracts/ in this repo) and read the addresses from the manifests. They never
-# read the live production v1 contracts (clean room rule).
-#
-# THE TWIN CHAIN, ONE PIN PER RUN
-# The `pin` job chooses the pinned block once (upstream head minus 2). Each matrix row starts its
-# own Twin fork with .github/actions/twin-fork at that pin, so rows never share a port or a chain,
-# and the Rust harness reuses it through TWIN_RPC_URL. Anvil's RPC cache is persisted per pin block.
-# Time-dependent flows warp (evm_increaseTime) instead of waiting. There is no docker chain.
+# rmpc binary-level integration tests (parity, receipt verify, CLI surface) and the nonce race
+# stress run. The Twin-chain e2e matrix (rmpc-e2e-smoke, -scenarios, -window_cap) deployed a vault
+# of the old multi-vault system. Those contracts were replaced by the 0.9.0 fund (PR 2042), so
+# the matrix, its pin job and its test binaries were removed.
 #
 # WHY skill_docs_parity, dapp_toml_roundtrip, receipt,
 # cli_committee_identity AND cli_version RUN HERE BEFORE THE DOCKER TESTS
@@ -67,12 +60,6 @@
 # runner load. Mixing it into the e2e matrix would make timing-dependent failures ambiguous
 # (is it the race or the chain interaction?). A separate job isolates the failure signal.
 #
-# GOTCHAS
-# - --test-threads=1 is required for all e2e test binaries. Parallel tests in the same binary
-#   would share one Twin fork and race on block time and nonces. Do not remove this flag.
-# - A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool. If a row still
-#   fails to start, set the optional secret BASE_UPSTREAM_RPC to a paid provider.
-
 name: rust-client-devnet-integration
 
 # CI taxonomy (issue #1105): this suite proves rmpc end-to-end against a real
@@ -83,15 +70,6 @@ env:
   CI_CLASS: system-correctness
 
 on:
-  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
-  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
-  workflow_call:
-    inputs:
-      pin_block:
-        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
-        type: string
-        required: false
-        default: ""
   # system-correctness: this devnet integration suite is a merge gate for `dev`. It
   # defers past draft PRs (ready_for_review onward) so drafts are not charged for the
   # Twin chain boot, and runs on push to dev for merged-commit coverage. paths-ignore
@@ -110,8 +88,6 @@ on:
 # distinct concurrency lane per ref and never cancel, so merged-commit coverage
 # always completes. See docs/development/ci-suites.md (CI velocity tiers).
 concurrency:
-  # suite tag keeps called copies (nightly Twin chain run) in separate lanes:
-  # inside workflow_call github.workflow is the CALLER's name, shared by every suite.
   group: ${{ github.workflow }}-suite07-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -121,22 +97,6 @@ permissions:
   contents: read
 
 jobs:
-  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
-  pin:
-    name: twin-pin
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    outputs:
-      block: ${{ steps.pin.outputs.block }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: pin
-        uses: ./.github/actions/twin-pin
-        with:
-          pin-block: ${{ inputs.pin_block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
   # Non-devnet rmpc tests that need the release binary but no chain. Kept in this
   # suite (rather than suite 6) because they depend on the release build; split into
   # their own fast job so a manifest/TOML drift fails in <1 min without booting the Twin chain.
@@ -378,58 +338,6 @@ jobs:
             --release \
             --manifest-path clients/rust-payment-client/Cargo.toml \
             --test write_seam_reverted_anvil -- --nocapture
-
-  # PARALLEL TWIN MATRIX (issue #600): one runner per e2e binary, each with its OWN Twin fork at the
-  # run pin (no shared port or chain). fail-fast: false so one failing binary does not cancel the
-  # others, and the per-binary green/red signal stays independent.
-  devnet-e2e:
-    name: rmpc-e2e-${{ matrix.binary }}
-    needs: pin
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # min_executed (issue 1656) is the executed count of the binary in a green run.
-          - { binary: smoke, min_executed: 1 }
-          - { binary: scenarios, min_executed: 11 }
-          - { binary: window_cap, min_executed: 1 }
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # The Rust harness deploys through the "publish contracts" runbook (publish-contracts/ in this repo).
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      # Installs foundry (anvil, forge, cast) and bun, restores anvil's RPC cache keyed by the pin
-      # block, starts the Twin fork and exports TWIN_RPC_URL for the harness to reuse.
-      - name: Start the Twin chain at the run pin
-        uses: ./.github/actions/twin-fork
-        with:
-          pin-block: ${{ needs.pin.outputs.block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-      - name: e2e ${{ matrix.binary }}
-        working-directory: testing/ethereum-testnet/e2e-rust
-        env:
-          CARGO_TEST_MIN_EXECUTED: ${{ matrix.min_executed }}
-        run: |
-          bash ../../../.github/scripts/cargo_test_require_executed.sh \
-            --release --test ${{ matrix.binary }} -- --test-threads=1 --nocapture
-
-      - name: Stop the Twin fork and save its RPC cache
-        if: always()
-        uses: ./.github/actions/twin-fork-save-cache
 
   nonce-race-stress:
     name: rmpc-nonce-race-stress

@@ -134,7 +134,7 @@ check "the webhook receives the alert body and the exit is 1" 'grep -q "rpc_unre
 
 # ─── The one-vault stack: KeeperAccount holds KEEPER_ROLE on the queue and the Rebalancer ────
 # KeeperAccount takes its owners and bot keys as constructor arrays. The deployer owns it and the bot key may call execute.
-KEEPER_ACCOUNT="$( (cd "$REPO_ROOT" && forge create contracts/test/prototype/src/KeeperAccount.sol:KeeperAccount \
+KEEPER_ACCOUNT="$( (cd "$REPO_ROOT" && forge create contracts/KeeperAccount.sol:KeeperAccount \
     --rpc-url "$RPC_URL" --unlocked --from "$DEPLOYER" --broadcast --json \
     --constructor-args "[$DEPLOYER]" "[$BOT_ADDR]") 2>"$WORK/keeper-account.err" \
     | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["deployedTo"])' 2>/dev/null)" \

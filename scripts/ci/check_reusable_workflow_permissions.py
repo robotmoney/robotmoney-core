@@ -190,18 +190,6 @@ def self_test() -> int:
         errs = check(real)
         return not errs, errs
 
-    @case("nightly_suite07_parity_needs_pull_requests_read")
-    def _():
-        # The 2026-10-07..13 startup_failure: drop the job-level grant from the nightly's suite-07 call.
-        tree = copy.deepcopy(real)
-        job = tree["suite-29-nightly-twin-fork.yml"]["jobs"]["suite-07"]
-        if "permissions" not in job:
-            return False, ["suite-29 suite-07 caller job has no permissions block to remove"]
-        del job["permissions"]
-        errs = check(tree)
-        return must_fail(errs, "suite-29-nightly-twin-fork.yml:suite-07",
-                         "suite-07-rmpc-integration.yml:parity", "pull-requests: read"), errs
-
     @case("caller_write_covers_called_read")
     def _():
         tree = {"a.yml": workflow({"contents": "write"}, a=call("b.yml")),

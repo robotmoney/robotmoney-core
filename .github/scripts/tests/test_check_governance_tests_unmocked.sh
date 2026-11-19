@@ -30,10 +30,4 @@ printf 'fn t() {}\n' > "$f"
 printf 'cast --from "$FUSION_RELEASE_ADDRESS"\n' > "$tmp/scripts/fusion/devnet-acceptance.sh"
 if bash "$guard" "$tmp" >/dev/null 2>&1; then echo "FAIL: EOA release probe accepted"; exit 1; fi
 rm -f "$tmp/scripts/fusion/devnet-acceptance.sh"
-mkdir -p "$tmp/testing/fork-e2e-rust/tests"
-k="$tmp/testing/fork-e2e-rust/tests/rmpc_get_timelock_fork.rs"
-printf 'fn t() { let fx = Fixture::new(); }\n' > "$k"
-bash "$guard" "$tmp" >/dev/null || { echo "FAIL: clean fork test rejected"; exit 1; }
-printf 'if skip_if_no_fork() { return; }\n' > "$k"
-if bash "$guard" "$tmp" >/dev/null 2>&1; then echo "FAIL: fork-skip accepted"; exit 1; fi
 echo "ok: check_governance_tests_unmocked self-test"

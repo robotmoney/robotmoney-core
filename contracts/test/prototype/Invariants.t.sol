@@ -27,7 +27,7 @@ import {
     IDLE_INDEX,
     BPS,
     PRICE_SCALE
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 import {
     Claim,
     FlowBooks,
@@ -42,11 +42,11 @@ import {
     Fill,
     SettleContext,
     TIMELOCK_DELAY_REFERENCE
-} from "./src/FlowTypes.sol";
-import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
+} from "../../FlowTypes.sol";
+import {IRebalanceGovernance} from "../../interfaces/IRebalanceGovernance.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
 import {IStrategyAdapter} from "../../interfaces/IStrategyAdapter.sol";
 
 /// @title Invariants

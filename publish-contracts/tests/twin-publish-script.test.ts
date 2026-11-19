@@ -358,9 +358,9 @@ fi
 });
 
 describe("the rehearsal uses only the allowed Twin environment steps", () => {
-  test("no anvil_ or evm_ RPC name in the action, its script or the suite 28 workflow", () => {
+  test("no anvil_ or evm_ RPC name in its script or the suite 28 workflow (the twin-publish action was deleted with the old system, PR 2042)", () => {
     const script = join(REPO_ROOT, "publish-contracts/src/ci/twin-publish.ts");
-    const files = [join(ACTION, "action.yml"), script, join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml"), join(REPO_ROOT, "publish-contracts/src/ci/twin-upgrade-lifecycle.ts")];
+    const files = [script, join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml"), join(REPO_ROOT, "publish-contracts/src/ci/twin-upgrade-lifecycle.ts")];
     for (const f of files) expect(readFileSync(f, "utf8")).not.toMatch(/\b(anvil|evm)_[a-zA-Z]+/);
     const steps = [...readFileSync(script, "utf8").matchAll(/run\(\[bun, rehearsal, "([a-z-]+)"/g)].map((m) => m[1]).filter((x) => x !== "keys");
     expect(steps).toEqual(["fund-gas", "fund-usdc"]);

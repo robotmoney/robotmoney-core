@@ -15,11 +15,11 @@ bare array, and the old `jq '.[0].private_key'` read kept the job red from
 - A missing address or key, a malformed address or key, an empty wallet
   list, an envelope with `success: false`, and non-JSON each exit non-zero
   with a reason, and no reason ever echoes the private key.
-- The workflow step reads the wallet through this parser (never `.[0]`), the
-  deposit job's twin-publish step runs govern (rmUSDC deploys paused, so
-  self-check and deposit refuse with ErrDepositsPaused without it), and the
-  job's Foundry install and the twin-fork action pin ONE exact release (a
-  floating `stable` is how the shape change arrived unreviewed).
+- Suite 11b's Foundry install and the twin-fork action pin ONE exact release
+  (a floating `stable` is how the shape change arrived unreviewed).
+
+The deposit replay job that ran the parser, and the two tests of its wiring,
+were removed with the old multi-vault contracts (PR 2042).
 
 The parser is invoked as a subprocess with the wallet on stdin, the exact
 interface the workflow uses.
@@ -202,26 +202,5 @@ def test_suite_11b_and_twin_fork_pin_one_exact_foundry_release() -> None:
                 "never stable, nightly or an omitted version (issue #1682)"
             )
             versions.add(version)
-    # The deposit job installs Foundry, then twin-fork installs it again and wins on PATH, so the
-    # cast that prints the wallet is twin-fork's. Two different pins would test a version nobody reviewed.
+    # Two different pins would test a version nobody reviewed.
     assert len(versions) == 1, f"suite-11b and twin-fork pin different Foundry releases: {sorted(versions)}"
-
-
-def test_keypair_step_reads_the_wallet_through_the_parser() -> None:
-    doc = yaml.safe_load(SUITE_11B.read_text(encoding="utf-8"))
-    steps = {step.get("name"): step for step in doc["jobs"]["deposit"]["steps"]}
-    script = steps["Generate fresh agent keypair and keystore"]["run"]
-    assert "cast wallet new --json" in script
-    assert "parse_cast_wallet_new.py --field private_key" in script
-    assert "parse_cast_wallet_new.py --field address" in script
-    assert ".[0].private_key" not in script and ".[0].address" not in script, "the step reads the wallet with a shape-bound jq path again"
-
-
-def test_deposit_job_publish_runs_govern_so_rmusdc_is_unpaused() -> None:
-    doc = yaml.safe_load(SUITE_11B.read_text(encoding="utf-8"))
-    publish = [s for s in doc["jobs"]["deposit"]["steps"] if s.get("uses") == "./.github/actions/twin-publish"]
-    assert len(publish) == 1, f"expected one twin-publish step in the deposit job, found {len(publish)}"
-    assert (publish[0].get("with") or {}).get("govern") == "true", (
-        "the deposit job's twin-publish step must pass govern: \"true\": every vault deploys paused and "
-        "self-check/deposit refuse with ErrDepositsPaused until stage 13 unpauses rmUSDC"
-    )

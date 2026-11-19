@@ -13,7 +13,6 @@ cd services/explorer-indexer
 cargo test --test migrations    # schema sanity (Docker)
 cargo test --test idempotency   # ON CONFLICT DO NOTHING (Docker)
 cargo test --test rpc_failure   # indexer_runs error path (Docker)
-cargo test --test fork_indexer  # full flow (Docker + RMPC_FORK_RPC_URL)
 ```
 
 Each test prints a skip line and exits 0 when its **local** prerequisites are
@@ -23,7 +22,6 @@ convenience, not the CI coverage model: the underlying fork harness is moving
 to an offline checked-in fixture with no secret (see
 [ADR-0011](../../docs/adr/ADR-0011-fork-test-golden-fixtures-and-nightly-drift.md)).
 
-A wrapper script lives at `test_index_fork.sh` for the §11 acceptance
-flow ("scripted indexer run against a fork-anvil range exits 0 and
-populates all 9 tables"); it is a thin convenience over the cargo
-invocations above.
+The fork_indexer test and its `test_index_fork.sh` wrapper deployed a vault of the old
+multi-vault system. Those contracts were replaced by the 0.9.0 fund (PR 2042), so both were
+removed.

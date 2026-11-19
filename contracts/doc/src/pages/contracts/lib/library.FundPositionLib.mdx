@@ -1,0 +1,1230 @@
+---
+title: "FundPositionLib"
+description: "Units per lending position (E9, RB-21), as an externally linked library (DELEGATECALL as the fund)."
+---
+
+# FundPositionLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/lib/FundPositionLib.sol)
+
+**Title:** FundPositionLib
+
+Units per lending position (E9, RB-21), as an externally linked library (DELEGATECALL as the fund).
+
+Each lending asset `i` has `positionUnits[i]` units. They are shares of the position's value
+`P = adapter.totalAssets() − deferredTotal[i]` (`FundValuationLib.positionValue`). Claims of past in-kind
+exits hold `positionClaimTotal[i]` of them (`positionClaimOf[i][account]` each); the holders own the rest.
+Every path that supplies to or withdraws from a lending venue goes through this library and keeps the
+units right, so one unit is always the same fraction of the position:
+- a supply for the holders (`supply`: `mintInKind`, a rebalance step's buy leg) mints units for the
+value the position gained, at the unit's value before it;
+- a withdrawal for the holders (`take`: `sellForFlow`, a step's sell leg; `drain`: the emergency unwind
+and an exclusion restore; the paid part of an in-kind lending leg) burns holders' units for the value
+the position lost;
+- an in-kind exit beyond the period's allowance, or one a venue cannot pay, moves the exiter's units from
+the holders to a claim (`inKindLending`); `claimPosition` later pays the claim and burns its units.
+A claim's value therefore moves with the venue: interest and losses are shared pro rata with the holders,
+and a deposit or a step into the venue does not change the claim's value (RB-21).
+
+Rounding (holders first, then the claim holders, never the other way): units minted for a supply round
+DOWN and units burned for a withdrawal round UP, so the value of one unit never falls through rounding;
+an exiter's slice in units rounds DOWN; a claim is paid `LENDING_ROUNDING_UNITS` short of its value, so
+venue rounding falls on it, not on the holders. Units start at `POSITION_UNITS_PER_USDC` per USDC unit, a
+fine scale, so each rounding is far below one USDC unit.
+
+## Constants
+
+### UNREADABLE
+
+<i>
+
+`pos0` marker of the in-kind snapshot: this lending venue's value read reverted (E23).
+
+</i>
+
+```solidity
+uint256 internal constant UNREADABLE = type(uint256).max;
+```
+
+## Functions
+
+<a id="supply-fundstate-uint256-uint256"></a>
+
+### supply
+
+Move `amount` USDC into lending asset `i`'s adapter and deploy it for the holders. Returns what the
+adapter kept (the fund's balance delta, `RobotMoneyVaultOps._allocate`: a refused supply comes straight
+back and stays idle). Mints holders' units for the value the position gained. Reverts if the venue's
+value read reverts (callers: `mintInKind`, a step's buy leg; both trade only counted assets).
+
+```solidity
+function supply(FundState storage s, uint256 i, uint256 amount)
+        public
+        returns (uint256 placed);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| placed | `uint256` |  |
+
+<a id="take-fundstate-uint256-uint256"></a>
+
+### take
+
+`withdraw(amount)` from lending asset `i` for the holders. Returns the USDC that arrived (the fund's
+balance delta). Burns holders' units for the value the position lost. A venue that cannot pay reverts
+(callers: `sellForFlow`, a step's sell leg).
+
+```solidity
+function take(FundState storage s, uint256 i, uint256 amount) public returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="takeforflow-fundstate-uint256-uint256-uint256-uint256-address-uint256-bool"></a>
+
+### takeForFlow
+
+```solidity
+function takeForFlow(
+        FundState storage s,
+        uint256 i,
+        uint256 holderSliceUsdc,
+        uint256 shares,
+        uint256 supplyBefore,
+        address claimant,
+        uint256 claimFeeBps,
+        bool linkedFee
+    ) public returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| holderSliceUsdc | `uint256` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+| claimant | `address` |  |
+| claimFeeBps | `uint256` |  |
+| linkedFee | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="takeforflowbatch-fundstate-uint256-uint256-uint256-uint256-address-uint256-uint16"></a>
+
+### takeForFlowBatch
+
+Step 3f (RB-35): batch variant of `takeForFlow` distributing any shortfall claim units pro rata across
+`owners` with exact zero-dust conservation and linked fees at each owner's `ownerFeeBps[k]`.
+
+```solidity
+function takeForFlowBatch(
+        FundState storage s,
+        uint256 i,
+        uint256 holderSliceUsdc,
+        uint256 shares,
+        uint256 supplyBefore,
+        address[] memory owners,
+        uint256[] memory ownerShares,
+        uint16[] memory ownerFeeBps
+    ) public returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| holderSliceUsdc | `uint256` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+| owners | `address[]` |  |
+| ownerShares | `uint256[]` |  |
+| ownerFeeBps | `uint16[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_takeforflow-fundstate-uint256-uint256-takeclaimctx"></a>
+
+### _takeForFlow
+
+```solidity
+function _takeForFlow(
+        FundState storage s,
+        uint256 i,
+        uint256 holderSliceUsdc,
+        TakeClaimCtx memory ctx
+    ) private returns (uint256 gotHolder);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| holderSliceUsdc | `uint256` |  |
+| ctx | `TakeClaimCtx` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gotHolder | `uint256` |  |
+
+<a id="_claimshortfall-fundstate-uint256-uint256-takeclaimctx"></a>
+
+### _claimShortfall
+
+```solidity
+function _claimShortfall(FundState storage s, uint256 i, uint256 units, TakeClaimCtx memory ctx)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| units | `uint256` |  |
+| ctx | `TakeClaimCtx` |  |
+
+<a id="_readtakevalue-fundstate-uint256"></a>
+
+### _readTakeValue
+
+```solidity
+function _readTakeValue(FundState storage s, uint256 i) private view returns (uint256 p0);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p0 | `uint256` |  |
+
+<a id="_takewithdrawandapply-fundstate-uint256-uint256-uint256-uint256-bool"></a>
+
+### _takeWithdrawAndApply
+
+```solidity
+function _takeWithdrawAndApply(
+        FundState storage s,
+        uint256 i,
+        uint256 wantHolder,
+        uint256 u0,
+        uint256 p0,
+        bool strict
+    ) private returns (uint256 gotHolder, uint256 holdersBurned, uint256 h0);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| wantHolder | `uint256` |  |
+| u0 | `uint256` |  |
+| p0 | `uint256` |  |
+| strict | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gotHolder | `uint256` |  |
+| holdersBurned | `uint256` |  |
+| h0 | `uint256` |  |
+
+<a id="_applytakeunits-fundstate-uint256-uint256-uint256-uint256-uint256-uint256"></a>
+
+### _applyTakeUnits
+
+```solidity
+function _applyTakeUnits(
+        FundState storage s,
+        uint256 i,
+        uint256 p0,
+        uint256 p1,
+        uint256 u0,
+        uint256 c0,
+        uint256 h0
+    ) private returns (uint256 holdersBurned);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| p0 | `uint256` |  |
+| p1 | `uint256` |  |
+| u0 | `uint256` |  |
+| c0 | `uint256` |  |
+| h0 | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holdersBurned | `uint256` |  |
+
+<a id="_trywithdrawavailable-fundstate-uint256-uint256"></a>
+
+### _tryWithdrawAvailable
+
+```solidity
+function _tryWithdrawAvailable(FundState storage s, uint256 i, uint256 wantTotal)
+        private
+        returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| wantTotal | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="drain-fundstate-uint256-exclusionledger-uint256-exclusionledger-recoverysource"></a>
+
+### drain
+
+Withdraw the holders' whole part of lending asset `i`, tolerant of a failing adapter. What stays in
+the adapter is reserved: the step 3c `deferredTotal[i]` and the position claims' value (rounded UP), so
+an emergency never takes what claim holders own. With `id != 0` the USDC that arrived (balance delta,
+never the adapter's return value) moves into exclusion record `id` of `ledger`
+(`RobotMoneyVaultOps._drain` + `_credit`). Burns the holders' units for what left. `ok` is false when
+`totalAssets` or `withdraw` reverted. Callers: `emergencyUnwind`, the restore branch of
+`syncExclusions`.
+
+```solidity
+function drain(
+        FundState storage s,
+        uint256 i,
+        ExclusionLedger ledger,
+        uint256 id,
+        ExclusionLedger.RecoverySource source
+    ) public returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| ledger | `ExclusionLedger` |  |
+| id | `uint256` |  |
+| source | `ExclusionLedger.RecoverySource` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="inkindlending-fundstate-uint256-uint256-address-uint256-uint256"></a>
+
+### inKindLending
+
+The lending legs of `redeemInKind` for `shares` of `supplyBefore`, from the check 7 snapshot
+(`held0`: holders' part per index; `pos0`: position value per index, 0 when not counted or empty,
+`UNREADABLE` when the venue's value read reverted). Returns the USDC that arrived, which the caller pays
+as part of the USDC leg (exit fee included there).
+1. Each readable leg's slice: `want = floor(held0 × shares / supplyBefore) − LENDING_ROUNDING_UNITS`.
+2. The period's allowance left (E20): `max(inKindBps × Σ held0 of readable legs / 10 000,
+inKindFloorUsdc) − inKindUsed[period]`. It reads no price: the amounts are the venues' own USDC.
+3. Each leg withdraws `want` in USDC when the total fits the allowance, else `want × left / total`
+(pro rata over the venues, so no venue is drained first), under try/catch.
+4. Whatever of `want` did not arrive (beyond the allowance, a revert, a short fill) becomes a claim
+on the position: the exiter's slice in units less the units its USDC part burned. A leg paid in
+full leaves no claim (its rounding margin stays with the holders).
+5. A leg whose value read reverted (E23) becomes a claim on the exiter's units of it, with no read and
+no withdrawal.
+Claims are keyed to `claimant`; the exit fee's share of each claim goes to the fee recipient as its
+own claim (every leg pays the fee, coordinator ruling 7). Adds the USDC that arrived to
+`inKindUsed[period]`.
+
+```solidity
+function inKindLending(
+        FundState storage s,
+        uint256[] memory held0,
+        uint256[] memory pos0,
+        address claimant,
+        uint256 shares,
+        uint256 supplyBefore
+    ) public returns (uint256 usdcGot);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| held0 | `uint256[]` |  |
+| pos0 | `uint256[]` |  |
+| claimant | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcGot | `uint256` |  |
+
+<a id="_wants-fundstate-uint256-uint256-uint256-uint256"></a>
+
+### _wants
+
+<i>
+
+Steps 1 to 3 of `inKindLending` (own frame for stack depth): each readable leg's `want`, and the USDC
+part it asks for (`paid`): all of `want` when the total fits the allowance left this period, else
+`want × left / total`, rounded DOWN.
+
+</i>
+
+```solidity
+function _wants(
+        FundState storage s,
+        uint256[] memory held0,
+        uint256[] memory pos0,
+        uint256 shares,
+        uint256 supplyBefore
+    ) private view returns (uint256[] memory want, uint256[] memory paid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| held0 | `uint256[]` |  |
+| pos0 | `uint256[]` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| want | `uint256[]` |  |
+| paid | `uint256[]` |  |
+
+<a id="allowanceleft-fundstate-uint256"></a>
+
+### allowanceLeft
+
+Lending USDC in-kind exits may still take this period (E20): `max(inKindBps × holdings / 10 000,
+inKindFloorUsdc) − inKindUsed[now / inKindPeriod]`, floored at 0. 0 while no period is set.
+
+```solidity
+function allowanceLeft(FundState storage s, uint256 holdings) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| holdings | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="setinkindallowance-fundstate-uint16-uint128-uint32"></a>
+
+### setInKindAllowance
+
+Body of `IRobotMoneyFund.setInKindAllowance` (the fund checks ADMIN_ROLE). Bounds: `bps ≤ 10 000`,
+`floorUsdc ≤ MAX_IN_KIND_FLOOR_USDC`, `period` in [MIN_IN_KIND_PERIOD, MAX_IN_KIND_PERIOD]
+(`InvalidParam`). A new period length re-keys `inKindUsed`, so it takes effect from the next exit.
+
+```solidity
+function setInKindAllowance(FundState storage s, uint16 bps, uint128 floorUsdc, uint32 period)
+        public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| bps | `uint16` |  |
+| floorUsdc | `uint128` |  |
+| period | `uint32` |  |
+
+<a id="inkindallowance-fundstate"></a>
+
+### inKindAllowance
+
+Body of `IRobotMoneyFund.inKindAllowance`.
+
+```solidity
+function inKindAllowance(FundState storage s)
+        public
+        view
+        returns (uint16 bps, uint128 floorUsdc, uint32 period, uint256 usedNow);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+| floorUsdc | `uint128` |  |
+| period | `uint32` |  |
+| usedNow | `uint256` |  |
+
+<a id="_leg-fundstate-uint256-uint256-uint256-uint256-address"></a>
+
+### _leg
+
+<i>
+
+One readable in-kind lending leg: withdraw `x` (≤ `want`) under try/catch, burn the holders' units for
+what left, and turn the unpaid part of the exiter's slice into a claim. Returns the USDC that arrived.
+
+</i>
+
+```solidity
+function _leg(
+        FundState storage s,
+        uint256 i,
+        uint256 p0,
+        uint256 want,
+        uint256 x,
+        address claimant
+    ) private returns (uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| p0 | `uint256` |  |
+| want | `uint256` |  |
+| x | `uint256` |  |
+| claimant | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+
+<a id="_claimunread-fundstate-uint256-address-uint256-uint256"></a>
+
+### _claimUnread
+
+<i>
+
+E23: a lending leg whose value read reverted. No read and no withdrawal: the exiter's units of the
+position, `floor(holders' units × shares / supplyBefore)`, become its claim.
+
+</i>
+
+```solidity
+function _claimUnread(
+        FundState storage s,
+        uint256 i,
+        address claimant,
+        uint256 shares,
+        uint256 supplyBefore
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| claimant | `address` |  |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+
+<a id="_claim-fundstate-uint256-address-uint256"></a>
+
+### _claim
+
+<i>
+
+Move `units` of lending position `i` from the holders to claims: the exit fee's share to the fee
+recipient, the rest to `claimant`.
+
+</i>
+
+```solidity
+function _claim(FundState storage s, uint256 i, address claimant, uint256 units) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| claimant | `address` |  |
+| units | `uint256` |  |
+
+<a id="_claimwithfee-fundstate-uint256-address-uint256-uint256-bool"></a>
+
+### _claimWithFee
+
+```solidity
+function _claimWithFee(
+        FundState storage s,
+        uint256 i,
+        address claimant,
+        uint256 units,
+        uint256 feeBps,
+        bool linkedFee
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| claimant | `address` |  |
+| units | `uint256` |  |
+| feeBps | `uint256` |  |
+| linkedFee | `bool` |  |
+
+<a id="_allocatelendingepochscaled-fundstate-uint256-uint256"></a>
+
+### _allocateLendingEpochScaled
+
+```solidity
+function _allocateLendingEpochScaled(FundState storage s, uint256 i, uint256 units)
+        private
+        returns (uint256 addScaled);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| units | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| addScaled | `uint256` |  |
+
+<a id="_addlendingscaled-fundstate-uint256-lendingclaimaccount-address-uint256-uint256-bool"></a>
+
+### _addLendingScaled
+
+```solidity
+function _addLendingScaled(
+        FundState storage s,
+        uint256 i,
+        LendingClaimAccount storage entry,
+        address account,
+        uint256 addScaled,
+        uint256 emitUnits,
+        bool emitEvent
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| entry | `LendingClaimAccount` |  |
+| account | `address` |  |
+| addScaled | `uint256` |  |
+| emitUnits | `uint256` |  |
+| emitEvent | `bool` |  |
+
+<a id="_harvestlendingentry-fundstate-uint256-lendingclaimaccount"></a>
+
+### _harvestLendingEntry
+
+```solidity
+function _harvestLendingEntry(FundState storage s, uint256 i, LendingClaimAccount storage entry)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| entry | `LendingClaimAccount` |  |
+
+<a id="_migratelegacylending-fundstate-uint256-address"></a>
+
+### _migrateLegacyLending
+
+```solidity
+function _migrateLegacyLending(FundState storage s, uint256 i, address account) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| account | `address` |  |
+
+<a id="_creditlendingpot-fundstate-uint256-uint256"></a>
+
+### _creditLendingPot
+
+```solidity
+function _creditLendingPot(FundState storage s, uint256 i, uint256 gotClaims) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| gotClaims | `uint256` |  |
+
+<a id="_rolllendingepoch-fundstate-uint256"></a>
+
+### _rollLendingEpoch
+
+```solidity
+function _rollLendingEpoch(FundState storage s, uint256 i) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+
+<a id="_lendingentryunits-fundstate-uint256-lendingclaimaccount"></a>
+
+### _lendingEntryUnits
+
+```solidity
+function _lendingEntryUnits(FundState storage s, uint256 i, LendingClaimAccount storage entry)
+        private
+        view
+        returns (uint256 units, uint256 pending);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| entry | `LendingClaimAccount` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| units | `uint256` |  |
+| pending | `uint256` |  |
+
+<a id="claimposition-fundstate-uint256-address-address"></a>
+
+### claimPosition
+
+Body of `IRobotMoneyFund.claimPosition`: pay `account`'s whole claim on lending position `i` at
+today's value (plus any accrued pot USDC), less `LENDING_ROUNDING_UNITS`, to `to`. Reverts
+`ZeroAddress`, `NoPositionClaim`, or `DeferredShortfall` while the venue cannot pay.
+
+```solidity
+function claimPosition(FundState storage s, uint256 i, address account, address to)
+        public
+        returns (uint256 usdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| account | `address` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+
+<a id="_withdrawclaimunits-fundstate-uint256-lendingclaimaccount-uint256-uint256-uint256"></a>
+
+### _withdrawClaimUnits
+
+```solidity
+function _withdrawClaimUnits(
+        FundState storage s,
+        uint256 i,
+        LendingClaimAccount storage entry,
+        uint256 cur,
+        uint256 c0,
+        uint256 units
+    ) private returns (uint256 adapterUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| entry | `LendingClaimAccount` |  |
+| cur | `uint256` |  |
+| c0 | `uint256` |  |
+| units | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapterUsdc | `uint256` |  |
+
+<a id="settlelendingclaim-fundstate-uint256-address"></a>
+
+### settleLendingClaim
+
+Step 3f (E54, RB-35, A45): permissionless settlement of `owner`'s lending position claim (and any
+linked exit fee) on asset `i`. Withdraws whatever the venue can pay without reverting on partial
+liquidity, pays any accrued pot USDC, transfers `feeUsdc` to `feeRecipient` and `netUsdc` to `owner`.
+
+```solidity
+function settleLendingClaim(FundState storage s, uint256 i, address owner)
+        public
+        returns (uint256 netUsdc, uint256 feeUsdc, bool hasClaim);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| netUsdc | `uint256` |  |
+| feeUsdc | `uint256` |  |
+| hasClaim | `bool` |  |
+
+<a id="_settleclaimunits-fundstate-uint256-settleburnctx"></a>
+
+### _settleClaimUnits
+
+```solidity
+function _settleClaimUnits(FundState storage s, uint256 i, SettleBurnCtx memory b)
+        private
+        returns (uint256 gotOwner, uint256 gotFee);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| b | `SettleBurnCtx` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| gotOwner | `uint256` |  |
+| gotFee | `uint256` |  |
+
+<a id="_applysettleburn-fundstate-uint256-settleburnctx"></a>
+
+### _applySettleBurn
+
+```solidity
+function _applySettleBurn(FundState storage s, uint256 i, SettleBurnCtx memory b) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| b | `SettleBurnCtx` |  |
+
+<a id="_withdrawforsettle-fundstate-uint256-uint256-uint256-uint256"></a>
+
+### _withdrawForSettle
+
+```solidity
+function _withdrawForSettle(
+        FundState storage s,
+        uint256 i,
+        uint256 combUnits,
+        uint256 u0,
+        uint256 c0
+    ) private returns (uint256 got, uint256 burned);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| combUnits | `uint256` |  |
+| u0 | `uint256` |  |
+| c0 | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| got | `uint256` |  |
+| burned | `uint256` |  |
+
+<a id="_takelendingpot-fundstate-uint256-uint256"></a>
+
+### _takeLendingPot
+
+```solidity
+function _takeLendingPot(FundState storage s, uint256 i, uint256 amount)
+        private
+        returns (uint256 paid);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| paid | `uint256` |  |
+
+<a id="claimof-fundstate-uint256-address"></a>
+
+### claimOf
+
+Body of `IRobotMoneyFund.positionClaimOf`: `account`'s claim units on lending position `i` and their
+value today (`units × positionValue / positionUnits` + any already-withdrawn pot USDC), rounded DOWN.
+
+```solidity
+function claimOf(FundState storage s, uint256 i, address account)
+        public
+        view
+        returns (uint256 units, uint256 usdcValue);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| units | `uint256` |  |
+| usdcValue | `uint256` |  |
+
+<a id="claimspart-fundstate-uint256-uint256"></a>
+
+### claimsPart
+
+The claims' part of lending position `i` worth `p`, rounded UP (what an emergency must leave).
+
+```solidity
+function claimsPart(FundState storage s, uint256 i, uint256 p) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| p | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_mintunits-fundstate-uint256-uint256-uint256"></a>
+
+### _mintUnits
+
+<i>
+
+The position grew from `p0` to `p1` for the holders: mint `(p1 − p0) × units / p0` holders' units,
+rounded DOWN. The first units of a position: `p1 × POSITION_UNITS_PER_USDC`, all the holders'. A
+position worth 0 that still has units (a venue lost everything): every old unit is worth nothing, so the
+new value goes to the holders by minting `units × p1 × POSITION_UNITS_PER_USDC`, which leaves any old
+claim less than 1 / (1 + p1 × POSITION_UNITS_PER_USDC) of it (below one USDC unit).
+
+</i>
+
+```solidity
+function _mintUnits(FundState storage s, uint256 i, uint256 p0, uint256 p1) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| p0 | `uint256` |  |
+| p1 | `uint256` |  |
+
+<a id="_burnunits-fundstate-uint256-uint256-uint256"></a>
+
+### _burnUnits
+
+<i>
+
+The position fell from `p0` to `p1` by a withdrawal for the holders: burn `(p0 − p1) × units / p0`
+holders' units, rounded UP, at most every holders' unit (beyond that a misbehaving venue's loss is shared
+by the claims; check 10 still guards the holders on the flow paths).
+
+</i>
+
+```solidity
+function _burnUnits(FundState storage s, uint256 i, uint256 p0, uint256 p1) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| p0 | `uint256` |  |
+| p1 | `uint256` |  |
+
+<a id="_trytake-fundstate-uint256-uint256-uint256"></a>
+
+### _tryTake
+
+<i>
+
+`withdraw(amount)` from lending asset `i` (worth `p0` before) under try/catch, for the holders: `ok` false
+when it reverted (nothing moved), `got` the fund's USDC delta, and the holders' units burned for what the
+position lost.
+
+</i>
+
+```solidity
+function _tryTake(FundState storage s, uint256 i, uint256 amount, uint256 p0)
+        private
+        returns (bool ok, uint256 got);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| amount | `uint256` |  |
+| p0 | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| got | `uint256` |  |
+
+<a id="_valueafter-fundstate-uint256-uint256-uint256"></a>
+
+### _valueAfter
+
+<i>
+
+Position value after a withdrawal that delivered `got`: the venue's own read, or `p0 − got` when the
+read reverts after the withdrawal.
+
+</i>
+
+```solidity
+function _valueAfter(FundState storage s, uint256 i, uint256 p0, uint256 got)
+        private
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| i | `uint256` |  |
+| p0 | `uint256` |  |
+| got | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+## Structs
+
+### TakeClaimCtx
+
+Step 3f (E37, E44, E54): withdraw `holderSliceUsdc` (less `LENDING_ROUNDING_UNITS`) from lending
+asset `i` for a net redemption (`shares / supplyBefore`), withdrawing pro rata for any outstanding
+claims (`positionClaimTotal[i]`) in the same call. On shortfall, mints claim units for `claimant`
+with exit fee `claimFeeBps` (linked when `linkedFee`, else credited directly to `feeRecipient`).
+
+```solidity
+struct TakeClaimCtx {
+        uint256 shares;
+        uint256 supplyBefore;
+        address claimant;
+        uint256 claimFeeBps;
+        bool linkedFee;
+        bool batch;
+        address[] owners;
+        uint256[] ownerShares;
+        uint16[] ownerFeeBps;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| supplyBefore | `uint256` |  |
+| claimant | `address` |  |
+| claimFeeBps | `uint256` |  |
+| linkedFee | `bool` |  |
+| batch | `bool` |  |
+| owners | `address[]` |  |
+| ownerShares | `uint256[]` |  |
+| ownerFeeBps | `uint16[]` |  |
+
+### SettleBurnCtx
+
+```solidity
+struct SettleBurnCtx {
+        address owner;
+        uint256 cur;
+        uint256 c0;
+        uint256 u0;
+        uint256 combUnits;
+        uint256 burned;
+        uint256 ownerScaled;
+        uint256 feeScaled;
+        uint256 totalScaled;
+        uint256 got;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| cur | `uint256` |  |
+| c0 | `uint256` |  |
+| u0 | `uint256` |  |
+| combUnits | `uint256` |  |
+| burned | `uint256` |  |
+| ownerScaled | `uint256` |  |
+| feeScaled | `uint256` |  |
+| totalScaled | `uint256` |  |
+| got | `uint256` |  |
+

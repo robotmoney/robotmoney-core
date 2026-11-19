@@ -168,7 +168,7 @@ export function pendingUpgrades(scheduled: readonly { id: Hex; target: Address; 
  * every member of every stored struct and every ERC-7201 namespace member of the deployed snapshot at the same position with the same type, and drop no linked library.
  * New rows and members may only follow the old ones. An empty list passes.
  */
-export function layoutExtensionProblems(deployed: any, candidate: any, renames: readonly LayoutRename[] = [], contract = ""): string[] {
+export function layoutExtensionProblems(deployed: any, candidate: any, renames: readonly LayoutRename[] = [], contract = "", libraryRenames: readonly LibraryRename[] = []): string[] {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const ext = (old: unknown[] = [], neu: unknown[] = []) => old.length <= neu.length && old.every((x, i) => same(x, neu[i]));
   const bad: string[] = [];
@@ -180,7 +180,9 @@ export function layoutExtensionProblems(deployed: any, candidate: any, renames: 
   if (!ext(storage, candidate?.storage)) bad.push("storage: a variable moved, was retyped or removed");
   for (const [k, v] of Object.entries<unknown[]>(deployed?.structs ?? {})) if (!ext(v, candidate?.structs?.[k])) bad.push(`struct ${k}: a member moved, was retyped or removed`);
   for (const [k, v] of Object.entries<unknown[]>(deployed?.namespaces ?? {})) if (!ext(v, candidate?.namespaces?.[k])) bad.push(`namespace ${k}: a member moved, was retyped or removed`);
-  for (const l of (deployed?.libraries ?? []) as string[]) if (!((candidate?.libraries ?? []) as string[]).includes(l)) bad.push(`library ${l} is no longer linked`);
+  // PR 2042: a reviewed library source-path rename (libraryRenames) is applied to the deployed library names, as the shell gate does
+  const libName = (l: string): string => libraryRenames.find((x) => x.from === l)?.to ?? l;
+  for (const l of (deployed?.libraries ?? []) as string[]) if (!((candidate?.libraries ?? []) as string[]).includes(libName(l))) bad.push(`library ${l} is no longer linked`);
   return bad;
 }
 
@@ -192,7 +194,7 @@ export function layoutGateProblems(spec: ProxySpec, coreDir: string, buildDir: s
   for (const [dir, f] of [[coreDir, spec.layout], [coreDir, pins], [buildDir, spec.layout]] as const) if (!existsSync(join(dir, f))) return [`${join(dir, f)} does not exist`];
   const deployedId = layoutId(coreDir, spec.layout, pins);
   if (!recordedLayoutId || lc(recordedLayoutId) !== lc(deployedId)) return [`the deployed snapshot ${spec.layout} (layout id ${deployedId}) is not the one verify recorded (${String(recordedLayoutId)}): run verify on the DEPLOY_SHA checkout first`];
-  return layoutExtensionProblems(JSON.parse(readFileSync(join(coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(join(buildDir, spec.layout), "utf8")), layoutRenames(buildDir), spec.contract);
+  return layoutExtensionProblems(JSON.parse(readFileSync(join(coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(join(buildDir, spec.layout), "utf8")), layoutRenames(buildDir), spec.contract, libraryRenames(buildDir));
 }
 
 /** Issue 1927: one reviewed label-only rename of a proxy storage row (scripts/ci/storage-layout-renames.json): the slot, offset and type are pinned, only the name changes. */
@@ -210,6 +212,17 @@ export function layoutRenames(buildDir: string): LayoutRename[] {
     throw new Error(`${p}: renames must be a list of {contract, from, to, slot, offset, type}`);
   }
   return list as LayoutRename[];
+}
+
+/** PR 2042: one reviewed source-path rename of a linked library (the fully qualified name only); the library's code and the proxy storage are untouched. */
+export interface LibraryRename { from: string; to: string }
+/** The reviewed library renames the candidate build declares (`libraryRenames` in scripts/ci/storage-layout-renames.json). None without the file or the key. */
+export function libraryRenames(buildDir: string): LibraryRename[] {
+  const p = join(buildDir, LAYOUT_RENAMES_REL);
+  if (!existsSync(p)) return [];
+  const list = JSON.parse(readFileSync(p, "utf8"))?.libraryRenames ?? [];
+  if (!Array.isArray(list) || !list.every((r: any) => typeof r?.from === "string" && typeof r.to === "string")) throw new Error(`${p}: libraryRenames must be a list of {from, to}`);
+  return list as LibraryRename[];
 }
 
 /**

@@ -16,8 +16,8 @@ import {
     SkipReason,
     StepParams,
     BPS
-} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
+} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
 
 /// @title RebalancerGapsTest
 /// @notice Step 3f audit gaps in the rebalancer, one dedicated test each: the last dust step (SAFE-05), the cost

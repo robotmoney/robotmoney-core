@@ -33,7 +33,7 @@ import { LIBRARY_ADDRESS_CAUSE } from "./libs-adopt.ts";
 import { childEnv, confirmStage, loadRunManifest, manifestDir, receiptBlock, saveRunManifest, waitForReceiptBlock, type RunContext, type RunManifest } from "./runner.ts";
 import { getStageTable } from "./stages.ts";
 import { manifestBase } from "./stage-table.ts";
-import { UPGRADE_ROW, layoutExtensionProblems, layoutGateProblems, layoutRenames, runtimeCodeProblems } from "./upgrade-rows.ts";
+import { UPGRADE_ROW, layoutExtensionProblems, layoutGateProblems, layoutRenames, libraryRenames, runtimeCodeProblems } from "./upgrade-rows.ts";
 import { artifactJson, compareCode, ERC1967_IMPLEMENTATION_SLOT, linkedLibraries, loadArtifact } from "./verify/codehash.ts";
 import { viemReader } from "./verify/reader.ts";
 import { layoutId, proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
@@ -204,7 +204,7 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   if (layout.length === 0 && candidateLayout !== spec.layout) {
     const cand = join(build, candidateLayout);
     if (!existsSync(cand)) layout.push(`${cand} does not exist`);
-    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(layoutBase, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract).map((p) => `${contract}: ${p}`));
+    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(layoutBase, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract, libraryRenames(build)).map((p) => `${contract}: ${p}`));
   }
   if (layout.length) refuse(`the storage layout gate refuses the build ${build}${contract !== spec.contract ? ` (${contract})` : ""}: ${layout.join("; ")}`, { layout });
   const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e) : upgradeCommand(ctx, e));

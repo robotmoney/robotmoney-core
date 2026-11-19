@@ -1,9 +1,9 @@
 {
   "enums": {},
   "libraries": [
+    "contracts/lib/FundValuationLib.sol:FundValuationLib",
     "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
-    "contracts/test/prototype/src/lib/FundValuationLib.sol:FundValuationLib",
-    "contracts/test/prototype/src/lib/StepFeedLib.sol:StepFeedLib"
+    "contracts/lib/StepFeedLib.sol:StepFeedLib"
   ],
   "namespaces": {
     "openzeppelin.storage.AccessControl": [

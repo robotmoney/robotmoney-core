@@ -12,19 +12,19 @@ import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 import {BasketSwaps} from "../../lib/BasketSwaps.sol";
 import {BasketAssetConfigGuard} from "../../lib/BasketAssetConfigGuard.sol";
 import {GovernedUpgrade} from "../../lib/GovernedUUPS.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
-import {FundAdminLib} from "./src/lib/FundAdminLib.sol";
-import {FundFlowsLib} from "./src/lib/FundFlowsLib.sol";
-import {FundPositionLib} from "./src/lib/FundPositionLib.sol";
-import {FundStepLib} from "./src/lib/FundStepLib.sol";
-import {FundDelistLib} from "./src/lib/FundDelistLib.sol";
-import {StepFeedLib} from "./src/lib/StepFeedLib.sol";
-import {FundStorage} from "./src/lib/FundStorage.sol";
-import {FlowCheckLib} from "./src/lib/FlowCheckLib.sol";
-import {FlowMatchLib} from "./src/lib/FlowMatchLib.sol";
-import {FlowSettleLib} from "./src/lib/FlowSettleLib.sol";
-import {FlowClaimLib} from "./src/lib/FlowClaimLib.sol";
-import {PlanMath} from "./src/PlanMath.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
+import {FundAdminLib} from "../../lib/FundAdminLib.sol";
+import {FundFlowsLib} from "../../lib/FundFlowsLib.sol";
+import {FundPositionLib} from "../../lib/FundPositionLib.sol";
+import {FundStepLib} from "../../lib/FundStepLib.sol";
+import {FundDelistLib} from "../../lib/FundDelistLib.sol";
+import {StepFeedLib} from "../../lib/StepFeedLib.sol";
+import {FundStorage} from "../../lib/FundStorage.sol";
+import {FlowCheckLib} from "../../lib/FlowCheckLib.sol";
+import {FlowMatchLib} from "../../lib/FlowMatchLib.sol";
+import {FlowSettleLib} from "../../lib/FlowSettleLib.sol";
+import {FlowClaimLib} from "../../lib/FlowClaimLib.sol";
+import {PlanMath} from "../../PlanMath.sol";
 
 /// @notice One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue; step 3f adds `FlowMatchLib` and
 ///         `FundDelistLib`): the core implementations and every linked library deploy under EIP-170 (24,576 bytes)
@@ -117,22 +117,15 @@ contract SizeGateTest is PrototypeHarness {
 
         // EIP-3860 initcode limits on all core contracts and all 16 libraries (full path disambiguates baseline/).
         _assertInitCode(
-            "RobotMoneyFund initcode     ",
-            "contracts/test/prototype/src/RobotMoneyFund.sol:RobotMoneyFund"
+            "RobotMoneyFund initcode     ", "contracts/RobotMoneyFund.sol:RobotMoneyFund"
+        );
+        _assertInitCode("Rebalancer initcode         ", "contracts/Rebalancer.sol:Rebalancer");
+        _assertInitCode("FlowQueue initcode          ", "contracts/FlowQueue.sol:FlowQueue");
+        _assertInitCode(
+            "RebalanceGovernance initcode", "contracts/RebalanceGovernance.sol:RebalanceGovernance"
         );
         _assertInitCode(
-            "Rebalancer initcode         ", "contracts/test/prototype/src/Rebalancer.sol:Rebalancer"
-        );
-        _assertInitCode(
-            "FlowQueue initcode          ", "contracts/test/prototype/src/FlowQueue.sol:FlowQueue"
-        );
-        _assertInitCode(
-            "RebalanceGovernance initcode",
-            "contracts/test/prototype/src/RebalanceGovernance.sol:RebalanceGovernance"
-        );
-        _assertInitCode(
-            "FundExclusionLedger initcode",
-            "contracts/test/prototype/src/FundExclusionLedger.sol:FundExclusionLedger"
+            "FundExclusionLedger initcode", "contracts/FundExclusionLedger.sol:FundExclusionLedger"
         );
         _assertInitCode("TickMath initcode           ", "contracts/lib/TickMath.sol:TickMath");
         _assertInitCode(
@@ -147,48 +140,33 @@ contract SizeGateTest is PrototypeHarness {
             "GovernedUpgrade initcode    ", "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
         );
         _assertInitCode(
-            "FundPositionLib initcode    ",
-            "contracts/test/prototype/src/lib/FundPositionLib.sol:FundPositionLib"
+            "FundPositionLib initcode    ", "contracts/lib/FundPositionLib.sol:FundPositionLib"
         );
         _assertInitCode(
-            "FundValuationLib initcode   ",
-            "contracts/test/prototype/src/lib/FundValuationLib.sol:FundValuationLib"
+            "FundValuationLib initcode   ", "contracts/lib/FundValuationLib.sol:FundValuationLib"
         );
         _assertInitCode(
-            "FundAdminLib initcode       ",
-            "contracts/test/prototype/src/lib/FundAdminLib.sol:FundAdminLib"
+            "FundAdminLib initcode       ", "contracts/lib/FundAdminLib.sol:FundAdminLib"
         );
         _assertInitCode(
-            "FundFlowsLib initcode       ",
-            "contracts/test/prototype/src/lib/FundFlowsLib.sol:FundFlowsLib"
+            "FundFlowsLib initcode       ", "contracts/lib/FundFlowsLib.sol:FundFlowsLib"
+        );
+        _assertInitCode("FundStepLib initcode        ", "contracts/lib/FundStepLib.sol:FundStepLib");
+        _assertInitCode(
+            "FundDelistLib initcode      ", "contracts/lib/FundDelistLib.sol:FundDelistLib"
+        );
+        _assertInitCode("StepFeedLib initcode        ", "contracts/lib/StepFeedLib.sol:StepFeedLib");
+        _assertInitCode(
+            "FlowCheckLib initcode       ", "contracts/lib/FlowCheckLib.sol:FlowCheckLib"
         );
         _assertInitCode(
-            "FundStepLib initcode        ",
-            "contracts/test/prototype/src/lib/FundStepLib.sol:FundStepLib"
+            "FlowMatchLib initcode       ", "contracts/lib/FlowMatchLib.sol:FlowMatchLib"
         );
         _assertInitCode(
-            "FundDelistLib initcode      ",
-            "contracts/test/prototype/src/lib/FundDelistLib.sol:FundDelistLib"
+            "FlowSettleLib initcode      ", "contracts/lib/FlowSettleLib.sol:FlowSettleLib"
         );
         _assertInitCode(
-            "StepFeedLib initcode        ",
-            "contracts/test/prototype/src/lib/StepFeedLib.sol:StepFeedLib"
-        );
-        _assertInitCode(
-            "FlowCheckLib initcode       ",
-            "contracts/test/prototype/src/lib/FlowCheckLib.sol:FlowCheckLib"
-        );
-        _assertInitCode(
-            "FlowMatchLib initcode       ",
-            "contracts/test/prototype/src/lib/FlowMatchLib.sol:FlowMatchLib"
-        );
-        _assertInitCode(
-            "FlowSettleLib initcode      ",
-            "contracts/test/prototype/src/lib/FlowSettleLib.sol:FlowSettleLib"
-        );
-        _assertInitCode(
-            "FlowClaimLib initcode       ",
-            "contracts/test/prototype/src/lib/FlowClaimLib.sol:FlowClaimLib"
+            "FlowClaimLib initcode       ", "contracts/lib/FlowClaimLib.sol:FlowClaimLib"
         );
 
         // Step 3f: all 5 prototype adapters (EIP-170 runtime <= 24,576 B, EIP-3860 initcode <= 49,152 B).
@@ -205,46 +183,35 @@ contract SizeGateTest is PrototypeHarness {
 
         _assertAdapterArtifact(
             "AaveV3RateAdapter           ",
-            "contracts/test/prototype/src/adapters/AaveV3RateAdapter.sol:AaveV3RateAdapter"
+            "contracts/adapters/AaveV3RateAdapter.sol:AaveV3RateAdapter"
         );
         _assertAdapterArtifact(
             "CompoundV3RateAdapter       ",
-            "contracts/test/prototype/src/adapters/CompoundV3RateAdapter.sol:CompoundV3RateAdapter"
+            "contracts/adapters/CompoundV3RateAdapter.sol:CompoundV3RateAdapter"
         );
         _assertAdapterArtifact(
             "MorphoRateAdapter           ",
-            "contracts/test/prototype/src/adapters/MorphoRateAdapter.sol:MorphoRateAdapter"
+            "contracts/adapters/MorphoRateAdapter.sol:MorphoRateAdapter"
         );
         _assertAdapterArtifact(
             "UniswapV3ExactOutSwapAdapter",
-            "contracts/test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol:UniswapV3ExactOutSwapAdapter"
+            "contracts/adapters/UniswapV3ExactOutSwapAdapter.sol:UniswapV3ExactOutSwapAdapter"
         );
         _assertAdapterArtifact(
             "AerodromeExactOutSwapAdapter",
-            "contracts/test/prototype/src/adapters/AerodromeExactOutSwapAdapter.sol:AerodromeExactOutSwapAdapter"
+            "contracts/adapters/AerodromeExactOutSwapAdapter.sol:AerodromeExactOutSwapAdapter"
         );
 
         // Internal/inlined prototype libraries (verify stub runtime <= EIP-170 and initcode <= EIP-3860).
         assertLe(type(FundStorage).runtimeCode.length, EIP170_LIMIT, "FundStorage over EIP-170");
         assertLe(type(PlanMath).runtimeCode.length, EIP170_LIMIT, "PlanMath over EIP-170");
+        _assertInitCode("FundStorage initcode        ", "contracts/lib/FundStorage.sol:FundStorage");
+        _assertInitCode("PlanMath initcode           ", "contracts/PlanMath.sol:PlanMath");
+        _assertInitCode("FeedLib initcode            ", "contracts/lib/FeedLib.sol:FeedLib");
         _assertInitCode(
-            "FundStorage initcode        ",
-            "contracts/test/prototype/src/lib/FundStorage.sol:FundStorage"
+            "TwapSlicesLib initcode      ", "contracts/lib/TwapSlicesLib.sol:TwapSlicesLib"
         );
-        _assertInitCode(
-            "PlanMath initcode           ", "contracts/test/prototype/src/PlanMath.sol:PlanMath"
-        );
-        _assertInitCode(
-            "FeedLib initcode            ", "contracts/test/prototype/src/lib/FeedLib.sol:FeedLib"
-        );
-        _assertInitCode(
-            "TwapSlicesLib initcode      ",
-            "contracts/test/prototype/src/lib/TwapSlicesLib.sol:TwapSlicesLib"
-        );
-        _assertInitCode(
-            "FlowStorage initcode        ",
-            "contracts/test/prototype/src/lib/FlowStorage.sol:FlowStorage"
-        );
+        _assertInitCode("FlowStorage initcode        ", "contracts/lib/FlowStorage.sol:FlowStorage");
     }
 
     function _assertAdapterArtifact(string memory label, string memory artifact) private view {

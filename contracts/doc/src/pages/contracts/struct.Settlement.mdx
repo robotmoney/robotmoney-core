@@ -1,0 +1,45 @@
+---
+title: "Settlement"
+description: "One round settlement or match record (proposal §5.9.3 check 12, §5.11.4, E24, E49)."
+---
+
+# Settlement
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/FlowTypes.sol)
+
+One round settlement or match record (proposal §5.9.3 check 12, §5.11.4, E24, E49).
+
+```solidity
+struct Settlement {
+    uint64 time;
+    address settler;
+    uint256 matchedShares;
+    uint256 matchedUsdc;
+    uint256 matchSharePrice;
+    uint256 usdcIn;
+    uint256 sharesMinted;
+    uint256 sharesBurned;
+    uint256 usdcOut;
+    uint64 frozenUntil;
+    uint64 freezeSetAt;
+    uint64 holdEndsAt;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| time | `uint64` |  |
+| settler | `address` |  |
+| matchedShares | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| matchSharePrice | `uint256` |  |
+| usdcIn | `uint256` |  |
+| sharesMinted | `uint256` |  |
+| sharesBurned | `uint256` |  |
+| usdcOut | `uint256` |  |
+| frozenUntil | `uint64` |  |
+| freezeSetAt | `uint64` |  |
+| holdEndsAt | `uint64` |  |
+

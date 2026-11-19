@@ -22,21 +22,24 @@
 #
 # FULLY-GENERATED OUTPUTS (CI drift-gated)
 #   clients/rust-payment-client/abi/Erc20.json          ← TestERC20 (mint/burn)
-#   clients/rust-payment-client/abi/RobotMoneyGateway.json
-#   clients/rust-payment-client/abi/VaultRegistry.json
-#   clients/rust-payment-client/abi/PortfolioRouter.json
-#   clients/rust-payment-client/abi/RouterGovernance.json
 #   clients/rust-payment-client/abi/TimelockController.json
 #   clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json
-#   clients/rust-payment-client/abi/IVault.json         ← contracts/interfaces/IVault.sol (interface only, issue #1464)
-#   clients/dapp/src/lib/abi.generated.ts
 #
 # UN-GATED HAND-MAINTAINED FILES (each MUST cite an OPEN tracking issue)
-# None. #1346 measured the seven un-gated files, #1362 regenerated six, and
-# #1464 resolved the last (`MockVault.json`): the clients bind to the
-# compiler-owned, interface-only `contracts/interfaces/IVault.sol`, whose ABI is
-# generated below as `IVault.json`. No deployed vault inherits `IVault`, because
-# vault bytecode and inheritance are frozen.
+#   clients/rust-payment-client/abi/RobotMoneyGateway.json — frozen: source deleted in PR 2042 (tracking issue #2034)
+#   clients/rust-payment-client/abi/VaultRegistry.json — frozen: source deleted in PR 2042 (tracking issue #2034)
+#   clients/rust-payment-client/abi/PortfolioRouter.json — frozen: source deleted in PR 2042 (tracking issue #2034)
+#   clients/rust-payment-client/abi/RouterGovernance.json — frozen: source deleted in PR 2042 (tracking issue #2034)
+#   clients/rust-payment-client/abi/IVault.json — frozen: source deleted in PR 2042 (tracking issue #2034)
+#   clients/dapp/src/lib/abi.generated.ts — frozen: six of its nine contracts deleted in PR 2042 (tracking issue #2034)
+#
+# WHY THE FROZEN FILES ARE NOT REGENERATED (PR 2042)
+# PR 2042 replaced the old multi-vault contracts with the 0.9.0 fund. The gateway, registry, router,
+# router governance, IVault, RobotMoneyVault and both basket vaults have no Foundry artifact any
+# more, so their ABIs cannot be re-derived. The clients still compile against the committed copies
+# until they move to the fund surface (issue 2034 for rmpc). abi.generated.ts mixes three live
+# contracts (TestERC20, MockVault, ExclusionLedger) with six deleted ones in one file, so the whole
+# file is frozen with them.
 #
 # BOTH BASKET VAULTS ARE NOW GENERATED (issue #1364)
 # The dapp's `BASKET_VAULT_SHORTLIST_ABI` names both basket vaults, but #1346
@@ -53,7 +56,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$REPO_ROOT/out"
 RUST_ABI="$REPO_ROOT/clients/rust-payment-client/abi"
-DAPP_LIB="$REPO_ROOT/clients/dapp/src/lib"
 
 if [[ ! -d "$OUT" ]]; then
   echo "ERROR: Foundry out/ directory not found at $OUT" >&2
@@ -83,11 +85,10 @@ echo "==> Generating Rust ABI JSON files (drift-gated)..."
 
 # Erc20.json maps to TestERC20 (adds mint/burn used by the test fixture)
 extract_abi "$OUT/TestERC20.sol/TestERC20.json"                  "$RUST_ABI/Erc20.json"
-extract_abi "$OUT/RobotMoneyGateway.sol/RobotMoneyGateway.json"  "$RUST_ABI/RobotMoneyGateway.json"
 
-# Issue #1362: these six were hand-trimmed excerpts of the same artifacts, and
-# one of them (VaultRegistry) had silently drifted into a shape no deployed
-# contract returns. They are now full artifact ABIs like the two above.
+# Issue #1362: these were hand-trimmed excerpts of the same artifacts, and one
+# of them (VaultRegistry, now frozen) had silently drifted into a shape no
+# deployed contract returns. They are now full artifact ABIs.
 #
 # NOTE FOR WHOEVER ADDS THE NEXT ONE: a full artifact ABI names the declaring
 # contract of every struct it borrows, so `sol!` emits a module per foreign
@@ -95,173 +96,14 @@ extract_abi "$OUT/RobotMoneyGateway.sol/RobotMoneyGateway.json"  "$RUST_ABI/Robo
 # `clients/rust-payment-client/src/gateway/mod.rs` expands each binding inside
 # its own private module for exactly that reason; expand a new one at file
 # scope and the crate stops compiling on a duplicate-module error.
-extract_abi "$OUT/VaultRegistry.sol/VaultRegistry.json"          "$RUST_ABI/VaultRegistry.json"
-extract_abi "$OUT/PortfolioRouter.sol/PortfolioRouter.json"      "$RUST_ABI/PortfolioRouter.json"
-extract_abi "$OUT/RouterGovernance.sol/RouterGovernance.json"    "$RUST_ABI/RouterGovernance.json"
 extract_abi "$OUT/TimelockController.sol/TimelockController.json" "$RUST_ABI/TimelockController.json"
 extract_abi "$OUT/ConsensusRecommendationReceipt.sol/ConsensusRecommendationReceipt.json" \
                                                                  "$RUST_ABI/ConsensusRecommendationReceipt.json"
-
-# Issue #1464: the vault read surface rmpc uses, from a compiler-owned interface
-# instead of the hand-maintained MockVault.json (a test fixture plus a
-# hand-added depositsPaused()).
-extract_abi "$OUT/IVault.sol/IVault.json"                        "$RUST_ABI/IVault.json"
-
-# ---------------------------------------------------------------------------
-# 2. TypeScript generated ABI file for the dapp (fully generated — CI drift-gated)
-# ---------------------------------------------------------------------------
-echo "==> Generating dapp TypeScript ABI bindings..."
-
-python3 - "$OUT" "$DAPP_LIB/abi.generated.ts" <<'PYEOF'
-import json
-import sys
-
-out_dir = sys.argv[1]
-dest = sys.argv[2]
-
-def load_abi(path):
-    with open(path) as f:
-        return json.load(f)["abi"]
-
-def abi_to_ts(abi):
-    """Render a JSON ABI array as a TypeScript as const literal."""
-    return json.dumps(abi, indent=2)
-
-gateway_abi      = load_abi(f"{out_dir}/RobotMoneyGateway.sol/RobotMoneyGateway.json")
-erc20_abi        = load_abi(f"{out_dir}/TestERC20.sol/TestERC20.json")
-vault_abi        = load_abi(f"{out_dir}/MockVault.sol/MockVault.json")
-robot_vault_abi  = load_abi(f"{out_dir}/RobotMoneyVault.sol/RobotMoneyVault.json")
-registry_abi     = load_abi(f"{out_dir}/VaultRegistry.sol/VaultRegistry.json")
-router_abi       = load_abi(f"{out_dir}/PortfolioRouter.sol/PortfolioRouter.json")
-agent_vault_abi  = load_abi(f"{out_dir}/AgentTokenVault.sol/AgentTokenVault.json")
-proto_vault_abi  = load_abi(f"{out_dir}/ProtocolAssetVault.sol/ProtocolAssetVault.json")
-exclusion_abi    = load_abi(f"{out_dir}/ExclusionLedger.sol/ExclusionLedger.json")
-
-content = f"""\
-// THIS FILE IS AUTO-GENERATED — DO NOT EDIT BY HAND.
-// Re-generate with: bash .github/scripts/generate_abi_bindings.sh
-// Source: contracts/out/ (Foundry build artifacts)
-// Issue: #374
-
-/**
- * Full RobotMoneyGateway ABI — generated from Foundry artifact.
- * abi.ts does not import from this file — it hand-maintains its own excerpt
- * (see abi.ts's header). This file's canonical signatures are instead
- * cross-checked against abi.ts's exports by
- * clients/dapp/tests/unit/abi-parity.test.ts (issue #1281), which fails on
- * any abi.ts entry that has no exact match here.
- */
-export const gatewayAbiGenerated = {abi_to_ts(gateway_abi)} as const;
-
-/**
- * Full TestERC20 ABI (standard ERC-20 + mint/burn) — generated from Foundry artifact.
- */
-export const erc20AbiGenerated = {abi_to_ts(erc20_abi)} as const;
-
-/**
- * Full MockVault ABI — generated from Foundry artifact.
- */
-export const vaultAbiGenerated = {abi_to_ts(vault_abi)} as const;
-
-/**
- * Full RobotMoneyVault ABI — generated from Foundry artifact.
- *
- * Includes the adapter allowlist governance surface (setAdapterAllowed,
- * setAdapterCodeHashAllowed, AdapterAllowedSet, AdapterCodeHashAllowedSet).
- * Dapp admin panels drive the on-chain guard through this typed binding.
- * Canonical: docs/technical/security-model.md, issue #444.
- */
-export const robotMoneyVaultAbiGenerated = {abi_to_ts(robot_vault_abi)} as const;
-
-/**
- * Full VaultRegistry ABI — generated from Foundry artifact.
- */
-export const registryAbiGenerated = {abi_to_ts(registry_abi)} as const;
-
-/**
- * Full PortfolioRouter ABI — generated from Foundry artifact.
- */
-export const routerAbiGenerated = {abi_to_ts(router_abi)} as const;
-
-/**
- * Full AgentTokenVault ABI — generated from Foundry artifact.
- *
- * This is the canonical counterpart for `abi.ts`'s hand-maintained
- * `BASKET_VAULT_SHORTLIST_ABI`, which had none until issue #1346 — leaving it
- * the last binding `abi-parity.test.ts` could not cover. `shortlist()` returns
- * five parallel arrays, not a struct array; getting that wrong was scan
- * finding DAPP-5.
- *
- * Its counterpart `protocolAssetVaultAbiGenerated` is below: until issue #1364
- * `ProtocolAssetVault` declared no `shortlist()` at all, so there was nothing to
- * generate and nothing to compare.
- */
-export const agentTokenVaultAbiGenerated = {abi_to_ts(agent_vault_abi)} as const;
-
-/**
- * Full ProtocolAssetVault ABI — generated from Foundry artifact.
- *
- * The second canonical counterpart for `abi.ts`'s hand-maintained
- * `BASKET_VAULT_SHORTLIST_ABI`. The dapp's `CompositionSection` treats a vault
- * as a basket when `riskLabel === "VOLATILE" || (SPECULATIVE && Active)`
- * (`VaultDetail.tsx`) and then calls `shortlist()` on it — and before issue
- * #1364 only `AgentTokenVault` declared that function, so such a call reverted
- * and the panel rendered "unavailable".
- *
- * Note the panel is NOT yet reachable for this vault on `dev`: issue #1434 —
- * the indexer's risk-label mapping matches names no deploy script registers —
- * makes every vault resolve to `STABLE_YIELD`, so `isBasket` is never true.
- * #1364 and #1434 are independent defects behind one symptom; both must land
- * before the composition panel resolves end to end. Declaring `shortlist()`
- * here is correct and inert until then, and the parity gate below earns its
- * keep regardless.
- *
- * `abi-parity.test.ts` now checks the hand-maintained fragment against BOTH
- * basket vaults, so the next basket vault that ships without `shortlist()`
- * fails CI instead of degrading quietly.
- */
-export const protocolAssetVaultAbiGenerated = {abi_to_ts(proto_vault_abi)} as const;
-
-/**
- * Full ExclusionLedger ABI — generated from Foundry artifact (core 1820).
- *
- * Each RobotMoneyVault deploys one ledger that holds USDC recovered from an
- * excluded adapter for the holders at the moment of exclusion. The canonical
- * counterpart of `abi.ts`'s `EXCLUSION_LEDGER_ABI`, which the position card
- * reads (QA plan U5); `abi-parity.test.ts` compares the two.
- */
-export const exclusionLedgerAbiGenerated = {abi_to_ts(exclusion_abi)} as const;
-"""
-
-with open(dest, "w") as f:
-    f.write(content)
-
-print(f"  wrote {dest}")
-PYEOF
-
-# Format the generated TypeScript file with Prettier so it passes the dapp
-# fmt check (suite-09).  Requires the dapp dependencies to be installed; if
-# they are not, the script skips formatting and prints a reminder.
-PRETTIER_BIN="$REPO_ROOT/clients/dapp/node_modules/.bin/prettier"
-if [[ -x "$PRETTIER_BIN" ]]; then
-  "$PRETTIER_BIN" --write "$DAPP_LIB/abi.generated.ts" >/dev/null
-  echo "  formatted $DAPP_LIB/abi.generated.ts with Prettier"
-else
-  echo "  WARNING: Prettier not found at $PRETTIER_BIN"
-  echo "           Run 'bun install' inside clients/dapp/ then re-run this script"
-  echo "           to produce a Prettier-compliant abi.generated.ts."
-fi
 
 echo ""
 echo "ABI generation complete."
 echo ""
 echo "Drift-gated files (CI checks these):"
 echo "  clients/rust-payment-client/abi/Erc20.json"
-echo "  clients/rust-payment-client/abi/RobotMoneyGateway.json"
-echo "  clients/rust-payment-client/abi/VaultRegistry.json"
-echo "  clients/rust-payment-client/abi/PortfolioRouter.json"
-echo "  clients/rust-payment-client/abi/RouterGovernance.json"
 echo "  clients/rust-payment-client/abi/TimelockController.json"
 echo "  clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json"
-echo "  clients/rust-payment-client/abi/IVault.json"
-echo "  clients/dapp/src/lib/abi.generated.ts"

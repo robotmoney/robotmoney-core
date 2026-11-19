@@ -8,8 +8,8 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IAavePool} from "../../../interfaces/IAavePool.sol";
-import {ILendingRateAdapter} from "../src/interfaces/IFlowAdapters.sol";
-import {IAavePoolRate} from "../src/adapters/AaveV3RateAdapter.sol";
+import {ILendingRateAdapter} from "../../../interfaces/IFlowAdapters.sol";
+import {IAavePoolRate} from "../../../adapters/AaveV3RateAdapter.sol";
 import {MechReentry} from "./MechReentry.sol";
 
 /// @title MechAaveAdapter

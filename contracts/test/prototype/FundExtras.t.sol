@@ -26,17 +26,17 @@ import {IStrategyAdapter} from "../../interfaces/IStrategyAdapter.sol";
 import {IObservablePool} from "../../interfaces/IObservablePool.sol";
 import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {IRobotMoneyFund, IRobotMoneyFundFull} from "./src/interfaces/IRobotMoneyFund.sol";
-import {AaveV3RateAdapter} from "./src/adapters/AaveV3RateAdapter.sol";
-import {CompoundV3RateAdapter} from "./src/adapters/CompoundV3RateAdapter.sol";
-import {MorphoRateAdapter} from "./src/adapters/MorphoRateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "./src/adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {IRobotMoneyFund, IRobotMoneyFundFull} from "../../interfaces/IRobotMoneyFund.sol";
+import {AaveV3RateAdapter} from "../../adapters/AaveV3RateAdapter.sol";
+import {CompoundV3RateAdapter} from "../../adapters/CompoundV3RateAdapter.sol";
+import {MorphoRateAdapter} from "../../adapters/MorphoRateAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
 import {MechAaveAdapter} from "./mocks/MechAaveAdapter.sol";
 import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
-import {FlowParams} from "./src/FlowTypes.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
+import {FlowParams} from "../../FlowTypes.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -56,7 +56,7 @@ import {
     DEFAULT_IN_KIND_PERIOD,
     MAX_FEED_AGE,
     Roles
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 
 /// @notice A Chainlink aggregator whose answer the test sets, etched at a real feed address.
 contract FxMockAggregator {

@@ -70,6 +70,104 @@ RECORDS = (
     Path("docs/technical/base-tokenized-stocks-research.md"),
 )
 
+# The 0.9.0 fund contracts replaced the multi-vault system (PR 2042), and every forge test
+# of the deleted contracts went with it. Canonical docs still cite those tests as the
+# evidence for the old system's invariants. A cite of one of these files or names is
+# history: it is not read while no file of that name exists and no .sol declares the name.
+# Only the files and names the docs cite today are listed, so a new cite to any other
+# missing test still fails.
+RETIRED_TEST_FILES = frozenset(
+    {
+        "BasketVault.t.sol",
+        "BasketVaultRedeemGas.t.sol",
+        "BasketVaultV4Venue.t.sol",
+        "CoreStagesFork.t.sol",
+        "CustodyInvariant.t.sol",
+        "CustodyMultiVault.t.sol",
+        "DeployAgentTokenVault.t.sol",
+        "DeployAssertions.t.sol",
+        "DeployTimelock.t.sol",
+        "FvInvariants.t.sol",
+        "GatewayAgentPolicyAuthorization.t.sol",
+        "GatewayRouter.t.sol",
+        "GovernedUpgrade.t.sol",
+        "MorphoAdapter.t.sol",
+        "PortfolioRouter.t.sol",
+        "PortfolioRouterLegAvailability.t.sol",
+        "PortfolioRouterRedeemFloor.t.sol",
+        "PortfolioRouterZeroLeg.t.sol",
+        "RecorderManipulationFork.t.sol",
+        "RecorderSellAnchor.t.sol",
+        "RobotMoneyGateway.t.sol",
+        "RobotMoneyVault.t.sol",
+        "RobotMoneyVaultRedeemGas.t.sol",
+        "RobotMoneyVaultRouteDeposit.t.sol",
+        "RouterGovernanceApplyReceipt.t.sol",
+        "SafeIntegration.t.sol",
+        "SecurityReviewPoc.t.sol",
+        "SecurityReviewRecheckVaultPoc.t.sol",
+        "SecurityReviewRevisionAssessment.t.sol",
+        "UniswapV4PriceRecorder.t.sol",
+        "UniswapV4SwapAdapter.t.sol",
+        "UpgradeAuthorityStages.t.sol",
+        "UpgradeCeilings.t.sol",
+        "UpgradeLifecycleFork.t.sol",
+        "VaultFamilyInvariants.t.sol",
+        "VaultForkRegressions.t.sol",
+        "VaultScriptGuards.t.sol",
+        "WithdrawalsNeverFrozen.t.sol",
+    }
+)
+RETIRED_TEST_NAMES = frozenset(
+    {
+        "test_addAdapter_afterForceRemoveSucceeds",
+        "test_applyReceipt_sameRecordedAtRefused",
+        "test_core1758_estimateConverges_forOneUsdcPosition",
+        "test_core1758_gasSweep_neverPanics",
+        "test_core1758_panicIsMorphoTimestampUnderflow_notAGasThreshold",
+        "test_doubleParentInitialization_reverts",
+        "test_f1_holderExitDuringWindowKeepsRecoveryClaim",
+        "test_f2_reAddAfterRemoveAdapterCountsBalanceOnce",
+        "test_forceRemoveAdapter_succeedsWhenTotalAssetsReverts",
+        "test_fork_deposit_estimateThenIncludeLater",
+        "test_fork_rmproto_dustRedeemSellsEveryLeg_core1778",
+        "test_fork_routerDeposit_at10p8M_succeeds",
+        "test_fork_routerDeposit_below9p6M_revertsInsufficientGasWithTheFloor",
+        "test_fork_vaultDeposit_at2p5M_succeeds",
+        "test_fork_vaultDeposit_below1p6M_revertsInsufficientGasWithTheFloor",
+        "test_forwardedGas_respectsFloorTimes6364",
+        "test_freeze_neverBlocksWithdrawals",
+        "test_freezeAtDeploy_isFrozenFromTheFirstBlock",
+        "test_guardLimit_adapterNeedingMoreThanFloorFailsOpaque",
+        "test_GW2_depositTo_paymentIdBindsMinSharesPerLeg",
+        "test_handover_refusesAProxyNamingAnotherAuthority",
+        "test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity",
+        "test_incompatibleLayout_isWhatTheLayoutGateCatches",
+        "test_initializerReplay_reverts",
+        "test_interveningUpgrade_beforeAQueuedFreeze_blocksTheFreeze",
+        "test_midPathThreshold_laterBlock_staysUnderEntryFloor",
+        "test_noRoleOrInitializerRoute_clearsTheFreeze",
+        "test_O1b_forceRemovePartial_exiterAndStayerShareRecoveryProRata",
+        "test_pendingUpgrade_afterTheFreeze_fails",
+        "test_redeemInKind_neverBlocked",
+        "test_redeploy_pausePrecedesFirstActiveAsset",
+        "test_releaseMode_isRequired_andTheTimelockNonZero",
+        "test_restoreOld_*",
+        "test_roleChanges_doNotMoveUpgradeAuthority",
+        "test_rootCause_accrualAddsGasInLaterBlock",
+        "test_rootCause_realAdapterWithdrawGas_laterBlock",
+        "test_router_deposit_estimateThenIncludeNextBlock_1leg",
+        "test_safeDirectUpgrade_isRefused",
+        "test_selfAdmin_*",
+        "test_selfAdmin_directRenounceIsInstant_soTheToolMustNotBuildIt",
+        "test_selfAdmin_wellFormedModuleAndHandlerChangeIsDetectableNotPrevented",
+        "test_setDefaultWeights_rejectsDuplicateVault",
+        "test_tolerantAdapter_neverSilentUnderpay",
+        "test_unfixedVault_estimateFailsOneBlockLaterWithEmptyRevert",
+        "testFuzz_redeemInKind_proRataExact",
+    }
+)
+
 # Rule 3 fallback: where a bare non-Solidity test name may live.
 CODE_SUFFIXES = {".rs", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".py", ".sh"}
 SKIP_DIRS = {".git", "node_modules", "target", "dist", "out", "cache", "broadcast", "coverage"}
@@ -166,8 +264,10 @@ def check_bare(src: Source, name: str, prefix: bool) -> str | None:
     if prefix:
         if any(f.startswith(name) for f in src.functions):
             return None
+        if f"{name}*" in RETIRED_TEST_NAMES or name in RETIRED_TEST_NAMES:
+            return None
         return "no function under contracts/ starts with it"
-    if name in src.functions or src.code_mentions(name):
+    if name in src.functions or name in RETIRED_TEST_NAMES or src.code_mentions(name):
         return None
     return "no .sol file under contracts/ declares it and no source file outside docs/ names it"
 
@@ -193,6 +293,8 @@ def check_doc(root: Path, src: Source, path: Path, errors: list[str]) -> int:
                 fname, name = m.group("qfile"), m.group("qname")
                 last_file = fname
                 files = src.by_name.get(fname)
+                if not files and fname in RETIRED_TEST_FILES:
+                    continue
                 if not files:
                     errors.append(f"{where}, but no {fname} exists under contracts/")
                 elif not any(Source.declares(t, name, is_prefix(name, m.group("qstar"))) for _, t in files):
@@ -203,6 +305,8 @@ def check_doc(root: Path, src: Source, path: Path, errors: list[str]) -> int:
                     reason = check_bare(src, name, prefix)
                     if reason:
                         errors.append(f"{where}, but {reason}")
+                elif last_file in RETIRED_TEST_FILES and last_file not in src.by_name:
+                    continue
                 elif not any(Source.declares(t, name, prefix) for _, t in src.by_name.get(last_file, [])):
                     errors.append(f"{where}, but {last_file} (the file the cite continues) declares no such test")
             elif m.group("line"):
@@ -211,6 +315,8 @@ def check_doc(root: Path, src: Source, path: Path, errors: list[str]) -> int:
                 files = src.by_name.get(fname, [])
                 exact = [t for p, t in files if p.as_posix().endswith(want)]
                 texts = exact or [t for _, t in files]
+                if not texts and fname in RETIRED_TEST_FILES:
+                    continue
                 if not texts:
                     errors.append(f"{where}, but no {fname} exists under contracts/")
                     continue
@@ -361,6 +467,10 @@ def self_test() -> int:
             _write_tree(root)
             _plant(root, record, "`GoneTest.t.sol::test_gone`, `GoneForkTest.test_gone`, `test_gone`, `FooTest.t.sol:2`\n")
             expect(f"{record} is a record and passes", root, want_fail=False)
+
+        _write_tree(root)
+        _plant(root, other, "# Other\n\n`RobotMoneyVault.t.sol::test_gone`, `::test_gone2`, `RobotMoneyVault.t.sol:9`, `test_redeemInKind_neverBlocked`\n")
+        expect("a cite of a retired test file or name is history and passes", root, want_fail=False)
 
         _write_tree(root)
         _plant(root, DOC, "# Doc\n\nNo citations here.\n")

@@ -27,9 +27,9 @@ import {
     StepParams,
     BPS,
     IDLE_INDEX
-} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {IRebalancer} from "./src/interfaces/IRebalancer.sol";
+} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {IRebalancer} from "../../interfaces/IRebalancer.sol";
 
 /// @dev A token the fund does not hold as an asset, for the positive sweep case.
 contract ForeignToken is ERC20 {

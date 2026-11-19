@@ -3,7 +3,7 @@
 //            (P9.69 to P9.72: the fund system's governed upgrade lifecycle, Deploy 4).
 pragma solidity ^0.8.24;
 
-import {Rebalancer} from "../prototype/src/Rebalancer.sol";
+import {Rebalancer} from "../../Rebalancer.sol";
 
 // Test-only v2 of the fund system's rebalancer (Deploy 4), in the shape of helpers/UpgradeV2.sol: the v1 contract plus one marker getter,
 // so the rehearsal can read which implementation the rebalancer proxy runs while every v1 slot stays where it was. It adds no state, so

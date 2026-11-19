@@ -4,8 +4,8 @@
 // Experiment prototype only (contracts/test/prototype/). Not a production test.
 pragma solidity ^0.8.24;
 
-import {Roles} from "./src/FundTypes.sol";
-import {KeeperAccount} from "./src/KeeperAccount.sol";
+import {Roles} from "../../FundTypes.sol";
+import {KeeperAccount} from "../../KeeperAccount.sol";
 import {FlowQueueBase} from "./FlowQueue.t.sol";
 
 /// @title KeeperAccountFlowTest

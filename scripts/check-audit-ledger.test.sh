@@ -43,9 +43,9 @@ bash "${TMP}/t/scripts/check-audit-ledger.sh" >/dev/null 2>&1 || bad "clean tree
 pass "clean tree exits 0"
 
 mk_tree
-printf '// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\ncontract NoLedgerRow {}\n' >"${TMP}/t/contracts/vaults/NoLedgerRow.sol"
+printf '// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\ncontract NoLedgerRow {}\n' >"${TMP}/t/contracts/lib/NoLedgerRow.sol"
 if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "contract with no ledger row must exit non-zero"; fi
-grep -q 'vaults/NoLedgerRow.sol' <<<"${out}" || bad "failure must name vaults/NoLedgerRow.sol"
+grep -q 'lib/NoLedgerRow.sol' <<<"${out}" || bad "failure must name lib/NoLedgerRow.sol"
 pass "new contract with no ledger row fails and is named"
 
 mk_tree
@@ -112,17 +112,19 @@ pass "verification companion needs no ledger key"
 
 # --- Source line cites (#1792, QA plan v1 W2) ----------------------------------
 mk_tree
-sed -i '/^| SR-1012-5 |/s/RobotMoneyVault.sol:1150-1155/RobotMoneyVault.sol:9150-9155/' "${TMP}/t/docs/audits.md"
-grep -q 'RobotMoneyVault.sol:9150-9155' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
+sed -i '/^| FS-VLT-10 |/s/MorphoAdapter.sol:197-200/MorphoAdapter.sol:9197-9200/' "${TMP}/t/docs/audits.md"
+grep -q 'MorphoAdapter.sol:9197-9200' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
 if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "a source cite past the end of its file must exit non-zero"; fi
-grep -q 'RobotMoneyVault.sol:9150-9155' <<<"${out}" || bad "failure must name the cite"
+grep -q 'MorphoAdapter.sol:9197-9200' <<<"${out}" || bad "failure must name the cite"
 pass "source cite past the end of its file fails and is named"
 
 mk_tree
-sed -i '/^| SR-1012-5 |/s/RobotMoneyVault.sol:1150-1155/RobotMoneyVault.sol:1-2/' "${TMP}/t/docs/audits.md"
-grep -q 'RobotMoneyVault.sol:1-2' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
+# shellcheck disable=SC2016  # backticks are literal markdown.
+sed -i '/^| FS-VLT-10 |/s/`MorphoAdapter.sol:197-200`/(`MorphoAdapter.withdraw`, `MorphoAdapter.sol:197-200`)/' "${TMP}/t/docs/audits.md"
+# shellcheck disable=SC2016  # backticks are literal markdown.
+grep -q 'MorphoAdapter.withdraw`, `MorphoAdapter.sol:197-200' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
 if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "an anchored cite outside its symbol must exit non-zero"; fi
-grep -q 'RobotMoneyVault.forceRemoveAdapter' <<<"${out}" || bad "failure must name the anchor symbol"
+grep -q 'MorphoAdapter.withdraw' <<<"${out}" || bad "failure must name the anchor symbol"
 pass "source cite anchored by Name.symbol outside that symbol fails and is named"
 
 [ "${ran}" -ge 13 ] || bad "fewer than 13 checks ran"

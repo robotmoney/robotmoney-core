@@ -42,8 +42,9 @@ floors="$(cd "$WF" && cat suite-05-fork-integration.yml suite-07-rmpc-integratio
   | grep -oE 'CARGO_TEST_MIN_EXECUTED=[0-9]+|CARGO_TEST_MIN_EXECUTED: "?[0-9]+|min_executed: [0-9]+' \
   | grep -oE '[0-9]+$')"
 count="$(printf '%s\n' "$floors" | wc -l)"
-# 51 since QA plan v1 T5 named a floor on every wrapped step of suites 5 and 8.
-[ "$count" -ge 51 ] || { echo "FAIL: found $count floors in the five suites, expected at least 51"; exit 1; }
+# 51 since QA plan v1 T5 named a floor on every wrapped step of suites 5 and 8; 46 since PR 2042
+# removed the Twin jobs and slots that deployed the old multi-vault contracts (suites 5, 7, 8, 11b).
+[ "$count" -ge 46 ] || { echo "FAIL: found $count floors in the five suites, expected at least 46"; exit 1; }
 
 forge_floors="$(grep -oE 'FORGE_TEST_MIN_EXECUTED=[0-9]+' "$WF/suite-22-formal-verification.yml" | grep -oE '[0-9]+$')"
 forge_count="$(printf '%s\n' "$forge_floors" | grep -c . || true)"

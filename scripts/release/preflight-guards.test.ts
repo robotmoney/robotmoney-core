@@ -52,7 +52,7 @@ describe("Deploy 4: CEREMONY_CONTRACTS covers the fund system", () => {
   const fund = table.stages.filter((s: any) => s.system === "fund");
   const want = [...new Set<string>([
     ...fund.flatMap((s: any) => (s.proxies ?? []).map((p: any) => p.contract)).filter((c: string) => c !== "ConsensusRecommendationReceipt"),
-    ...fund.flatMap((s: any) => s.create2Libraries ?? []).filter((n: string) => table.create2Libraries.find((l: any) => l.name === n)?.path.startsWith("contracts/test/prototype/")),
+    ...fund.flatMap((s: any) => s.create2Libraries ?? []).filter((n: string) => table.create2Libraries.find((l: any) => l.name === n)?.path.match(/^contracts\/lib\/(Fund|Flow|StepFeed|Feed|TwapSlices)/)),
     "FundExclusionLedger", "AaveV3RateAdapter", "CompoundV3RateAdapter", "MorphoRateAdapter", "UniswapV3ExactOutSwapAdapter",
   ])].sort();
   test("every fund proxy, fund library, the ledger and the adapter copies are listed", () => {
@@ -67,7 +67,7 @@ describe("Deploy 4: CEREMONY_CONTRACTS covers the fund system", () => {
       const p = join(outDir, `${c}.sol`, `${c}.json`);
       if (!existsSync(p)) continue; // no build in this checkout: the size gate itself fails on a missing artifact
       const target = Object.keys(JSON.parse(readFileSync(p, "utf8")).metadata.settings.compilationTarget)[0];
-      expect([c, target]).toEqual([c, `contracts/test/prototype/src/${c}.sol`]);
+      expect([c, target]).toEqual([c, `contracts/${c}.sol`]);
     }
   });
 });

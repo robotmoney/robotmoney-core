@@ -64,11 +64,4 @@ describe("twin scenario markers", () => {
     const script = readFileSync(join(REPO_ROOT, "publish-contracts/src/ci/twin-publish-fund.ts"), "utf8");
     for (const name of FUND_RUN_MARKERS) expect(script).toContain(`MARKERS.${name}`);
   });
-  test("twin-publish.ts prints every marker the workflow requires and the workflow requires them all", () => {
-    const script = readFileSync(join(REPO_ROOT, "publish-contracts/src/ci/twin-publish.ts"), "utf8");
-    for (const name of VAULTS_RUN_MARKERS) expect(script).toContain(`MARKERS.${name}`);
-    const wf = readFileSync(join(REPO_ROOT, ".github/workflows/suite-28-core-stages.yml"), "utf8");
-    expect(wf).toContain(`--require ${VAULTS_RUN_MARKERS.join(",")}`);
-    for (const input of ['vaults-only: "true"', 'gateway: "true"']) expect(wf).toContain(input);
-  });
 });

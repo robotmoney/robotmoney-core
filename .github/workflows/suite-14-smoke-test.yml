@@ -1,19 +1,13 @@
 # Canonical: docs/development/ci-suites.md §14
 #
 # WHY THIS SUITE EXISTS
-# This suite is the CI contract for `make testnet`: the cli_meta matrix entry boots
-# `cargo run -p smoke-test -- --full-stack` — the exact path `make testnet` runs — so a
-# devnet boot regression (e.g. a deploy script drifting from a contract invariant, like
-# the RouterGovernance ExecutionDelayBelowMinimum revert) is caught in CI on push to
-# main/dev/dev-phase-* and in the nightly full-suite run (suite-21), not only when a
-# human next runs `make testnet` locally.
+# The smoke-test crate is the Twin chain harness. The guards job runs its hermetic tests (the
+# deploy-only command line, the govern stdout contract, the reaper and Twin fork arguments) and the
+# CI guard scripts. The devnet job proves the Twin environment steps on a real Twin fork.
 #
-# The smoke-test crate is the shared devnet fixture used by suites 7, 8, 10, 11, and 12.
-# If Fixture::new() is broken — because the Twin fork tool changed, the publish run regressed, or a
-# port mapping shifted — every one of those suites will fail at boot time with a confusing
-# "connection refused" error, not a "fixture broken" error. Validating the fixture in isolation, on
-# every change to the devnet config, means a broken fixture is caught and diagnosed here, rather
-# than discovered as mysterious failures across five other suites.
+# The rows and jobs that booted the full fixture (cli_meta, fixture_meta, fund_usdc, governance,
+# twin_publish, twin_pause_all) deployed the old multi-vault contracts through publish contracts.
+# Those contracts were replaced by the 0.9.0 fund (PR 2042), so they were removed.
 #
 # THE CHAIN IS THE TWIN FORK (core 1498, 1496)
 # Every chain job starts the Twin chain (id 918453) with .github/actions/twin-fork: anvil
@@ -32,12 +26,6 @@
 # explicitly before the test run ensures that both the library and the binary compile
 # cleanly. Without this step, a binary-only compile error would be hidden by cargo test
 # (which does not build binaries by default).
-#
-# WHY THE CLI META TEST RUNS SEPARATELY
-# The `cli_meta` integration test boots `cargo run -p smoke-test -- --full-stack`
-# and checks the harness contract around endpoint summary output, `--dapp-port`,
-# and Ctrl-C teardown. Keeping it as its own cargo invocation makes failures easier
-# to interpret than mixing it into the shared fixture suite.
 #
 # WHY THE SAFETY-NET TEARDOWN USES || true
 # The teardown runs with if: always(), including when the job is cancelled by GitHub Actions
@@ -65,11 +53,6 @@ on:
         type: string
         required: false
         default: ""
-      production_fixtures_dir:
-        description: "Optional: a directory with production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace, for a caller that has them. Empty: the parity step uses the label and sheet fixtures committed in publish-contracts/tests/fixtures."
-        type: string
-        required: false
-        default: ""
   # HEAVY tier: this devnet boot/teardown suite is a merge gate for `dev` — it
   # runs on every pull_request targeting dev (no path filter, so the gate always
   # reports for any branch merging to dev) and on push to dev for merged-commit
@@ -79,12 +62,6 @@ on:
   pull_request:
     branches: [dev]
   workflow_dispatch:
-    inputs:
-      production_fixtures_dir:
-        description: "Optional: a directory with production fixtures (verifier-labels.txt, production-sheet.env), relative to the workspace, for a caller that has them. Empty: the parity step uses the label and sheet fixtures committed in publish-contracts/tests/fixtures."
-        type: string
-        required: false
-        default: ""
 
 # CI velocity tiers (issue #600): cancel superseded PR runs so a re-push does
 # not pile up duplicate suites. push:main/dev runs are exempt — they keep a
@@ -267,16 +244,11 @@ jobs:
   # PARALLEL TWIN MATRIX (issue #600): one runner per devnet-booting binary, each with its OWN
   # Twin fork at the run pin (no shared port or chain). fail-fast: false keeps every binary's
   # signal independent.
-  #   - cli_meta:            boots `smoke-test --full-stack`, asserts summary + Ctrl-C teardown
-  #   - fixture_meta:        deploys contracts, asserts RPC + the four-vault manifests
-  #   (demo_seeding, full_stack_demo_tvl, faucet_eth and faucet_rm were deleted in core 1488 with demo seeding
-  #   and the dapp faucet funding: the one deployment scheme has no demo-only code.)
-  #   - fund_usdc:           the Fixture wrappers of the Twin environment steps: fund USDC (a grant on the real
-  #                          FiatToken slot), fund gas, warp
-  #   - twin_fork_env:       the same three steps straight through TwinFork on the real Base USDC, no publish run
-  #   - twin_publish:        its own job below (not a matrix row): path-gated on pull_request
-  #   - governance:          the deployer holds no admin, the timelock is admin (core 1488), and the weight
-  #                          setter releases from the deployed receipt register (issue 1698)
+  #   - twin_fork_env:       the Twin environment steps (fund USDC, fund gas, warp) straight through
+  #                          TwinFork on the real Base USDC, no publish run
+  #   cli_meta, fixture_meta, fund_usdc and governance, and the twin_publish and twin_pause_all jobs,
+  #   deployed the old multi-vault contracts through publish contracts. Those contracts were replaced
+  #   by the 0.9.0 fund (PR 2042), so the rows, the jobs and their test binaries were removed.
   #
   # The 70-minute budget covers the dapp image builds of cli_meta (the indexer compiles with cargo
   # --release, issue #880) plus the publish run. The Twin fork itself is ready in about a minute
@@ -316,27 +288,12 @@ jobs:
       matrix:
         binary:
           [
-            cli_meta,
-            fixture_meta,
-            fund_usdc,
-            governance,
             twin_fork_env,
           ]
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      # The harness calls the one runbook, "publish contracts" (publish-contracts/ in this repo, Bun TypeScript).
-      # The Twin chain arguments are the only difference from a mainnet run.
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
-      # cli_meta boots the dapp compose stack, so Docker must be available.
-      - name: Verify Docker is available
-        run: |
-          docker version
-          docker compose version
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -405,190 +362,6 @@ jobs:
       - name: Safety-net teardown (always)
         if: always()
         run: docker ps -aq --filter "label=com.robotmoney.testnet" | xargs -r docker rm -f || true
-
-      - name: Stop the Twin fork and save its RPC cache
-        if: always()
-        uses: ./.github/actions/twin-fork-save-cache
-
-  # Which paths changed. twin_publish runs on a pull_request only when a path that affects the deploy
-  # changed. push, workflow_dispatch and workflow_call (the nightly) always run it. The diff is read
-  # from git: no third-party action, no token.
-  changes:
-    name: smoke-test-changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      CI_CLASS: feature-correctness
-    outputs:
-      deploy: ${{ steps.diff.outputs.deploy }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: diff
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --name-only "$BASE_SHA"...HEAD | grep -Eq '^(contracts/script/|scripts/deploy/|scripts/stage/|publish-contracts/|deployments/twin-918453/|config/|testing/smoke-test/|\.github/workflows/suite-14-smoke-test\.yml)'; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # THE TWIN CHAIN PUBLISH JOB (core 1488, 1486, 1485). Starts the Twin chain (918453), a pinned lazy
-  # fork of real Base state, runs publish contracts (bun publish-contracts/src/cli.ts, the one deploy driver)
-  # through the harness test twin_publish: all four vaults, the real Safe, the timelock handover, the
-  # one verifier (its labels include the router, basket and timelock role proofs) and the govern matrix.
-  # While the chain is up the same test runs scripts/stage/twin-run-report.ts. This job needs no Docker and runs only in CI.
-  twin_publish:
-    name: smoke-test-twin-publish
-    needs: [changes, pin]
-    if: ${{ needs.changes.outputs.deploy == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 70
-    env:
-      CI_CLASS: feature-correctness
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Start the Twin chain at the run pin
-        uses: ./.github/actions/twin-fork
-        with:
-          pin-block: ${{ needs.pin.outputs.block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-      - name: cargo build (includes CLI binary)
-        working-directory: testing/smoke-test
-        run: cargo build -p smoke-test
-
-      # Non-zero test count floor (core 1488): cargo_test_require_executed.sh fails a run that executes
-      # fewer than CARGO_TEST_MIN_EXECUTED tests, so a filter that matches nothing is a failure, not a green.
-      - name: Twin chain publish, verify and govern matrix
-        working-directory: testing/smoke-test
-        env:
-          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_publish.log
-          CARGO_TEST_MIN_EXECUTED: "1"
-          SMOKE_TEST_VERIFY_OUT: ${{ runner.temp }}/stage-verify-labels.txt
-          SMOKE_TEST_SHEET_OUT: ${{ runner.temp }}/stage-run-sheet.env
-          SMOKE_TEST_PROOF_DIR: ${{ runner.temp }}/twin-proofs
-          SMOKE_TEST_MARKER_OUT: ${{ runner.temp }}/twin-systems-marker.txt
-        run: >-
-          bash ../../.github/scripts/cargo_test_require_executed.sh
-          -p smoke-test --release --test twin_publish -- --test-threads=1 --nocapture
-
-      # Issue 1892: the vaults-only and gateway system scenario must have RUN, not only compiled. The test prints its marker with positive manifest counts
-      # (vaults run: no gateway manifest; gateway run: both gateway manifests, vaults manifests byte-unchanged, zero agents at handover). A removed scenario fails here.
-      - name: Require the system scenario marker of the Twin publish test
-        run: >-
-          grep -Eq 'TWIN-SCENARIO rust-systems: vaults_manifests=[1-9][0-9]* gateway_manifests=2 vaults_unchanged=true agents_at_handover=0'
-          "${{ runner.temp }}/twin-systems-marker.txt"
-
-      # Core 1488: the REAL stage outputs go through label-diff and sheet-diff. The Twin chain test
-      # (twin_publish.rs) writes the verifier label file (SMOKE_TEST_VERIFY_OUT) and the run sheet
-      # (SMOKE_TEST_SHEET_OUT). The other side is the input production_fixtures_dir when a caller gives
-      # one, else the label and sheet fixtures committed in publish-contracts/tests/fixtures. A missing or
-      # empty file fails this step and names the path.
-      - name: Stage vs mainnet parity (label-diff, sheet-diff on real output)
-        env:
-          FIXTURES_DIR: ${{ inputs.production_fixtures_dir }}
-        run: |
-          args=(--stage-labels "$RUNNER_TEMP/stage-verify-labels.txt" --stage-sheet "$RUNNER_TEMP/stage-run-sheet.env")
-          if [ -n "$FIXTURES_DIR" ]; then
-            args+=(--fixtures-dir "$GITHUB_WORKSPACE/$FIXTURES_DIR")
-          else
-            args+=(--mainnet-labels publish-contracts/tests/fixtures/verifier-labels.txt --production-sheet publish-contracts/tests/fixtures/frozen-sheet.env.example)
-          fi
-          bun scripts/stage/parity.ts "${args[@]}"
-
-      - name: Upload manifests, proofs and the run report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: twin-publish-run
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/twin-proofs/
-            ${{ runner.temp }}/stage-verify-labels.txt
-            ${{ runner.temp }}/stage-run-sheet.env
-
-      - name: Upload smoke-test logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-test-logs-twin_publish
-          path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
-
-      - name: Stop the Twin fork and save its RPC cache
-        if: always()
-        uses: ./.github/actions/twin-fork-save-cache
-
-  # CORE 1619 (plan decision 22): a failed verify pauses deposits on all four vaults. Its own job, so it gets a fresh Twin chain: a second
-  # deployment on the fork twin_publish used would find the libraries already there and send nothing. The test forces a real stage 12
-  # failure on a fresh deployment, then asserts depositsPaused on rmUSDC, rmPROTO, rmAGENT and rmRWA read from the chain, each vault's
-  # entry in the rollout report, and a redeem on every paused vault that holds shares. Real vaults, the real EMERGENCY keystore, no mock.
-  twin_pause_all:
-    name: smoke-test-twin-pause-all
-    needs: [changes, pin]
-    if: ${{ needs.changes.outputs.deploy == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 70
-    env:
-      CI_CLASS: feature-correctness
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Start the Twin chain at the run pin
-        uses: ./.github/actions/twin-fork
-        with:
-          pin-block: ${{ needs.pin.outputs.block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-      - name: cargo build (includes CLI binary)
-        working-directory: testing/smoke-test
-        run: cargo build -p smoke-test
-
-      # Non-zero test count floor: a filter that matches nothing is a failure, not a green.
-      - name: Twin chain forced verify failure pauses all four vaults
-        working-directory: testing/smoke-test
-        env:
-          SMOKE_TEST_LOG_FILE: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test-twin_pause_all.log
-          CARGO_TEST_MIN_EXECUTED: "1"
-        run: >-
-          bash ../../.github/scripts/cargo_test_require_executed.sh
-          -p smoke-test --release --test twin_pause_all -- --test-threads=1 --nocapture
-
-      - name: Upload smoke-test logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: smoke-test-logs-twin_pause_all
-          path: ${{ runner.temp }}/robotmoney-smoke-test/smoke-test*.log*
 
       - name: Stop the Twin fork and save its RPC cache
         if: always()
