@@ -1293,6 +1293,11 @@
   },
   {
     "type": "error",
+    "name": "MinSharesLengthMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotAgentOwner",
     "inputs": []
   },
@@ -1345,6 +1350,11 @@
   {
     "type": "error",
     "name": "ShareReceiverNotAuthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SlippageExceeded",
     "inputs": []
   },
   {

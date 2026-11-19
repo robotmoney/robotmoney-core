@@ -19,6 +19,7 @@ contract DeployVaultRegistryTest is Test {
     function setUp() public {
         script = new DeployVaultRegistry();
         usdc = new TestERC20();
+        vm.etch(vault, hex"00");
     }
 
     // ─── Happy path ───────────────────────────────────────────────────────────

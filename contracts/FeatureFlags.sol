@@ -12,7 +12,7 @@ pragma solidity ^0.8.24;
 ///
 ///         Flag IDs (stable — never renumber):
 ///           0  MULTI_VAULT_ENABLED       gates multi-vault UI + indexer paths
-///           1  PORTFOLIO_ROUTER_ENABLED  gates router deposit path
+///           1  PORTFOLIO_ROUTER_ENABLED  gates router deposit UI
 ///           2  INDEXER_MULTI_VAULT_EVENTS gates indexer VaultRegistry events
 library FeatureFlags {
     // -------------------------------------------------------------------------
@@ -23,8 +23,8 @@ library FeatureFlags {
     ///      indexing in the explorer-indexer.
     uint8 public constant MULTI_VAULT_ENABLED = 0;
 
-    /// @dev Gates the PortfolioRouter deposit path and the router allocation
-    ///      surface in the dapp.
+    /// @dev Gates the PortfolioRouter deposit and router allocation
+    ///      surfaces in flag-aware clients. Router transaction entry points do not read this bitmap.
     uint8 public constant PORTFOLIO_ROUTER_ENABLED = 1;
 
     /// @dev Gates VaultRegistered / VaultStatusChanged event ingestion in the

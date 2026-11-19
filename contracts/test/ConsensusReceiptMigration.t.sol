@@ -150,6 +150,8 @@ contract ConsensusReceiptMigrationTest is SafeGovernance {
         assertEq(r2.submitter, submitter);
         assertFalse(r2.released, "unreleased stays unreleased");
         assertEq(receipts.getReceipt(1).receiptId, keccak256("r2"), "append order");
+        assertEq(receipts.receiptSequence(keccak256("r1")), 1, "legacy issuance index");
+        assertEq(receipts.receiptSequence(keccak256("r2")), 2, "outstanding legacy index");
     }
 
     function test_migration_postUpgradeRecordAndReleaseWork() public {

@@ -49,7 +49,7 @@ vi.mock("wagmi", () => ({
   useAccount: () => ({ address: USER, isConnected: true }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "allowance") return { data: 10_000_000n, refetch: vi.fn() };
-    if (opts.functionName === "previewDeposit") return { data: fourLegs, error: null };
+    if (opts.functionName === "previewDepositFor") return { data: fourLegs, error: null };
     if (opts.functionName === "getEffectiveWeights")
       return {
         data: [

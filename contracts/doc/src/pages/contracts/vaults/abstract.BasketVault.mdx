@@ -317,6 +317,18 @@ uint256 internal _lastMintedShares;
 uint256 internal _lastWithdrawnAssets;
 ```
 
+### _inKindFeeRemainder
+
+<i>
+
+Fractional in-kind fees in basis-point units, carried per payout token.
+
+</i>
+
+```solidity
+mapping(address token => uint256 remainder) private _inKindFeeRemainder;
+```
+
 ## Functions
 
 <a id="__basketvault_init-string-string-uint256-initparams"></a>
@@ -1270,8 +1282,8 @@ no-stranded-asset invariant without arbitrary admin routing. The
 min-out is TWAP-derived and slippage-bounded exactly like the
 proportional-withdraw sell leg, so the swap fails closed if the
 oracle is unavailable or the price is manipulated. The additional
-caller-supplied minUsdcOut is checked against the actual received
-amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
+caller-supplied minUsdcOut must be at most the computed TWAP floor
+or the transaction reverts with SlippageExceeded before swapping (AZ-BSK-5).
 A dust balance, whose TWAP floor rounds to zero USDC units, is left in
 place and the call is a no-op (QA plan D6), like a zero balance.
 
@@ -1286,7 +1298,7 @@ function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonRee
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | index | `uint256` | Registry index of an inactive (removed) basket asset. |
-| minUsdcOut | `uint256` | Caller-supplied slippage floor (in USDC raw units).<br/>Reverts with SlippageExceeded when the swap output is<br/>below this floor, preventing MEV sandwich attacks on<br/>NAV recovery. Pass 0 to use only the TWAP-derived<br/>floor. Only enforced on the pool-healthy path; the<br/>degraded-pool path quarantines instead of swapping. |
+| minUsdcOut | `uint256` | Caller-supplied slippage floor (in USDC raw units).<br/>Reverts with SlippageExceeded if the computed<br/>TWAP floor is below this value. Pass 0 to use only the TWAP-derived<br/>floor. Only enforced on the pool-healthy path; the<br/>degraded-pool path quarantines instead of swapping. |
 
 <a id="_slippagefloor-assetinfo-uint256"></a>
 
@@ -1561,10 +1573,9 @@ caller-supplied. This replaces the deleted arbitrary-recipient
 `token` is USDC, the vault share token, or ANY basket asset —
 active OR configured-but-inactive. Inactive (removed) basket
 assets are NOT swept here: a balance that reappears on a removed
-asset is re-absorbed into NAV via `reabsorbRemovedAsset` (INV-2),
-never routed to an admin or to quarantine, so it stays redeemable
-by holders (this is the no-stranded-asset replacement for the
-audit 2026-06-09 L-15 admin rescue path).
+asset is handled through `reabsorbRemovedAsset` (INV-2). A healthy
+sale returns proceeds to NAV. Degraded-oracle quarantine uses the
+fixed destination through that separate entry point.
 
 ```solidity
 function sweepForeignToken(address token) external;

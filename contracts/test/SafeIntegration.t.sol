@@ -618,6 +618,7 @@ contract SafeIntegrationTest is Test {
     /// @notice AC1a: Full Safe.execTransaction() → schedule → mine delay → execute on VaultRegistry.
     function test_happyPath_vaultRegistry_registerVault() public withSnap {
         address newVault = makeAddr("newVault");
+        vm.etch(newVault, hex"00");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Test Vault", asset: address(usdc), registeredAt: block.timestamp
         });
@@ -822,6 +823,7 @@ contract SafeIntegrationTest is Test {
     /// @notice AC4: TimelockController.execute() before min delay elapses reverts.
     function test_sadPath_preDelayExecute_reverts() public withSnap {
         address newVault = makeAddr("vaultForDelay");
+        vm.etch(newVault, hex"00");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Delay Test", asset: address(usdc), registeredAt: block.timestamp
         });
@@ -900,6 +902,7 @@ contract SafeIntegrationTest is Test {
     /// @notice AC5: Replaying an already-executed Safe+timelock operation reverts.
     function test_sadPath_replay_reverts() public withSnap {
         address newVault = makeAddr("vaultForReplay");
+        vm.etch(newVault, hex"00");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Replay Test", asset: address(usdc), registeredAt: block.timestamp
         });
@@ -1085,10 +1088,12 @@ contract SafeIntegrationTest is Test {
 
     /// @dev Schedule `registerVault` through the Safe with two owner signatures.
     function _scheduleViaSafe(bytes32 salt) internal returns (bytes memory callData, bytes32 opId) {
+        address newVault = makeAddr("openExecVault");
+        vm.etch(newVault, hex"00");
         callData = abi.encodeCall(
             VaultRegistry.registerVault,
             (
-                makeAddr("openExecVault"),
+                newVault,
                 VaultRegistry.VaultMetadata({
                     name: "Open", asset: address(usdc), registeredAt: block.timestamp
                 })
@@ -1203,6 +1208,7 @@ contract SafeIntegrationTest is Test {
     /// @notice AC7: A cancelled timelock operation cannot be executed after cancellation.
     function test_sadPath_cancelledOperation_cannotExecute() public withSnap {
         address newVault = makeAddr("vaultForCancel");
+        vm.etch(newVault, hex"00");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Cancel Test", asset: address(usdc), registeredAt: block.timestamp
         });

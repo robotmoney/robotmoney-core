@@ -131,6 +131,28 @@ function getReceiptById(bytes32 receiptId) external view returns (Receipt memory
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `Receipt` |  |
 
+<a id="receiptsequence-bytes32"></a>
+
+### receiptSequence
+
+The 1-based issuance index, or zero if the receipt does not exist.
+
+```solidity
+function receiptSequence(bytes32 receiptId) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="isrecorded-bytes32"></a>
 
 ### isRecorded

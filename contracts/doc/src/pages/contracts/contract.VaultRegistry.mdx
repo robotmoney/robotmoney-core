@@ -159,7 +159,8 @@ function initialize(address admin, address upgradeTimelock_, UpgradeMode upgrade
 ### registerVault
 
 Register a new vault. The vault is set to `Active` status immediately.
-Restricted to `ADMIN_ROLE`.
+Restricted to `ADMIN_ROLE`. Supported vaults must implement the
+registry-gated retire and unretire hooks used by all status changes.
 
 ```solidity
 function registerVault(address vault, VaultMetadata calldata metadata)
@@ -171,7 +172,7 @@ function registerVault(address vault, VaultMetadata calldata metadata)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| vault | `address` | Address of the vault contract to register (must not be zero or<br/>already registered). |
+| vault | `address` | Address of the deployed vault contract to register.<br/>Must be nonzero and unregistered. |
 | metadata | `VaultMetadata` | Human-readable name and asset address for the vault. |
 
 <a id="retire-address"></a>
@@ -255,6 +256,21 @@ function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(
 | ---- | ---- | ----------- |
 | vault | `address` | Address of an already-registered vault. |
 | newStatus | `VaultStatus` | New lifecycle status (Active, DepositsPaused, or Retired). |
+
+<a id="_setvaultstatus-address-vaultstatus"></a>
+
+### _setVaultStatus
+
+```solidity
+function _setVaultStatus(address vault, VaultStatus newStatus) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
+| newStatus | `VaultStatus` |  |
 
 <a id="setroutereligible-address-bool"></a>
 
@@ -514,6 +530,20 @@ Vault address argument is `address(0)`.
 ```solidity
 error ZeroAddress();
 ```
+
+### VaultHasNoCode
+
+A registered vault must be a deployed contract.
+
+```solidity
+error VaultHasNoCode(address vault);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault | `address` |  |
 
 ### AlreadyRegistered
 

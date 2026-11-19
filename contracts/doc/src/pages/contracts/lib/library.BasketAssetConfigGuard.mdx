@@ -243,7 +243,7 @@ function requireExecutionPoolMatchesTwap(address pool, uint24 swapFee, Venue ven
 | swapFee | `uint24` |  |
 | venue | `Venue` |  |
 
-<a id="payinkind-assetinfo-address-uint256-uint256"></a>
+<a id="payinkind-assetinfo-mapping-address-uint256-address-uint256-uint256"></a>
 
 ### payInKind
 
@@ -256,6 +256,7 @@ the vault's idle USDC and of each ACTIVE basket token. `exitFeeBps` of each leg 
 ```solidity
 function payInKind(
         AssetInfo[] storage assets,
+        mapping(address => uint256) storage feeRemainders,
         address receiver,
         uint256 shares,
         uint256 supplyBefore
@@ -267,16 +268,18 @@ function payInKind(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | assets | `AssetInfo[]` |  |
+| feeRemainders | `mapping(address => uint256)` |  |
 | receiver | `address` |  |
 | shares | `uint256` |  |
 | supplyBefore | `uint256` |  |
 
-<a id="_payleg-ierc20-address-uint256-uint256-uint256-address"></a>
+<a id="_payleg-mapping-address-uint256-ierc20-address-uint256-uint256-uint256-address"></a>
 
 ### _payLeg
 
 ```solidity
 function _payLeg(
+        mapping(address => uint256) storage feeRemainders,
         IERC20 token,
         address receiver,
         uint256 shares,
@@ -290,6 +293,7 @@ function _payLeg(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| feeRemainders | `mapping(address => uint256)` |  |
 | token | `IERC20` |  |
 | receiver | `address` |  |
 | shares | `uint256` |  |

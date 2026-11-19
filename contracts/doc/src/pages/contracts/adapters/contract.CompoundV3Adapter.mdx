@@ -7,7 +7,7 @@ description: "Strategy adapter that supplies USDC to Compound V3 (Comet) on Base
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/adapters/CompoundV3Adapter.sol)
 
-**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter), [IVenueHealthAdapter](/contracts/interfaces/interface.IVenueHealthAdapter)
+**Inherits:** [IStrategyAdapter](/contracts/interfaces/interface.IStrategyAdapter), [IVenueHealthAdapter](/contracts/interfaces/interface.IVenueHealthAdapter), [IVenueLiquidityAdapter](/contracts/interfaces/interface.IVenueLiquidityAdapter), [IERC165](/contracts/test/vendor/safe-1.4.1/interfaces/interface.IERC165)
 
 **Title:** CompoundV3Adapter
 
@@ -176,6 +176,52 @@ function venueWithdrawable() public view returns (bool);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
+
+<a id="supportsinterface-bytes4"></a>
+
+### supportsInterface
+
+<i>
+
+Returns true if this contract implements the interface defined by
+`interfaceId`. See the corresponding
+https://eips.ethereum.org/EIPS/eip-165#how-interfaces-are-identified[EIP section]
+to learn more about how these ids are created.
+
+This function call must use less than 30 000 gas.
+
+</i>
+
+```solidity
+function supportsInterface(bytes4 interfaceId) external pure returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| interfaceId | `bytes4` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="withdrawalliquidity"></a>
+
+### withdrawalLiquidity
+
+```solidity
+function withdrawalLiquidity() external view returns (bool open, uint256 available);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| open | `bool` | Whether the venue permits withdrawals under current conditions. |
+| available | `uint256` | The maximum underlying the adapter can withdraw immediately. |
 
 <a id="deploy-uint256-uint256"></a>
 

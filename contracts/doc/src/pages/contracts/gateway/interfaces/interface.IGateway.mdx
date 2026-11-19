@@ -73,7 +73,7 @@ function depositTo(
 | deadline | `uint64` | Hard expiry; must be `&lt;= block.timestamp + 600`. |
 | idempotencyKey | `bytes32` | Caller-side dedup salt mixed into `paymentId`. |
 | destination | `address` | ERC-4626 vault named in the policy. |
-| minSharesPerLeg | `uint256[]` | Bound into `paymentId` only. Pass an empty array. |
+| minSharesPerLeg | `uint256[]` | Empty to omit a floor, or one minimum in destination vault share units. |
 
 **Returns**
 

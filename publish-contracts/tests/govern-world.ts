@@ -139,7 +139,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
       getTransactionReceipt: async ({ hash }: { hash: string }) => ({ blockNumber: s.txClock.get(hash) ?? s.clock, status: "success", ...s.txReceipts.get(hash.toLowerCase()) }),
       readContract: async ({ address, functionName, args }: { address: Address; functionName: string; args?: unknown[] }) => {
         const key = Object.entries(A.vaults).find(([, v]) => v === address)?.[0] as "USDC" | undefined;
-        if (functionName in s.reads) return s.reads[functionName];
+        if (functionName in s.reads) {
+          const value = s.reads[functionName];
+          if (value instanceof Error) throw value;
+          return value;
+        }
         switch (functionName) {
           case "tvlCap": return sheet.vaults[key!].tvlCap;
           case "perDepositCap": return sheet.vaults[key!].perDepositCap;
@@ -153,6 +157,8 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
           case "listVaults": return s.listed;
           case "getReceiptById": return { payloadDigest: s.digests.get(String(args?.[0]).toLowerCase()), recordedAt: recordedAtOf(String(args?.[0])) };
           case "lastAppliedRecordedAt": return s.lastAppliedRecordedAt;
+          case "lastAppliedReceiptSequence": return 0n;
+          case "receiptSequence": return 1n;
           case "vaultCap": return s.vaultCaps.get(String(args?.[0])) ?? 0n;
           case "getDefaultWeights": return [s.weights.vaults, s.weights.bps];
           case "getWeights": return s.voted ? [s.voted.vaults, s.voted.bps] : [[], []];
@@ -282,7 +288,11 @@ export function fakeTimelock(sheet: ReturnType<typeof parseSheet>, startMinDelay
             if (!s.recorded.has(rid.toLowerCase()) && !s.recorded.has(rid)) throw new Error("ReceiptNotRecorded");
             if (s.released.has(rid.toLowerCase())) throw new Error("ReceiptAlreadyReleased");
             if ((s.digests.get(rid.toLowerCase()) ?? "").toLowerCase() !== digest.toLowerCase()) throw new Error("PayloadDigestMismatch");
-            if (recordedAtOf(rid) <= s.lastAppliedRecordedAt) throw new Error("ReceiptNotNewerThanApplied");
+            const lastSequence = (s.reads.lastAppliedReceiptSequence as bigint | undefined) ?? 0n;
+            const sequence = (s.reads.receiptSequence as bigint | undefined) ?? 0n;
+            if (lastSequence === 0n ? recordedAtOf(rid) <= s.lastAppliedRecordedAt : sequence <= lastSequence) {
+              throw new Error("ReceiptNotNewerThanApplied");
+            }
             if (new Set(vs.map((x) => x.toLowerCase())).size !== vs.length) throw new Error("DuplicateVault");
             s.lastAppliedRecordedAt = recordedAtOf(rid);
             s.released.add(rid.toLowerCase());

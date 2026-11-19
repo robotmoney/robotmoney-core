@@ -169,6 +169,9 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     /// @notice Vault address argument is `address(0)`.
     error ZeroAddress();
 
+    /// @notice A registered vault must be a deployed contract.
+    error VaultHasNoCode(address vault);
+
     /// @notice Vault address is already registered.
     error AlreadyRegistered();
 
@@ -232,9 +235,10 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     // ─── Write surface ───────────────────────────────────────────────────────
 
     /// @notice Register a new vault. The vault is set to `Active` status immediately.
-    ///         Restricted to `ADMIN_ROLE`.
-    /// @param vault    Address of the vault contract to register (must not be zero or
-    ///                 already registered).
+    ///         Restricted to `ADMIN_ROLE`. Supported vaults must implement the
+    ///         registry-gated retire and unretire hooks used by all status changes.
+    /// @param vault    Address of the deployed vault contract to register.
+    ///                 Must be nonzero and unregistered.
     /// @param metadata Human-readable name and asset address for the vault.
     function registerVault(address vault, VaultMetadata calldata metadata)
         external
@@ -242,6 +246,7 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     {
         if (vault == address(0)) revert ZeroAddress();
         if (_registered[vault]) revert AlreadyRegistered();
+        if (vault.code.length == 0) revert VaultHasNoCode(vault);
 
         _registered[vault] = true;
         _vaults.push(vault);
@@ -259,11 +264,8 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     // #925, graduated-authority model)" and docs/prd.md §6 Vault lifecycle +
     // §12 INV-3.
     //
-    // `setVaultStatus(vault, Retired)` alone stops only the *router* from sending
-    // new deposits; the vault still accepts *direct* deposits until its own
-    // deposit-halt is flipped. `retire(vault)` closes that drift by doing both in
-    // one timelock-gated call: it sets registry status to `Retired` AND calls the
-    // vault deposit-halt leg (`IRetirableVault.retire()`). Emergency
+    // Both lifecycle entry points update the registry and call the vault hook
+    // in the same timelock-gated transaction. Emergency
     // `RobotMoneyVault.shutdownVault` stays `EMERGENCY_ROLE`, vault-only, with no
     // registry/lifecycle change — the hot key never makes a lifecycle decision.
 
@@ -278,17 +280,7 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     ///         (ERC-4626 `redeem` is never revoked; ADR-0009).
     /// @param vault Address of an already-registered vault.
     function retire(address vault) external onlyRole(ADMIN_ROLE) {
-        if (!_registered[vault]) revert NotRegistered();
-        // A Retired vault must never remain counted in `routerEligibleCount`: it
-        // can never be an Active leg, so the router's default weight vector
-        // (length == routerEligibleCount, every leg Active AND eligible) could no
-        // longer be set — stranding the default vector. Force the documented
-        // make-ineligible-before-retire ordering in-contract (issue #1173,
-        // ADR-0002) instead of relying on convention.
-        if (_routerEligible[vault]) revert RetireWhileRouterEligible(vault);
-        _status[vault] = VaultStatus.Retired;
-        IRetirableVault(vault).retire();
-        emit VaultStatusChanged(vault, VaultStatus.Retired, block.timestamp);
+        _setVaultStatus(vault, VaultStatus.Retired);
     }
 
     /// @notice Abort a deprecation: atomically set the vault's registry status
@@ -298,10 +290,7 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     ///         to `ADMIN_ROLE` (TimelockController in production).
     /// @param vault Address of an already-registered vault.
     function reactivate(address vault) external onlyRole(ADMIN_ROLE) {
-        if (!_registered[vault]) revert NotRegistered();
-        _status[vault] = VaultStatus.Active;
-        IRetirableVault(vault).unretire();
-        emit VaultStatusChanged(vault, VaultStatus.Active, block.timestamp);
+        _setVaultStatus(vault, VaultStatus.Active);
     }
 
     /// @notice Update a vault's lifecycle status, driving the vault's own
@@ -329,6 +318,10 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
     /// @param vault      Address of an already-registered vault.
     /// @param newStatus  New lifecycle status (Active, DepositsPaused, or Retired).
     function setVaultStatus(address vault, VaultStatus newStatus) external onlyRole(ADMIN_ROLE) {
+        _setVaultStatus(vault, newStatus);
+    }
+
+    function _setVaultStatus(address vault, VaultStatus newStatus) private {
         if (!_registered[vault]) revert NotRegistered();
         // Same retirement invariant as `retire()` (issue #1173): a Retired vault
         // must never remain counted in `routerEligibleCount`, or the router's
@@ -345,19 +338,11 @@ contract VaultRegistry is AdminFloorAccessControl, GovernedUUPS {
         // Drive the vault's deposit-halt flag so it can never disagree with the
         // registry status (LIFE-1 / F-04 / AZ-REG-1). Active re-opens direct
         // deposits; any non-Active status (DepositsPaused or Retired) hard-stops them.
-        // The empty-code guard skips addresses with no contract code. Calls are
-        // made directly (no try/catch) so a hook failure propagates to the
-        // caller: a failed retire must NOT be silently absorbed while the
-        // registry records the vault as Retired (AZ-REG-1 — deposits would
-        // continue against a supposedly-retired vault). Every vault type in the
-        // protocol implements IRetirableVault; a registered address that lacks
-        // the hook fails the call intentionally.
-        if (vault.code.length > 0) {
-            if (newStatus == VaultStatus.Active) {
-                IRetirableVault(vault).unretire();
-            } else {
-                IRetirableVault(vault).retire();
-            }
+        if (vault.code.length == 0) revert VaultHasNoCode(vault);
+        if (newStatus == VaultStatus.Active) {
+            IRetirableVault(vault).unretire();
+        } else {
+            IRetirableVault(vault).retire();
         }
 
         emit VaultStatusChanged(vault, newStatus, block.timestamp);

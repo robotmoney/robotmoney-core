@@ -90,7 +90,7 @@ contract VaultRegistryTest is Test {
     address internal admin = makeAddr("admin");
     address internal stranger = makeAddr("stranger");
 
-    // Stable fake vault addresses for tests that don't need real contracts.
+    // Lifecycle-capable fixtures for registration and status tests.
     address internal vault1 = makeAddr("vault1");
     address internal vault2 = makeAddr("vault2");
     address internal vault3 = makeAddr("vault3");
@@ -110,6 +110,10 @@ contract VaultRegistryTest is Test {
 
     function setUp() public {
         registry = CoreProxies.vaultRegistry(admin);
+        bytes memory vaultCode = type(MockRetirableVault).runtimeCode;
+        vm.etch(vault1, vaultCode);
+        vm.etch(vault2, vaultCode);
+        vm.etch(vault3, vaultCode);
     }
 
     // ─── Constructor ─────────────────────────────────────────────────────────
@@ -180,6 +184,13 @@ contract VaultRegistryTest is Test {
         vm.prank(admin);
         vm.expectRevert(VaultRegistry.ZeroAddress.selector);
         registry.registerVault(address(0), meta1);
+    }
+
+    function test_registerVault_revertsForAddressWithoutCode() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(VaultRegistry.VaultHasNoCode.selector, stranger));
+        registry.registerVault(stranger, meta1);
+        assertEq(registry.vaultCount(), 0);
     }
 
     function test_registerVault_revertsOnDuplicate() public {
@@ -546,6 +557,7 @@ contract VaultRegistryTest is Test {
         for (uint256 i = 0; i < count; i++) {
             // Derive a deterministic non-zero address for each iteration.
             address v = address(uint160(uint256(keccak256(abi.encodePacked("v", i)))));
+            vm.etch(v, type(MockRetirableVault).runtimeCode);
             vm.prank(admin);
             registry.registerVault(v, meta1);
         }

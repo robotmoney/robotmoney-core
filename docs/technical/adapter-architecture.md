@@ -234,19 +234,30 @@ A venue that shuts withdrawals too (security round 3):
   back there let a deposit mint at that NAV and left its slice idle, and
   a redeem no larger than idle was paid at full NAV while any later
   haircut fell on the holders who stayed (the FS-VLT-8 outcome).
-- The Aave and Compound adapters implement
-  `IVenueHealthAdapter.venueWithdrawable()`. While any active adapter
-  reports false, `RobotMoneyVault.maxDeposit` and `maxMint` read 0
-  (`RobotMoneyVaultOps.anyActiveBlocked`), so a deposit reverts and the
-  router skips the rmUSDC leg. A missing or reverting view reads as
-  open. Deposits reopen with the venue, or once the adapter leaves the
-  active set.
-- The adapter's own `deploy` does not hand a slice back while its venue
-  is shut: it reverts `VenueWithdrawalsClosed(reason)`. So a keeper
-  `rebalance` cannot pull a healthy venue's excess into idle and leave
-  it there either.
-- MetaMorpho has no pause, so `MorphoAdapter` has no such view; its
-  `AllCapsReached` refusal still hands back.
+- Current Aave, Compound and Morpho adapters advertise
+  `IVenueLiquidityAdapter` through ERC-165. They report withdrawal status
+  and immediate underlying liquidity. Aave caps the position at reserve
+  cash held by the aToken. Compound caps it at Comet base-token cash.
+  Morpho uses ERC-4626 `maxWithdraw(adapter)`.
+- A restricted venue, a failed or malformed advertised probe, or a
+  nonempty adapter reporting zero liquidity closes `maxDeposit` and
+  `maxMint` while it is active. Unadvertised adapters use the legacy
+  pause-only view where available. An unsupported legacy view leaves the
+  position balance as its withdrawal bound.
+- Redemptions cap each proportional pull at current liquidity and try
+  remaining eligible positions for any shortfall. A redemption with
+  insufficient aggregate liquidity reverts atomically. Older adapter
+  deployments without the liquidity interface can still revert on a
+  withdrawal that exceeds immediate venue cash.
+- The adapter's own `deploy` still reverts `VenueWithdrawalsClosed(reason)`
+  on Aave or Compound when the protocol prohibits withdrawals. Morpho
+  still returns a refused supply to the vault.
+- Rollout requires an inventory of active adapter addresses and runtime
+  hashes per target vault. The existing immutable Aave and Compound
+  instances supply pause status only. Existing Morpho supplies no venue
+  probe. Record this against the active set before upgrade and migrate
+  those positions through the normal governed adapter replacement flow
+  to enable liquidity bounds.
 - The operator response stays exclude first: `EMERGENCY_ROLE` runs
   `emergencyExcludeAdapter` before any drain.
 

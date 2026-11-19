@@ -225,6 +225,11 @@ contract ConsensusRecommendationReceipt is
         return _indexPlusOne[receiptId] != 0;
     }
 
+    /// @notice The existing 1-based issuance index also orders receipts recorded in the same second.
+    function receiptSequence(bytes32 receiptId) external view returns (uint256) {
+        return _indexPlusOne[receiptId];
+    }
+
     /// @inheritdoc IConsensusRecommendationReceipt
     function isReleased(bytes32 receiptId) external view returns (bool) {
         uint256 slot = _indexPlusOne[receiptId];

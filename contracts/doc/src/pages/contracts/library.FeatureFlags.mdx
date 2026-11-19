@@ -17,7 +17,7 @@ passed in wherever a gate check is needed — no storage cost.
 
 Flag IDs (stable — never renumber):
 0  MULTI_VAULT_ENABLED       gates multi-vault UI + indexer paths
-1  PORTFOLIO_ROUTER_ENABLED  gates router deposit path
+1  PORTFOLIO_ROUTER_ENABLED  gates router deposit UI
 2  INDEXER_MULTI_VAULT_EVENTS gates indexer VaultRegistry events
 
 ## Constants
@@ -39,8 +39,8 @@ uint8 public constant MULTI_VAULT_ENABLED = 0;
 
 <i>
 
-Gates the PortfolioRouter deposit path and the router allocation
-surface in the dapp.
+Gates the PortfolioRouter deposit and router allocation
+surfaces in flag-aware clients. Router transaction entry points do not read this bitmap.
 
 </i>
 

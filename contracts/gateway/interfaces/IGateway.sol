@@ -146,7 +146,7 @@ interface IGateway {
     /// @param deadline         Hard expiry; must be `<= block.timestamp + 600`.
     /// @param idempotencyKey   Caller-side dedup salt mixed into `paymentId`.
     /// @param destination      ERC-4626 vault named in the policy.
-    /// @param minSharesPerLeg  Bound into `paymentId` only. Pass an empty array.
+    /// @param minSharesPerLeg  Empty to omit a floor, or one minimum in destination vault share units.
     /// @return paymentId       keccak256(abi.encode(OP_DEPOSIT_TO=3, chainId, gateway, agent,
     ///                         orderId, amount, idempotencyKey, destination, minSharesPerLeg)).
     function depositTo(

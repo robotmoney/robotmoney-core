@@ -21,6 +21,7 @@ import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.so
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RobotMoneyVault} from "../RobotMoneyVault.sol";
+import {IVenueLiquidityAdapter} from "../interfaces/IVenueLiquidityAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {CoreProxies} from "./helpers/CoreProxies.sol";
 import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
@@ -42,6 +43,10 @@ contract RouteUSDC is ERC20 {
 
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
+    }
+
+    function burn(address from, uint256 amount) external {
+        _burn(from, amount);
     }
 }
 
@@ -1018,12 +1023,12 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         assertEq(usdc.balanceOf(address(s.v)), 0, "no idle USDC to pay an exit at par");
         assertEq(s.aave.totalAssets(), aaveHeld, "the paused balance is untouched");
 
-        // With no idle, a redeem needs Aave's pro-rata part, which the paused reserve refuses.
-        // The exit waits for `emergencyExcludeAdapter` (exclude first, FS-VLT-8), not for idle.
+        // A paused reserve contributes no liquidity. The other venues can fund a small exit.
         uint256 someShares = s.v.balanceOf(alice) / 10;
-        vm.expectRevert(bytes("29"));
         vm.prank(alice);
-        s.v.redeem(someShares, alice, alice);
+        uint256 out = s.v.redeem(someShares, alice, alice);
+        assertGt(out, 0, "healthy venues fund the exit");
+        assertEq(s.aave.totalAssets(), aaveHeld, "the paused balance remains untouched");
 
         s.pool.setPaused(false);
         assertEq(s.v.maxDeposit(alice), PER_DEPOSIT_CAP, "deposits reopen with the reserve");
@@ -1049,7 +1054,9 @@ contract RobotMoneyVaultRouteDepositTest is Test {
 
         vm.prank(alice);
         s.v.deposit(amount, alice);
-        assertEq(s.v.totalAssets(), 3_000 * ONE_USDC + amount, "the deposit lands once reopened");
+        assertEq(
+            s.v.totalAssets(), 3_000 * ONE_USDC + amount - out, "the deposit lands once reopened"
+        );
     }
 
     /// @notice Security round 3. Compound is overweight and Aave underweight when Aave's reserve
@@ -1102,6 +1109,107 @@ contract RobotMoneyVaultRouteDepositTest is Test {
         );
         vm.prank(address(s.v));
         s.compound.deploy(ONE_USDC);
+    }
+
+    function test_withdrawalLiquidityDistinguishesCashAndPause() public {
+        VenueSet memory s = _venueSet(type(uint128).max, type(uint128).max);
+        vm.prank(alice);
+        s.v.deposit(3_000 * ONE_USDC, alice);
+
+        address aaveCash = address(s.pool.aToken());
+        address cometCash = address(s.comet);
+        address morphoCash = address(s.metaMorpho);
+        (bool open, uint256 available) = s.aave.withdrawalLiquidity();
+        assertTrue(open);
+        assertEq(available, s.aave.totalAssets());
+        (open, available) = s.compound.withdrawalLiquidity();
+        assertTrue(open);
+        assertEq(available, s.compound.totalAssets());
+        (open, available) = s.morpho.withdrawalLiquidity();
+        assertTrue(open);
+        assertEq(available, s.morpho.totalAssets());
+
+        uint256 cash = 50 * ONE_USDC;
+        usdc.burn(aaveCash, usdc.balanceOf(aaveCash) - cash);
+        usdc.burn(cometCash, usdc.balanceOf(cometCash) - cash);
+        usdc.burn(morphoCash, usdc.balanceOf(morphoCash) - cash);
+        (open, available) = s.aave.withdrawalLiquidity();
+        assertTrue(open);
+        assertEq(available, cash);
+        (open, available) = s.compound.withdrawalLiquidity();
+        assertTrue(open);
+        assertEq(available, cash);
+        (open, available) = s.morpho.withdrawalLiquidity();
+        assertTrue(open);
+        assertEq(available, cash);
+
+        s.pool.setPaused(true);
+        (open, available) = s.aave.withdrawalLiquidity();
+        assertFalse(open);
+        assertEq(available, 0);
+        s.comet.setWithdrawPaused(true);
+        (open, available) = s.compound.withdrawalLiquidity();
+        assertFalse(open);
+        assertEq(available, 0);
+
+        uint256 shares = s.v.balanceOf(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RobotMoneyVault.InsufficientAdapterLiquidity.selector, 100 * ONE_USDC, cash
+            )
+        );
+        vm.prank(alice);
+        s.v.withdraw(100 * ONE_USDC, alice, alice);
+        assertEq(s.v.balanceOf(alice), shares);
+        assertEq(usdc.balanceOf(morphoCash), cash);
+    }
+
+    function test_advertisedLiquidityProbeFailsClosed() public {
+        VenueSet memory s = _venueSet(type(uint128).max, type(uint128).max);
+        assertGt(s.v.maxDeposit(alice), 0);
+        bytes memory probe = abi.encodeCall(IVenueLiquidityAdapter.withdrawalLiquidity, ());
+        vm.mockCallRevert(address(s.morpho), probe, "");
+        assertEq(s.v.maxDeposit(alice), 0, "reverting probe");
+        vm.clearMockedCalls();
+        vm.mockCall(address(s.morpho), probe, abi.encode(uint256(2), uint256(1)));
+        assertEq(s.v.maxDeposit(alice), 0, "invalid boolean");
+        vm.clearMockedCalls();
+        vm.mockCall(address(s.morpho), probe, abi.encode(uint256(1)));
+        assertEq(s.v.maxDeposit(alice), 0, "truncated response");
+    }
+
+    function test_keeperRebalanceMovesOnlyItsBudgetAndDeploysPreviouslyIdleFunds() public {
+        _bootstrapBalancedVault(3_000 * ONE_USDC);
+        vm.startPrank(admin);
+        vault.setAdapterCap(0, 1_000);
+        vault.setAdapterCap(1, 4_000);
+        vault.setAdapterCap(2, 4_000);
+        vault.setMaxRebalanceBpsPerCall(100);
+        vm.stopPrank();
+
+        usdc.mint(address(vault), 1_000 * ONE_USDC);
+        uint256 firstBefore = adapters[0].totalAssets();
+        vm.warp(block.timestamp + vault.minRebalanceInterval() + 1);
+        vm.prank(admin);
+        vault.rebalance();
+
+        assertEq(adapters[0].totalAssets(), firstBefore - 40 * ONE_USDC);
+        assertEq(adapters[1].totalAssets(), 1_600 * ONE_USDC);
+        assertEq(
+            adapters[2].totalAssets(),
+            4_000 * ONE_USDC - 1_600 * ONE_USDC - adapters[0].totalAssets()
+        );
+        assertEq(usdc.balanceOf(address(vault)), 0, "existing idle bypasses the move budget");
+
+        vm.prank(admin);
+        vault.setMaxRebalanceBpsPerCall(5_000);
+        vm.warp(block.timestamp + vault.minRebalanceInterval() + 1);
+        vm.prank(admin);
+        vault.rebalance();
+        assertEq(adapters[0].totalAssets(), 400 * ONE_USDC);
+        assertEq(adapters[1].totalAssets(), 1_600 * ONE_USDC);
+        assertEq(adapters[2].totalAssets(), 1_600 * ONE_USDC);
+        assertEq(usdc.balanceOf(address(vault)), 400 * ONE_USDC, "exhausted capacity stays idle");
     }
 
     // ─── Recorded gas for the ordinary balanced-vault deposit path ───────────

@@ -474,6 +474,7 @@ contract DeployTimelockTest is SafeGovernance {
     ///         the vault is registered.
     function test_timelockRouted_registerVault_succeedsAfterDelay() public {
         address newVault = makeAddr("newVault");
+        vm.etch(newVault, hex"00");
         VaultRegistry.VaultMetadata memory meta = VaultRegistry.VaultMetadata({
             name: "Timelocked Vault", asset: address(usdc), registeredAt: block.timestamp
         });

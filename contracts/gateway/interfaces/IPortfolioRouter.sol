@@ -3,9 +3,9 @@
 pragma solidity ^0.8.24;
 
 /// @title IPortfolioRouter
-/// @notice Minimal interface for PortfolioRouter used by RobotMoneyGateway.
-/// @dev The gateway needs `depositFor` and `redeemFor`; the full router
-///      surface is in contracts/PortfolioRouter.sol.
+/// @notice Minimal interface for integrations that call PortfolioRouter.
+/// @dev The current gateway deposits to one ERC-4626 vault. The full router interface
+///      is in contracts/PortfolioRouter.sol.
 interface IPortfolioRouter {
     /// @notice Split `amount` USDC across active vaults by the current weight
     ///         vector. Shares are minted to `receiver` instead of `msg.sender`.
@@ -18,16 +18,10 @@ interface IPortfolioRouter {
         returns (uint256[] memory sharesPerLeg);
 
     /// @notice Redeem vault shares from an explicit, caller-supplied set of
-    ///         vaults. Pulls shares from `shareHolder` via ERC-20 `transferFrom`
-    ///         (shareHolder must approve the router for each vault share token),
-    ///         calls `vault.redeem` on each leg, and forwards USDC only to
-    ///         `assetRecipient`. Legs are driven by the `vaults[]` argument, not
-    ///         the live weight vector (issue #967, F-03), so a reweighted-out or
-    ///         Retired position stays redeemable; `sharesPerLeg[i]` is identity-
-    ///         bound to `vaults[i]` (NC-5). Redemption works for every registry
-    ///         status (Active, DepositsPaused, Retired): no status blocks a leg (F-02, core 1494).
-    /// @param shareHolder       Address whose vault shares are redeemed (must have
-    ///                          approved the router to spend shares per vault).
+    ///         vaults. Each vault sends assets directly to the supplied recipient.
+    ///         The holder approves the router on the vault share token. An operator must
+    ///         also have a router redemption allowance for each vault and recipient.
+    /// @param shareHolder       Owner of the shares passed to the vault redeem call.
     /// @param assetRecipient    Address that receives the redeemed USDC per leg.
     /// @param vaults            Explicit list of vault addresses to redeem from.
     ///                          Each must be registered. Drives the redeem legs;

@@ -249,6 +249,14 @@ stays redeemable by holders, with no admin-routable path.
 function test_reabsorbRemovedAsset_creditsNavPermissionlessly() public;
 ```
 
+<a id="test_managedrecoverykeepscohortsontheirrespectivenav"></a>
+
+### test_managedRecoveryKeepsCohortsOnTheirRespectiveNav
+
+```solidity
+function test_managedRecoveryKeepsCohortsOnTheirRespectiveNav() public;
+```
+
 <a id="test_reabsorbremovedasset_revertsforactiveasset"></a>
 
 ### test_reabsorbRemovedAsset_revertsForActiveAsset
@@ -268,8 +276,7 @@ LIFE-6 / NC-8 (FLIPPED GREEN by #970): re-absorbing a removed asset
 whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
 reverts-and-strands. Pre-fix, the swap-floor read reverted and the
 reappeared balance was stuck on the vault forever; post-fix the
-quarantine fallback sweeps it to the governed quarantine address, so
-the balance is always actionable (the reversible safety valve).
+quarantine fallback sweeps it to the fixed quarantine address.
 Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
 
 ```solidity
@@ -1247,6 +1254,14 @@ the denominator, never receives more than the OZ formula, and caps hold.
 function test_AZBSK3_firstDepositWithDonatedIdleCannotOverMint() public;
 ```
 
+<a id="test_deposit_checksrealizednavagainsttvlcap"></a>
+
+### test_deposit_checksRealizedNavAgainstTvlCap
+
+```solidity
+function test_deposit_checksRealizedNavAgainstTvlCap() public;
+```
+
 <a id="test_azbsk3_tinydepositroundsdownandcapstillenforced"></a>
 
 ### test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced
@@ -1430,6 +1445,14 @@ function _addSecond(uint256 amount) internal returns (TestERC20 t2);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | t2 | `TestERC20` |  |
+
+<a id="test_redeeminkind_carriesfeesforeachpayouttoken"></a>
+
+### test_redeemInKind_carriesFeesForEachPayoutToken
+
+```solidity
+function test_redeemInKind_carriesFeesForEachPayoutToken() public;
+```
 
 <a id="test_redeeminkind_succeedswhenobservereverts"></a>
 

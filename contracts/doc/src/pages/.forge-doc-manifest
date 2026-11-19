@@ -40,6 +40,7 @@ contracts/interfaces/interface.IUnlockCallbackV4.mdx
 contracts/interfaces/interface.IUpstreamMonitor.mdx
 contracts/interfaces/interface.IVault.mdx
 contracts/interfaces/interface.IVenueHealthAdapter.mdx
+contracts/interfaces/interface.IVenueLiquidityAdapter.mdx
 contracts/lib/abstract.AdminFloorAccessControl.mdx
 contracts/lib/abstract.AdminFloorAccessControlCounter.mdx
 contracts/lib/abstract.GovernedUUPS.mdx
@@ -439,6 +440,13 @@ contracts/test/prototype/abstract.BaseFixture.mdx
 contracts/test/prototype/abstract.FlowQueueBase.mdx
 contracts/test/prototype/abstract.FlowQueueFixesBase.mdx
 contracts/test/prototype/abstract.PrototypeHarness.mdx
+contracts/test/prototype/anvil/contract.OneVaultDeliveryAnvil.mdx
+contracts/test/prototype/anvil/contract.OneVaultKeeperAnvil.mdx
+contracts/test/prototype/anvil/contract.OneVaultMockAToken.mdx
+contracts/test/prototype/anvil/contract.OneVaultMockAavePool.mdx
+contracts/test/prototype/anvil/contract.OneVaultMockBasketToken.mdx
+contracts/test/prototype/anvil/contract.OneVaultMockSwapRouter.mdx
+contracts/test/prototype/anvil/contract.OneVaultMockV3Pool.mdx
 contracts/test/prototype/baseline/abstract.BaselineHarness.mdx
 contracts/test/prototype/baseline/contract.AdversarialTest.mdx
 contracts/test/prototype/baseline/contract.AuctionExecutorTest.mdx
@@ -497,6 +505,7 @@ contracts/test/prototype/contract.FlowLibsPinTest.mdx
 contracts/test/prototype/contract.FlowLibsTest.mdx
 contracts/test/prototype/contract.FlowQueueFixesTest.mdx
 contracts/test/prototype/contract.FlowQueueOldestFirstInvariant.mdx
+contracts/test/prototype/contract.FlowQueuePermitTest.mdx
 contracts/test/prototype/contract.FlowQueueRandomSeedFuzzTest.mdx
 contracts/test/prototype/contract.FlowQueueRealFeedsTest.mdx
 contracts/test/prototype/contract.FlowQueueSeedTest.mdx
@@ -510,6 +519,7 @@ contracts/test/prototype/contract.HarnessSmokeTest.mdx
 contracts/test/prototype/contract.Invariants.mdx
 contracts/test/prototype/contract.OddDeltaPool.mdx
 contracts/test/prototype/contract.OwnerDefaultsTest.mdx
+contracts/test/prototype/contract.PermitUsdc.mdx
 contracts/test/prototype/contract.QueueMockAggregator.mdx
 contracts/test/prototype/contract.QueueMockObservablePool.mdx
 contracts/test/prototype/contract.ReviewFixesDepthTest.mdx

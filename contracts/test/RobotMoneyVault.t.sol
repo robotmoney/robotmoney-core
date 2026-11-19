@@ -368,6 +368,22 @@ contract RobotMoneyVaultTest is Test {
         usdc.approve(address(adapter), type(uint256).max);
     }
 
+    function test_initialize_rejectsZeroCaps() public {
+        _assertInvalidInitialCaps(0, PER_DEPOSIT_CAP);
+        _assertInvalidInitialCaps(TVL_CAP, 0);
+    }
+
+    function _assertInvalidInitialCaps(uint256 cap, uint256 depositCap) private {
+        address implementation = CoreProxies.implementationOf(address(vault));
+        (address timelock, GovernedUUPS.UpgradeMode mode) = CoreProxies.config();
+        bytes memory initData = abi.encodeCall(
+            RobotMoneyVault.initialize,
+            (IERC20(address(usdc)), cap, depositCap, 0, feeRecipient, admin, admin, timelock, mode)
+        );
+        vm.expectRevert(RobotMoneyVault.InvalidParam.selector);
+        CoreProxies.proxy(implementation, initData);
+    }
+
     function _allowAdapter(RobotMoneyVault vault_, address adapter_) internal {
         vm.prank(admin);
         vault_.setAdapterAllowed(adapter_, true);

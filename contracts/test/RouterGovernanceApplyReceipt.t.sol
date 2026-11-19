@@ -374,24 +374,55 @@ contract RouterGovernanceApplyReceiptTest is SafeGovernance {
         assertEq(gov.lastAppliedRecordedAt(), recordedB, "the guard still holds B");
     }
 
-    /// @notice A receipt recorded in the same second as the applied one is not newer, so
-    ///         it is refused.
-    function test_applyReceipt_sameRecordedAtRefused() public {
+    function test_applyReceipt_sameRecordedAtAppliesInIssuanceOrder() public {
         (bytes memory applyA, bytes memory applyB) = _scheduleBoth(0);
         uint64 recorded = receipts.getReceiptById(RECEIPT_ID).recordedAt;
-        assertEq(receipts.getReceiptById(RECEIPT_B).recordedAt, recorded, "same recordedAt");
+        assertEq(receipts.getReceiptById(RECEIPT_B).recordedAt, recorded);
 
         _govExecute(safe, timelock, address(gov), applyA, keccak256("apply-A"));
+        _govExecute(safe, timelock, address(gov), applyB, keccak256("apply-B"));
+
+        (address[] memory vb, uint256[] memory bb) = _vectorB();
+        _assertRouterVector(vb, bb);
+        assertTrue(receipts.isReleased(RECEIPT_ID));
+        assertTrue(receipts.isReleased(RECEIPT_B));
+        assertEq(gov.lastAppliedReceiptSequence(), receipts.receiptSequence(RECEIPT_B));
+    }
+
+    function test_applyReceipt_sameRecordedAtRefusesEarlierIssuance() public {
+        (bytes memory applyA, bytes memory applyB) = _scheduleBoth(0);
+        uint64 recorded = receipts.getReceiptById(RECEIPT_ID).recordedAt;
+        _govExecute(safe, timelock, address(gov), applyB, keccak256("apply-B"));
+
         vm.expectRevert(
             abi.encodeWithSelector(
-                RouterGovernance.ReceiptNotNewerThanApplied.selector, RECEIPT_B, recorded, recorded
+                RouterGovernance.ReceiptNotNewerThanApplied.selector, RECEIPT_ID, recorded, recorded
             )
         );
-        timelock.execute(address(gov), 0, applyB, bytes32(0), keccak256("apply-B"));
+        timelock.execute(address(gov), 0, applyA, bytes32(0), keccak256("apply-A"));
+        assertFalse(receipts.isReleased(RECEIPT_ID));
+    }
 
-        (address[] memory va, uint256[] memory ba) = _vector();
-        _assertRouterVector(va, ba);
-        assertFalse(receipts.isReleased(RECEIPT_B), "the refused receipt stays unreleased");
+    function test_applyReceipt_preservesLegacyTimestampWatermark() public {
+        (bytes memory applyA, bytes memory applyB) = _scheduleBoth(1 hours);
+        uint64 recordedAt = receipts.getReceiptById(RECEIPT_ID).recordedAt;
+        // Replay protection state inherited from a legacy implementation: the
+        // address in slot 1 stays put and only its timestamp watermark is set.
+        bytes32 slot = bytes32(uint256(1));
+        uint256 packed = uint256(vm.load(address(gov), slot));
+        vm.store(address(gov), slot, bytes32(packed | (uint256(recordedAt) << 160)));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RouterGovernance.ReceiptNotNewerThanApplied.selector,
+                RECEIPT_ID,
+                recordedAt,
+                recordedAt
+            )
+        );
+        timelock.execute(address(gov), 0, applyA, bytes32(0), keccak256("apply-A"));
+        _govExecute(safe, timelock, address(gov), applyB, keccak256("apply-B"));
+        assertEq(gov.lastAppliedReceiptSequence(), receipts.receiptSequence(RECEIPT_B));
     }
 
     /// @notice In order, A then B, both apply and B's vector is the active one.
