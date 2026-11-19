@@ -1,11 +1,11 @@
 {
   "enums": {},
   "libraries": [
-    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
     "contracts/lib/FlowCheckLib.sol:FlowCheckLib",
     "contracts/lib/FlowClaimLib.sol:FlowClaimLib",
     "contracts/lib/FlowMatchLib.sol:FlowMatchLib",
-    "contracts/lib/FlowSettleLib.sol:FlowSettleLib"
+    "contracts/lib/FlowSettleLib.sol:FlowSettleLib",
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
   ],
   "namespaces": {
     "openzeppelin.storage.AccessControl": [

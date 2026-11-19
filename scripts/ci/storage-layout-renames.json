@@ -1,5 +1,5 @@
 {
-  "_comment": "Reviewed label-only renames of proxy storage rows. The slot, offset and type are pinned: only the name changes, so the proxy layout is untouched. check-core-storage-layout.sh applies these to a baseline snapshot before it checks that the live layout extends it. Do not add entries for a moved or retyped variable.",
+  "_comment": "Reviewed label-only renames of proxy storage rows. The slot, offset and type are pinned: only the name changes, so the proxy layout is untouched. check-core-storage-layout.sh applies these to a baseline snapshot before it checks that the live layout extends it. Do not add entries for a moved or retyped variable. libraryRenames: reviewed source-path renames of a linked library (the fully qualified name only). They are applied to the baseline's library list; a library missing from this list still fails.",
   "renames": [
     {
       "contract": "ConsensusRecommendationReceipt",
@@ -10,6 +10,68 @@
       "type": "t_address",
       "issue": 1906,
       "reason": "SYS-1: a vaults-system contract names no gateway. The slot is retired (never written, never read) and keeps its position. The public getter gateway() is dropped from the ABI."
+    }
+  ],
+  "libraryRenames": [
+    {
+      "from": "contracts/test/prototype/src/lib/FlowCheckLib.sol:FlowCheckLib",
+      "to": "contracts/lib/FlowCheckLib.sol:FlowCheckLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FlowClaimLib.sol:FlowClaimLib",
+      "to": "contracts/lib/FlowClaimLib.sol:FlowClaimLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FlowMatchLib.sol:FlowMatchLib",
+      "to": "contracts/lib/FlowMatchLib.sol:FlowMatchLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FlowSettleLib.sol:FlowSettleLib",
+      "to": "contracts/lib/FlowSettleLib.sol:FlowSettleLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FundAdminLib.sol:FundAdminLib",
+      "to": "contracts/lib/FundAdminLib.sol:FundAdminLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FundDelistLib.sol:FundDelistLib",
+      "to": "contracts/lib/FundDelistLib.sol:FundDelistLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FundFlowsLib.sol:FundFlowsLib",
+      "to": "contracts/lib/FundFlowsLib.sol:FundFlowsLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FundPositionLib.sol:FundPositionLib",
+      "to": "contracts/lib/FundPositionLib.sol:FundPositionLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/FundValuationLib.sol:FundValuationLib",
+      "to": "contracts/lib/FundValuationLib.sol:FundValuationLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
+    },
+    {
+      "from": "contracts/test/prototype/src/lib/StepFeedLib.sol:StepFeedLib",
+      "to": "contracts/lib/StepFeedLib.sol:StepFeedLib",
+      "pr": 2042,
+      "reason": "The fund sources moved from contracts/test/prototype/src into contracts/ with the same layout. Only the library's source path changed; its runtime code is identical apart from the CBOR metadata (owner decision 2026-11-19)."
     }
   ]
 }

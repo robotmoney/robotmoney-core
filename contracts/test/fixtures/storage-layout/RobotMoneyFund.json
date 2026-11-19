@@ -1,12 +1,12 @@
 {
   "enums": {},
   "libraries": [
-    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
     "contracts/lib/FundAdminLib.sol:FundAdminLib",
     "contracts/lib/FundDelistLib.sol:FundDelistLib",
     "contracts/lib/FundFlowsLib.sol:FundFlowsLib",
     "contracts/lib/FundPositionLib.sol:FundPositionLib",
-    "contracts/lib/FundValuationLib.sol:FundValuationLib"
+    "contracts/lib/FundValuationLib.sol:FundValuationLib",
+    "contracts/lib/GovernedUUPS.sol:GovernedUpgrade"
   ],
   "namespaces": {
     "openzeppelin.storage.AccessControl": [

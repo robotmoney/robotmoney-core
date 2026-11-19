@@ -205,10 +205,12 @@ extends() {
   local label="$1" live="$2" base="$3" ref="$4" contract="${5:-}" bad
   [[ -s "$base" ]] || { echo "check-core-storage-layout: the snapshot of $label at $ref is empty" >&2; return 2; }
   # Reviewed label-only renames (storage-layout-renames.json: slot, offset and type pinned) are applied to the baseline rows.
+  # Reviewed library source-path renames (libraryRenames, PR 2042) are applied to the baseline's library names only.
   bad="$(jq -r --slurpfile b "$base" --slurpfile rn "$RENAMES" --arg c "$contract" '
     def renamed($rows): $rows | map(. as $r | ([$rn[0].renames[] | select(.contract == $c and .from == $r.label and .slot == $r.slot and .offset == $r.offset and .type == $r.type)] | first) as $m | if $m then .label = $m.to else . end);
+    def libsrenamed($libs): $libs | map(. as $x | ([($rn[0].libraryRenames // [])[] | select(.from == $x)] | first) as $m | if $m then $m.to else . end);
     def ext($old; $new): ($old | length) <= ($new | length) and $new[:($old | length)] == $old;
-    . as $l | ($b[0] | .storage = renamed(.storage // [])) as $o
+    . as $l | ($b[0] | .storage = renamed(.storage // []) | .libraries = libsrenamed(.libraries // [])) as $o
     | (if ext($o.storage // []; $l.storage // []) then empty else "storage: a variable moved, was retyped or removed" end),
       (($o.structs // {}) | to_entries[] | select(ext(.value; $l.structs[.key] // []) | not) | "struct \(.key): a member moved, was retyped or removed"),
       (($o.namespaces // {}) | to_entries[] | select(ext(.value; $l.namespaces[.key] // []) | not) | "namespace \(.key): a member moved, was retyped or removed"),
@@ -405,6 +407,25 @@ case "${1:-}" in
       echo "FAIL a rename of a retyped slot was accepted"; fails=$((fails + 1))
     else
       echo "ok   a rename does not cover a retyped slot"
+    fi
+    # PR 2042: a reviewed library source-path rename (libraryRenames) extends a baseline that names the old path; an unlisted path change does not.
+    lib0="$(jq -r '.libraries[0]' "$WORK/live.json")"; libn="${lib0##*:}"
+    lib_reviewed="$(jq -r --arg n "$libn" '[.libraryRenames[]? | select(.to | endswith(":" + $n))] | first | .from // empty' "$RENAMES")"
+    if [[ -n "$lib_reviewed" ]]; then
+      jq --arg o "$lib_reviewed" '.libraries[0] = $o' "$WORK/live.json" >"$WORK/old-lib.json"
+      if extends "$name" "$WORK/live.json" "$WORK/old-lib.json" base "$name" >"$WORK/out" 2>&1; then
+        echo "ok   a reviewed library path rename extends the baseline that names the old path"
+      else
+        echo "FAIL a reviewed library path rename was refused"; cat "$WORK/out"; fails=$((fails + 1))
+      fi
+    else
+      echo "FAIL the selftest layout links no library with a reviewed rename"; fails=$((fails + 1))
+    fi
+    jq --arg o "contracts/unlisted/${libn}.sol:${libn}" '.libraries[0] = $o' "$WORK/live.json" >"$WORK/old-lib.json"
+    if extends "$name" "$WORK/live.json" "$WORK/old-lib.json" base "$name" >"$WORK/out" 2>&1; then
+      echo "FAIL an unlisted library path change passed the baseline check"; fails=$((fails + 1))
+    else
+      echo "ok   an unlisted library path change fails against the baseline"
     fi
     jq '.libraries |= .[1:]' "$WORK/live.json" >"$WORK/new.json"
     cp "$WORK/new.json" "$WORK/snap.json"
