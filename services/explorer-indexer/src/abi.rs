@@ -918,194 +918,10 @@ mod tests {
         // (artifact dir, contract, event name, the topic the indexer filters on).
         // One entry per topic-0 in `Topics` that a first-party contract emits.
         let checks: &[(&str, &str, &str, B256)] = &[
-            // IGateway events, taken from the concrete implementation's artifact
-            // (RobotMoneyGateway inherits the IGateway event surface).
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "AgentAuthorized",
-                t.agent_authorized,
-            ),
-            // `AgentOwnershipTransferred` is no longer declared by the gateway (issue 1890
-            // removed `transferAgentOwnership`). The indexer keeps the topic only to decode
-            // historical logs of the deployed release, so it has no artifact entry here.
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "AgentRevoked",
-                t.agent_revoked,
-            ),
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "AgentDeposit",
-                t.agent_deposit,
-            ),
-            // `AgentDepositRouted`, `AgentWithdrawal` and `AgentWithdrawalRouted` left the
-            // gateway ABI (issue 1889). The indexer still decodes them as history of older
-            // deployments, so they have no compiled artifact to cross-check.
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "DepositsPaused",
-                t.deposits_paused,
-            ),
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "DepositsUnpaused",
-                t.deposits_unpaused,
-            ),
-            // RobotMoneyVault — vault state-snapshot triggers plus the two
-            // ERC-4626 standard events the vault inherits.
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Allocated",
-                t.vault_allocated,
-            ),
-            // The vault's deposit-pause events share the gateway's topic-0.
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "DepositsPaused",
-                t.deposits_paused,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "DepositsUnpaused",
-                t.deposits_unpaused,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Pulled",
-                t.vault_pulled,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Rebalanced",
-                t.vault_rebalanced,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "ExitFeeCharged",
-                t.vault_exit_fee_charged,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Deposit",
-                t.erc4626_deposit,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Withdraw",
-                t.erc4626_withdraw,
-            ),
-            // Snapshot-trigger events (issue 1781), from both vault families.
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "TvlCapUpdated",
-                t.vault_tvl_cap_updated,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "PerDepositCapUpdated",
-                t.vault_per_deposit_cap_updated,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "ExitFeeUpdated",
-                t.vault_exit_fee_updated,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Shutdown",
-                t.vault_shutdown,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "AdapterForceRemoved",
-                t.vault_adapter_force_removed,
-            ),
-            (
-                "BasketVault.sol",
-                "BasketVault",
-                "TvlCapUpdated",
-                t.vault_tvl_cap_updated,
-            ),
-            (
-                "BasketVault.sol",
-                "BasketVault",
-                "PerDepositCapUpdated",
-                t.vault_per_deposit_cap_updated,
-            ),
-            (
-                "BasketVault.sol",
-                "BasketVault",
-                "ExitFeeUpdated",
-                t.vault_exit_fee_updated,
-            ),
-            (
-                "BasketVault.sol",
-                "BasketVault",
-                "Shutdown",
-                t.vault_shutdown,
-            ),
-            (
-                "BasketVault.sol",
-                "BasketVault",
-                "Restored",
-                t.vault_restored,
-            ),
-            (
-                "BasketVault.sol",
-                "BasketVault",
-                "RedeemedInKind",
-                t.vault_redeemed_in_kind,
-            ),
-            // VaultRegistry.
-            (
-                "VaultRegistry.sol",
-                "VaultRegistry",
-                "VaultRegistered",
-                t.vault_registered,
-            ),
-            (
-                "VaultRegistry.sol",
-                "VaultRegistry",
-                "VaultStatusChanged",
-                t.vault_status_changed,
-            ),
-            // PortfolioRouter.
-            (
-                "PortfolioRouter.sol",
-                "PortfolioRouter",
-                "RouterDeposit",
-                t.router_deposit,
-            ),
-            (
-                "PortfolioRouter.sol",
-                "PortfolioRouter",
-                "WeightsSet",
-                t.weights_set,
-            ),
-            (
-                "PortfolioRouter.sol",
-                "PortfolioRouter",
-                "DefaultWeightsSet",
-                t.default_weights_set,
-            ),
+            // The gateway, vault, basket vault, registry and router entries were removed with
+            // those contracts (PR 2042: the old multi-vault system was replaced by the 0.9.0
+            // fund). Their artifacts no longer exist, and the indexer keeps their topics only to
+            // decode historical logs of the deployed releases.
             // ConsensusRecommendationReceipt — issue #1247.
             (
                 "ConsensusRecommendationReceipt.sol",
@@ -1143,39 +959,6 @@ mod tests {
                 "ExclusionLedger",
                 "ExclusionClaimed",
                 t.exclusion_claimed,
-            ),
-            // GovernedUUPS proxy events — issue 1810. Declared once on the
-            // shared base, so the gateway's and the vault's artifacts carry them.
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "Upgraded",
-                t.proxy_upgraded,
-            ),
-            (
-                "RobotMoneyGateway.sol",
-                "RobotMoneyGateway",
-                "UpgradesFrozen",
-                t.proxy_upgrades_frozen,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Upgraded",
-                t.proxy_upgraded,
-            ),
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "UpgradesFrozen",
-                t.proxy_upgrades_frozen,
-            ),
-            // OpenZeppelin `Initializable` — security round 3.
-            (
-                "RobotMoneyVault.sol",
-                "RobotMoneyVault",
-                "Initialized",
-                t.proxy_initialized,
             ),
         ];
 
@@ -1238,9 +1021,10 @@ mod tests {
             "not every entry in the artifact cross-check table was evaluated"
         );
         // 26 since issue #1698 deleted the four RouterGovernance voting events;
-        // 30 since issue 1810 added the two proxy events on two artifacts.
+        // 30 since issue 1810 added the two proxy events on two artifacts;
+        // 6 since PR 2042 deleted the gateway, vault, basket vault, registry and router.
         assert!(
-            checked >= 30,
+            checked >= 6,
             "artifact cross-check covered only {checked} events — entries were removed \
              from the table without removing the corresponding topic from `Topics`"
         );
