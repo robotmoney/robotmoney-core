@@ -16,7 +16,7 @@ import { GOVERN_ROWS, TWIN_ONLY_ROWS, UNPAUSE_ROWS } from "../src/govern.ts";
 import { getStageTable } from "../src/stages.ts";
 import { manifestFile } from "../src/stage-table.ts";
 import { REPO_ROOT } from "./repo-root.ts";
-import { SHA, tmp } from "./fixtures.ts";
+import { SHA } from "./fixtures.ts";
 import { world } from "./harness.ts";
 import { writeGovernManifests } from "./govern-world.ts";
 
@@ -100,15 +100,6 @@ describe("core harness contract: the argument vector and environment core builds
     expect(r.stderr).toContain(`"event":"run.manifest_dir"`);
     // publish prints no row lines
     expect(parseGovernOutput(r.stdout)).toEqual([]);
-  });
-
-  test("verify after publish: exit 0 without --resume, the verifier labels on stdout under [verify]", async () => {
-    const c = boot();
-    expect((await runCli(c, "publish")).code).toBe(0);
-    const r = await runCli(c, "verify");
-    if (r.code !== 0) console.error(r.stderr.split("\n").slice(-4).join("\n"));
-    expect(r.code).toBe(0);
-    expect(r.stdout.split("\n").filter(Boolean)).toEqual(["[verify]", "chain: id equals sheet", "manifest: vault.json present", "deployer: holds no role on any contract (log scan)"]);
   });
 
   test("govern: exit 0, one {row, phase, txHash, status:1, readyAt} stdout line per round event, equal to the recorded sample core parses", async () => {

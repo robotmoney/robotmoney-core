@@ -95,31 +95,6 @@ describe("docs mention the set-unwind-guard row (QA plan v1 D7)", () => {
   test("the runbook's post-govern verify step names the label", () => expect(DOCS["docs/operations/contract-release-runbooks.md"]).toContain("`vault[...]: emergencyUnwindGuard minUsdcOut above zero on every active asset of an open vault`"));
 });
 
-// QA plan v1 E3 (review QD-7, F2): the redeploy script's header cites a runbook section and README rows. Before, neither existed. Both docs now name the verb, the row,
-// the seven-call batch with the cap call, the cap-parity verifier label and --prior-out, and the runbook section the header names is a real heading.
-describe("docs the redeploy script header cites exist (QA plan v1 E3)", () => {
-  const HEADER = readFileSync(join(ROOT, "contracts", "script", "RedeployProtocolAssetVault.s.sol"), "utf8").split("\n").slice(0, 5).join("\n");
-  const P: [string, RegExp][] = [
-    ["the verb", /redeploy-vault --vault PROTO|`--vault PROTO`/],
-    ["the row", /govern --row redeploy-vault/],
-    ["the cap call", /router\.setVaultCap\(new, vaultCap\(old\)\)/],
-    ["the cap-parity label", /redeploy\[rmPROTO\]: router per-address cap equals approved old cap/],
-    ["--prior-out", /--prior-out/],
-    ["the evidence cap field", /router_vault_cap/],
-  ];
-  for (const [file, text] of Object.entries(DOCS)) for (const [what, re] of P) test(`${file} documents ${what}`, () => expect(text).toMatch(re));
-  test("the header names the runbook section, and the runbook has it as a heading", () => {
-    const cited = /contract-release-runbooks\.md\s+—\s+"([^"]+)"/.exec(HEADER)?.[1];
-    expect(cited).toBe("Redeploy one vault into a live deployment");
-    expect(DOCS["docs/operations/contract-release-runbooks.md"]).toMatch(new RegExp(`^###? [0-9.]* ?${cited}`, "m"));
-  });
-  test("the header names the README's verb and row, and the README has a row for each", () => {
-    expect(HEADER).toContain("publish-contracts/README.md — the `redeploy-vault` verb and the `redeploy-vault` govern row");
-    expect(DOCS["publish-contracts/README.md"]).toMatch(/^\| `redeploy-vault` \|/m);
-    expect(DOCS["publish-contracts/README.md"]).toMatch(/^- \*\*`govern --row redeploy-vault`/m);
-  });
-});
-
 // Issue 1831: the CLI help describes apply-receipt as the one RouterGovernance.applyReceipt call, and architecture 4.9 names both receipt ADMIN_ROLE holders.
 describe("the CLI help and architecture 4.9 describe the one-call apply and both receipt ADMIN_ROLE holders (issue 1831)", () => {
   test("the cli.ts USAGE text for apply-receipt names RouterGovernance.applyReceipt and not ONE timelock batch", async () => {

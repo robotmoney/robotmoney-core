@@ -99,11 +99,6 @@ export function writeCoreAssetConfig(coreDir: string, o: { proto?: object[]; rwa
   // core 2008: rmHARD's PAXG row. A V3-shaped row by default, so the healthy pool chain answers its fee; the real file is an Aerodrome row (tests that need it pass `hard`).
   writeFileSync2(join2(coreDir, "config", "hard-assets.json"), JSON.stringify({ ...head, assets: o.hard ?? [{ ...CONFIG_ASSET, symbol: "PAXG", token: "0xe904AEA5E1b110c9174728fA2efFc8aeD19E98Ef", pool: "0x00000000000000000000000000000000000000a4" }] }));
   writeFileSync2(join2(coreDir, "config", "agent-token-shortlist.json"), JSON.stringify({ ...head, shortlist: o.shortlist ?? [] }));
-  // issue 1705 C4: the verifier reads rmUSDC's adapter caps from the vault stage script and a basket's default maxSlippageBps from its contract, at the DEPLOY_SHA
-  for (const f of ["contracts/script/DeployVault.s.sol", "contracts/vaults/ProtocolAssetVault.sol", "contracts/vaults/AgentTokenVault.sol", "contracts/vaults/RwaBasketVault.sol", "contracts/vaults/HardAssetsVault.sol"]) {
-    mkdirSync2(join2(coreDir, f, ".."), { recursive: true });
-    writeFileSync2(join2(coreDir, f), readFileSync(join2(REPO, f), "utf8"));
-  }
 }
 
 const OBSERVE_ABI = parseAbi2(["function observe(uint32[] secondsAgos) view returns (int56[] tickCumulatives, uint160[] secondsPerLiquidityCumulativeX128s)"]);
