@@ -44,10 +44,15 @@ const SUITES: Record<string, string> = {
 };
 const PIN_OUT = "${{ needs.pin.outputs.block }}";
 /**
- * Issue 1927: the only exception to the one-pin rule. core-stages-twin-upgrade-from-v050 publishes release/v0.5.0-rehearsal, whose rmAGENT stage checks the live RM V4 pool against
- * its unlowered 1e15 floor; that pool was drained at Base block 52881518, so the job forks at 52881000, the state that release was built for. It still needs the pin job (its guard).
+ * Issue 1927: jobs exempt from the one-pin rule, pinned at a named historical block. The only one, suite 28's
+ * core-stages-twin-upgrade-from-v050, was deleted with the multi-vault system (PR 2042), so the map is empty.
  */
-const FIXED_PIN_JOBS: Record<string, string> = { "suite-28-core-stages.yml:core-stages-twin-upgrade-from-v050": "52881000" };
+const FIXED_PIN_JOBS: Record<string, string> = {};
+/**
+ * PR 2042 deleted suite 28's Twin chain rehearsal and upgrade jobs with the multi-vault system. Suite 28 keeps
+ * its offline jobs and the pin_block input the nightly passes, but has no pin job and starts no Twin fork.
+ */
+const NO_FORK = new Set(["suite-28"]);
 
 // 1. the nightly.
 const nightly = yaml(NIGHTLY);
@@ -71,6 +76,10 @@ for (const [job, file] of Object.entries(SUITES)) {
   const inp = wf.on?.workflow_call?.inputs?.pin_block;
   if (!inp || inp.type !== "string") bad(`${path} must declare workflow_call input pin_block (string)`);
   if (wf.on?.workflow_call?.inputs?.fresh_snapshot) bad(`${path} still declares fresh_snapshot`);
+  if (NO_FORK.has(job)) {
+    ok(`${file}: pin input, no Twin fork`);
+    continue;
+  }
   const pin = wf.jobs?.pin;
   if (!pin) bad(`${path} has no pin job`);
   const pinStep = (pin.steps ?? []).find((s: any) => String(s.uses ?? "").endsWith("/twin-pin"));
@@ -94,60 +103,6 @@ for (const [job, file] of Object.entries(SUITES)) {
   ok(`${file}: pin input, pin job and ${forks} twin-fork step(s) take the one pin`);
 }
 
-// 2a. suite 28 (core 1523): the rehearsal runs on every push to dev and is called by the nightly.
-{
-  const wf = yaml(".github/workflows/suite-28-core-stages.yml");
-  const on = wf.on ?? wf.true;
-  if (!on?.push?.branches?.includes("dev")) bad("suite-28-core-stages.yml must trigger on push to dev");
-  if (!on?.workflow_call) bad("suite-28-core-stages.yml must declare workflow_call");
-  if (on?.workflow_dispatch?.inputs?.twin_rpc_url) bad("suite-28-core-stages.yml still takes the external twin_rpc_url input");
-  const job = wf.jobs?.["core-stages-twin"];
-  if (!job) bad("suite-28-core-stages.yml has no core-stages-twin rehearsal job");
-  if (/inputs\.twin_rpc_url/.test(JSON.stringify(job))) bad("the rehearsal job must not read twin_rpc_url");
-  const uses = (job.steps ?? []).filter((x: any) => String(x.uses ?? "").endsWith("/twin-publish"));
-  if (uses.length !== 1 || uses[0].with?.verify !== "true" || uses[0].with?.govern !== "true") bad("the rehearsal job must run twin-publish once with verify and govern");
-  const up = (job.steps ?? []).find((x: any) => String(x.uses ?? "").includes("upload-artifact"));
-  if (!/rehearsal-counts-\$\{\{ github\.sha \}\}/.test(String(up?.with?.name))) bad("the rehearsal job must upload rehearsal-counts-<sha>");
-  ok("suite 28 rehearsal runs on push to dev, is called by the nightly, starts its own fork and uploads rehearsal-counts-<sha>");
-}
-
-// 2a'. suite 28 (issue 1846): the upgrade lifecycle job runs after the rehearsal job at the same pin, so the two forks never run at once and the
-// lifecycle job restores the pin's RPC cache the rehearsal saved. !cancelled() keeps it independent of the rehearsal's result, and (issue 1861) unlike always() starts
-// no 60-minute fork after a cancelled (superseded) run; the pin and draft guards stay.
-function lifecycleJobProblem(wf: any): string | null {
-  const job = wf.jobs?.["core-stages-twin-upgrade"];
-  if (!job || job.name !== "core-stages-twin-upgrade-lifecycle") return "suite-28-core-stages.yml has no core-stages-twin-upgrade-lifecycle job";
-  const needs: string[] = [].concat(job.needs ?? []);
-  for (const n of ["pin", "core-stages-twin"]) if (!needs.includes(n)) return `core-stages-twin-upgrade-lifecycle must need ${n} (needs: ${JSON.stringify(job.needs)})`;
-  const cond = String(job.if ?? "");
-  if (/always\(\)/.test(cond)) return "core-stages-twin-upgrade-lifecycle if: must not use always(): it also fires after a cancelled run (use !cancelled())";
-  if (!/!\s*cancelled\(\)/.test(cond)) return "core-stages-twin-upgrade-lifecycle if: must contain !cancelled()";
-  if (!cond.includes("needs.pin.result == 'success'")) return "core-stages-twin-upgrade-lifecycle if: must require needs.pin.result == 'success'";
-  if (!cond.includes("github.event.pull_request.draft == false")) return "core-stages-twin-upgrade-lifecycle if: must keep the draft guard";
-  return null;
-}
-{
-  const wf = yaml(".github/workflows/suite-28-core-stages.yml");
-  const problem = lifecycleJobProblem(wf);
-  if (problem) bad(problem);
-  // negative fixture: the same workflow with the job needing only pin must be refused
-  const onlyPin = structuredClone(wf);
-  onlyPin.jobs["core-stages-twin-upgrade"].needs = "pin";
-  if (lifecycleJobProblem(onlyPin) === null) bad("the lifecycle job check accepted a job that needs only pin");
-  const noCancelled = structuredClone(wf);
-  noCancelled.jobs["core-stages-twin-upgrade"].if = "${{ needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}";
-  if (lifecycleJobProblem(noCancelled) === null) bad("the lifecycle job check accepted an if: without !cancelled()");
-  const withAlways = structuredClone(wf);
-  withAlways.jobs["core-stages-twin-upgrade"].if = "${{ always() && needs.pin.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}";
-  if (lifecycleJobProblem(withAlways) === null) bad("the lifecycle job check accepted an if: using always() (it fires after a cancelled run)");
-  for (const [k, v] of [["pin", "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}"], ["draft", "${{ !cancelled() && needs.pin.result == 'success' }}"]] as const) {
-    const f = structuredClone(wf);
-    f.jobs["core-stages-twin-upgrade"].if = v;
-    if (lifecycleJobProblem(f) === null) bad(`the lifecycle job check accepted an if: without the ${k} guard`);
-  }
-  ok("suite 28 lifecycle job needs pin and core-stages-twin, runs if: !cancelled() with the pin and draft guards (needs-only-pin, always(), no-!cancelled(), no-pin-guard and no-draft-guard fixtures are refused)");
-}
-
 // 2b. the nightly uploads the results and the pin file.
 const uploads = Object.values<any>(nightly.jobs).flatMap((j: any) => (j.steps ?? []).filter((x: any) => String(x.uses ?? "").includes("upload-artifact")).map((x: any) => x.with?.name));
 for (const want of ["suite-results", "twin-pin"]) if (!uploads.includes(want)) bad(`${NIGHTLY} does not upload the ${want} artifact`);
@@ -160,19 +115,6 @@ if (JSON.stringify(nightly).includes("secrets.") && /secrets\.(?!BASE_UPSTREAM_R
   if (/upstream_url|upstream:\s*up\b|JSON\.stringify\(up\)/.test(run)) bad(`${NIGHTLY} pin file must not carry the upstream URL`);
 }
 ok("the nightly uploads suite-results and twin-pin and needs no secret beyond the optional BASE_UPSTREAM_RPC");
-
-// 2c. suite 1-2: the forge fork job runs on the Twin fork at one pin and no saved state.
-{
-  const file = ".github/workflows/suite-01-02-forge-tests.yml";
-  const wf = yaml(file);
-  const job = wf.jobs?.["fork-regressions"];
-  if (!job || ![].concat(job.needs ?? []).includes("twin-pin")) bad(`${file}: fork-regressions must need the twin-pin job`);
-  const fork = (job.steps ?? []).find((x: any) => String(x.uses ?? "").endsWith("/twin-fork"));
-  if (!fork || fork.with?.["pin-block"] !== "${{ needs.twin-pin.outputs.block }}") bad(`${file}: fork-regressions must start twin-fork at the pin from twin-pin`);
-  const runs = (job.steps ?? []).map((x: any) => String(x.run ?? "")).join("\n");
-  if (!/forge-fork-tests\.ts/.test(runs)) bad(`${file}: fork-regressions must run the fork tests through scripts/devnet/forge-fork-tests.ts`);
-  ok("suite 1-2 fork-regressions starts the Twin fork at the pin and runs the fork tests through the Bun runner");
-}
 
 // 2d. every twin-fork use has a matching save-cache step, one pin per workflow run, output names.
 {

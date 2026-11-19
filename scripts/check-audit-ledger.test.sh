@@ -119,7 +119,9 @@ grep -q 'MorphoAdapter.sol:9197-9200' <<<"${out}" || bad "failure must name the 
 pass "source cite past the end of its file fails and is named"
 
 mk_tree
+# shellcheck disable=SC2016  # backticks are literal markdown.
 sed -i '/^| FS-VLT-10 |/s/`MorphoAdapter.sol:197-200`/(`MorphoAdapter.withdraw`, `MorphoAdapter.sol:197-200`)/' "${TMP}/t/docs/audits.md"
+# shellcheck disable=SC2016  # backticks are literal markdown.
 grep -q 'MorphoAdapter.withdraw`, `MorphoAdapter.sol:197-200' "${TMP}/t/docs/audits.md" || bad "test setup: planted cite missing"
 if out="$(bash "${TMP}/t/scripts/check-audit-ledger.sh" 2>&1)"; then bad "an anchored cite outside its symbol must exit non-zero"; fi
 grep -q 'MorphoAdapter.withdraw' <<<"${out}" || bad "failure must name the anchor symbol"

@@ -462,8 +462,9 @@ jobs:
 
       - name: Cross-system feature flag consistency
         # Verifies that flag IDs in config/feature-flags.json match the
-        # constants in contracts/FeatureFlags.sol, clients/dapp/src/feature-flags.ts,
-        # and services/explorer-indexer/src/feature_flags.rs.
+        # constants in services/explorer-indexer/src/feature_flags.rs (and
+        # clients/dapp/src/feature-flags.ts when present). contracts/FeatureFlags.sol
+        # was deleted with the multi-vault system (PR 2042).
         # Implements: issue #389
         run: python3 .github/scripts/check_feature_flag_consistency.py
 

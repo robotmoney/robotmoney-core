@@ -4,9 +4,11 @@
 Canonical source: config/feature-flags.json
 
 Reads the registry JSON and verifies that every remaining cross-system surface
-(Solidity, Rust) declares exactly the same flag IDs and names. The dapp
+(Rust) declares exactly the same flag IDs and names. The dapp
 TypeScript bitmap mirror was removed in issue #433; when absent, this script
 skips that former surface instead of requiring dapp runtime gates to exist.
+contracts/FeatureFlags.sol was deleted with the multi-vault system when the
+0.9.0 fund contracts replaced it (PR 2042), so Solidity is no longer a surface.
 
 Exits 0 when all surfaces are consistent; exits 1 with a diff on any mismatch.
 
@@ -24,7 +26,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 REGISTRY_PATH = REPO_ROOT / "config" / "feature-flags.json"
-SOLIDITY_PATH = REPO_ROOT / "contracts" / "FeatureFlags.sol"
 TYPESCRIPT_PATH = REPO_ROOT / "clients" / "dapp" / "src" / "feature-flags.ts"
 RUST_PATH = REPO_ROOT / "services" / "explorer-indexer" / "src" / "feature_flags.rs"
 
@@ -37,18 +38,6 @@ def load_registry() -> list[dict]:
     with REGISTRY_PATH.open() as fh:
         data = json.load(fh)
     return data["flags"]
-
-
-def extract_solidity_constants(path: Path) -> dict[str, int]:
-    """Parse `uint8 public constant NAME = N;` from FeatureFlags.sol."""
-    pattern = re.compile(
-        r"uint8\s+public\s+constant\s+(\w+)\s*=\s*(\d+)\s*;"
-    )
-    result: dict[str, int] = {}
-    text = path.read_text()
-    for match in pattern.finditer(text):
-        result[match.group(1)] = int(match.group(2))
-    return result
 
 
 def extract_typescript_constants(path: Path) -> dict[str, int]:
@@ -87,24 +76,7 @@ def main() -> int:
     registry = load_registry()
     registry_by_name = {f["name"]: f["id"] for f in registry}
 
-    # Check Solidity.
-    sol = extract_solidity_constants(SOLIDITY_PATH)
-    for name, expected_id in registry_by_name.items():
-        if name not in sol:
-            errors.append(
-                f"[Solidity] Missing constant for flag '{name}' (id={expected_id})"
-            )
-        elif sol[name] != expected_id:
-            errors.append(
-                f"[Solidity] Flag '{name}': expected id={expected_id}, got id={sol[name]}"
-            )
-    for name in sol:
-        if name not in registry_by_name:
-            errors.append(
-                f"[Solidity] Undeclared constant '{name}' (not in registry)"
-            )
-
-    checked_systems = 2
+    checked_systems = 1
 
     # Check TypeScript only if the dapp-side bitmap mirror exists. Issue #433
     # intentionally removed clients/dapp/src/feature-flags.ts so portfolio UI
