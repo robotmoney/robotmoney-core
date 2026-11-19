@@ -842,6 +842,44 @@ contract RobotMoneyGatewayTest is Test {
         );
     }
 
+    function test_deposit_refusesMultipleShareFloors() public {
+        _authorize(agent, _defaultPolicy());
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.MinSharesLengthMismatch.selector);
+        gateway.depositTo(
+            bytes32("floor"),
+            ONE_USDC,
+            uint64(block.timestamp + 60),
+            bytes32("test"),
+            address(vault),
+            new uint256[](2)
+        );
+    }
+
+    function test_deposit_enforcesSingleDestinationShareFloor() public {
+        _authorize(agent, _defaultPolicy());
+        uint256 amount = 100 * ONE_USDC;
+        _fundAndApprove(agent, amount);
+        uint64 deadline = uint64(block.timestamp + 60);
+        uint256[] memory floors = new uint256[](1);
+        floors[0] = amount + 1;
+        vm.prank(agent);
+        vm.expectRevert(RobotMoneyGateway.SlippageExceeded.selector);
+        gateway.depositTo(
+            bytes32("floor"), amount, deadline, bytes32("test"), address(vault), floors
+        );
+        assertEq(usdc.balanceOf(agent), amount);
+        assertEq(vault.balanceOf(shareReceiver), 0);
+        assertEq(gateway.effectiveDepositWindowGross(agent), 0);
+
+        floors[0] = amount;
+        vm.prank(agent);
+        gateway.depositTo(
+            bytes32("floor"), amount, deadline, bytes32("test"), address(vault), floors
+        );
+        assertEq(vault.balanceOf(shareReceiver), amount);
+    }
+
     function test_deposit_revertsOnReplay_sameOrderAndIdempotencyKey() public {
         _authorize(agent, _defaultPolicy());
         _fundAndApprove(agent, 200 * ONE_USDC);

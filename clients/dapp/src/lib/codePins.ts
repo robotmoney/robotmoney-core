@@ -223,6 +223,7 @@ export function implementationPinsFor(
 export function pinnedWriteTarget(variables: unknown, gateway?: string): string | undefined {
   const v = (variables ?? {}) as { address?: unknown; functionName?: unknown; args?: unknown };
   if (
+    v.functionName === "depositWithQuote" ||
     v.functionName === "deposit" ||
     v.functionName === "mint" ||
     v.functionName === "requestDeposit" ||
@@ -254,6 +255,7 @@ export function pinnedWriteTarget(variables: unknown, gateway?: string): string 
  */
 export function isRouterDeposit(variables: unknown, router: string | undefined): boolean {
   const v = (variables ?? {}) as { address?: unknown; functionName?: unknown; args?: unknown };
+  if (v.functionName === "depositWithQuote") return true;
   if (v.functionName !== "deposit" && v.functionName !== "mint") return false;
   if (Array.isArray(v.args) && Array.isArray(v.args[1])) return true;
   return (

@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { receiptPayloadDigest } from "../src/receipt-digest.ts";
-import { decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
+import { ContractFunctionZeroDataError, decodeFunctionData, encodeFunctionData, keccak256, pad, parseAbi, toBytes, toFunctionSelector, type Address } from "viem";
 import { GOVERNED_PROXY_ABI, UPGRADE_MIGRATIONS, buildMigration, decodeUpgradeCall, migrationNameProblems, pinnedMigrationData, rerecordProxyManifest, upgradeRecordKey } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
 import { layoutId, proxySpecs } from "../src/verify/upgradeability.ts";
@@ -1334,6 +1334,35 @@ describe("issue 1696: apply-receipt, the Safe applies a consensus receipt throug
     await newer.apply({ warp: warpTo(newer.tl) });
     expect(newer.tl.s.released.has(RID)).toBe(true);
     expect(newer.tl.s.lastAppliedRecordedAt).toBe(7n);
+  });
+
+  test("legacy governance without a sequence selector retains the timestamp check", async () => {
+    const w = world();
+    w.tl.s.lastAppliedRecordedAt = 7n;
+    w.tl.s.recordedAt.set(RID, 7n);
+    w.tl.s.reads.lastAppliedReceiptSequence = new ContractFunctionZeroDataError({
+      functionName: "lastAppliedReceiptSequence",
+    });
+    await refused(w, "not later than the last applied receipt");
+    expect(w.tl.s.nonce).toBe(0);
+
+    w.tl.s.recordedAt.set(RID, 8n);
+    await w.apply({ warp: warpTo(w.tl) });
+    expect(w.tl.s.released.has(RID)).toBe(true);
+  });
+
+  test("an upgraded governance uses issuance sequence for same-second receipts", async () => {
+    const w = world();
+    w.tl.s.recordedAt.set(RID, 7n);
+    w.tl.s.lastAppliedRecordedAt = 7n;
+    w.tl.s.reads.lastAppliedReceiptSequence = 2n;
+    w.tl.s.reads.receiptSequence = 1n;
+    await refused(w, "does not advance 2");
+    expect(w.tl.s.nonce).toBe(0);
+
+    w.tl.s.reads.receiptSequence = 3n;
+    await w.apply({ warp: warpTo(w.tl) });
+    expect(w.tl.s.released.has(RID)).toBe(true);
   });
 
   test("issue 1831: an older receipt's apply scheduled before a newer receipt was applied is refused at execute (GOVERN), nothing is sent", async () => {

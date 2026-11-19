@@ -60,7 +60,7 @@ contract CappedAavePool {
         require(!frozen, "28");
         require(amount <= headroom, "51");
         headroom -= amount;
-        usdc.transferFrom(msg.sender, address(this), amount);
+        usdc.transferFrom(msg.sender, address(aToken), amount);
         aToken.mint(onBehalfOf, amount);
     }
 
@@ -71,7 +71,8 @@ contract CappedAavePool {
         uint256 out = amount == type(uint256).max ? aToken.balanceOf(msg.sender) : amount;
         aToken.burn(msg.sender, out);
         headroom += out;
-        usdc.transfer(to, out);
+        TestERC20(address(usdc)).burn(address(aToken), out);
+        TestERC20(address(usdc)).mint(to, out);
         return out;
     }
 }
@@ -118,6 +119,12 @@ contract CappedMetaMorpho is ERC20 {
         _burn(owner, shares);
         headroom += assets;
         asset.transfer(receiver, assets);
+    }
+
+    function maxWithdraw(address owner) external view returns (uint256) {
+        uint256 shares = balanceOf(owner);
+        uint256 cash = asset.balanceOf(address(this));
+        return cash < shares ? cash : shares;
     }
 
     function convertToAssets(uint256 shares_) external pure returns (uint256) {

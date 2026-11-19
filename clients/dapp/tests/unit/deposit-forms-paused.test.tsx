@@ -228,11 +228,11 @@ function routerResponder(fake: ReturnType<typeof makeFakeChain>) {
     }
     if (
       to === ROUTER.toLowerCase() &&
-      data.startsWith(toFunctionSelector("previewDeposit(uint256)"))
+      data.startsWith(toFunctionSelector("previewDepositFor(address,uint256)"))
     ) {
       return encodeFunctionResult({
         abi: routerAbi,
-        functionName: "previewDeposit",
+        functionName: "previewDepositFor",
         result: [
           {
             vault: VAULT,
@@ -332,7 +332,7 @@ describe.each(SCENARIOS.filter((sc) => sc.singleOnly !== true))(
               (c) =>
                 c.method === "eth_call" &&
                 c.to === ROUTER.toLowerCase() &&
-                c.data?.startsWith(toFunctionSelector("previewDeposit(uint256)")),
+                c.data?.startsWith(toFunctionSelector("previewDepositFor(address,uint256)")),
             ),
           ).toBe(true),
         );
@@ -372,11 +372,11 @@ describe("router form: any closed leg closes it, with the count", () => {
     fake.respond = (to, data) => {
       if (
         to === ROUTER.toLowerCase() &&
-        data.startsWith(toFunctionSelector("previewDeposit(uint256)"))
+        data.startsWith(toFunctionSelector("previewDepositFor(address,uint256)"))
       ) {
         return encodeFunctionResult({
           abi: routerAbi,
-          functionName: "previewDeposit",
+          functionName: "previewDepositFor",
           result: [
             {
               vault: VAULT,
@@ -425,8 +425,10 @@ describe("router form: any closed leg closes it, with the count", () => {
 describe("a pause that lands while the form is open", () => {
   const ALLOWANCE = toFunctionSelector("allowance(address,address)");
   const DEPOSIT = toFunctionSelector("deposit(uint256,address)");
-  const ROUTER_DEPOSIT = toFunctionSelector("deposit(uint256,uint256[])");
-  const PREVIEW = toFunctionSelector("previewDeposit(uint256)");
+  const ROUTER_DEPOSIT = toFunctionSelector(
+    "depositWithQuote(address,uint256,address[],uint256[],uint256)",
+  );
+  const PREVIEW = toFunctionSelector("previewDepositFor(address,uint256)");
   const WEIGHTS = toFunctionSelector("getEffectiveWeights()");
 
   function fullyEnabledFake(paused: Record<string, boolean>) {
@@ -446,7 +448,7 @@ describe("a pause that lands while the form is open", () => {
         if (data.startsWith(PREVIEW)) {
           return encodeFunctionResult({
             abi: routerAbi,
-            functionName: "previewDeposit",
+            functionName: "previewDepositFor",
             result: [
               {
                 vault: VAULT,
@@ -466,7 +468,11 @@ describe("a pause that lands while the form is open", () => {
           });
         }
         if (data.startsWith(ROUTER_DEPOSIT)) {
-          return encodeFunctionResult({ abi: routerAbi, functionName: "deposit", result: [1n] });
+          return encodeFunctionResult({
+            abi: routerAbi,
+            functionName: "depositWithQuote",
+            result: [1n],
+          });
         }
       }
       return undefined;

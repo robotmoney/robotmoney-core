@@ -570,6 +570,47 @@ contract BasketVaultTest is Test {
         );
     }
 
+    function test_managedRecoveryKeepsCohortsOnTheirRespectiveNav() public {
+        TestERC20 activeToken = _addSecond(0);
+        vm.prank(admin);
+        vault.removeAsset(0);
+
+        uint256 amount = 10 * ONE_USDC;
+        address secondHolder = makeAddr("secondHolder");
+        activeToken.mint(address(router), amount * 2);
+        router.setAmountOut(amount);
+        usdc.mint(stranger, amount);
+        usdc.mint(secondHolder, amount);
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), amount);
+        uint256 priorShares = vault.deposit(amount, stranger);
+        vm.stopPrank();
+
+        vm.prank(emergencyResponder);
+        vault.pauseDeposits();
+        assertEq(vault.maxDeposit(secondHolder), 0);
+
+        uint256 recovery = 7 * ONE_USDC;
+        basketToken.mint(address(vault), recovery);
+        usdc.mint(address(router), recovery);
+        router.setAmountOut(recovery);
+        vault.reabsorbRemovedAsset(0, 0);
+        assertEq(basketToken.balanceOf(address(vault)), 0);
+        assertEq(vault.totalSupply(), priorShares);
+        assertEq(vault.totalAssets(), amount + recovery);
+
+        vm.prank(admin);
+        vault.unpauseDeposits();
+        router.setAmountOut(amount);
+        vm.startPrank(secondHolder);
+        usdc.approve(address(vault), amount);
+        uint256 laterShares = vault.deposit(amount, secondHolder);
+        vm.stopPrank();
+
+        assertLt(laterShares, priorShares);
+        assertEq(vault.totalAssets(), amount * 2 + recovery);
+    }
+
     /// @notice An active asset cannot be re-absorbed (it is sold proportionally on
     ///         withdrawal, not swept).
     function test_reabsorbRemovedAsset_revertsForActiveAsset() public {
@@ -582,8 +623,7 @@ contract BasketVaultTest is Test {
     ///         whose pool is DEGRADED (TWAP `observe()` reverts "OLD") never
     ///         reverts-and-strands. Pre-fix, the swap-floor read reverted and the
     ///         reappeared balance was stuck on the vault forever; post-fix the
-    ///         quarantine fallback sweeps it to the governed quarantine address, so
-    ///         the balance is always actionable (the reversible safety valve).
+    ///         quarantine fallback sweeps it to the fixed quarantine address.
     ///         Deep proof referenced by FvInvariants.t.sol::test_LIFE6_*.
     function test_LIFE6_reabsorbSurvivesDegradedPool() public {
         vm.prank(admin);
@@ -2523,6 +2563,28 @@ contract BasketVaultTest is Test {
         assertLe(out, d + 7_000e6, "redeem bounded by total vault value");
     }
 
+    function test_deposit_checksRealizedNavAgainstTvlCap() public {
+        uint256 amount = ONE_USDC;
+        vm.prank(admin);
+        vault.setTvlCap(amount);
+        usdc.mint(stranger, amount);
+        basketToken.mint(address(router), amount + 1);
+        router.setAmountOut(amount + 1);
+
+        vm.startPrank(stranger);
+        usdc.approve(address(vault), amount);
+        vm.expectRevert(BasketVault.TVLCapExceeded.selector);
+        vault.deposit(amount, stranger);
+        assertEq(usdc.balanceOf(stranger), amount);
+        assertEq(basketToken.balanceOf(address(vault)), 0);
+        assertEq(vault.totalSupply(), 0);
+
+        router.setAmountOut(amount);
+        assertGt(vault.deposit(amount, stranger), 0);
+        vm.stopPrank();
+        assertEq(vault.totalAssets(), amount);
+    }
+
     /// @notice AZ-BSK-3 adversarial: tiny deposits round down and never mint a profit;
     ///         per-deposit cap still enforced.
     function test_AZBSK3_tinyDepositRoundsDownAndCapStillEnforced() public {
@@ -2789,6 +2851,30 @@ contract BasketVaultTest is Test {
         vm.prank(admin);
         vault.addAsset(address(t2), address(p2), 500, address(0), BasketVault.Venue.V3);
         t2.mint(address(vault), amount);
+    }
+
+    function test_redeemInKind_carriesFeesForEachPayoutToken() public {
+        uint256 shares = _depositAt1to1(stranger, 100);
+        usdc.mint(address(vault), 100);
+        TestERC20 second = _addSecond(200);
+        vm.prank(admin);
+        vault.setExitFeeBps(100);
+
+        vm.startPrank(stranger);
+        vault.redeemInKind(shares / 2, stranger, stranger);
+        assertEq(basketToken.balanceOf(admin), 0);
+        assertEq(usdc.balanceOf(admin), 0);
+        assertEq(second.balanceOf(admin), 1);
+        vault.redeemInKind(shares - shares / 2, stranger, stranger);
+        vm.stopPrank();
+
+        assertEq(basketToken.balanceOf(admin), 1);
+        assertEq(usdc.balanceOf(admin), 1);
+        assertEq(second.balanceOf(admin), 2);
+        assertEq(basketToken.balanceOf(stranger), 99);
+        assertEq(usdc.balanceOf(stranger), 99);
+        assertEq(second.balanceOf(stranger), 198);
+        assertEq(vault.totalSupply(), 0);
     }
 
     /// @notice PoC test_redeemBlockedByOracle: with observe() reverting, redeem reverts and

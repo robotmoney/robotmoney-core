@@ -141,6 +141,9 @@ contract VaultCodeSizeGuard is Test {
     function test_linkedLibraries_underEip170() public {
         _assertUnderLimit("BasketAssetConfigGuard.sol:BasketAssetConfigGuard");
         _assertUnderLimit("BasketViews.sol:BasketViews");
+        // RobotMoneyVault's public-function library is linked and deployed on its own (audit 0.9.0
+        // remediation: the liquidity probe pushed it to 25,180 bytes without this guard noticing).
+        _assertUnderLimit("RobotMoneyVaultOps.sol:RobotMoneyVaultOps");
     }
 
     /// @notice The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the

@@ -125,7 +125,7 @@ cast send $VAULT 'redeemInKind(uint256,address,address)' $SHARES $ME $ME --gas-l
 
 ## If something goes wrong
 
-- **The deposit fails with `InsufficientGas`.** The router needs a gas limit you set yourself: 2,400,000 per vault in the split, plus 1,200,000. For three vaults that is 8,400,000. Never let your wallet guess. Unused gas is refunded.
+- **The deposit fails with `InsufficientGas`.** The router needs a gas limit you set yourself: 2,800,000 per vault in the split, plus 1,200,000. For three vaults that is 9,600,000. Never let your wallet guess. Unused gas is refunded.
 - **A read right after a send shows the old value.** The public RPC is load balanced. A read can hit a node that has not seen your transaction yet. Wait a few seconds and read again.
 - **`replacement transaction underpriced`.** The RPC has not caught up with your last send. Wait a few seconds and run the command again.
 - **A balance looks wrong in a wallet app.** Use `previewRedeem` as in step 4. The raw share number is not a USDC amount.

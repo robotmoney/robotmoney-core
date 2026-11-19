@@ -80,6 +80,10 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     error FeeOnTransferDetected();
     /// @notice Pre/post-call invariant: gateway must never custody vault shares or leftover USDC across the call frame.
     error ShareCustodyInvariantViolated();
+    /// @notice `depositTo` takes at most one share floor, for its single destination vault.
+    error MinSharesLengthMismatch();
+    /// @notice The destination vault minted fewer shares than the caller's floor.
+    error SlippageExceeded();
     /// @notice Retired: a policy can no longer name a zero `shareReceiver`, because
     ///         the receiver must equal the (non-zero) caller. Kept for ABI stability.
     error InvalidShareReceiver();
@@ -570,8 +574,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
     /// @inheritdoc IGateway
     /// @dev The only agent action. Deposits into `destination`, which must appear in the
     ///      policy's non-empty `allowedDestinations`. No registry lookup, no pinned vault.
-    ///      Shares are minted to `shareReceiver`. `minSharesPerLeg` is bound into the
-    ///      `paymentId` (GW-2) and is not otherwise enforced: the gateway has no router leg.
+    ///      Shares are minted to the configured receiver. The optional floor is in destination share units.
     function depositTo(
         bytes32 orderId,
         uint256 amount,
@@ -581,6 +584,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         uint256[] calldata minSharesPerLeg
     ) external nonReentrant onlyRole(AGENT_ROLE) returns (bytes32 paymentId) {
         if (_depositsPaused) revert DepositsArePaused();
+        if (minSharesPerLeg.length > 1) revert MinSharesLengthMismatch();
 
         // Build a DepositArgs struct early to collapse locals onto the heap.
         // This avoids the "stack too deep" limit imposed by the EVM legacy codegen.
@@ -588,6 +592,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         args.orderId = orderId;
         args.amount = amount;
         args.destination = destination;
+        if (minSharesPerLeg.length == 1) args.minShares = minSharesPerLeg[0];
 
         {
             AgentPolicy memory p = agents[msg.sender];
@@ -688,6 +693,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         address destination;
         uint64 windowId;
         uint256 balBefore;
+        uint256 minShares;
         /// @dev Captured from the in-memory policy snapshot so the rolling-window
         ///      cap check never performs a second cold SLOAD on `agents[msg.sender]`.
         uint256 maxPerWindow;
@@ -719,6 +725,7 @@ contract RobotMoneyGateway is AccessRoles, ReentrancyGuardUpgradeable, IGateway,
         usdcToken.forceApprove(args.destination, args.amount);
         uint256 sharesMinted = IERC4626(args.destination).deposit(args.amount, args.shareReceiver);
         usdcToken.forceApprove(args.destination, 0);
+        if (sharesMinted < args.minShares) revert SlippageExceeded();
 
         if (IERC20(args.destination).balanceOf(address(this)) != shareBalanceBefore) {
             revert ShareCustodyInvariantViolated();

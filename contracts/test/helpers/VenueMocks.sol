@@ -24,16 +24,21 @@ contract EtchAavePool {
         aToken = TestERC20(aToken_);
     }
 
+    function getConfiguration(address) external pure returns (uint256) {
+        return 1 << 56; // active reserve
+    }
+
     function supply(address asset, uint256 amount, address onBehalfOf, uint16) external {
         require(asset == address(usdc), "wrong asset");
-        usdc.transferFrom(msg.sender, address(this), amount);
+        usdc.transferFrom(msg.sender, address(aToken), amount);
         aToken.mint(onBehalfOf, amount);
     }
 
     function withdraw(address asset, uint256 amount, address to) external returns (uint256) {
         require(asset == address(usdc), "wrong asset");
         aToken.burn(msg.sender, amount);
-        usdc.transfer(to, amount);
+        TestERC20(address(usdc)).burn(address(aToken), amount);
+        TestERC20(address(usdc)).mint(to, amount);
         return amount;
     }
 }
@@ -44,6 +49,10 @@ contract EtchComet {
 
     constructor(address usdc_) {
         usdc = IERC20(usdc_);
+    }
+
+    function isWithdrawPaused() external pure returns (bool) {
+        return false;
     }
 
     function supply(address asset, uint256 amount) external {
@@ -83,6 +92,12 @@ contract EtchErc4626Venue is ERC20 {
         _burn(owner, shares);
         asset.transfer(receiver, shares);
         return shares;
+    }
+
+    function maxWithdraw(address owner) external view returns (uint256) {
+        uint256 shares = balanceOf(owner);
+        uint256 cash = asset.balanceOf(address(this));
+        return cash < shares ? cash : shares;
     }
 
     function convertToAssets(uint256 shares) external pure returns (uint256) {

@@ -205,8 +205,9 @@ describe("the deploy-implementation verb in runbook 4.12 and the Twin harness (i
 describe("runbook 4.15 names only govern rows, flags and functions that exist (issue 1914)", () => {
   const S415 = (() => {
     const start = RUNBOOK.indexOf("### 4.15. The v0.6.0 governed upgrade");
-    const end = RUNBOOK.indexOf("\n## 5. ", start);
-    if (start < 0 || end < 0) throw new Error("the runbook has no section 4.15 before section 5");
+    // The section ends at the next heading of any level: section 4.16 (basket asset recovery) follows it.
+    const end = RUNBOOK.slice(start + 1).search(/\n#{2,3} /) + start + 1;
+    if (start < 0 || end <= start) throw new Error("the runbook has no section 4.15 before the next heading");
     return RUNBOOK.slice(start, end);
   })();
   const placeholder = (name: string): string => (name === "RC_SHA" ? "a".repeat(40) : name === "V050_SHA" ? "57fbe61833e9d7f94557d69102138f7c410c1346" : name === "BASE_RPC_URL" ? "http://127.0.0.1:8545" : name === "PWD" || name === "V050_DIR" ? "/x" : `0x${"1".repeat(40)}`);

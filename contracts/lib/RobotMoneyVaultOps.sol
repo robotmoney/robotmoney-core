@@ -10,6 +10,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {IExposureCappedAdapter} from "../interfaces/IExposureCappedAdapter.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {IVenueLiquidityAdapter} from "../interfaces/IVenueLiquidityAdapter.sol";
 import {IVenueHealthAdapter} from "../interfaces/IVenueHealthAdapter.sol";
 import {ExclusionLedger} from "../ExclusionLedger.sol";
 import {BpsMath} from "./BpsMath.sol";
@@ -177,18 +179,9 @@ library RobotMoneyVaultOps {
         return b.adapters[i].active && isUsable(b, usdc, i);
     }
 
-    /// @notice Body of `RobotMoneyVault._anyActiveAdapterBlocked`: true when an active entry is
-    ///         not usable (ineligible, or under an open exclusion record: core 1788 / 1820). With
-    ///         `venues`, also true when a usable active entry reports that its venue refuses
-    ///         withdrawals (`IVenueHealthAdapter.venueWithdrawable` false: an Aave reserve paused
-    ///         or inactive, a Comet with `isWithdrawPaused` set; security round 3). NAV counts
-    ///         that venue's balance at face, so a deposit would mint against value nobody can
-    ///         withdraw, and a slice the venue hands back would sit idle to pay early exits at
-    ///         that NAV while a later haircut falls on the holders who stay. Deposits stay closed
-    ///         until the venue reopens or the adapter leaves the active set. A missing or reverting
-    ///         view reads as open, as `_ceiling` reads `maxExposure`; the lending adapter's own
-    ///         `deploy` still refuses to hand a slice back while its venue is shut
-    ///         (`VenueWithdrawalsClosed`). An unusable entry is never asked.
+    /// @notice Detect active adapters that are unusable or unable to service withdrawals.
+    /// @dev A cashless venue with an outstanding position blocks deposits because that
+    ///      position still prices into NAV.
     function anyActiveBlocked(Book storage b, address usdc, bool venues)
         public
         view
@@ -199,11 +192,47 @@ library RobotMoneyVaultOps {
             if (!b.adapters[i].active) continue;
             if (!isUsable(b, usdc, i)) return true;
             if (!venues) continue;
-            (bool ok, bytes memory data) = address(b.adapters[i].adapter)
-                .staticcall(abi.encodeCall(IVenueHealthAdapter.venueWithdrawable, ()));
-            if (ok && data.length == 32 && abi.decode(data, (uint256)) == 0) return true;
+            IStrategyAdapter adapter = b.adapters[i].adapter;
+            (bool open, uint256 available) = _withdrawalLiquidity(adapter);
+            if (!open) return true;
+            if (available == 0) {
+                try adapter.totalAssets() returns (uint256 balance) {
+                    if (balance != 0) return true;
+                } catch {
+                    return true;
+                }
+            }
         }
         return false;
+    }
+
+    /// @dev Advertised probes fail closed if they revert or return malformed data. Unadvertised
+    ///      adapters retain legacy semantics: honor the pause-only signal when present.
+    function _withdrawalLiquidity(IStrategyAdapter adapter)
+        private
+        view
+        returns (bool open, uint256 available)
+    {
+        (bool ok, bytes memory data) = address(adapter)
+            .staticcall(
+                abi.encodeCall(
+                    IERC165.supportsInterface, (type(IVenueLiquidityAdapter).interfaceId)
+                )
+            );
+        if (ok && data.length == 32 && abi.decode(data, (uint256)) == 1) {
+            (ok, data) = address(adapter)
+                .staticcall(abi.encodeCall(IVenueLiquidityAdapter.withdrawalLiquidity, ()));
+            if (!ok || data.length != 64) return (false, 0);
+            (uint256 status, uint256 liquid) = abi.decode(data, (uint256, uint256));
+            return status == 1 ? (true, liquid) : (false, 0);
+        }
+
+        (ok, data) =
+            address(adapter).staticcall(abi.encodeCall(IVenueHealthAdapter.venueWithdrawable, ()));
+        if (ok && data.length != 0 && (data.length != 32 || abi.decode(data, (uint256)) != 1)) {
+            return (false, 0);
+        }
+        return (true, type(uint256).max);
     }
 
     /// @dev The `rank`-th active adapter's slice of `total` when `active` adapters split it
@@ -405,9 +434,9 @@ library RobotMoneyVaultOps {
     ///      from NAV, so it must be excluded here too or the proportional denominator would not match
     ///      NAV (ADP-2 / F-14). Fails fast with `InsufficientAdapterLiquidity` when the counted
     ///      adapters cannot cover the request (audit 2026-06-09, L-2). Pass 1 pulls proportionally,
-    ///      each pull capped at the adapter's reported balance, and the last counted adapter takes the
+    ///      each pull capped at immediately available liquidity, and the last counted adapter takes the
     ///      flooring remainder (core 1482), so pass 2 runs only when an adapter is short. Pass 2
-    ///      sweeps leftovers across all counted adapters at `min(remaining, balance)`. An
+    ///      sweeps leftovers across counted adapters with remaining liquidity. An
     ///      under-delivering adapter reverts `InsufficientAdapterLiquidity`; it is never funded from
     ///      other holders' idle USDC (FEE-2 / NC-11).
     /// @param adapterCallGasFloor The vault's `ADAPTER_CALL_GAS_FLOOR`, checked before each `withdraw`.
@@ -432,32 +461,23 @@ library RobotMoneyVaultOps {
         }
 
         uint256 remaining = remainingNeeded;
-        // Pass 1: proportional pulls, each capped at the adapter's reported balance.
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!isCounted(b, usdc, i)) continue;
-            IStrategyAdapter adpt = b.adapters[i].adapter;
-            uint256 adapterBalance = adpt.totalAssets();
-            uint256 pull =
-                i == lastCounted ? remaining : (remainingNeeded * adapterBalance) / totalInAdapters;
-            if (pull > remaining) pull = remaining;
-            if (pull > adapterBalance) pull = adapterBalance;
-            if (pull == 0) continue;
-            uint256 actual = _withdrawFrom(adpt, i, pull, adapterCallGasFloor);
-            pulled += actual;
-            remaining = actual >= remaining ? 0 : remaining - actual;
-        }
-
-        // Pass 2: sweep rounding leftovers across all counted adapters, capping each pull at
-        // min(remaining, balance), so one short adapter cannot DoS a withdrawal others can cover.
-        for (uint256 i = 0; i < len && remaining > 0; i++) {
-            if (!isCounted(b, usdc, i)) continue;
-            IStrategyAdapter adpt = b.adapters[i].adapter;
-            uint256 adapterBalance = adpt.totalAssets();
-            uint256 pull = adapterBalance < remaining ? adapterBalance : remaining;
-            if (pull == 0) continue;
-            uint256 actual = _withdrawFrom(adpt, i, pull, adapterCallGasFloor);
-            pulled += actual;
-            remaining = actual >= remaining ? 0 : remaining - actual;
+        // Pass 0 preserves proportional allocations wherever the venue can pay its share; the last
+        // counted adapter takes the flooring remainder. Pass 1 re-reads balances and liquidity after
+        // the earlier pulls, including for venues sharing reserves, and sweeps what is still owed.
+        for (uint256 pass = 0; pass < 2; pass++) {
+            for (uint256 i = 0; i < len && remaining > 0; i++) {
+                if (!isCounted(b, usdc, i)) continue;
+                IStrategyAdapter adpt = b.adapters[i].adapter;
+                uint256 adapterBalance = adpt.totalAssets();
+                uint256 pull = (pass == 0 && i != lastCounted)
+                    ? (remainingNeeded * adapterBalance) / totalInAdapters
+                    : remaining;
+                if (pull > remaining) pull = remaining;
+                if (pull > adapterBalance) pull = adapterBalance;
+                uint256 actual = _withdrawLiquid(adpt, i, pull, adapterCallGasFloor);
+                pulled += actual;
+                remaining = actual >= remaining ? 0 : remaining - actual;
+            }
         }
 
         // Adapters under-delivered versus their reported balances (a buggy or lying adapter).
@@ -739,36 +759,70 @@ library RobotMoneyVaultOps {
 
     // ─── Rebalance ────────────────────────────────────────────────────
 
-    /// @notice Pull leg of `RobotMoneyVault.rebalance`: withdraw each usable active adapter's
-    ///         excess over its equal-weight target, up to `maxMovePerCall` in total. Never pulls from
-    ///         a quarantined entry or one under an open exclusion record (core 1788 / 1820): its
-    ///         balance is outside NAV and recovery goes through the governed paths.
-    /// @return totalMoved USDC the adapters returned.
-    function rebalancePull(
+    /// @notice Move at most maxMovePerCall out of existing positions. Previously idle
+    ///         assets are exempt from that limit. Excess that cannot fit under the caps stays idle.
+    function rebalance(
         Book storage b,
         address usdc,
         uint256 totalAssetsCached,
-        uint256 maxMovePerCall
+        uint256 maxMovePerCall,
+        uint256 adapterCallGasFloor
     ) public returns (uint256 totalMoved) {
+        uint256[] memory targets = _keeperTargets(b, usdc, totalAssetsCached);
+        totalMoved = _rebalancePull(b, usdc, targets, maxMovePerCall, adapterCallGasFloor);
+
+        uint256 idle = _allocateToTargets(b, usdc, targets, adapterCallGasFloor);
+        if (idle > 0) emit UnroutedDeposit(idle);
+    }
+
+    /// @dev Start at equal weight capped by each eligible adapter's ceiling. Redistribute
+    ///      excess in registry order, matching deposit routing's second pass.
+    function _keeperTargets(Book storage b, address usdc, uint256 total)
+        private
+        view
+        returns (uint256[] memory targets)
+    {
+        uint256 len = b.adapters.length;
+        targets = new uint256[](len);
+        uint256[] memory ceilings = new uint256[](len);
         uint256 active = activeCount(b);
         uint256 rank;
-        uint256 len = b.adapters.length;
+        uint256 remaining = total;
         for (uint256 i = 0; i < len; i++) {
             if (!b.adapters[i].active) continue;
-            if (totalMoved >= maxMovePerCall) break;
-            uint256 targetBalance = equalWeightBalance(totalAssetsCached, rank, active);
-            rank++;
+            uint256 equal = equalWeightBalance(total, rank++, active);
             if (!isUsable(b, usdc, i)) continue;
-            IStrategyAdapter adpt = b.adapters[i].adapter;
-            uint256 currentBalance = adpt.totalAssets();
-            if (currentBalance <= targetBalance) continue;
-            uint256 excess = currentBalance - targetBalance;
-            uint256 pull =
-                (totalMoved + excess > maxMovePerCall) ? (maxMovePerCall - totalMoved) : excess;
-            if (pull == 0) continue;
-            uint256 actual = adpt.withdraw(pull);
-            totalMoved += actual;
-            emit Pulled(i, address(adpt), actual);
+            uint256 ceiling = _ceiling(b, total, i);
+            ceilings[i] = ceiling;
+            uint256 target = equal < ceiling ? equal : ceiling;
+            targets[i] = target;
+            remaining -= target;
+        }
+        for (uint256 i = 0; i < len && remaining > 0; i++) {
+            uint256 headroom = ceilings[i] - targets[i];
+            uint256 fill = headroom < remaining ? headroom : remaining;
+            targets[i] += fill;
+            remaining -= fill;
+        }
+    }
+
+    function _rebalancePull(
+        Book storage b,
+        address usdc,
+        uint256[] memory targets,
+        uint256 maxMovePerCall,
+        uint256 adapterCallGasFloor
+    ) private returns (uint256 totalMoved) {
+        for (uint256 i = 0; i < targets.length && totalMoved < maxMovePerCall; i++) {
+            if (!isCounted(b, usdc, i)) continue;
+            IStrategyAdapter adapter = b.adapters[i].adapter;
+            uint256 current = adapter.totalAssets();
+            if (current <= targets[i]) continue;
+            uint256 excess = current - targets[i];
+            uint256 budget = maxMovePerCall - totalMoved;
+            totalMoved += _withdrawLiquid(
+                adapter, i, excess < budget ? excess : budget, adapterCallGasFloor
+            );
         }
     }
 
@@ -822,13 +876,25 @@ library RobotMoneyVaultOps {
         uint256[] memory targetBalances,
         uint256 adapterCallGasFloor
     ) public {
-        uint256 idle = IERC20(usdc).balanceOf(address(this));
+        _allocateToTargets(b, usdc, targetBalances, adapterCallGasFloor);
+    }
+
+    /// @dev Move idle USDC into each active entry below `targets[i]`, in registry order, with the
+    ///      full eligibility revert. Shared by the keeper and admin rebalances.
+    /// @return idle USDC left idle afterwards.
+    function _allocateToTargets(
+        Book storage b,
+        address usdc,
+        uint256[] memory targets,
+        uint256 adapterCallGasFloor
+    ) private returns (uint256 idle) {
+        idle = IERC20(usdc).balanceOf(address(this));
         uint256 len = b.adapters.length;
         for (uint256 i = 0; i < len && idle > 0; i++) {
-            if (!b.adapters[i].active) continue;
+            if (targets[i] == 0 || !b.adapters[i].active) continue;
             uint256 current = b.adapters[i].adapter.totalAssets();
-            if (current < targetBalances[i]) {
-                uint256 deficit = targetBalances[i] - current;
+            if (current < targets[i]) {
+                uint256 deficit = targets[i] - current;
                 uint256 allocation = deficit < idle ? deficit : idle;
                 idle -= _allocate(b, usdc, i, allocation, adapterCallGasFloor);
             }
@@ -931,6 +997,19 @@ library RobotMoneyVaultOps {
         _requireGas(floor);
         actual = adpt.withdraw(pull);
         emit Pulled(i, address(adpt), actual);
+    }
+
+    /// @dev `_withdrawFrom` capped at the venue's immediately withdrawable liquidity. Skips the
+    ///      probe and the call when nothing is to be pulled; returns what the adapter paid.
+    function _withdrawLiquid(IStrategyAdapter adpt, uint256 i, uint256 pull, uint256 floor)
+        private
+        returns (uint256)
+    {
+        if (pull == 0) return 0;
+        (, uint256 available) = _withdrawalLiquidity(adpt);
+        if (pull > available) pull = available;
+        if (pull == 0) return 0;
+        return _withdrawFrom(adpt, i, pull, floor);
     }
 
     /// @dev Equal-weight target in bps for the entry at `index` (0 when inactive). The

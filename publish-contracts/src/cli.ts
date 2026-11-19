@@ -105,7 +105,7 @@ export const USAGE = `publish contracts
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698):
                      ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and sets the router's active vector together.
-                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, was recorded after the last applied receipt (lastAppliedRecordedAt, issue 1831),
+                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, advances the last applied receipt sequence (or the legacy lastAppliedRecordedAt watermark, issue 1831),
                      the payload's receipt digest (domain line + bytes) equals the stored digest, and the vector sums to 10000 bps and lists the registry's router-eligible vaults in
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
                      --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt's RECEIPT_RELEASER_ROLE (the narrow release role, issue 1888;

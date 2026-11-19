@@ -98,6 +98,7 @@ export const sidebar = [
         { text: "IUpstreamMonitor", link: "/contracts/interfaces/interface.IUpstreamMonitor" },
         { text: "IVault", link: "/contracts/interfaces/interface.IVault" },
         { text: "IVenueHealthAdapter", link: "/contracts/interfaces/interface.IVenueHealthAdapter" },
+        { text: "IVenueLiquidityAdapter", link: "/contracts/interfaces/interface.IVenueLiquidityAdapter" },
       ],
     },
     {
@@ -670,6 +671,7 @@ export const sidebar = [
             { text: "FlowLibsTest", link: "/contracts/test/prototype/contract.FlowLibsTest" },
             { text: "FlowQueueFixesTest", link: "/contracts/test/prototype/contract.FlowQueueFixesTest" },
             { text: "FlowQueueOldestFirstInvariant", link: "/contracts/test/prototype/contract.FlowQueueOldestFirstInvariant" },
+            { text: "FlowQueuePermitTest", link: "/contracts/test/prototype/contract.FlowQueuePermitTest" },
             { text: "FlowQueueRandomSeedFuzzTest", link: "/contracts/test/prototype/contract.FlowQueueRandomSeedFuzzTest" },
             { text: "FlowQueueRealFeedsTest", link: "/contracts/test/prototype/contract.FlowQueueRealFeedsTest" },
             { text: "FlowQueueSeedTest", link: "/contracts/test/prototype/contract.FlowQueueSeedTest" },
@@ -683,6 +685,7 @@ export const sidebar = [
             { text: "Invariants", link: "/contracts/test/prototype/contract.Invariants" },
             { text: "OddDeltaPool", link: "/contracts/test/prototype/contract.OddDeltaPool" },
             { text: "OwnerDefaultsTest", link: "/contracts/test/prototype/contract.OwnerDefaultsTest" },
+            { text: "PermitUsdc", link: "/contracts/test/prototype/contract.PermitUsdc" },
             { text: "QueueMockAggregator", link: "/contracts/test/prototype/contract.QueueMockAggregator" },
             { text: "QueueMockObservablePool", link: "/contracts/test/prototype/contract.QueueMockObservablePool" },
             { text: "ReviewFixesDepthTest", link: "/contracts/test/prototype/contract.ReviewFixesDepthTest" },
@@ -746,6 +749,18 @@ export const sidebar = [
             { text: "AttackPnl", link: "/contracts/test/prototype/struct.AttackPnl" },
           ],
         },
+      ],
+    },
+    {
+      text: "contracts/test/prototype/anvil",
+      items: [
+        { text: "OneVaultDeliveryAnvil", link: "/contracts/test/prototype/anvil/contract.OneVaultDeliveryAnvil" },
+        { text: "OneVaultKeeperAnvil", link: "/contracts/test/prototype/anvil/contract.OneVaultKeeperAnvil" },
+        { text: "OneVaultMockAToken", link: "/contracts/test/prototype/anvil/contract.OneVaultMockAToken" },
+        { text: "OneVaultMockAavePool", link: "/contracts/test/prototype/anvil/contract.OneVaultMockAavePool" },
+        { text: "OneVaultMockBasketToken", link: "/contracts/test/prototype/anvil/contract.OneVaultMockBasketToken" },
+        { text: "OneVaultMockSwapRouter", link: "/contracts/test/prototype/anvil/contract.OneVaultMockSwapRouter" },
+        { text: "OneVaultMockV3Pool", link: "/contracts/test/prototype/anvil/contract.OneVaultMockV3Pool" },
       ],
     },
     {

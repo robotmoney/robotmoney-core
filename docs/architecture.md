@@ -855,14 +855,17 @@ never be applied. The evidence check still parses historical
 `receipt_releases` entries.
 
 **Apply order (issue 1831).** `RouterGovernance` stores
-`lastAppliedRecordedAt`, the `recordedAt` of the last receipt it applied.
-`applyReceipt` reverts `ReceiptNotNewerThanApplied` unless the receipt was
-recorded strictly later. The timelock's executor role is open, so anyone can
-execute two ready apply operations in either order. Executing an older one
-after a newer one therefore reverts, the older receipt stays unreleased, and
-the newer vector stays active. The `apply-receipt` row reads
-`lastAppliedRecordedAt` and refuses with USAGE before it schedules a receipt
-that is not newer. No EOA can release a receipt after handover.
+the last applied receipt's `lastAppliedRecordedAt` and 1-based issuance
+index. Receipts from the same second follow their stable append order.
+`applyReceipt` reverts `ReceiptNotNewerThanApplied` if the issuance index
+does not advance. The first application after an upgrade uses the strictly
+newer timestamp rule until the index watermark exists. Upgrade the receipt
+register first to expose its existing indices, then upgrade RouterGovernance.
+The receipt layout and ID format stay the same. The timelock executor can
+execute ready operations in either order. An older receipt stays unreleased
+once a newer one applies. The `apply-receipt` govern row checks the watermark
+before scheduling and again before execution. No EOA can release a receipt
+after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or

@@ -28,6 +28,12 @@ IERC20 public immutable assetToken;
 bool public failOnDeposit;
 ```
 
+### blockedReceiver
+
+```solidity
+address public blockedReceiver;
+```
+
 ## Functions
 
 <a id="constructor-address"></a>
@@ -134,20 +140,34 @@ reverts (QA plan D4), so a router-leg mock must answer it.
 </i>
 
 ```solidity
-function maxDeposit(address) external pure returns (uint256);
+function maxDeposit(address receiver) public view returns (uint256);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| _ | `address` |  |
+| receiver | `address` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="setblockedreceiver-address"></a>
+
+### setBlockedReceiver
+
+```solidity
+function setBlockedReceiver(address receiver) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
 
 <a id="setfailondeposit-bool"></a>
 

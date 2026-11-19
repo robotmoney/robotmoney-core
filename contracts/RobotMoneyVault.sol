@@ -427,8 +427,8 @@ contract RobotMoneyVault is
     /// @notice Atomic proxy initialization (the ERC1967Proxy constructor calls it). Takes the
     ///         arguments the constructor took, plus the upgrade authority and release mode.
     /// @param _asset The vault asset (USDC).
-    /// @param _tvlCap Maximum total assets, 6-decimal units (0 = no cap).
-    /// @param _perDepositCap Maximum single deposit; must not exceed a non-zero `_tvlCap`.
+    /// @param _tvlCap Maximum total assets, 6-decimal units. Must be positive.
+    /// @param _perDepositCap Maximum single deposit; must be positive and at most the TVL cap.
     /// @param _exitFeeBps Exit fee in basis points, at most `MAX_EXIT_FEE_BPS`.
     /// @param _feeRecipient Receives exit fees. Not zero.
     /// @param _admin Receives ADMIN_ROLE. Not zero.
@@ -458,7 +458,7 @@ contract RobotMoneyVault is
             revert ZeroAddress();
         }
         if (_exitFeeBps > MAX_EXIT_FEE_BPS) revert InvalidFee();
-        if (_tvlCap > 0 && _perDepositCap > _tvlCap) revert InvalidParam();
+        if (_tvlCap == 0 || _perDepositCap == 0 || _perDepositCap > _tvlCap) revert InvalidParam();
 
         tvlCap = _tvlCap;
         perDepositCap = _perDepositCap;
@@ -1009,18 +1009,13 @@ contract RobotMoneyVault is
         lastRebalanceAt = block.timestamp;
 
         uint256 totalAssetsCached = totalAssets();
-        // Same exactly-partitioning target set the allocator uses (#1391), so a rebalance does
-        // not pull dust that `_routeDeposit` hands straight back below. Quarantined entries and
-        // entries under an open exclusion record are never pulled from (core 1788 / 1820).
-        uint256 totalMoved = RobotMoneyVaultOps.rebalancePull(
+        uint256 totalMoved = RobotMoneyVaultOps.rebalance(
             _book(),
             asset(),
             totalAssetsCached,
-            (totalAssetsCached * maxRebalanceBpsPerCall) / MAX_BPS
+            (totalAssetsCached * maxRebalanceBpsPerCall) / MAX_BPS,
+            ADAPTER_CALL_GAS_FLOOR
         );
-
-        uint256 idle = IERC20(asset()).balanceOf(address(this));
-        if (idle > 0) _routeDeposit(idle);
 
         emit Rebalanced(totalMoved);
     }

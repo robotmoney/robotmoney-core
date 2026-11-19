@@ -374,8 +374,8 @@ function initialize(
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | _asset | `IERC20` | The vault asset (USDC). |
-| _tvlCap | `uint256` | Maximum total assets, 6-decimal units (0 = no cap). |
-| _perDepositCap | `uint256` | Maximum single deposit; must not exceed a non-zero `_tvlCap`. |
+| _tvlCap | `uint256` | Maximum total assets, 6-decimal units. Must be positive. |
+| _perDepositCap | `uint256` | Maximum single deposit; must be positive and at most the TVL cap. |
 | _exitFeeBps | `uint256` | Exit fee in basis points, at most `MAX_EXIT_FEE_BPS`. |
 | _feeRecipient | `address` | Receives exit fees. Not zero. |
 | _admin | `address` | Receives ADMIN_ROLE. Not zero. |

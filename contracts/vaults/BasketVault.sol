@@ -232,6 +232,9 @@ abstract contract BasketVault is
     uint256 internal _lastMintedShares;
     uint256 internal _lastWithdrawnAssets;
 
+    /// @dev Fractional in-kind fees in basis-point units, carried per payout token.
+    mapping(address token => uint256 remainder) private _inKindFeeRemainder;
+
     // ─── Events ───────────────────────────────────────────────────────
 
     /// @dev Emitted when `ADMIN_ROLE` sets the linked registry for the first time.
@@ -621,8 +624,9 @@ abstract contract BasketVault is
         // `BasketViews` library to keep this EIP-170-tight vault under the limit.
 
         // Snapshot pre-deposit state so shares are minted against the value the
-        // pool held BEFORE this deposit's tokens landed. Reuse `taBefore` for the
-        // TVL-cap check (pre-swap; post-swap NAV may differ slightly by slippage).
+        // pool held BEFORE this deposit's tokens landed. The public entrypoints
+        // already cap their input through maxDeposit or its inverse maxMint.
+        // Enforce the cap on realized NAV below before issuing shares.
         // AZ-BSK-3 (C1-corrected): the share-price denominator is the FULL
         // pre-deposit NAV `taBefore` (adapter-free basket token value PLUS every
         // idle USDC dollar), the exact OZ mint denominator. Idle USDC backs
@@ -630,7 +634,6 @@ abstract contract BasketVault is
         // over-mints to a depositor after emergencyUnwind + unpauseDeposits.
         uint256 supplyBefore = totalSupply();
         uint256 taBefore = totalAssets();
-        if (taBefore + usdcAmount > tvlCap) revert TVLCapExceeded();
 
         // Pull USDC from the caller into the vault (no shares minted yet).
         SafeERC20.safeTransferFrom(IERC20(asset()), caller, address(this), usdcAmount);
@@ -651,7 +654,9 @@ abstract contract BasketVault is
         // nonReentrant modifier prevents any actual re-entry; USDC and the swap
         // adapters are not ERC777 tokens.
         uint256 slippageFloor = usdcAmount.mulDiv(MAX_BPS - maxSlippageBps, MAX_BPS);
-        uint256 realizedDelta = totalAssets() - taBefore;
+        uint256 realizedNav = totalAssets();
+        if (realizedNav > tvlCap) revert TVLCapExceeded();
+        uint256 realizedDelta = realizedNav - taBefore;
         if (realizedDelta < slippageFloor) {
             revert DepositBelowSlippageFloor(realizedDelta, slippageFloor);
         }
@@ -765,7 +770,9 @@ abstract contract BasketVault is
         uint256 supplyBefore = totalSupply();
         _burn(owner, shares);
 
-        BasketAssetConfigGuard.payInKind(_guardAssets(), receiver, shares, supplyBefore);
+        BasketAssetConfigGuard.payInKind(
+            _guardAssets(), _inKindFeeRemainder, receiver, shares, supplyBefore
+        );
         emit RedeemedInKind(owner, receiver, shares);
     }
 
@@ -950,6 +957,7 @@ abstract contract BasketVault is
             uint256 bal = IERC20(assets[i].token).balanceOf(address(this));
             if (bal == 0) continue;
 
+            // Unswappable dust can remain in vault NAV after a full USDC exit.
             uint256 sellAmount = bal.mulDiv(shares, supplyBefore);
             if (sellAmount == 0) continue;
 
@@ -1181,15 +1189,14 @@ abstract contract BasketVault is
     ///      min-out is TWAP-derived and slippage-bounded exactly like the
     ///      proportional-withdraw sell leg, so the swap fails closed if the
     ///      oracle is unavailable or the price is manipulated. The additional
-    ///      caller-supplied minUsdcOut is checked against the actual received
-    ///      amount and reverts with SlippageExceeded if not met (AZ-BSK-5).
+    ///      caller-supplied minUsdcOut must be at most the computed TWAP floor
+    ///      or the transaction reverts with SlippageExceeded before swapping (AZ-BSK-5).
     ///      A dust balance, whose TWAP floor rounds to zero USDC units, is left in
     ///      place and the call is a no-op (QA plan D6), like a zero balance.
     /// @param index      Registry index of an inactive (removed) basket asset.
     /// @param minUsdcOut Caller-supplied slippage floor (in USDC raw units).
-    ///                   Reverts with SlippageExceeded when the swap output is
-    ///                   below this floor, preventing MEV sandwich attacks on
-    ///                   NAV recovery. Pass 0 to use only the TWAP-derived
+    ///                   Reverts with SlippageExceeded if the computed
+    ///                   TWAP floor is below this value. Pass 0 to use only the TWAP-derived
     ///                   floor. Only enforced on the pool-healthy path; the
     ///                   degraded-pool path quarantines instead of swapping.
     function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external nonReentrant {
@@ -1201,9 +1208,9 @@ abstract contract BasketVault is
         // into NAV (same construction as the proportional-withdraw sell leg), crediting all
         // holders pro-rata with no caller-supplied recipient. A removed asset's pool can be
         // DEGRADED (its TWAP observation history gone, so `observe()` reverts "OLD"); then the
-        // balance is permissionlessly swept to the governed quarantine address instead of
-        // being stranded, so `reabsorbRemovedAsset` can never revert-and-strand. The floor
-        // read is the self-only `emergencyTwapUsdcValue`, so its revert is catchable.
+        // balance is permissionlessly swept to the fixed quarantine address instead of
+        // remaining in the vault. The floor read is the self-only
+        // `emergencyTwapUsdcValue`, so its revert is catchable.
         //
         // AZ-BSK-5: the TWAP-derived floor is the worst-case bound on the swap output; if it
         // falls below the caller's `minUsdcOut` the call reverts `SlippageExceeded` early.
@@ -1367,10 +1374,9 @@ abstract contract BasketVault is
     ///         `token` is USDC, the vault share token, or ANY basket asset —
     ///         active OR configured-but-inactive. Inactive (removed) basket
     ///         assets are NOT swept here: a balance that reappears on a removed
-    ///         asset is re-absorbed into NAV via `reabsorbRemovedAsset` (INV-2),
-    ///         never routed to an admin or to quarantine, so it stays redeemable
-    ///         by holders (this is the no-stranded-asset replacement for the
-    ///         audit 2026-06-09 L-15 admin rescue path).
+    ///         asset is handled through `reabsorbRemovedAsset` (INV-2). A healthy
+    ///         sale returns proceeds to NAV. Degraded-oracle quarantine uses the
+    ///         fixed destination through that separate entry point.
     /// @param token Foreign ERC-20 to quarantine. Must not be USDC, the share
     ///        token, or any active/configured basket asset.
     function sweepForeignToken(address token) external {
@@ -1379,7 +1385,7 @@ abstract contract BasketVault is
         // worst re-enter into a zero-balance no-op that reverts.
         // Protected = USDC, the share token, or ANY registered basket asset
         // (active OR configured-but-inactive). Inactive entries are re-absorbed
-        // into NAV via `reabsorbRemovedAsset`, never quarantined.
+        // into NAV or quarantined via `reabsorbRemovedAsset`.
         bool protected_ = token == address(_USDC) || token == address(this);
         uint256 len = assets.length;
         for (uint256 i = 0; i < len && !protected_; i++) {

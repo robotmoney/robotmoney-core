@@ -48,6 +48,12 @@ contract MockMorphoVault is ERC20 {
         return super.balanceOf(account);
     }
 
+    function maxWithdraw(address owner) external view returns (uint256) {
+        uint256 shares = balanceOf(owner);
+        uint256 cash = asset.balanceOf(address(this));
+        return cash < shares ? cash : shares;
+    }
+
     function convertToAssets(uint256 shares_) external pure returns (uint256) {
         return shares_;
     }

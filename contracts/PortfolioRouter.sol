@@ -240,6 +240,9 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     /// @notice The supplied `deadline` has passed (`block.timestamp > deadline`).
     error DeadlineExpired();
 
+    /// @notice The quoted vault identities differ from the effective deposit route.
+    error DepositRouteChanged();
+
     /// @notice Total deposit amount exceeds the global router cap.
     error RouterCapExceeded();
 
@@ -288,8 +291,12 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///      leg. At 1_700_000 the vault's own entry floor, not this one, bound the estimate for
     ///      a one- or two-leg router, and it moved by about 22_000 gas between the estimate
     ///      block and the next block, so a limit equal to the estimate failed at inclusion. At
-    ///      2_400_000 this floor binds again. See docs/technical/redeem-gas-1482.md.
-    uint256 internal constant DEPOSIT_GAS_PER_LEG = 2_400_000;
+    ///      2_400_000 this floor bound again until the 0.9.0 audit remediation added each lending
+    ///      adapter's withdrawal-liquidity probe to `maxDeposit` (MetaMorpho `maxWithdraw` walks its
+    ///      markets): the one-leg estimate then reached about 2_486_000 on a Base fork, above
+    ///      2_400_000, so the vault floor bound it again. At 2_800_000 this floor binds with about
+    ///      300_000 to spare for one leg. See docs/technical/redeem-gas-1482.md.
+    uint256 internal constant DEPOSIT_GAS_PER_LEG = 2_800_000;
 
     /// @notice The explicit `vaults[]` array supplied to `redeemFor` does not
     ///         match the length of `sharesPerLeg` (or `minAssetsPerLeg`). Each
@@ -331,8 +338,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     /// @param vault  The vault whose deposit call reverted.
     error UsdcLegTransferFailed(address vault);
 
-    /// @notice Caller is not the shareHolder and has insufficient ERC-20
-    ///         allowance on the vault share token to redeem on its behalf.
+    /// @notice Caller has insufficient router redemption allowance for the holder.
     /// @param shareHolder  The owner of the vault shares.
     /// @param caller       The address that attempted the unauthorized redeem.
     error UnauthorizedRedeemer(address shareHolder, address caller);
@@ -421,6 +427,23 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     /// @notice The pending rotation of `WEIGHT_SETTER_ROLE`. `newHolder` is address(0) when none is pending.
     ///         The stage 12 verifier fails a run while a rotation is pending.
     WeightSetterRotation public pendingWeightSetterRotation;
+
+    /// @notice Shares an operator may redeem for a holder, scoped to one vault and recipient.
+    mapping(
+        address holder
+            => mapping(
+            address operator
+                => mapping(address vault => mapping(address recipient => uint256 shares))
+        )
+    ) public redemptionAllowance;
+
+    event RedemptionAllowanceSet(
+        address indexed holder,
+        address indexed operator,
+        address indexed vault,
+        address recipient,
+        uint256 shares
+    );
 
     struct WeightSetterRotation {
         address newHolder;
@@ -698,6 +721,15 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     /// @param amount  Total USDC to preview.
     /// @return legs   One entry per vault in the current weight vector.
     function previewDeposit(uint256 amount) external view returns (LegPreview[] memory legs) {
+        return previewDepositFor(msg.sender, amount);
+    }
+
+    /// @notice Preview a deposit for the beneficiary whose capacity limits apply.
+    function previewDepositFor(address receiver, uint256 amount)
+        public
+        view
+        returns (LegPreview[] memory legs)
+    {
         (address[] memory vaultList, uint256[] memory bpsList) = _effectiveWeightsMemory();
         uint256 n = vaultList.length;
         legs = new LegPreview[](n);
@@ -709,7 +741,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
         // amount. A zero-amount leg is never called by the deposit path (issue
         // 1746), so it quotes zero shares and stays available.
         (bool[] memory available, uint256[] memory legAmounts, uint256[] memory estShares) =
-            _availabilityAndAmounts(vaultList, bpsList, amount);
+            _availabilityAndAmounts(vaultList, bpsList, amount, receiver);
 
         for (uint256 i = 0; i < n; i++) {
             legs[i] = LegPreview({
@@ -771,7 +803,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     function _availabilityAndAmounts(
         address[] memory vaultList,
         uint256[] memory bpsList,
-        uint256 amount
+        uint256 amount,
+        address receiver
     )
         internal
         view
@@ -784,7 +817,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
         // First pass: the amount-independent checks (status, eligibility,
         // the vault's own maxDeposit).
         for (uint256 i = 0; i < n; i++) {
-            available[i] = _isDepositable(vaultList[i]);
+            available[i] = _isDepositable(vaultList[i], receiver);
         }
 
         // Split, then quote every funded available leg at its split amount. A
@@ -848,11 +881,8 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///      own `maxDeposit`? Mirrors the reverting checks in
     ///      `_executeLeg`/`_requireRouterEligible` and the vault's own ERC-4626
     ///      deposit gate without reverting, so it can be used to compute the
-    ///      shared availability set. `maxDeposit` is read with this router as the
-    ///      receiver: preview has no receiver to pass, and every vault in the
-    ///      family ignores the argument. A reverting `maxDeposit` counts as 0,
-    ///      because an ERC-4626 `deposit` reads it first and would revert too.
-    function _isDepositable(address vault) internal view returns (bool) {
+    ///      shared availability set. A reverting beneficiary-specific capacity counts as zero.
+    function _isDepositable(address vault, address receiver) internal view returns (bool) {
         try registry.getVault(vault) returns (
             VaultRegistry.VaultMetadata memory, VaultRegistry.VaultStatus status
         ) {
@@ -861,7 +891,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
             return false;
         }
         if (!this.isRouterEligible(vault)) return false;
-        try IERC4626(vault).maxDeposit(address(this)) returns (uint256 cap) {
+        try IERC4626(vault).maxDeposit(receiver) returns (uint256 cap) {
             return cap != 0;
         } catch {
             return false;
@@ -885,6 +915,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///                          skipped leg reverts `LegSkippedWithFloor(vault)`
     ///                          (security round 2). Pass 0 for the legs
     ///                          `previewDeposit` reports unavailable or unfunded.
+    /// @dev Direct entry point. The dapp routing feature flag only controls visibility in that client.
     function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
         external
         nonReentrant
@@ -920,16 +951,47 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
         return _depositTo(receiver, amount, minSharesPerLeg);
     }
 
+    /// @notice Deposit with the ordered vault identities returned by a preview and a deadline.
+    /// @dev Floors are in the corresponding vault share units.
+    function depositWithQuote(
+        address receiver,
+        uint256 amount,
+        address[] calldata expectedVaults,
+        uint256[] calldata minSharesPerLeg,
+        uint256 deadline
+    ) external nonReentrant returns (uint256[] memory sharesPerLeg) {
+        if (receiver == address(0)) revert ZeroAddress();
+        if (block.timestamp > deadline) revert DeadlineExpired();
+        (address[] storage vaults,) = _effectiveWeights();
+        if (expectedVaults.length != vaults.length) revert DepositRouteChanged();
+        if (minSharesPerLeg.length != expectedVaults.length) revert MinSharesLengthMismatch();
+        for (uint256 i = 0; i < vaults.length; i++) {
+            if (vaults[i] != expectedVaults[i]) revert DepositRouteChanged();
+        }
+        return _depositTo(receiver, amount, minSharesPerLeg);
+    }
+
+    /// @notice Set a spendable allowance for an operator to redeem one vault position to a recipient.
+    /// @dev The holder separately approves the router on the vault share token.
+    ///      Existing ERC-20 approvals to operators do not create router allowances.
+    function setRedemptionAllowance(
+        address operator,
+        address vault,
+        address recipient,
+        uint256 shares
+    ) external nonReentrant {
+        if (operator == address(0) || vault == address(0) || recipient == address(0)) {
+            revert ZeroAddress();
+        }
+        redemptionAllowance[msg.sender][operator][vault][recipient] = shares;
+        emit RedemptionAllowanceSet(msg.sender, operator, vault, recipient, shares);
+    }
+
     /// @notice Redeem vault shares from an explicit, caller-supplied set of
     ///         vaults. For each leg the router calls
     ///         `vaults[i].redeem(sharesPerLeg[i], assetRecipient, shareHolder)`,
-    ///         routing USDC directly to `assetRecipient`. The caller (typically
-    ///         the gateway) must either be `shareHolder` itself — the gateway
-    ///         pulls the user's shares into its own custody for the call frame
-    ///         and passes itself as `shareHolder` — or hold an ERC-20 allowance
-    ///         from `shareHolder` on each vault's share token covering that leg's
-    ///         share count; otherwise the call reverts with `UnauthorizedRedeemer`
-    ///         (confused-deputy guard, audit finding M-5).
+    ///         routing USDC directly to the specified recipient. An operator spends a router
+    ///         allowance from the share holder for the named vault and recipient.
     ///
     ///         EXIT SEMANTICS (issue #967, F-02/F-03/NC-5):
     ///         - Legs are driven by the explicit `vaults[]` argument, NOT the
@@ -945,32 +1007,16 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
     ///           1494). Retired vaults are withdraw-only, never deposit targets —
     ///           see ADR-0009.
     ///
-    ///         SECURITY: users must NEVER leave a STANDING share-token approval to
-    ///         this router. The router calls `vault.redeem` with itself as the
-    ///         vault-level spender, so a standing user→router approval would let
-    ///         any holder-authorized caller burn the user's shares to an arbitrary
-    ///         `assetRecipient`. Two flows approve the router: the gateway's
-    ///         transient self-custody flow (approve inside its own `nonReentrant`
-    ///         frame, clear afterwards), and a holder's own single-vault exit
-    ///         (QA plan D9, SR-M16), which approves exactly the shares of the one
-    ///         `redeemFor(holder, holder, [vault], [shares], [floor], deadline)`
-    ///         it sends next. That redeem spends the approval to zero. A holder
-    ///         whose call reverts (`SlippageExceeded`, `DeadlineExpired`) clears
-    ///         the approval it left. A direct `vault.redeem` has no minimum-out,
-    ///         so this one-leg call is how a holder puts a floor on one vault.
+    ///         The vault charges the separate ERC-20 allowance granted to the router
+    ///         by the holder. Approve only the shares intended for redemption and clear
+    ///         residual approval if the transaction is abandoned.
     ///
     ///         All legs must succeed (all-or-revert). No intermediate USDC custody
     ///         is created in the router — each vault sends USDC directly to
     ///         `assetRecipient`.
     ///
-    /// @param shareHolder       Address whose vault shares are redeemed (the `owner`
-    ///                          passed to `vault.redeem`). Either equals the caller
-    ///                          (gateway self-custody flow: shares pulled from the
-    ///                          user and held only during the call frame), or must
-    ///                          have approved the caller on each vault's share token
-    ///                          for at least that leg's share count. Direct user
-    ///                          approvals to this router are forbidden (see SECURITY
-    ///                          note above).
+    /// @param shareHolder       Owner of the vault shares. An operator must have a
+    ///                          router redemption allowance from the holder.
     /// @param assetRecipient    Address that receives redeemed USDC. The router
     ///                          forwards each leg's USDC here; it never custodies USDC.
     /// @param vaults            Explicit, caller-supplied list of vault addresses to
@@ -1062,18 +1108,13 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
             revert RedeemVaultNotRegistered(vault);
         }
 
-        // Confused-deputy guard (issue #751): caller must be shareHolder or
-        // have ERC-20 allowance on the vault share token. Without this check
-        // any address can front-run a shareHolder's approval tx and call
-        // redeemFor, burning shares at a caller-specified share count.
-        if (msg.sender != shareHolder && IERC20(vault).allowance(shareHolder, msg.sender) < shares)
-        {
-            revert UnauthorizedRedeemer(shareHolder, msg.sender);
+        if (msg.sender != shareHolder) {
+            uint256 remaining = redemptionAllowance[shareHolder][msg.sender][vault][assetRecipient];
+            if (remaining < shares) revert UnauthorizedRedeemer(shareHolder, msg.sender);
+            redemptionAllowance[shareHolder][msg.sender][vault][assetRecipient] = remaining - shares;
         }
 
-        // Redeem: shareHolder must have approved msg.sender (the gateway) to
-        // spend their vault shares; the gateway is the `owner` caller here.
-        // vault.redeem sends USDC directly to assetRecipient.
+        // The vault spends the holder ERC-20 approval to the router.
         assetsOut = IERC4626(vault).redeem(shares, assetRecipient, shareHolder);
 
         // Per-leg slippage floor (finding L-8): reject settlement below the
@@ -1129,7 +1170,7 @@ contract PortfolioRouter is AdminFloorAccessControl, ReentrancyGuardUpgradeable,
         // longer reverts the whole router deposit; the basket deposits the
         // remaining legs.
         (bool[] memory available, uint256[] memory legAmounts,) =
-            _availabilityAndAmounts(vaultList, bpsList, amount);
+            _availabilityAndAmounts(vaultList, bpsList, amount, receiver);
 
         // When NO leg is depositable the basket is consistently unavailable: there
         // is nothing to route and `previewDeposit` reports every leg unavailable,

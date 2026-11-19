@@ -226,7 +226,7 @@ contract RedeemGasGuardsTest is Test {
     uint256 internal constant ROUTER_PER_LEG = 1_700_000;
     uint256 internal constant GATEWAY_DEPOSIT_FLOOR = 2_000_000;
     /// @dev The deposit side runs the availability pass before any vault (QA plan D4), so its per-leg floors are above the redeem ones.
-    uint256 internal constant ROUTER_DEPOSIT_PER_LEG = 2_400_000;
+    uint256 internal constant ROUTER_DEPOSIT_PER_LEG = 2_800_000;
     uint256 internal constant VAULT_FLOOR = 1_600_000;
 
     function test_router_redeemFor_belowFloor_revertsInsufficientGas() public {

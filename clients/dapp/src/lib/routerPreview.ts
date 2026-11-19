@@ -171,6 +171,7 @@ export function buildRouterPreview(
   amount: bigint,
   legs: LegPreview[],
   ctx: RouterPreviewContext,
+  quote?: { receiver: Address; deadline: bigint },
 ): RouterPreview {
   if (!ctx.gatewayCodeHashVerified) {
     return {
@@ -180,7 +181,7 @@ export function buildRouterPreview(
     };
   }
 
-  const functionName: RouterActionName = "deposit";
+  const functionName: RouterActionName = quote ? "depositWithQuote" : "deposit";
 
   // DAPP-2 (issue #1025): derive non-zero per-leg share floors from the
   // preview's estimated shares so the encoded calldata carries real slippage
@@ -189,11 +190,23 @@ export function buildRouterPreview(
 
   let calldata: Hex;
   try {
-    calldata = encodeFunctionData({
-      abi: routerAbi,
-      functionName: "deposit",
-      args: [amount, minSharesPerLeg],
-    });
+    calldata = quote
+      ? encodeFunctionData({
+          abi: routerAbi,
+          functionName: "depositWithQuote",
+          args: [
+            quote.receiver,
+            amount,
+            legs.map((leg) => leg.vault),
+            minSharesPerLeg,
+            quote.deadline,
+          ],
+        })
+      : encodeFunctionData({
+          abi: routerAbi,
+          functionName: "deposit",
+          args: [amount, minSharesPerLeg],
+        });
   } catch {
     return { ok: false, reason: "unknown_revert" as const };
   }
@@ -243,9 +256,24 @@ export function buildRouterPreview(
     target: ctx.router,
     targetCodeHashKnown,
     ...(refusedLegs.length > 0 ? { warning: refusedRouterLegsText(refusedLegs) } : {}),
-    functionName: "deposit",
+    functionName,
     selector,
     args: [
+      ...(quote
+        ? [
+            { name: "receiver", raw: quote.receiver, gloss: "Share beneficiary" },
+            {
+              name: "expectedVaults",
+              raw: legs.map((leg) => leg.vault).join(", "),
+              gloss: "Ordered vault addresses",
+            },
+            {
+              name: "deadline",
+              raw: quote.deadline.toString(),
+              gloss: "Quote expiry (Unix seconds)",
+            },
+          ]
+        : []),
       {
         name: "amount",
         raw: amount.toString(),

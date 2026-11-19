@@ -2,7 +2,7 @@
 // Canonical: docs/technical/governance-decisions.md §3 — the Safe applies consensus receipts through the weight setter
 // Canonical: docs/architecture.md §2.3 — Governance Boundary
 // Implements: issue #1698 — the weight setter applies a consensus receipt in one call; voting deleted
-// Implements: issue #1831 — applyReceipt is monotonic in the receipt's recordedAt
+// Implements: issue #1831 — applyReceipt applies receipts in monotonic issuance order
 pragma solidity ^0.8.24;
 
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
@@ -84,13 +84,16 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
     IConsensusRecommendationReceipt public receipts;
 
     /// @notice The `recordedAt` of the last receipt `applyReceipt` applied (0 until
-    ///         the first). `applyReceipt` refuses any receipt not recorded strictly
-    ///         later, so two ready apply operations executed out of order cannot
+    ///         the first). `applyReceipt` refuses receipts older in issuance order,
+    ///         so two ready apply operations executed out of order cannot
     ///         make the older receipt's vector the active one (issue 1831).
     ///         Appended after `receipts`: the compiler packs it into the unused
     ///         bytes 20..27 of slot 1, which earlier code never wrote, so the
     ///         layout stays append-only and an upgraded proxy reads 0 here.
     uint64 public lastAppliedRecordedAt;
+
+    /// @notice Sequence of the most recently applied receipt (0 for a legacy timestamp watermark).
+    uint256 public lastAppliedReceiptSequence;
 
     // ─── Events ──────────────────────────────────────────────────────────────
 
@@ -118,8 +121,8 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
     /// @notice The call named `given`, but the receipt's stored digest is `stored`.
     error PayloadDigestMismatch(bytes32 receiptId, bytes32 stored, bytes32 given);
 
-    /// @notice `receiptId` was recorded at `recordedAt`, which is not later than
-    ///         `lastApplied`, the `recordedAt` of the receipt already applied.
+    /// @notice `receiptId` does not advance the applied issuance watermark.
+    ///         The two timestamps remain diagnostic fields for ABI compatibility.
     error ReceiptNotNewerThanApplied(bytes32 receiptId, uint64 recordedAt, uint64 lastApplied);
 
     // ─── Initializer ─────────────────────────────────────────────────────────
@@ -159,8 +162,9 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
     ///         one call. `WEIGHT_SETTER_ROLE` only (the timelock).
     ///
     ///         Reverts unless the receipt is recorded, is not released, its
-    ///         stored digest equals `payloadDigest`, and it was recorded strictly
-    ///         later than the last applied receipt (`lastAppliedRecordedAt`).
+    ///         stored digest equals `payloadDigest`, and its issuance sequence
+    ///         advances the applied watermark. After a legacy upgrade, the first
+    ///         receipt must have a strictly newer timestamp than the old watermark.
     ///         An older receipt executed after a newer one therefore reverts and
     ///         stays unreleased, and the newer vector stays active. The router then refuses a
     ///         vector whose lengths differ, whose bps do not sum to 10 000, that
@@ -188,9 +192,14 @@ contract RouterGovernance is AdminFloorAccessControl, ReentrancyGuardUpgradeable
         if (r.payloadDigest != payloadDigest) {
             revert PayloadDigestMismatch(receiptId, r.payloadDigest, payloadDigest);
         }
-        uint64 last = lastAppliedRecordedAt;
-        if (r.recordedAt <= last) revert ReceiptNotNewerThanApplied(receiptId, r.recordedAt, last);
+        uint64 lastAt = lastAppliedRecordedAt;
+        uint256 lastSequence = lastAppliedReceiptSequence;
+        uint256 sequence = receipts.receiptSequence(receiptId);
+        if (sequence <= lastSequence || (lastSequence == 0 && r.recordedAt <= lastAt)) {
+            revert ReceiptNotNewerThanApplied(receiptId, r.recordedAt, lastAt);
+        }
         lastAppliedRecordedAt = r.recordedAt;
+        lastAppliedReceiptSequence = sequence;
 
         receipts.releaseReceipt(receiptId);
         router.setWeights(vaults, bps);

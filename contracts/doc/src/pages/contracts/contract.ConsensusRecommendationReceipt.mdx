@@ -342,6 +342,28 @@ function isRecorded(bytes32 receiptId) external view returns (bool);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
 
+<a id="receiptsequence-bytes32"></a>
+
+### receiptSequence
+
+The existing 1-based issuance index also orders receipts recorded in the same second.
+
+```solidity
+function receiptSequence(bytes32 receiptId) external view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiptId | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="isreleased-bytes32"></a>
 
 ### isReleased

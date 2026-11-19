@@ -36,6 +36,7 @@ contract MockRouterVault is ERC20 {
 
     IERC20 public immutable assetToken;
     bool public failOnDeposit;
+    address public blockedReceiver;
 
     event Deposit(address indexed sender, address indexed receiver, uint256 assets, uint256 shares);
 
@@ -61,8 +62,12 @@ contract MockRouterVault is ERC20 {
 
     /// @dev ERC-4626 `maxDeposit`: uncapped. The router skips a leg whose `maxDeposit` is 0 or
     ///      reverts (QA plan D4), so a router-leg mock must answer it.
-    function maxDeposit(address) external pure returns (uint256) {
-        return type(uint256).max;
+    function maxDeposit(address receiver) public view returns (uint256) {
+        return blockedReceiver != address(0) && receiver == blockedReceiver ? 0 : type(uint256).max;
+    }
+
+    function setBlockedReceiver(address receiver) external {
+        blockedReceiver = receiver;
     }
 
     function setFailOnDeposit(bool fail) external {
@@ -70,7 +75,9 @@ contract MockRouterVault is ERC20 {
     }
 
     function deposit(uint256 assets, address receiver) external returns (uint256 shares) {
-        require(!failOnDeposit, "MockRouterVault: deposit reverted");
+        require(
+            !failOnDeposit && assets <= maxDeposit(receiver), "MockRouterVault: deposit reverted"
+        );
         assetToken.safeTransferFrom(msg.sender, address(this), assets);
         shares = assets;
         _mint(receiver, shares);
@@ -910,6 +917,7 @@ contract PortfolioRouterTest is SafeGovernance {
     ///         and being able to weight it.
     function test_setWeights_revertsIfVaultAssetUnreadable() public {
         address fakeVault = makeAddr("fakeVault");
+        vm.etch(fakeVault, hex"60006000fd");
         VaultRegistry.VaultMetadata memory fakeMeta = VaultRegistry.VaultMetadata({
             name: "Fake Vault", asset: address(usdc), registeredAt: 0
         });
@@ -1663,6 +1671,64 @@ contract PortfolioRouterTest is SafeGovernance {
         (address[] memory got,) = router.getDefaultWeights();
         assertEq(got[0], address(vaultB));
         assertEq(got[1], address(vaultA));
+    }
+
+    function test_depositWithQuote_appliesBeneficiaryCapacity() public {
+        _setEqualWeights();
+        vaultA.setBlockedReceiver(stranger);
+        uint256 amount = 1_000 * ONE_USDC;
+        PortfolioRouter.LegPreview[] memory legs = router.previewDepositFor(stranger, amount);
+        assertTrue(legs[0].unavailable);
+        assertEq(legs[1].legAmount, amount);
+        uint256[] memory floors = new uint256[](2);
+        floors[1] = legs[1].estShares;
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        router.depositWithQuote(stranger, amount, _redeemVaults(), floors, block.timestamp);
+        assertEq(vaultA.balanceOf(stranger), 0);
+        assertEq(vaultB.balanceOf(stranger), amount);
+    }
+
+    function test_depositWithQuote_rejectsMismatchedAndExpiredRoute() public {
+        _setEqualWeights();
+        uint256 amount = 1_000 * ONE_USDC;
+        uint256 deadline = block.timestamp;
+        address[] memory vaults = _redeemVaults();
+        (vaults[0], vaults[1]) = (vaults[1], vaults[0]);
+        _fundAndApprove(depositor, amount);
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.DepositRouteChanged.selector);
+        router.depositWithQuote(depositor, amount, vaults, new uint256[](2), deadline);
+        assertEq(usdc.balanceOf(depositor), amount);
+
+        vm.warp(deadline + 1);
+        vm.prank(depositor);
+        vm.expectRevert(PortfolioRouter.DeadlineExpired.selector);
+        router.depositWithQuote(depositor, amount, _redeemVaults(), new uint256[](2), deadline);
+        assertEq(usdc.balanceOf(depositor), amount);
+    }
+
+    function test_redeemFor_delegatedAllowanceIsConsumed() public {
+        uint256[] memory shares = _depositAndApproveForRedeem(1_000 * ONE_USDC);
+        uint256[] memory requested = new uint256[](2);
+        requested[0] = shares[0] / 2;
+        vm.prank(depositor);
+        router.setRedemptionAllowance(stranger, address(vaultA), depositor, requested[0]);
+        vm.prank(stranger);
+        uint256[] memory assets = router.redeemFor(
+            depositor, depositor, _redeemVaults(), requested, new uint256[](2), block.timestamp
+        );
+        assertEq(assets[0], requested[0]);
+        assertEq(router.redemptionAllowance(depositor, stranger, address(vaultA), depositor), 0);
+        vm.prank(stranger);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PortfolioRouter.UnauthorizedRedeemer.selector, depositor, stranger
+            )
+        );
+        router.redeemFor(
+            depositor, depositor, _redeemVaults(), requested, new uint256[](2), block.timestamp
+        );
     }
 
     // ─── redeemFor: authorization guards (issue #751) ──────────────────────────

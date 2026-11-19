@@ -418,15 +418,28 @@ ReceiptNotNewerThanApplied. B's vector stays active and A stays unreleased.
 function test_applyReceipt_outOfOrderOlderReverts() public;
 ```
 
-<a id="test_applyreceipt_samerecordedatrefused"></a>
+<a id="test_applyreceipt_samerecordedatappliesinissuanceorder"></a>
 
-### test_applyReceipt_sameRecordedAtRefused
-
-A receipt recorded in the same second as the applied one is not newer, so
-it is refused.
+### test_applyReceipt_sameRecordedAtAppliesInIssuanceOrder
 
 ```solidity
-function test_applyReceipt_sameRecordedAtRefused() public;
+function test_applyReceipt_sameRecordedAtAppliesInIssuanceOrder() public;
+```
+
+<a id="test_applyreceipt_samerecordedatrefusesearlierissuance"></a>
+
+### test_applyReceipt_sameRecordedAtRefusesEarlierIssuance
+
+```solidity
+function test_applyReceipt_sameRecordedAtRefusesEarlierIssuance() public;
+```
+
+<a id="test_applyreceipt_preserveslegacytimestampwatermark"></a>
+
+### test_applyReceipt_preservesLegacyTimestampWatermark
+
+```solidity
+function test_applyReceipt_preservesLegacyTimestampWatermark() public;
 ```
 
 <a id="test_applyreceipt_inorderstillapplies"></a>

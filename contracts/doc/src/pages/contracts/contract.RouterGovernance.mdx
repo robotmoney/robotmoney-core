@@ -103,8 +103,8 @@ IConsensusRecommendationReceipt public receipts;
 ### lastAppliedRecordedAt
 
 The `recordedAt` of the last receipt `applyReceipt` applied (0 until
-the first). `applyReceipt` refuses any receipt not recorded strictly
-later, so two ready apply operations executed out of order cannot
+the first). `applyReceipt` refuses receipts older in issuance order,
+so two ready apply operations executed out of order cannot
 make the older receipt's vector the active one (issue 1831).
 Appended after `receipts`: the compiler packs it into the unused
 bytes 20..27 of slot 1, which earlier code never wrote, so the
@@ -112,6 +112,14 @@ layout stays append-only and an upgraded proxy reads 0 here.
 
 ```solidity
 uint64 public lastAppliedRecordedAt;
+```
+
+### lastAppliedReceiptSequence
+
+Sequence of the most recently applied receipt (0 for a legacy timestamp watermark).
+
+```solidity
+uint256 public lastAppliedReceiptSequence;
 ```
 
 ## Functions
@@ -150,8 +158,9 @@ Release `receiptId` and set its weight vector on the router, in
 one call. `WEIGHT_SETTER_ROLE` only (the timelock).
 
 Reverts unless the receipt is recorded, is not released, its
-stored digest equals `payloadDigest`, and it was recorded strictly
-later than the last applied receipt (`lastAppliedRecordedAt`).
+stored digest equals `payloadDigest`, and its issuance sequence
+advances the applied watermark. After a legacy upgrade, the first
+receipt must have a strictly newer timestamp than the old watermark.
 An older receipt executed after a newer one therefore reverts and
 stays unreleased, and the newer vector stays active. The router then refuses a
 vector whose lengths differ, whose bps do not sum to 10 000, that
@@ -307,8 +316,8 @@ error PayloadDigestMismatch(bytes32 receiptId, bytes32 stored, bytes32 given);
 
 ### ReceiptNotNewerThanApplied
 
-`receiptId` was recorded at `recordedAt`, which is not later than
-`lastApplied`, the `recordedAt` of the receipt already applied.
+`receiptId` does not advance the applied issuance watermark.
+The two timestamps remain diagnostic fields for ABI compatibility.
 
 ```solidity
 error ReceiptNotNewerThanApplied(bytes32 receiptId, uint64 recordedAt, uint64 lastApplied);

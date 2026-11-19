@@ -485,11 +485,46 @@ export const routerAbi = [
   },
   {
     type: "function",
+    name: "previewDepositFor",
+    stateMutability: "view",
+    inputs: [
+      { name: "receiver", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [
+      {
+        name: "legs",
+        type: "tuple[]",
+        components: [
+          { name: "vault", type: "address" },
+          { name: "weightBps", type: "uint256" },
+          { name: "legAmount", type: "uint256" },
+          { name: "estShares", type: "uint256" },
+          { name: "unavailable", type: "bool" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
     name: "deposit",
     stateMutability: "nonpayable",
     inputs: [
       { name: "amount", type: "uint256" },
       { name: "minSharesPerLeg", type: "uint256[]" },
+    ],
+    outputs: [{ name: "sharesPerLeg", type: "uint256[]" }],
+  },
+  {
+    type: "function",
+    name: "depositWithQuote",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "receiver", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "expectedVaults", type: "address[]" },
+      { name: "minSharesPerLeg", type: "uint256[]" },
+      { name: "deadline", type: "uint256" },
     ],
     outputs: [{ name: "sharesPerLeg", type: "uint256[]" }],
   },
@@ -560,7 +595,7 @@ export const routerAbi = [
   },
 ] as const;
 
-export type RouterActionName = "deposit" | "redeemFor";
+export type RouterActionName = "deposit" | "depositWithQuote" | "redeemFor";
 
 /**
  * Minimal ABI fragment for AgentTokenVault.shortlist() and

@@ -279,12 +279,10 @@ contract GatewayRouterTest is Test {
         bytes32 orderId = keccak256("gw2-leg-order");
         bytes32 idem = keccak256("gw2-leg-idem");
         uint64 deadline = uint64(block.timestamp + 60);
-        uint256[] memory legsA = new uint256[](2);
+        uint256[] memory legsA = new uint256[](1);
         legsA[0] = 1;
-        legsA[1] = 1;
-        uint256[] memory legsB = new uint256[](2);
+        uint256[] memory legsB = new uint256[](1);
         legsB[0] = 2;
-        legsB[1] = 2;
 
         vm.prank(agent);
         bytes32 idA = gateway.depositTo(orderId, amount, deadline, idem, address(vault), legsA);

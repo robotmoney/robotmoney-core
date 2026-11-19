@@ -1,23 +1,13 @@
 ---
 title: "IVenueHealthAdapter"
-description: "Strategy adapter that can report whether its venue still pays withdrawals (`AaveV3Adapter`, `CompoundV3Adapter`)."
+description: "Legacy pause-only withdrawal signal used by Aave and Compound adapters."
 ---
 
 # IVenueHealthAdapter
 
 [Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/interfaces/IVenueHealthAdapter.sol)
 
-Strategy adapter that can report whether its venue still pays withdrawals
-(`AaveV3Adapter`, `CompoundV3Adapter`).
-
-<i>
-
-`RobotMoneyVault` closes deposits (`maxDeposit` 0) while an active adapter reports false,
-through `RobotMoneyVaultOps.anyActiveBlocked`, a `staticcall` that reads a missing or reverting
-view as true. Minting while a venue cannot pay would count its stuck balance at face, and
-the new USDC would fund early exits at that NAV (security round 3).
-
-</i>
+Legacy pause-only withdrawal signal used by Aave and Compound adapters.
 
 ## Functions
 
