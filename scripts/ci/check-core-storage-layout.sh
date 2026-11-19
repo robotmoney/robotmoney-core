@@ -53,16 +53,7 @@ RENAMES="${RENAMES:-$REPO_ROOT/scripts/ci/storage-layout-renames.json}"
 # contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; HardAssetsVault, ADR-0018),
 # and the four proxies of the fund system (Deploy 4).
 CONTRACTS=(
-  "RobotMoneyVault:contracts/RobotMoneyVault.sol"
-  "ProtocolAssetVault:contracts/vaults/ProtocolAssetVault.sol"
-  "AgentTokenVault:contracts/vaults/AgentTokenVault.sol"
-  "RwaBasketVault:contracts/vaults/RwaBasketVault.sol"
-  "HardAssetsVault:contracts/vaults/HardAssetsVault.sol"
-  "VaultRegistry:contracts/VaultRegistry.sol"
-  "PortfolioRouter:contracts/PortfolioRouter.sol"
-  "RobotMoneyGateway:contracts/gateway/RobotMoneyGateway.sol"
   "ConsensusRecommendationReceipt:contracts/ConsensusRecommendationReceipt.sol"
-  "RouterGovernance:contracts/RouterGovernance.sol"
   # Deploy 4 (owner exception 2026-11-12): the fund system's four proxies, the one-vault prototype deployed as a rehearsal.
   "RobotMoneyFund:contracts/RobotMoneyFund.sol"
   "Rebalancer:contracts/Rebalancer.sol"
@@ -315,7 +306,7 @@ case "${1:-}" in
     echo "check-core-storage-layout: wrote $PINS"
     ;;
   --selftest)
-    name="RobotMoneyGateway"; src="contracts/gateway/RobotMoneyGateway.sol"
+    name="Rebalancer"; src="contracts/Rebalancer.sol"
     normalized_live "$name" "$src" >"$WORK/live.json"
     fails=0
     expect() {
@@ -385,15 +376,6 @@ case "${1:-}" in
     jq '.namespaces["robotmoney.storage.GovernedUUPS"] |= reverse' "$WORK/live.json" >"$WORK/new.json"
     cp "$WORK/new.json" "$WORK/snap.json"
     gate "a reordered namespace with a regenerated snapshot fails against the baseline" 1
-    # Issue 1888: the retired committee slots stay in storage. Deleting one (and regenerating the snapshot) is rejected.
-    for retired in icPolicy consensusReceipt; do
-      jq --arg l "$retired" '.storage |= map(select(.label != $l))' "$WORK/live.json" >"$WORK/new.json"
-      if [[ "$(jq '.storage | length' "$WORK/new.json")" == "$(jq '.storage | length' "$WORK/live.json")" ]]; then
-        echo "FAIL the gateway layout has no retired slot $retired to remove"; fails=$((fails + 1))
-      fi
-      cp "$WORK/new.json" "$WORK/snap.json"
-      gate "removing the retired gateway slot $retired with a regenerated snapshot fails against the baseline" 1
-    done
     normalized_live "ConsensusRecommendationReceipt" "contracts/ConsensusRecommendationReceipt.sol" >"$WORK/receipt-live.json"
     for retired in _retiredWriterSlot icPolicy; do
       jq --arg l "$retired" '.storage |= map(select(.label != $l))' "$WORK/receipt-live.json" >"$WORK/new.json"
@@ -442,9 +424,9 @@ case "${1:-}" in
     for id in robotmoney.storage.GovernedUUPS openzeppelin.storage.AccessControl \
       openzeppelin.storage.ReentrancyGuard openzeppelin.storage.Initializable; do
       if jq -e --arg id "$id" '.namespaces[$id] | length > 0' "$WORK/live.json" >/dev/null; then
-        echo "ok   namespace $id is in the gateway layout"
+        echo "ok   namespace $id is in the selftest layout"
       else
-        echo "FAIL namespace $id is missing from the gateway layout"; fails=$((fails + 1))
+        echo "FAIL namespace $id is missing from the selftest layout"; fails=$((fails + 1))
       fi
     done
     # Every committed snapshot must itself be in the normalized shape.

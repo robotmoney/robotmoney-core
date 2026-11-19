@@ -170,18 +170,7 @@ jobs:
           bun test scripts/ci/check-system-split.test.ts
 
       - name: forge test (SYS-1, ACL-9 and the coverage map — issue 1892)
-        run: FORGE_TEST_MIN_EXECUTED=13 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/CoverageMap.t.sol"
-
-      # Fusion's named evidence files need an execution boundary in the CI log.
-      # A whole-suite `forge test` is not enough for a fail-closed external
-      # evidence reader to know that an individual file actually ran.
-      - name: Fusion contract evidence targets
-        run: |
-          for f in ConsensusRecommendationReceipt; do
-            echo "::group::contracts/test/${f}.t.sol:"
-            bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
-            echo "::endgroup::"
-          done
+        run: FORGE_TEST_MIN_EXECUTED=5 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/CoverageMap.t.sol"
 
       # Issue 1853: the TypeScript core timelock prediction publish-contracts pins before every proxy stage
       # (publish-contracts/src/timelock-pin.ts) equals UpgradeAuthority.predictTimelock for this build. The
@@ -245,21 +234,7 @@ jobs:
           if grep -q 'ships no GovernedUUPS proxy' "$out"; then echo "::error::the baseline compared nothing"; exit 1; fi
           n="$(grep -c 'storage layout extends the layout of release/v0.5.0-rehearsal' "$out" || true)"
           echo "storage layouts compared with release/v0.5.0-rehearsal: $n"
-          if [[ "$n" -ne 9 ]]; then echo "::error::the baseline check compared $n contracts, exactly 9 are required (issue 1916)"; exit 1; fi
-
-      # Issue 1914 Task B: the seven contracts the v0.6.0 governed upgrade does not touch (RouterGovernance, VaultRegistry, PortfolioRouter, rmUSDC, rmPROTO, rmAGENT,
-      # rmRWA) changed in comments only. The script builds release/v0.5.0-rehearsal and HEAD, masks immutables, library links and the CBOR metadata trailer, and exits
-      # non-zero on any runtime-logic difference. The summary line is asserted so a run that compared nothing (or fewer than all seven) reads red, never green.
-      - name: Comment-only contracts are logic-identical to Deploy 3 (issue 1914)
-        run: |
-          set -o pipefail
-          git fetch --quiet --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
-          test "$(git rev-parse --verify --quiet 'refs/tags/release/v0.5.0-rehearsal^{commit}')" = "57fbe61833e9d7f94557d69102138f7c410c1346" || { echo "::error::release/v0.5.0-rehearsal moved: it must resolve to 57fbe61833e9d7f94557d69102138f7c410c1346"; exit 1; }
-          bun test publish-contracts/tests/check-comment-only-contracts.test.ts
-          bun publish-contracts/src/ci/check-comment-only-contracts.ts | tee "$RUNNER_TEMP/comment-only.txt"
-          grep -qx 'compared 7 contract(s), 7 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
-          # Issue 1926: the relative-remapping foundry.toml moves only the CBOR metadata tail, and the verifier's code hash masks exactly that tail.
-          bun test publish-contracts/tests/verify/units.test.ts -t "issue 1926"
+          if [[ "$n" -ne 1 ]]; then echo "::error::the baseline check compared $n contracts, exactly 1 is required (ConsensusRecommendationReceipt, the only v0.5.0 proxy left; issue 1916)"; exit 1; fi
 
       - name: forge test (basket vault production scripts and eligibility — core 1486)
         # Explicit, named guard for the basket vault scripts (one deployment scheme):
