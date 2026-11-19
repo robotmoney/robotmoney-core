@@ -56,6 +56,29 @@ SKIP_DIRS = {"out", "cache", "broadcast", "node_modules"}
 CITE = re.compile(r"`(?P<path>(?:[\w.-]+/)*(?P<name>[A-Za-z]\w*)(?P<sfx>(?:\.s)?\.sol)):(?P<ranges>\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)`")
 ANCHOR = re.compile(r"`(?P<name>[A-Z]\w*)\.(?P<symbol>[A-Za-z_]\w*)`")
 DECL = re.compile(r"^\s*(?:function|modifier)\s+(\w+)\s*\(")
+# The 0.9.0 fund contracts replaced the multi-vault system (PR 2042) and its sources were
+# deleted. Finding-register rows keep their cites into those files as history, so a cite
+# to one of these names is not read while no file of that name is under contracts/.
+RETIRED = frozenset(
+    {
+        "FeatureFlags.sol",
+        "PortfolioRouter.sol",
+        "RobotMoneyVault.sol",
+        "RouterGovernance.sol",
+        "VaultRegistry.sol",
+        "UniswapV4PriceRecorder.sol",
+        "UniswapV4SwapAdapter.sol",
+        "AccessRoles.sol",
+        "RobotMoneyGateway.sol",
+        "BasketViews.sol",
+        "GatewayWindows.sol",
+        "AgentTokenVault.sol",
+        "BasketVault.sol",
+        "HardAssetsVault.sol",
+        "ProtocolAssetVault.sol",
+        "RwaBasketVault.sol",
+    }
+)
 
 
 def repo_root() -> Path:
@@ -119,6 +142,8 @@ def check(root: Path) -> tuple[list[str], int]:
             files = [(rel, lines) for rel, lines in src.get(basename, []) if rel.endswith(cited)]
             anchors = [a.group("symbol") for a in ANCHOR.finditer(row, prev_end, m.start()) if a.group("name") == m.group("name")]
             prev_end = m.end()
+            if not files and basename in RETIRED and basename not in src:
+                continue
             if not files:
                 errors.append(f"{where}, but no {cited} exists under contracts/")
                 continue
@@ -176,6 +201,7 @@ def self_test() -> int:
         ("library path cite passes", "| X | `Ops.go` (`contracts/lib/Ops.sol:2`) |\n", False),
         ("a .t.sol cite is not read", "| X | `Teller.t.sol:999` |\n", False),
         ("an anchor before the previous cite does not bind", "| X | `Teller.other`, `Teller.sol:9`; the fee (`Teller.sol:5`) |\n", False),
+        ("a cite into a retired contract is history", "| X | (`RobotMoneyVault.sol:895-901`) |\n", False),
         ("missing file fails", "| X | (`Gone.sol:3`) |\n", True),
         ("line past the end fails", "| X | (`Teller.sol:1538-1585`) |\n", True),
         ("inverted range fails", "| X | (`Teller.sol:6-5`) |\n", True),
