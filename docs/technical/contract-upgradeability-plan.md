@@ -39,13 +39,20 @@ Candidates for per-instance proxies are, in the vaults system,
 `ConsensusRecommendationReceipt`, and, in the
 rmpc gateway system, `RobotMoneyGateway`. Inventory each deployment stage before
 implementation; make the decision per contract and record exclusions in the
-release manifest. The strategy and swap adapters, linked libraries,
+release manifest. The strategy adapters, linked libraries,
 `UniswapV4PriceRecorder`, and `TimelockController` remain direct
 deployments in this plan. Safe retains its existing canonical SafeProxy 1.4.1
 and verified SafeL2 singleton topology; it is not converted to a Robot Money
-UUPS proxy. Adapter address and runtime-codehash checks and the
-no-proxy scan remain mandatory. An adapter upgrade means deploying a new
-adapter and approving its address/hash through the existing governance path.
+UUPS proxy. Lending (strategy) adapters stay direct deployments: their
+address and runtime-codehash checks and the no-proxy scan remain mandatory, and
+replacing one means deploying a new adapter and approving its hash. Fund basket
+swap adapters are the exception (ADR-0019, 2026-11-19): each runs behind a
+`GovernedUUPS` proxy whose upgrade authority is the fund timelock. The fund
+pins the proxy code hash (`setAdapterProxyCodeHash`) and the implementation code
+hash (`setAdapterCodeHashAllowed`) and checks both on every use. An upgrade is
+two governed steps: allow the new implementation hash, then `upgradeToAndCall`.
+`setAssetAdapter` moves a basket asset to another vetted adapter without moving
+tokens.
 
 ## Two systems
 
