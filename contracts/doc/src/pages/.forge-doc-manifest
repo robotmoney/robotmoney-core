@@ -7,6 +7,7 @@ contracts/adapters/contract.CompoundV3RateAdapter.mdx
 contracts/adapters/contract.MorphoAdapter.mdx
 contracts/adapters/contract.MorphoRateAdapter.mdx
 contracts/adapters/contract.UniswapV3ExactOutSwapAdapter.mdx
+contracts/adapters/contract.UniswapV3ExactOutSwapAdapterUpgradeable.mdx
 contracts/adapters/contract.UniswapV3SwapAdapter.mdx
 contracts/adapters/interface.IAavePoolRate.mdx
 contracts/adapters/interface.IAerodromeSlipstreamRouterExactOut.mdx
@@ -62,6 +63,7 @@ contracts/interfaces/interface.IVenueHealthAdapter.mdx
 contracts/lib/abstract.AdminFloorAccessControl.mdx
 contracts/lib/abstract.AdminFloorAccessControlCounter.mdx
 contracts/lib/abstract.GovernedUUPS.mdx
+contracts/lib/interface.IAdapterImplementation.mdx
 contracts/lib/interface.IBasketSwapsVault.mdx
 contracts/lib/interface.IDustPricedVault.mdx
 contracts/lib/interface.IExclusionLedgerView.mdx
@@ -79,6 +81,7 @@ contracts/lib/library.FlowMatchLib.mdx
 contracts/lib/library.FlowSettleLib.mdx
 contracts/lib/library.FlowStorage.mdx
 contracts/lib/library.ForeignTokenQuarantine.mdx
+contracts/lib/library.FundAdapterGuard.mdx
 contracts/lib/library.FundAdminLib.mdx
 contracts/lib/library.FundDelistLib.mdx
 contracts/lib/library.FundFlowsLib.mdx

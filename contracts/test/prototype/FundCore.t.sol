@@ -17,7 +17,9 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
 import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {UniswapV3ExactOutSwapAdapterUpgradeable} from "../../adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol";
+import {
+    UniswapV3ExactOutSwapAdapterUpgradeable
+} from "../../adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol";
 import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {FlowParams, IFlowEvents} from "../../FlowTypes.sol";
 import {AssetConfig} from "../../FundTypes.sol";
@@ -758,23 +760,33 @@ contract FundCoreTest is PrototypeHarness {
         proxy = address(
             new ERC1967Proxy(
                 impl,
-                abi.encodeCall(UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (address(timelock)))
+                abi.encodeCall(
+                    UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (address(timelock))
+                )
             )
         );
     }
 
     function _allow(bytes32 h) internal {
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (h, true)));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (h, true))
+        );
     }
 
     function _markProxy(bytes32 h) internal {
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterProxyCodeHash, (h, true)));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterProxyCodeHash, (h, true))
+        );
     }
 
     function test_adr0019_setAssetAdapter_movesBasketAssetToVettedProxy() public {
         _seedAndInvest();
         (address proxy, address impl) = _proxyAdapter(ROUTER);
-        assertEq(UniswapV3ExactOutSwapAdapterUpgradeable(proxy).implementation(), impl, "proxy reports impl");
+        assertEq(
+            UniswapV3ExactOutSwapAdapterUpgradeable(proxy).implementation(),
+            impl,
+            "proxy reports impl"
+        );
         _allow(proxy.codehash);
         _allow(impl.codehash);
         _markProxy(proxy.codehash);
@@ -794,7 +806,9 @@ contract FundCoreTest is PrototypeHarness {
         _markProxy(proxy.codehash);
         vm.prank(address(timelock));
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl, impl.codehash)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl, impl.codehash
+            )
         );
         fund.setAssetAdapter(IDX_WETH, proxy);
     }
@@ -804,7 +818,9 @@ contract FundCoreTest is PrototypeHarness {
         _allow(impl.codehash);
         vm.prank(address(timelock));
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, proxy, proxy.codehash)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, proxy, proxy.codehash
+            )
         );
         fund.setAssetAdapter(IDX_WETH, proxy);
     }
@@ -827,13 +843,17 @@ contract FundCoreTest is PrototypeHarness {
         _allow(proxy.codehash);
         _allow(impl.codehash);
         _markProxy(proxy.codehash);
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.setAssetAdapter, (IDX_WETH, proxy)));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAssetAdapter, (IDX_WETH, proxy))
+        );
 
         // A different router immutable gives a different implementation code hash, not on the allowlist.
         address impl2 = address(new UniswapV3ExactOutSwapAdapterUpgradeable(address(0xBEEF)));
         timelockExecute(proxy, abi.encodeCall(GovernedUUPS.upgradeToAndCall, (impl2, "")));
         vm.expectRevert(
-            abi.encodeWithSelector(IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl2, impl2.codehash)
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl2, impl2.codehash
+            )
         );
         fund.totalAssets();
 

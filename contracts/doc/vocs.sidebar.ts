@@ -115,6 +115,7 @@ export const sidebar = [
             { text: "MorphoAdapter", link: "/contracts/adapters/contract.MorphoAdapter" },
             { text: "MorphoRateAdapter", link: "/contracts/adapters/contract.MorphoRateAdapter" },
             { text: "UniswapV3ExactOutSwapAdapter", link: "/contracts/adapters/contract.UniswapV3ExactOutSwapAdapter" },
+            { text: "UniswapV3ExactOutSwapAdapterUpgradeable", link: "/contracts/adapters/contract.UniswapV3ExactOutSwapAdapterUpgradeable" },
             { text: "UniswapV3SwapAdapter", link: "/contracts/adapters/contract.UniswapV3SwapAdapter" },
           ],
         },
@@ -172,6 +173,7 @@ export const sidebar = [
           text: "Interfaces",
           collapsed: true,
           items: [
+            { text: "IAdapterImplementation", link: "/contracts/lib/interface.IAdapterImplementation" },
             { text: "IBasketSwapsVault", link: "/contracts/lib/interface.IBasketSwapsVault" },
             { text: "IDustPricedVault", link: "/contracts/lib/interface.IDustPricedVault" },
             { text: "IExclusionLedgerView", link: "/contracts/lib/interface.IExclusionLedgerView" },
@@ -195,6 +197,7 @@ export const sidebar = [
             { text: "FlowSettleLib", link: "/contracts/lib/library.FlowSettleLib" },
             { text: "FlowStorage", link: "/contracts/lib/library.FlowStorage" },
             { text: "ForeignTokenQuarantine", link: "/contracts/lib/library.ForeignTokenQuarantine" },
+            { text: "FundAdapterGuard", link: "/contracts/lib/library.FundAdapterGuard" },
             { text: "FundAdminLib", link: "/contracts/lib/library.FundAdminLib" },
             { text: "FundDelistLib", link: "/contracts/lib/library.FundDelistLib" },
             { text: "FundFlowsLib", link: "/contracts/lib/library.FundFlowsLib" },

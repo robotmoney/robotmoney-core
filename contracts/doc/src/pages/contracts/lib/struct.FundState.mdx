@@ -4,7 +4,7 @@ title: "FundState"
 
 # FundState
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/lib/FundStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/686fb6eee37ebea70d3c4d3ec214392afc74d9f7/contracts/lib/FundStorage.sol)
 
 **Note:**
 
@@ -84,6 +84,11 @@ struct FundState {
     mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingFeeLinked;
 
     address rebalancer;
+
+    /// @dev ADR-0019: adapter runtime code hashes that are governed UUPS proxies. An adapter whose code hash is
+    ///      here is vetted on every use by the code hash of the implementation it reports (`FundAdapterGuard`).
+    ///      Appended (v0.9.0): the storage layout is append-only.
+    mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;
 }
 ```
 
@@ -150,4 +155,5 @@ struct FundState {
 | lendingClaims | `mapping(uint256 index => mapping(address owner => LendingClaimAccount))` |  |
 | lendingFeeLinked | `mapping(uint256 index => mapping(address owner => LendingClaimAccount))` |  |
 | rebalancer | `address` |  |
+| adapterProxyCodeHash | `mapping(bytes32 codeHash => bool isProxy)` |  |
 

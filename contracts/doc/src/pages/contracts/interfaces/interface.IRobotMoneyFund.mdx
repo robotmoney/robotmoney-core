@@ -5,7 +5,7 @@ description: "The one vault (`RobotMoneyFund`, share `rmFUND`): an ERC-4626 over
 
 # IRobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/interfaces/IRobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/686fb6eee37ebea70d3c4d3ec214392afc74d9f7/contracts/interfaces/IRobotMoneyFund.sol)
 
 **Inherits:** [IFundEvents](/contracts/interface.IFundEvents)
 
@@ -1432,6 +1432,42 @@ function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed) external;
 | codeHash | `bytes32` |  |
 | allowed | `bool` |  |
 
+<a id="setadapterproxycodehash-bytes32-bool"></a>
+
+### setAdapterProxyCodeHash
+
+ADR-0019 (ADMIN_ROLE): mark `codeHash` as a governed UUPS adapter proxy. An adapter with that code hash
+must also report an implementation whose code hash is allowed, on every use.
+
+```solidity
+function setAdapterProxyCodeHash(bytes32 codeHash, bool isProxy) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| codeHash | `bytes32` |  |
+| isProxy | `bool` |  |
+
+<a id="setassetadapter-uint256-address"></a>
+
+### setAssetAdapter
+
+ADR-0019 (ADMIN_ROLE): point active basket asset `index` at another vetted swap adapter. The adapter
+must report the asset's pool as fixed-fee and the fee band must fit (E43). Moves no tokens.
+
+```solidity
+function setAssetAdapter(uint256 index, address adapter) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
+
 <a id="addasset-assetconfig"></a>
 
 ### addAsset
@@ -1978,6 +2014,39 @@ event AdapterCodeHashAllowedSet(bytes32 indexed codeHash, bool allowed);
 | ---- | ---- | ----------- |
 | codeHash | `bytes32` |  |
 | allowed | `bool` |  |
+
+### AdapterProxyCodeHashSet
+
+ADR-0019: `codeHash` is (or stops being) treated as a governed UUPS adapter proxy.
+
+```solidity
+event AdapterProxyCodeHashSet(bytes32 indexed codeHash, bool isProxy);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| codeHash | `bytes32` |  |
+| isProxy | `bool` |  |
+
+### AssetAdapterSet
+
+ADR-0019: basket asset `index` now swaps and prices through `adapter`.
+
+```solidity
+event AssetAdapterSet(
+        uint256 indexed index, address indexed oldAdapter, address indexed adapter
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| oldAdapter | `address` |  |
+| adapter | `address` |  |
 
 ### DepositsPaused
 

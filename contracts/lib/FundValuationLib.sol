@@ -232,7 +232,8 @@ library FundValuationLib {
             uint256 unit = 10 ** IERC20Metadata(a.token).decimals();
             return bal.mulDiv(px, unit);
         }
-        return IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter)).twapPrice(a.pool, a.token, s.usdc, bal, a.twapWindow);
+        return IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter))
+            .twapPrice(a.pool, a.token, s.usdc, bal, a.twapWindow);
     }
 
     /// @notice `totalAssets()`: fund-owned idle USDC plus every counted asset's value.
@@ -343,8 +344,8 @@ library FundValuationLib {
     {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending || amount == 0) return amount;
-        return
-            IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter)).twapPrice(a.pool, a.token, s.usdc, amount, a.twapWindow);
+        return IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter))
+            .twapPrice(a.pool, a.token, s.usdc, amount, a.twapWindow);
     }
 
     /// @notice Amount of asset `i` worth `usdcAmount` at TWAP. Lending: identity.
@@ -355,9 +356,8 @@ library FundValuationLib {
     {
         AssetConfig storage a = s.assets[i];
         if (a.kind == AssetKind.Lending || usdcAmount == 0) return usdcAmount;
-        return
-            IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter))
-                .twapPrice(a.pool, s.usdc, a.token, usdcAmount, a.twapWindow);
+        return IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter))
+            .twapPrice(a.pool, s.usdc, a.token, usdcAmount, a.twapWindow);
     }
 
     // ─── ORA-4 (§4.3, §5.3 step 2) ───────────────────────────────────────────

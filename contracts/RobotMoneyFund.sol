@@ -758,7 +758,9 @@ contract RobotMoneyFund is
     /// @inheritdoc IRobotMoneyFund
     function setAdapterProxyCodeHash(bytes32 codeHash, bool isProxy) external {
         _adminOp(
-            isProxy ? FundAdminLib.ADMIN_MARK_ADAPTER_PROXY : FundAdminLib.ADMIN_UNMARK_ADAPTER_PROXY,
+            isProxy
+                ? FundAdminLib.ADMIN_MARK_ADAPTER_PROXY
+                : FundAdminLib.ADMIN_UNMARK_ADAPTER_PROXY,
             uint256(codeHash),
             address(0)
         );

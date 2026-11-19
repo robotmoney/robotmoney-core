@@ -50,7 +50,9 @@ interface IRobotMoneyFund is IFundEvents {
     /// @notice ADR-0019: `codeHash` is (or stops being) treated as a governed UUPS adapter proxy.
     event AdapterProxyCodeHashSet(bytes32 indexed codeHash, bool isProxy);
     /// @notice ADR-0019: basket asset `index` now swaps and prices through `adapter`.
-    event AssetAdapterSet(uint256 indexed index, address indexed oldAdapter, address indexed adapter);
+    event AssetAdapterSet(
+        uint256 indexed index, address indexed oldAdapter, address indexed adapter
+    );
     event DepositsPaused(address indexed account);
     event DepositsUnpaused(address indexed account);
     event Shutdown();
