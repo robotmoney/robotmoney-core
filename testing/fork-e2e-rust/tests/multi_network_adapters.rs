@@ -19,28 +19,18 @@
 //! now runs the devnet leg with `--skip base_testnet`, runs the testnet leg in its own step only
 //! when the testnet secrets are set, and proves the refusal with `CI=true` and no testnet env.
 //!
-//! The vault-stack part on Base's public testnet is its own test, `vault_stack_base_testnet`. It
-//! needs `RM_TESTNET_VAULT_ADDR`, a Robot Money deploy on Base's public testnet, which is out of
-//! scope (#839). Without it the test skips on a laptop and panics under CI, like every other leg.
-//! No deploy exists there today, so suite 5 leaves that test out by name (`--skip
-//! vault_stack_base_testnet`) and the `adapters_against_live_services::base_testnet` leg runs the
-//! Uniswap and Aave parts with no skip at all (QA plan v1 T5).
+//! The vault-stack part (Compound / Morpho / Curve through the old `RobotMoneyVault`) was removed
+//! with the old multi-vault contracts (PR 2042). Both legs run the Uniswap and Aave parts.
 //!
 //! ## Adapter coverage (grep-able names in `--nocapture` output)
 //! - **Uniswap** V3 swap — USDC -> WETH `exactInputSingle` on the live router.
 //! - **Aave** V3 supply — USDC `supply` into the live Aave pool, asserting the
 //!   aToken (interest-bearing receipt) balance rises.
-//! - **Curve** swap — exercised on devnet via the vault's strategy stack when
-//!   the vault is present; on testnet the Curve venue is reported but skipped
-//!   until a Robot Money deploy populates the registry (see `RM_TESTNET_*`).
-//! - **Compound** / **Morpho** — exercised through the `RobotMoneyVault`
-//!   deposit/redeem round-trip (the vault routes funds into all registered
-//!   adapters) when a vault address is configured for the network.
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{
-    base_testnet_addresses, parameterized_e2e, run_network_leg, scenarios, skip_network_or_refuse,
+    base_testnet_addresses, parameterized_e2e, scenarios, skip_network_or_refuse,
     Account, ForkFixture, HarnessError, Network, IERC20,
 };
 
@@ -80,14 +70,6 @@ sol! {
             uint128 unbacked,
             uint128 isolationModeTotalDebt
         );
-    }
-
-    /// `RobotMoneyVault` subset for the round-trip (mirrors `IRobotMoneyVault`).
-    interface IVault {
-        function deposit(uint256 assets, address receiver) external returns (uint256);
-        function balanceOf(address account) external view returns (uint256);
-        function activeAdapterCount() external view returns (uint256);
-        function asset() external view returns (address);
     }
 }
 
@@ -252,75 +234,6 @@ fn exercise_aave(fx: &ForkFixture, network: Network) -> Result<(), HarnessError>
     Ok(())
 }
 
-// ── Adapters: Compound / Morpho / Curve via the vault round-trip ──────────────
-
-/// Deposit USDC into `vault`, the `RobotMoneyVault` on `network`, which routes
-/// funds into every registered strategy adapter (Aave / Compound / Morpho, plus
-/// any Curve-routed basket leg). Asserts shares are minted, proving the full
-/// adapter stack mediates the deposit. The caller names the vault: the devnet
-/// leg deploys its own, and `vault_stack_base_testnet` reads
-/// `RM_TESTNET_VAULT_ADDR` (a testnet vault deploy is out of scope for #839).
-fn exercise_vault_adapter_stack(
-    fx: &ForkFixture,
-    network: Network,
-    vault: Address,
-) -> Result<(), HarnessError> {
-    let deposit = U256::from(50_000_000u64); // 50 USDC
-    let user = match funded_account(fx, network, one_eth() * U256::from(5u64), deposit) {
-        Ok(u) => u,
-        Err(e) if e.is_skip() => return skip_unfunded_leg("vault stack", network),
-        Err(e) => return Err(e),
-    };
-
-    // Sanity: the vault routes into a real adapter stack.
-    let count_bytes = user.call(vault, &IVault::activeAdapterCountCall {})?;
-    let adapter_count = scenarios::decode_u256(&count_bytes)?;
-    assert!(
-        adapter_count > U256::ZERO,
-        "vault on {} has zero active adapters — Compound/Morpho/Curve stack not wired",
-        network.name()
-    );
-
-    scenarios::approve_usdc_on(&user, network.usdc(), vault, deposit)?;
-    let receipt = user.send(
-        vault,
-        &IVault::depositCall {
-            assets: deposit,
-            receiver: user.address,
-        },
-        U256::ZERO,
-        // The vault deposit fans out to every adapter and refuses to start an adapter call with
-        // less than ADAPTER_CALL_GAS_FLOOR (400k) left (InsufficientGas). The three-adapter stack
-        // used 1.14M, so 1.5M left only 361k for the last adapter.
-        3_000_000,
-    )?;
-    assert!(
-        !receipt.logs.is_empty(),
-        "vault deposit on {} emitted no logs",
-        network.name()
-    );
-
-    let shares_bytes = user.call(
-        vault,
-        &IVault::balanceOfCall {
-            account: user.address,
-        },
-    )?;
-    let shares = scenarios::decode_u256(&shares_bytes)?;
-    assert!(
-        shares > U256::ZERO,
-        "vault deposit on {} minted no shares — Compound/Morpho/Curve adapters did not absorb deposit",
-        network.name()
-    );
-    eprintln!(
-        "[multi_network_adapters] Compound/Morpho/Curve via vault on {}: OK \
-         adapters={adapter_count} shares={shares} tx={:#x}",
-        network.name(),
-        receipt.tx_hash
-    );
-    Ok(())
-}
-
 // ── Parameterized entry point ─────────────────────────────────────────────────
 
 parameterized_e2e!(
@@ -352,39 +265,5 @@ parameterized_e2e!(
 
         exercise_uniswap(&fx, network).expect("Uniswap adapter");
         exercise_aave(&fx, network).expect("Aave adapter");
-        // The vault-stack part runs here on devnet only. On Base's public testnet it is the
-        // separate test below, so this leg has no part that skips (QA plan v1 T5).
-        if network == Network::RobotMoneyDevnet {
-            // Clean room rule (core 1498): the vault this test deploys itself through the vault stage.
-            let vault = fx.deployed().expect("devnet vault stage").vault;
-            exercise_vault_adapter_stack(&fx, network, vault)
-                .expect("Compound/Morpho/Curve vault stack");
-        }
     }
 );
-
-/// The Compound/Morpho/Curve vault stack on Base's public testnet. It needs a Robot Money deploy
-/// there (`RM_TESTNET_VAULT_ADDR`), which is out of scope for #839 and does not exist today.
-/// Without it the test skips on a laptop and panics under CI, so a CI run cannot pass it without
-/// running it. Suite 5 leaves it out by name (`--skip vault_stack_base_testnet`) until that deploy
-/// exists; the name carries `base_testnet`, so the devnet step's `--skip base_testnet` drops it too.
-#[test]
-fn vault_stack_base_testnet() {
-    let network = Network::BaseTestnet;
-    let Some(vault) = base_testnet_addresses::robotmoney_vault() else {
-        skip_network_or_refuse(
-            "vault_stack_base_testnet",
-            network,
-            "RM_TESTNET_VAULT_ADDR (a Robot Money vault deployed on Base's public testnet)",
-        );
-        return;
-    };
-    run_network_leg(
-        "vault_stack_base_testnet",
-        network,
-        &|network: Network, fx: ForkFixture| {
-            exercise_vault_adapter_stack(&fx, network, vault)
-                .expect("Compound/Morpho/Curve vault stack");
-        },
-    );
-}

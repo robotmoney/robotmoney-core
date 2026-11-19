@@ -5,9 +5,10 @@
  *
  * The Twin chain (id 918453) is a pinned lazy fork of real Base state made with anvil. This checks
  * the owner rule "ONE pin per workflow run (a setup job outputs the pin; jobs take it as input)":
- *   1. the nightly (suite-29-nightly-twin-fork.yml) calls suites 5, 7, 8, 10, 11b, 14 and 28 with
- *      pin_block taken from its own pin job, and passes secrets with `secrets: inherit`;
- *   2. each of those suites declares the workflow_call input pin_block, has a `pin` job that uses
+ *   1. the nightly (suite-29-nightly-twin-fork.yml) calls suites 5, 14 and 28 with pin_block taken
+ *      from its own pin job, and passes secrets with `secrets: inherit`;
+ *   2. suites 5 and 14 (the ones that still start a Twin fork) declare the workflow_call input
+ *      pin_block, have a `pin` job that uses
  *      .github/actions/twin-pin with that input, and every step that uses .github/actions/twin-fork
  *      takes its pin-block from the pin job output and sits in a job that needs the pin job;
  *   3. nothing in .github, scripts, testing, clients or services still references the retired
@@ -33,26 +34,15 @@ function yaml(file: string): any {
 }
 
 const NIGHTLY = ".github/workflows/suite-29-nightly-twin-fork.yml";
+// Suites 7, 8, 10 and 11b left the nightly with their Twin jobs, and suite 28 lost its Twin jobs: they deployed the old multi-vault
+// contracts, replaced by the 0.9.0 fund (PR 2042). Suite 28 is still called for its offline jobs.
 const SUITES: Record<string, string> = {
   "suite-05": "suite-05-fork-integration.yml",
-  "suite-07": "suite-07-rmpc-integration.yml",
-  "suite-08": "suite-08-explorer-indexer.yml",
-  "suite-10": "suite-10-dapp-e2e.yml",
-  "suite-11b": "suite-11b-opencode-headless.yml",
   "suite-14": "suite-14-smoke-test.yml",
   "suite-28": "suite-28-core-stages.yml",
 };
+const TWIN_SUITES = ["suite-05", "suite-14"];
 const PIN_OUT = "${{ needs.pin.outputs.block }}";
-/**
- * Issue 1927: jobs exempt from the one-pin rule, pinned at a named historical block. The only one, suite 28's
- * core-stages-twin-upgrade-from-v050, was deleted with the multi-vault system (PR 2042), so the map is empty.
- */
-const FIXED_PIN_JOBS: Record<string, string> = {};
-/**
- * PR 2042 deleted suite 28's Twin chain rehearsal and upgrade jobs with the multi-vault system. Suite 28 keeps
- * its offline jobs and the pin_block input the nightly passes, but has no pin job and starts no Twin fork.
- */
-const NO_FORK = new Set(["suite-28"]);
 
 // 1. the nightly.
 const nightly = yaml(NIGHTLY);
@@ -67,19 +57,16 @@ for (const [job, file] of Object.entries(SUITES)) {
   if (!needs.includes("pin")) bad(`${NIGHTLY} job ${job} must need the pin job`);
 }
 if (nightly.jobs["suite-26"]) bad(`${NIGHTLY} calls suite 26, which targets the shared stage devnet`);
-ok("the nightly calls suites 5, 7, 8, 10, 11b, 14 and 28 with ONE pin from its pin job");
+ok("the nightly calls suites 5, 14 and 28 with ONE pin from its pin job");
 
-// 2. each suite: input, pin job, every twin-fork step takes the pin as input.
-for (const [job, file] of Object.entries(SUITES)) {
+// 2. each Twin suite: input, pin job, every twin-fork step takes the pin as input.
+for (const job of TWIN_SUITES) {
+  const file = SUITES[job];
   const path = `.github/workflows/${file}`;
   const wf = yaml(path);
   const inp = wf.on?.workflow_call?.inputs?.pin_block;
   if (!inp || inp.type !== "string") bad(`${path} must declare workflow_call input pin_block (string)`);
   if (wf.on?.workflow_call?.inputs?.fresh_snapshot) bad(`${path} still declares fresh_snapshot`);
-  if (NO_FORK.has(job)) {
-    ok(`${file}: pin input, no Twin fork`);
-    continue;
-  }
   const pin = wf.jobs?.pin;
   if (!pin) bad(`${path} has no pin job`);
   const pinStep = (pin.steps ?? []).find((s: any) => String(s.uses ?? "").endsWith("/twin-pin"));
@@ -91,11 +78,7 @@ for (const [job, file] of Object.entries(SUITES)) {
     for (const s of j.steps ?? []) {
       if (!String(s.uses ?? "").endsWith("/twin-fork")) continue;
       forks++;
-      const fixed = FIXED_PIN_JOBS[`${file}:${name}`];
-      if (fixed) {
-        // Issue 1927: the one job pinned at a named historical block, the Base state the release it publishes was built for. Its pin is that constant, nothing else.
-        if (s.with?.["pin-block"] !== "${{ env.V050_PIN }}" || String(j.env?.V050_PIN) !== fixed) bad(`${path} job ${name}: its twin-fork must take pin-block: \${{ env.V050_PIN }} with env V050_PIN ${fixed}`);
-      } else if (s.with?.["pin-block"] !== PIN_OUT) bad(`${path} job ${name}: twin-fork must take pin-block: ${PIN_OUT}`);
+      if (s.with?.["pin-block"] !== PIN_OUT) bad(`${path} job ${name}: twin-fork must take pin-block: ${PIN_OUT}`);
       if (![].concat(j.needs ?? []).includes("pin")) bad(`${path} job ${name} uses twin-fork but does not need the pin job`);
     }
   }
@@ -138,8 +121,7 @@ ok("the nightly uploads suite-results and twin-pin and needs no secret beyond th
       if (!isSave(last)) bad(`${path} job ${name}: the LAST step must use twin-fork-save-cache`);
       if (!/always\(\)/.test(String(last.if ?? ""))) bad(`${path} job ${name}: the twin-fork-save-cache step must have if: always()`);
       if (steps.indexOf(last) < steps.indexOf(forks[forks.length - 1])) bad(`${path} job ${name}: save-cache must come after twin-fork`);
-      // issue 1927: the fixed-pin job (checked above) is not a second run pin
-      if (!FIXED_PIN_JOBS[`${f}:${name}`]) for (const fk of forks) pins.add(String(fk.with?.["pin-block"] ?? ""));
+      for (const fk of forks) pins.add(String(fk.with?.["pin-block"] ?? ""));
     }
     if (jobsWithFork.length === 0) continue;
     // ONE pin per workflow run: every fork takes the same expression; an empty pin (auto) is only

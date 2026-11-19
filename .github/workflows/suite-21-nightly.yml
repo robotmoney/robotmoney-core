@@ -78,7 +78,6 @@ jobs:
             suite-07-rmpc-integration.yml
             suite-08-explorer-indexer.yml
             suite-09-dapp-quality.yml
-            suite-10-dapp-e2e.yml
             suite-11a-opencode-smoke.yml
             suite-11b-opencode-headless.yml
             suite-12-openclaw.yml

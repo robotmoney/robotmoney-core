@@ -11,9 +11,12 @@
 #
 # ONE PIN FOR THE WHOLE RUN
 # The `pin` job chooses the block once (.github/actions/twin-pin). Each suite is the existing
-# workflow, called with workflow_call and pin_block: suites 5, 7, 8, 10, 11b, 14 and 28. Steps are not
-# copied: a suite change lands in one file and this nightly picks it up. Each suite's own pin job
-# hands that block through unchanged, then its chain jobs start their own Twin fork at it.
+# workflow, called with workflow_call and pin_block: suites 5, 14 and 28. Steps are not copied: a
+# suite change lands in one file and this nightly picks it up. Each suite's own pin job hands that
+# block through unchanged, then its chain jobs start their own Twin fork at it.
+#
+# Suites 7, 8, 10 and 11b left this list (and suite 28 lost its Twin jobs) when their Twin jobs
+# went: they deployed the old multi-vault contracts, replaced by the 0.9.0 fund (PR 2042).
 #
 # SECRETS
 # `secrets: inherit` hands the called suites what they already use when they run on their own
@@ -25,7 +28,7 @@
 # A called workflow can keep or lower the caller's GITHUB_TOKEN permissions, never raise them. When
 # a called job asks for a scope the caller job does not grant, GitHub refuses the whole run as
 # `startup_failure` before any job starts. That kept this nightly from ever running (7/7
-# startup_failure 2026-10-07..13, QA plan v1 T1): the suite-07 `parity` job asks for
+# startup_failure 2026-10-07..13, QA plan v1 T1): the suite-07 `parity` job asked for
 # `pull-requests: read`. So the workflow default stays `contents: read` and each caller job that
 # needs more grants it at job level with the reason. scripts/ci/check_reusable_workflow_permissions.py
 # (suite 13) fails when a caller grants less than any job it calls asks for.
@@ -108,43 +111,6 @@ jobs:
     with:
       pin_block: ${{ needs.pin.outputs.block }}
 
-  suite-07:
-    name: suite-07 rmpc integration
-    needs: pin
-    uses: ./.github/workflows/suite-07-rmpc-integration.yml
-    # The called `parity` job reads the pulls/compare APIs for its changed-path list and asks for
-    # pull-requests: read. Without this grant GitHub refuses the whole nightly as startup_failure.
-    permissions:
-      contents: read
-      pull-requests: read
-    secrets: inherit
-    with:
-      pin_block: ${{ needs.pin.outputs.block }}
-
-  suite-08:
-    name: suite-08 explorer indexer
-    needs: pin
-    uses: ./.github/workflows/suite-08-explorer-indexer.yml
-    secrets: inherit
-    with:
-      pin_block: ${{ needs.pin.outputs.block }}
-
-  suite-10:
-    name: suite-10 dapp e2e
-    needs: pin
-    uses: ./.github/workflows/suite-10-dapp-e2e.yml
-    secrets: inherit
-    with:
-      pin_block: ${{ needs.pin.outputs.block }}
-
-  suite-11b:
-    name: suite-11b opencode headless
-    needs: pin
-    uses: ./.github/workflows/suite-11b-opencode-headless.yml
-    secrets: inherit
-    with:
-      pin_block: ${{ needs.pin.outputs.block }}
-
   suite-14:
     name: suite-14 smoke test
     needs: pin
@@ -164,7 +130,7 @@ jobs:
   results:
     name: record-results
     if: ${{ always() }}
-    needs: [pin, suite-05, suite-07, suite-08, suite-10, suite-11b, suite-14, suite-28]
+    needs: [pin, suite-05, suite-14, suite-28]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -186,7 +152,7 @@ jobs:
           pin_result="$(echo "$NEEDS" | jq -r '.pin.result')"
           echo "pin job: $pin_result (Twin pin block ${PIN_BLOCK:-none})" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$pin_result" = "success" ] || bad=1
-          [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 7 ] || { echo "::error::fewer than seven suite results were recorded"; bad=1; }
+          [ "$(find "$RUNNER_TEMP/suite-results" -maxdepth 1 -name "suite-*.json" | wc -l)" -ge 3 ] || { echo "::error::fewer than three suite results were recorded"; bad=1; }
           exit "$bad"
 
       - name: Upload the suite results
