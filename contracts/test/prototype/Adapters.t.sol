@@ -14,20 +14,20 @@ import {BaseFixture} from "./BaseFixture.sol";
 import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {TickMath} from "../../lib/TickMath.sol";
 import {ISwapRouter} from "../../interfaces/ISwapRouter.sol";
-import {AerodromeExactOutSwapAdapter} from "./src/adapters/AerodromeExactOutSwapAdapter.sol";
+import {AerodromeExactOutSwapAdapter} from "../../adapters/AerodromeExactOutSwapAdapter.sol";
 import {
     ISwapRouterExactOut,
     UniswapV3ExactOutSwapAdapter
-} from "./src/adapters/UniswapV3ExactOutSwapAdapter.sol";
+} from "../../adapters/UniswapV3ExactOutSwapAdapter.sol";
 import {AerodromeSwapAdapter} from "../../adapters/AerodromeSwapAdapter.sol";
 import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MechAaveAdapter} from "./mocks/MechAaveAdapter.sol";
 import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {IRobotMoneyFund, IRobotMoneyFundFull} from "./src/interfaces/IRobotMoneyFund.sol";
-import {FundExclusionLedger} from "./src/FundExclusionLedger.sol";
-import {FlowQueue} from "./src/FlowQueue.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {IRobotMoneyFund, IRobotMoneyFundFull} from "../../interfaces/IRobotMoneyFund.sol";
+import {FundExclusionLedger} from "../../FundExclusionLedger.sol";
+import {FlowQueue} from "../../FlowQueue.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -39,7 +39,7 @@ import {
     DEFAULT_IN_KIND_PERIOD,
     IDLE_INDEX,
     LENDING_ROUNDING_UNITS
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 import {
     FlowParams,
     FlowQueueInit,
@@ -50,7 +50,7 @@ import {
     DEFAULT_CANCEL_BUFFER,
     DEFAULT_MAX_PAUSE,
     DEFAULT_MATCH_BAND_BPS
-} from "./src/FlowTypes.sol";
+} from "../../FlowTypes.sol";
 
 /// @notice The Slipstream pool and factory reads these tests make.
 interface IAeroCLPoolRead {

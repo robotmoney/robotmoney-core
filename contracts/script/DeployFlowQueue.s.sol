@@ -6,15 +6,15 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 
-import {FlowQueue} from "../test/prototype/src/FlowQueue.sol";
+import {FlowQueue} from "../FlowQueue.sol";
 import {
     FlowParams,
     FlowQueueInit,
     DEFAULT_CANCEL_BUFFER,
     DEFAULT_MAX_PAUSE,
     DEFAULT_MATCH_BAND_BPS
-} from "../test/prototype/src/FlowTypes.sol";
-import {Roles} from "../test/prototype/src/FundTypes.sol";
+} from "../FlowTypes.sol";
+import {Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFlowQueue

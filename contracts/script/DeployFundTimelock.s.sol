@@ -9,7 +9,7 @@ import {console2} from "forge-std/console2.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
-import {Roles} from "../test/prototype/src/FundTypes.sol";
+import {Roles} from "../FundTypes.sol";
 import {CoreTimelockHandover} from "./CoreTimelockHandover.sol";
 import {FundTimelockPolicy} from "./FundTimelockPolicy.sol";
 import {UpgradeAuthority} from "./UpgradeAuthority.sol";

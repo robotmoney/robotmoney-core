@@ -13,7 +13,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IAavePool} from "../../interfaces/IAavePool.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {IDLE_INDEX, PRICE_SCALE} from "./src/FundTypes.sol";
+import {IDLE_INDEX, PRICE_SCALE} from "../../FundTypes.sol";
 import {
     Claim,
     FlowBooks,
@@ -26,9 +26,9 @@ import {
     Settlement,
     SettleCheck,
     TIMELOCK_DELAY_REFERENCE
-} from "./src/FlowTypes.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
-import {IAavePoolRate} from "./src/adapters/AaveV3RateAdapter.sol";
+} from "../../FlowTypes.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
+import {IAavePoolRate} from "../../adapters/AaveV3RateAdapter.sol";
 
 /// @title FixVenue
 /// @notice A lending venue that `vm.etch` places over the harness's Aave V3 rate adapter (whose code keeps no storage),

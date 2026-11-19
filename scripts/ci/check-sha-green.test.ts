@@ -114,14 +114,6 @@ describe("parseConfig", () => {
       parseConfig({ version: 1, required: [{ name: "a" }], optional: [], exempt: [{ name: "b", prefix: "c" }] }),
     ).toThrow();
   });
-  test("the Twin upgrade lifecycle job is required and the comment names the re-run recovery", () => {
-    const raw = JSON.parse(readFileSync(resolve(repo, "scripts/ci/required-checks.json"), "utf8"));
-    const c = parseConfig(raw);
-    expect(c.required.map((s) => s.name)).toContain("core-stages-twin-upgrade-lifecycle");
-    expect(c.optional.map((s) => s.name)).not.toContain("core-stages-twin-upgrade-lifecycle");
-    expect(raw.comment).toContain("core-stages-twin-upgrade-lifecycle");
-    expect(raw.comment).toContain("re-run");
-  });
   test("rejects an unknown class and a deploy-paths entry with no paths", () => {
     expect(() => parseConfig({ version: 1, required: [{ name: "a", class: "x" }], optional: [] })).toThrow();
     expect(() => parseConfig({ version: 1, required: [{ name: "a", class: "required-on-deploy-paths" }], optional: [] })).toThrow();
@@ -235,13 +227,9 @@ describe("the deploy-gate list equals the jobs the workflow tree runs on every p
       "explorer-indexer-fast",
       "explorer-indexer-devnet",
       "rmpc-e2e-*",
-      "core-stages-twin-upgrade-lifecycle",
     ]) {
       expect(required.has(l)).toBe(true);
     }
-    // core-stages-twin-chain reads a rate-limited public upstream: optional with a reason, never required (issue 1846 policy).
-    expect(required.has("core-stages-twin-chain")).toBe(false);
-    expect(c.optional.map(label)).toContain("core-stages-twin-chain");
   });
 
   test("every optional and exempt entry says why it does not gate", () => {

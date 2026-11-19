@@ -6,8 +6,8 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 
-import {RebalanceGovernance} from "../test/prototype/src/RebalanceGovernance.sol";
-import {PlanParams, Roles} from "../test/prototype/src/FundTypes.sol";
+import {RebalanceGovernance} from "../RebalanceGovernance.sol";
+import {PlanParams, Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployRebalanceGovernance

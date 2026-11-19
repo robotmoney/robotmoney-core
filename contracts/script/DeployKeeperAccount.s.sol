@@ -6,7 +6,7 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 
-import {KeeperAccount} from "../test/prototype/src/KeeperAccount.sol";
+import {KeeperAccount} from "../KeeperAccount.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployKeeperAccount

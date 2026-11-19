@@ -64,10 +64,10 @@ CONTRACTS=(
   "ConsensusRecommendationReceipt:contracts/ConsensusRecommendationReceipt.sol"
   "RouterGovernance:contracts/RouterGovernance.sol"
   # Deploy 4 (owner exception 2026-11-12): the fund system's four proxies, the one-vault prototype deployed as a rehearsal.
-  "RobotMoneyFund:contracts/test/prototype/src/RobotMoneyFund.sol"
-  "Rebalancer:contracts/test/prototype/src/Rebalancer.sol"
-  "RebalanceGovernance:contracts/test/prototype/src/RebalanceGovernance.sol"
-  "FlowQueue:contracts/test/prototype/src/FlowQueue.sol"
+  "RobotMoneyFund:contracts/RobotMoneyFund.sol"
+  "Rebalancer:contracts/Rebalancer.sol"
+  "RebalanceGovernance:contracts/RebalanceGovernance.sol"
+  "FlowQueue:contracts/FlowQueue.sol"
   # Deploy 4: the rebalancer's test-only second implementation (helpers/FundUpgradeV2.sol), which deploy-implementation --system fund --contract RebalancerV2
   # deploys for the runbook's upgrade lifecycle. Pinned so its snapshot, which must extend the Rebalancer's, is the contract's real layout.
   "RebalancerV2:contracts/test/helpers/FundUpgradeV2.sol"

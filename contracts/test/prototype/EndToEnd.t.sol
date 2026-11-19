@@ -28,7 +28,7 @@ import {
     BPS,
     IDLE_INDEX,
     PRICE_SCALE
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 import {
     Claim,
     FlowBooks,
@@ -40,10 +40,10 @@ import {
     RequestStatus,
     Settlement,
     SettleCheck
-} from "./src/FlowTypes.sol";
-import {PlanMath} from "./src/PlanMath.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
+} from "../../FlowTypes.sol";
+import {PlanMath} from "../../PlanMath.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {IRebalanceGovernance} from "../../interfaces/IRebalanceGovernance.sol";
 
 /// @notice One-vault experiment, step 3d: the whole life of the fund on the timed flows, on real Base venues.
 ///

@@ -9,8 +9,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ISwapRouter} from "../../../interfaces/ISwapRouter.sol";
 import {TwapTickMath} from "../../../lib/TwapTickMath.sol";
-import {IExactOutSwapAdapter} from "../src/interfaces/IFlowAdapters.sol";
-import {ISwapRouterExactOut} from "../src/adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {IExactOutSwapAdapter} from "../../../interfaces/IFlowAdapters.sol";
+import {ISwapRouterExactOut} from "../../../adapters/UniswapV3ExactOutSwapAdapter.sol";
 import {MechReentry} from "./MechReentry.sol";
 
 /// @title MechSwapAdapter

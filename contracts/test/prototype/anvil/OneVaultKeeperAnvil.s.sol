@@ -19,11 +19,11 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {GovernedUUPS} from "../../../lib/GovernedUUPS.sol";
 import {TestERC20} from "../../helpers/TestERC20.sol";
 import {MockAggregator} from "../mocks/MockAggregator.sol";
-import {Rebalancer} from "../src/Rebalancer.sol";
-import {AaveV3RateAdapter} from "../src/adapters/AaveV3RateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "../src/adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {AssetConfig, AssetKind, AssetStepParams, StepParams, Venue} from "../src/FundTypes.sol";
-import {IRobotMoneyFundFull} from "../src/interfaces/IRobotMoneyFund.sol";
+import {Rebalancer} from "../../../Rebalancer.sol";
+import {AaveV3RateAdapter} from "../../../adapters/AaveV3RateAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../../../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {AssetConfig, AssetKind, AssetStepParams, StepParams, Venue} from "../../../FundTypes.sol";
+import {IRobotMoneyFundFull} from "../../../interfaces/IRobotMoneyFund.sol";
 
 /// @notice Test-only aToken for the mock pool. Six decimals, like USDC. Only its pool mints and burns.
 contract OneVaultMockAToken is ERC20 {

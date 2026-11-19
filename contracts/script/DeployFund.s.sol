@@ -8,20 +8,20 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {RobotMoneyFund} from "../test/prototype/src/RobotMoneyFund.sol";
-import {AaveV3RateAdapter} from "../test/prototype/src/adapters/AaveV3RateAdapter.sol";
-import {CompoundV3RateAdapter} from "../test/prototype/src/adapters/CompoundV3RateAdapter.sol";
-import {MorphoRateAdapter} from "../test/prototype/src/adapters/MorphoRateAdapter.sol";
+import {RobotMoneyFund} from "../RobotMoneyFund.sol";
+import {AaveV3RateAdapter} from "../adapters/AaveV3RateAdapter.sol";
+import {CompoundV3RateAdapter} from "../adapters/CompoundV3RateAdapter.sol";
+import {MorphoRateAdapter} from "../adapters/MorphoRateAdapter.sol";
 import {
     UniswapV3ExactOutSwapAdapter
-} from "../test/prototype/src/adapters/UniswapV3ExactOutSwapAdapter.sol";
+} from "../adapters/UniswapV3ExactOutSwapAdapter.sol";
 import {
     AssetConfig,
     AssetKind,
     FundInitParams,
     Venue,
     Roles
-} from "../test/prototype/src/FundTypes.sol";
+} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFund

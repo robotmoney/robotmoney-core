@@ -7,9 +7,9 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {PlanParams, PlanStatus, SkipReason, IDLE_INDEX} from "./src/FundTypes.sol";
+import {PlanParams, PlanStatus, SkipReason, IDLE_INDEX} from "../../FundTypes.sol";
 import {IObservablePool} from "../../interfaces/IObservablePool.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
 import {FlowQueueFixesBase} from "./FlowQueueFixes.t.sol";
 import {
     Claim,
@@ -18,8 +18,8 @@ import {
     IFlowEvents,
     RequestKind,
     Settlement
-} from "./src/FlowTypes.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
+} from "../../FlowTypes.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
 
 /// @title ReviewFixesRebalancerTest
 /// @notice One test per error the adversarial review of 2026-11-12 found in the rebalancer, each failing on the code

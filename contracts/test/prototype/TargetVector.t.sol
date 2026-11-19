@@ -7,9 +7,9 @@
 pragma solidity ^0.8.24;
 
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {IFundEvents, AssetConfig, PlanParams, PlanStatus, BPS} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
+import {IFundEvents, AssetConfig, PlanParams, PlanStatus, BPS} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {IRebalanceGovernance} from "../../interfaces/IRebalanceGovernance.sol";
 
 /// @notice RB-9: a target vector names every active asset exactly once and sums to 10 000. Each refused vector
 ///         reverts with its own error through all three doors (`applyReceipt`, `setTarget`, `previewPlan`). A

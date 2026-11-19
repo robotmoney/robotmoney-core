@@ -163,7 +163,7 @@ describe("stage-table.json", () => {
       }
       return seen;
     };
-    const P = "contracts/test/prototype/src/";
+    const P = "contracts/";
     const sources: Record<string, string[]> = {
       "fund-libs": ["contracts/script/DeployFundLibs.s.sol"],
       "fund-receipt": ["contracts/ConsensusRecommendationReceipt.sol"], // DeployFundReceipt.s.sol deploys it

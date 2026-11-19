@@ -2,10 +2,10 @@
   "enums": {},
   "libraries": [
     "contracts/lib/GovernedUUPS.sol:GovernedUpgrade",
-    "contracts/test/prototype/src/lib/FlowCheckLib.sol:FlowCheckLib",
-    "contracts/test/prototype/src/lib/FlowClaimLib.sol:FlowClaimLib",
-    "contracts/test/prototype/src/lib/FlowMatchLib.sol:FlowMatchLib",
-    "contracts/test/prototype/src/lib/FlowSettleLib.sol:FlowSettleLib"
+    "contracts/lib/FlowCheckLib.sol:FlowCheckLib",
+    "contracts/lib/FlowClaimLib.sol:FlowClaimLib",
+    "contracts/lib/FlowMatchLib.sol:FlowMatchLib",
+    "contracts/lib/FlowSettleLib.sol:FlowSettleLib"
   ],
   "namespaces": {
     "openzeppelin.storage.AccessControl": [

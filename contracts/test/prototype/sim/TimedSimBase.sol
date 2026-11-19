@@ -14,8 +14,8 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {TwapTickMath} from "../../../lib/TwapTickMath.sol";
 import {PrototypeHarness} from "../PrototypeHarness.sol";
 import {MockAggregator} from "../mocks/MockAggregator.sol";
-import {TwapSlicesLib} from "../src/lib/TwapSlicesLib.sol";
-import {BPS, PRICE_SCALE, PlanParams, PlanStatus} from "../src/FundTypes.sol";
+import {TwapSlicesLib} from "../../../lib/TwapSlicesLib.sol";
+import {BPS, PRICE_SCALE, PlanParams, PlanStatus} from "../../../FundTypes.sol";
 import {
     FlowParams,
     IFlowEvents,
@@ -23,8 +23,8 @@ import {
     Request,
     RequestStatus,
     SettleCheck
-} from "../src/FlowTypes.sol";
-import {ILendingRateAdapter} from "../src/interfaces/IFlowAdapters.sol";
+} from "../../../FlowTypes.sol";
+import {ILendingRateAdapter} from "../../../interfaces/IFlowAdapters.sol";
 import {SimMarket} from "./SimMarket.sol";
 
 /// @title TimedSimBase

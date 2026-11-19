@@ -16,7 +16,7 @@ import {IBasketSwapAdapter} from "../../interfaces/IBasketSwapAdapter.sol";
 
 import {PrototypeHarness, IHarnessSwapRouter02, IHarnessV3Pool} from "./PrototypeHarness.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
-import {UniswapV3ExactOutSwapAdapter} from "./src/adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../../adapters/UniswapV3ExactOutSwapAdapter.sol";
 import {
     FeedStatus,
     IFundEvents,
@@ -27,9 +27,9 @@ import {
     StepOrder,
     BPS,
     IDLE_INDEX
-} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {Rebalancer} from "./src/Rebalancer.sol";
+} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {Rebalancer} from "../../Rebalancer.sol";
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════
 //  A hostile swap venue for the RB-19 balance check

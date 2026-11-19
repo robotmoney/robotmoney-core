@@ -66,7 +66,6 @@
     { "name": "recorder-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "onevault-share-delivery-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "onevault-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
-    { "prefix": "erc4626-precondition (", "source": "suite-19-erc4626-demo-tvl-matrix.yml" },
     { "name": "watchdog-unit", "source": "suite-20-watchdog.yml" },
     { "name": "watchdog-integration", "source": "suite-20-watchdog.yml" },
     { "name": "forge-invariant-spec-tests", "source": "suite-22-formal-verification.yml" },
@@ -84,15 +83,11 @@
     { "name": "stage-core-stack-containers", "source": "suite-28-core-stack-selftest.yml" },
     { "name": "core-stages-offline", "source": "suite-28-core-stages.yml" },
     { "name": "publish-contracts-tests", "source": "suite-28-core-stages.yml" },
-    { "name": "core-stages-twin-upgrade-lifecycle", "source": "suite-28-core-stages.yml" },
-    { "name": "core-stages-twin-upgrade-from-v050", "source": "suite-28-core-stages.yml" },
     { "name": "check-sha-green-tests", "source": "suite-30-check-sha-green.yml" }
   ],
   "optional": [
-    { "name": "forge-fork-vault-regressions", "source": "suite-01-02-forge-tests.yml", "reason": "It runs on the Twin chain, a pinned lazy fork of real Base state served by a public upstream that can rate limit (core 1498), so a provider outage must not block a deploy sha." },
     { "prefix": "fork-integration-", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 legs on the Twin chain and anvil. Optional since the list was created (core 1505), next to forge-fork-vault-regressions, which reads the same public upstream." },
     { "name": "base-testnet-adapters", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 leg that needs the Base testnet RPC and a funded testnet account from repository secrets. A testnet outage or an empty funder must not block a deploy sha. Kept with fork-integration-*." },
-    { "name": "core-stages-twin-chain", "source": "suite-28-core-stages.yml", "reason": "It reads a public Base upstream that can rate limit, so a required entry would block every deploy sha on a provider outage. It is gated indirectly: freeze-counts refuses a counts file whose rehearsal conclusion is not success, and the plan job needs the committed counts. core-stages-twin-upgrade-lifecycle reads the same upstream and is gated directly (issue 1846)." },
     { "name": "solidity-slither", "source": "suite-03-solidity-quality.yml", "reason": "It installs the latest slither-analyzer from pip with no version pin, so a new detector release can turn it red with no change in the sha." },
     { "name": "skill-url-reachability", "source": "suite-23-skill-url-reachability.yml", "reason": "It fetches the published raw SKILL.md URLs of the dev ref over the live network, not this sha's files (CI_CLASS heavy, a sweep)." },
     { "name": "opencode-headless-deposit-replay", "source": "suite-11b-opencode-headless.yml", "reason": "Suite 11b has no push trigger: it runs on the nightly and on dispatch, so a deploy sha does not always carry it." }

@@ -16,10 +16,10 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
 import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
-import {FlowParams, IFlowEvents} from "./src/FlowTypes.sol";
-import {AssetConfig} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {FundExclusionLedger} from "./src/FundExclusionLedger.sol";
+import {FlowParams, IFlowEvents} from "../../FlowTypes.sol";
+import {AssetConfig} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {FundExclusionLedger} from "../../FundExclusionLedger.sol";
 import {
     AssetKind,
     IFundEvents,
@@ -28,7 +28,7 @@ import {
     Roles,
     BPS,
     LENDING_ROUNDING_UNITS
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 
 contract FundCoreTest is PrototypeHarness {
     using Math for uint256;

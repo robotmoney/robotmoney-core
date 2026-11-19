@@ -1171,7 +1171,7 @@ test("OPS-03: emergency-key revocation is ONE scheduleBatch that lifts pauses an
 
 // ─── v0.9.0 upgrade: the 21-field FlowParams tuple, the header rc tag, the done markers and the word-aware checks ───
 const GATE_SOURCE = (): string => readFileSync(join(ROOT, "publish-contracts", "src", "release-gate.ts"), "utf8");
-const FLOW_TYPES_SOL = join(ROOT, "contracts", "test", "prototype", "src", "FlowTypes.sol");
+const FLOW_TYPES_SOL = join(ROOT, "contracts", "FlowTypes.sol");
 /** PURE. The tuple types of `struct FlowParams` in FlowTypes.sol, in declaration order. */
 function flowParamsTypes(sol: string): string[] {
   const body = /struct FlowParams \{([^}]*)\}/.exec(sol);
