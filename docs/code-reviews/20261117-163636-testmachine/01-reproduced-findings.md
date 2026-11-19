@@ -81,8 +81,10 @@ equivalent acceptance exists for this path.
 
 `ConsensusRecommendationReceipt.sol:167` stamps `recordedAt = block.timestamp`;
 `RouterGovernance.sol:191-193` requires strictly `>` with no tie-breaker or batch
-path. Directly pinned by
-`RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtRefused`.
+path. Directly pinned at the pin by the same-second refusal test.
+Citation updated after the fix: the finding 17 remediation replaced that test with
+`RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtAppliesInIssuanceOrder`
+and `RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtRefusesEarlierIssuance`.
 
 ## #18 — Token donations prevent asset deactivation (accepted)
 
