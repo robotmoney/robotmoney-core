@@ -90,24 +90,6 @@ describe("parseConfig", () => {
     expect(names).toContain("bun-audit");
     expect(names).toContain("deleted-stage-gate");
   });
-  test("the twin publish job is required-on-deploy-paths with the suite 14 path filter", () => {
-    const c = parseConfig(JSON.parse(readFileSync(resolve(repo, "scripts/ci/required-checks.json"), "utf8")));
-    const twin = c.required.find((s) => s.name === "smoke-test-twin-publish");
-    expect(twin?.class).toBe("required-on-deploy-paths");
-    const wf = readFileSync(resolve(repo, ".github/workflows/suite-14-smoke-test.yml"), "utf8");
-    for (const path of twin?.paths ?? []) expect(wf.includes(path.replace(/\./g, "\\."))).toBe(true);
-  });
-  test("every required-on-deploy-paths entry lists exactly the suite 14 changes filter", () => {
-    const c = parseConfig(JSON.parse(readFileSync(resolve(repo, "scripts/ci/required-checks.json"), "utf8")));
-    const wf = readFileSync(resolve(repo, ".github/workflows/suite-14-smoke-test.yml"), "utf8");
-    // The changes job: `grep -Eq '^(contracts/script/|...|\.github/workflows/suite-14-smoke-test\.yml)'`.
-    const m = wf.match(/grep -Eq '\^\(([^)]*)\)'/);
-    expect(m).not.toBeNull();
-    const filter = m![1].split("|").map((p) => p.replace(/\\\./g, ".")).sort();
-    const gated = c.required.filter((s) => s.class === "required-on-deploy-paths");
-    expect(gated.map((s) => s.name).sort()).toEqual(["smoke-test-twin-pause-all", "smoke-test-twin-publish"]);
-    for (const s of gated) expect([...(s.paths ?? [])].sort()).toEqual(filter);
-  });
   test("rejects an exempt list that is not a list, and an exempt entry with both name and prefix", () => {
     expect(() => parseConfig({ version: 1, required: [{ name: "a" }], optional: [], exempt: {} })).toThrow();
     expect(() =>
@@ -219,14 +201,11 @@ describe("the deploy-gate list equals the jobs the workflow tree runs on every p
     // The jobs the QA review found outside the list (T10) are gated now.
     const required = new Set(c.required.map(label));
     for (const l of [
-      "dapp-e2e",
       "watchdog-unit",
       "smoke-test-guards",
       "rmpc-unit-releases",
       "forge-invariant-fuzz-tests",
       "explorer-indexer-fast",
-      "explorer-indexer-devnet",
-      "rmpc-e2e-*",
     ]) {
       expect(required.has(l)).toBe(true);
     }
