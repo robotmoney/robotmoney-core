@@ -6,9 +6,7 @@ pragma solidity ^0.8.24;
 
 import {PlanParams} from "../FundTypes.sol";
 import {IRobotMoneyFund} from "./IRobotMoneyFund.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "./IConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "./IConsensusRecommendationReceipt.sol";
 
 /// @title IRebalanceGovernance
 /// @notice Port of `RouterGovernance`: turns a recorded consensus receipt into a fund target and a

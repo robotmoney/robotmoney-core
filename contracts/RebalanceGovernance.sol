@@ -11,9 +11,7 @@ import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
-import {
-    IConsensusRecommendationReceipt
-} from "./interfaces/IConsensusRecommendationReceipt.sol";
+import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
 import {
     PlanParams,
     Roles,

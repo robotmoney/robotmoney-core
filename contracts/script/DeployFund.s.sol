@@ -12,16 +12,8 @@ import {RobotMoneyFund} from "../RobotMoneyFund.sol";
 import {AaveV3RateAdapter} from "../adapters/AaveV3RateAdapter.sol";
 import {CompoundV3RateAdapter} from "../adapters/CompoundV3RateAdapter.sol";
 import {MorphoRateAdapter} from "../adapters/MorphoRateAdapter.sol";
-import {
-    UniswapV3ExactOutSwapAdapter
-} from "../adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {
-    AssetConfig,
-    AssetKind,
-    FundInitParams,
-    Venue,
-    Roles
-} from "../FundTypes.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {AssetConfig, AssetKind, FundInitParams, Venue, Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFund
