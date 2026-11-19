@@ -5,7 +5,7 @@ description: "The adapter registry loops of `RobotMoneyVault`, as an externally 
 
 # RobotMoneyVaultOps
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/lib/RobotMoneyVaultOps.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5cb9063ea9f4ff0602f130be3e11798ca618c42d/contracts/lib/RobotMoneyVaultOps.sol)
 
 **Title:** RobotMoneyVaultOps
 
@@ -194,18 +194,14 @@ function isCounted(Book storage b, address usdc, uint256 i) internal view return
 
 ### anyActiveBlocked
 
-Body of `RobotMoneyVault._anyActiveAdapterBlocked`: true when an active entry is
-not usable (ineligible, or under an open exclusion record: core 1788 / 1820). With
-`venues`, also true when a usable active entry reports that its venue refuses
-withdrawals (`IVenueHealthAdapter.venueWithdrawable` false: an Aave reserve paused
-or inactive, a Comet with `isWithdrawPaused` set; security round 3). NAV counts
-that venue's balance at face, so a deposit would mint against value nobody can
-withdraw, and a slice the venue hands back would sit idle to pay early exits at
-that NAV while a later haircut falls on the holders who stay. Deposits stay closed
-until the venue reopens or the adapter leaves the active set. A missing or reverting
-view reads as open, as `_ceiling` reads `maxExposure`; the lending adapter's own
-`deploy` still refuses to hand a slice back while its venue is shut
-(`VenueWithdrawalsClosed`). An unusable entry is never asked.
+Detect active adapters that are unusable or unable to service withdrawals.
+
+<i>
+
+A cashless venue with an outstanding position blocks deposits because that
+position still prices into NAV.
+
+</i>
 
 ```solidity
 function anyActiveBlocked(Book storage b, address usdc, bool venues)
@@ -227,6 +223,37 @@ function anyActiveBlocked(Book storage b, address usdc, bool venues)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
+
+<a id="_withdrawalliquidity-istrategyadapter"></a>
+
+### _withdrawalLiquidity
+
+<i>
+
+Advertised probes fail closed if they revert or return malformed data. Unadvertised
+adapters retain legacy semantics: honor the pause-only signal when present.
+
+</i>
+
+```solidity
+function _withdrawalLiquidity(IStrategyAdapter adapter)
+        private
+        view
+        returns (bool open, uint256 available);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `IStrategyAdapter` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| open | `bool` |  |
+| available | `uint256` |  |
 
 <a id="equalweightbalance-uint256-uint256-uint256"></a>
 
@@ -481,9 +508,9 @@ Only counted (active AND usable) adapters are pulled from: a revoked adapter is 
 from NAV, so it must be excluded here too or the proportional denominator would not match
 NAV (ADP-2 / F-14). Fails fast with `InsufficientAdapterLiquidity` when the counted
 adapters cannot cover the request (audit 2026-06-09, L-2). Pass 1 pulls proportionally,
-each pull capped at the adapter's reported balance, and the last counted adapter takes the
+each pull capped at immediately available liquidity, and the last counted adapter takes the
 flooring remainder (core 1482), so pass 2 runs only when an adapter is short. Pass 2
-sweeps leftovers across all counted adapters at `min(remaining, balance)`. An
+sweeps leftovers across counted adapters with remaining liquidity. An
 under-delivering adapter reverts `InsufficientAdapterLiquidity`; it is never funded from
 other holders' idle USDC (FEE-2 / NC-11).
 
@@ -872,21 +899,20 @@ function recoverRemoved(
 | index | `uint256` |  |
 | amount | `uint256` |  |
 
-<a id="rebalancepull-book-address-uint256-uint256"></a>
+<a id="rebalance-book-address-uint256-uint256-uint256"></a>
 
-### rebalancePull
+### rebalance
 
-Pull leg of `RobotMoneyVault.rebalance`: withdraw each usable active adapter's
-excess over its equal-weight target, up to `maxMovePerCall` in total. Never pulls from
-a quarantined entry or one under an open exclusion record (core 1788 / 1820): its
-balance is outside NAV and recovery goes through the governed paths.
+Move at most maxMovePerCall out of existing positions. Previously idle
+assets are exempt from that limit. Excess that cannot fit under the caps stays idle.
 
 ```solidity
-function rebalancePull(
+function rebalance(
         Book storage b,
         address usdc,
         uint256 totalAssetsCached,
-        uint256 maxMovePerCall
+        uint256 maxMovePerCall,
+        uint256 adapterCallGasFloor
     ) public returns (uint256 totalMoved);
 ```
 
@@ -898,12 +924,75 @@ function rebalancePull(
 | usdc | `address` |  |
 | totalAssetsCached | `uint256` |  |
 | maxMovePerCall | `uint256` |  |
+| adapterCallGasFloor | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| totalMoved | `uint256` | USDC the adapters returned. |
+| totalMoved | `uint256` |  |
+
+<a id="_keepertargets-book-address-uint256"></a>
+
+### _keeperTargets
+
+<i>
+
+Start at equal weight capped by each eligible adapter's ceiling. Redistribute
+excess in registry order, matching deposit routing's second pass.
+
+</i>
+
+```solidity
+function _keeperTargets(Book storage b, address usdc, uint256 total)
+        private
+        view
+        returns (uint256[] memory targets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| total | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targets | `uint256[]` |  |
+
+<a id="_rebalancepull-book-address-uint256-uint256-uint256"></a>
+
+### _rebalancePull
+
+```solidity
+function _rebalancePull(
+        Book storage b,
+        address usdc,
+        uint256[] memory targets,
+        uint256 maxMovePerCall,
+        uint256 adapterCallGasFloor
+    ) private returns (uint256 totalMoved);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| targets | `uint256[]` |  |
+| maxMovePerCall | `uint256` |  |
+| adapterCallGasFloor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalMoved | `uint256` |  |
 
 <a id="adminrebalancepull-book-address-exclusionledger-uint256-uint256"></a>
 
@@ -967,6 +1056,41 @@ function adminRebalanceAllocate(
 | usdc | `address` |  |
 | targetBalances | `uint256[]` |  |
 | adapterCallGasFloor | `uint256` |  |
+
+<a id="_allocatetotargets-book-address-uint256-uint256"></a>
+
+### _allocateToTargets
+
+<i>
+
+Move idle USDC into each active entry below `targets[i]`, in registry order, with the
+full eligibility revert. Shared by the keeper and admin rebalances.
+
+</i>
+
+```solidity
+function _allocateToTargets(
+        Book storage b,
+        address usdc,
+        uint256[] memory targets,
+        uint256 adapterCallGasFloor
+    ) private returns (uint256 idle);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Book` |  |
+| usdc | `address` |  |
+| targets | `uint256[]` |  |
+| adapterCallGasFloor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle | `uint256` | USDC left idle afterwards. |
 
 <a id="adapterinfo-book-uint256"></a>
 
@@ -1147,6 +1271,38 @@ function _withdrawFrom(IStrategyAdapter adpt, uint256 i, uint256 pull, uint256 f
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | actual | `uint256` |  |
+
+<a id="_withdrawliquid-istrategyadapter-uint256-uint256-uint256"></a>
+
+### _withdrawLiquid
+
+<i>
+
+`_withdrawFrom` capped at the venue's immediately withdrawable liquidity. Skips the
+probe and the call when nothing is to be pulled; returns what the adapter paid.
+
+</i>
+
+```solidity
+function _withdrawLiquid(IStrategyAdapter adpt, uint256 i, uint256 pull, uint256 floor)
+        private
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adpt | `IStrategyAdapter` |  |
+| i | `uint256` |  |
+| pull | `uint256` |  |
+| floor | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="_targetbpsforindex-book-uint256"></a>
 

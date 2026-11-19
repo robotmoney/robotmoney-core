@@ -5,7 +5,7 @@ description: "Outer allocation contract that accepts USDC and splits deposits ac
 
 # PortfolioRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/PortfolioRouter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5cb9063ea9f4ff0602f130be3e11798ca618c42d/contracts/PortfolioRouter.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -127,12 +127,16 @@ and `previewDeposit` before any vault is called, about 700_000 gas for one rmUSD
 leg. At 1_700_000 the vault's own entry floor, not this one, bound the estimate for
 a one- or two-leg router, and it moved by about 22_000 gas between the estimate
 block and the next block, so a limit equal to the estimate failed at inclusion. At
-2_400_000 this floor binds again. See docs/technical/redeem-gas-1482.md.
+2_400_000 this floor bound again until the 0.9.0 audit remediation added each lending
+adapter's withdrawal-liquidity probe to `maxDeposit` (MetaMorpho `maxWithdraw` walks its
+markets): the one-leg estimate then reached about 2_486_000 on a Base fork, above
+2_400_000, so the vault floor bound it again. At 2_800_000 this floor binds with about
+300_000 to spare for one leg. See docs/technical/redeem-gas-1482.md.
 
 </i>
 
 ```solidity
-uint256 internal constant DEPOSIT_GAS_PER_LEG = 2_400_000;
+uint256 internal constant DEPOSIT_GAS_PER_LEG = 2_800_000;
 ```
 
 ## State Variables
@@ -263,6 +267,20 @@ The stage 12 verifier fails a run while a rotation is pending.
 
 ```solidity
 WeightSetterRotation public pendingWeightSetterRotation;
+```
+
+### redemptionAllowance
+
+Shares an operator may redeem for a holder, scoped to one vault and recipient.
+
+```solidity
+mapping(
+        address holder
+            => mapping(
+            address operator
+                => mapping(address vault => mapping(address recipient => uint256 shares))
+        )
+    ) public redemptionAllowance;
 ```
 
 ## Functions
@@ -599,7 +617,33 @@ function previewDeposit(uint256 amount) external view returns (LegPreview[] memo
 | ---- | ---- | ----------- |
 | legs | `LegPreview[]` |   One entry per vault in the current weight vector. |
 
-<a id="_availabilityandamounts-address-uint256-uint256"></a>
+<a id="previewdepositfor-address-uint256"></a>
+
+### previewDepositFor
+
+Preview a deposit for the beneficiary whose capacity limits apply.
+
+```solidity
+function previewDepositFor(address receiver, uint256 amount)
+        public
+        view
+        returns (LegPreview[] memory legs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| legs | `LegPreview[]` |  |
+
+<a id="_availabilityandamounts-address-uint256-uint256-address"></a>
 
 ### _availabilityAndAmounts
 
@@ -658,7 +702,8 @@ caller's floor for it is 0; a non-zero floor reverts
 function _availabilityAndAmounts(
         address[] memory vaultList,
         uint256[] memory bpsList,
-        uint256 amount
+        uint256 amount,
+        address receiver
     )
         internal
         view
@@ -672,6 +717,7 @@ function _availabilityAndAmounts(
 | vaultList | `address[]` |  |
 | bpsList | `uint256[]` |  |
 | amount | `uint256` |  |
+| receiver | `address` |  |
 
 **Returns**
 
@@ -717,7 +763,7 @@ function _splitAcrossAvailable(
 | ---- | ---- | ----------- |
 | legAmounts | `uint256[]` |  |
 
-<a id="_isdepositable-address"></a>
+<a id="_isdepositable-address-address"></a>
 
 ### _isDepositable
 
@@ -728,15 +774,12 @@ Non-reverting, amount-independent half of the availability check: is
 own `maxDeposit`? Mirrors the reverting checks in
 `_executeLeg`/`_requireRouterEligible` and the vault's own ERC-4626
 deposit gate without reverting, so it can be used to compute the
-shared availability set. `maxDeposit` is read with this router as the
-receiver: preview has no receiver to pass, and every vault in the
-family ignores the argument. A reverting `maxDeposit` counts as 0,
-because an ERC-4626 `deposit` reads it first and would revert too.
+shared availability set. A reverting beneficiary-specific capacity counts as zero.
 
 </i>
 
 ```solidity
-function _isDepositable(address vault) internal view returns (bool);
+function _isDepositable(address vault, address receiver) internal view returns (bool);
 ```
 
 **Parameters**
@@ -744,6 +787,7 @@ function _isDepositable(address vault) internal view returns (bool);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | vault | `address` |  |
+| receiver | `address` |  |
 
 **Returns**
 
@@ -758,6 +802,12 @@ function _isDepositable(address vault) internal view returns (bool);
 Split `amount` USDC across active vaults by the current weight
 vector. All legs must succeed (all-or-revert). Shares are minted
 directly to `msg.sender`.
+
+<i>
+
+Direct entry point. The dapp routing feature flag only controls visibility in that client.
+
+</i>
 
 ```solidity
 function deposit(uint256 amount, uint256[] calldata minSharesPerLeg)
@@ -810,6 +860,75 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 | ---- | ---- | ----------- |
 | sharesPerLeg | `uint256[]` |  |
 
+<a id="depositwithquote-address-uint256-address-uint256-uint256"></a>
+
+### depositWithQuote
+
+Deposit with the ordered vault identities returned by a preview and a deadline.
+
+<i>
+
+Floors are in the corresponding vault share units.
+
+</i>
+
+```solidity
+function depositWithQuote(
+        address receiver,
+        uint256 amount,
+        address[] calldata expectedVaults,
+        uint256[] calldata minSharesPerLeg,
+        uint256 deadline
+    ) external nonReentrant returns (uint256[] memory sharesPerLeg);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| receiver | `address` |  |
+| amount | `uint256` |  |
+| expectedVaults | `address[]` |  |
+| minSharesPerLeg | `uint256[]` |  |
+| deadline | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesPerLeg | `uint256[]` |  |
+
+<a id="setredemptionallowance-address-address-address-uint256"></a>
+
+### setRedemptionAllowance
+
+Set a spendable allowance for an operator to redeem one vault position to a recipient.
+
+<i>
+
+The holder separately approves the router on the vault share token.
+Existing ERC-20 approvals to operators do not create router allowances.
+
+</i>
+
+```solidity
+function setRedemptionAllowance(
+        address operator,
+        address vault,
+        address recipient,
+        uint256 shares
+    ) external nonReentrant;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| operator | `address` |  |
+| vault | `address` |  |
+| recipient | `address` |  |
+| shares | `uint256` |  |
+
 <a id="redeemfor-address-address-address-uint256-uint256-uint256"></a>
 
 ### redeemFor
@@ -817,13 +936,8 @@ function depositFor(address receiver, uint256 amount, uint256[] calldata minShar
 Redeem vault shares from an explicit, caller-supplied set of
 vaults. For each leg the router calls
 `vaults[i].redeem(sharesPerLeg[i], assetRecipient, shareHolder)`,
-routing USDC directly to `assetRecipient`. The caller (typically
-the gateway) must either be `shareHolder` itself — the gateway
-pulls the user's shares into its own custody for the call frame
-and passes itself as `shareHolder` — or hold an ERC-20 allowance
-from `shareHolder` on each vault's share token covering that leg's
-share count; otherwise the call reverts with `UnauthorizedRedeemer`
-(confused-deputy guard, audit finding M-5).
+routing USDC directly to the specified recipient. An operator spends a router
+allowance from the share holder for the named vault and recipient.
 
 EXIT SEMANTICS (issue #967, F-02/F-03/NC-5):
 - Legs are driven by the explicit `vaults[]` argument, NOT the
@@ -839,19 +953,9 @@ DepositsPaused or Retired). No status blocks an exit (F-02, core
 1494). Retired vaults are withdraw-only, never deposit targets —
 see ADR-0009.
 
-SECURITY: users must NEVER leave a STANDING share-token approval to
-this router. The router calls `vault.redeem` with itself as the
-vault-level spender, so a standing user→router approval would let
-any holder-authorized caller burn the user's shares to an arbitrary
-`assetRecipient`. Two flows approve the router: the gateway's
-transient self-custody flow (approve inside its own `nonReentrant`
-frame, clear afterwards), and a holder's own single-vault exit
-(QA plan D9, SR-M16), which approves exactly the shares of the one
-`redeemFor(holder, holder, [vault], [shares], [floor], deadline)`
-it sends next. That redeem spends the approval to zero. A holder
-whose call reverts (`SlippageExceeded`, `DeadlineExpired`) clears
-the approval it left. A direct `vault.redeem` has no minimum-out,
-so this one-leg call is how a holder puts a floor on one vault.
+The vault charges the separate ERC-20 allowance granted to the router
+by the holder. Approve only the shares intended for redemption and clear
+residual approval if the transaction is abandoned.
 
 All legs must succeed (all-or-revert). No intermediate USDC custody
 is created in the router — each vault sends USDC directly to
@@ -872,7 +976,7 @@ function redeemFor(
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| shareHolder | `address` | Address whose vault shares are redeemed (the `owner`<br/>passed to `vault.redeem`). Either equals the caller<br/>(gateway self-custody flow: shares pulled from the<br/>user and held only during the call frame), or must<br/>have approved the caller on each vault's share token<br/>for at least that leg's share count. Direct user<br/>approvals to this router are forbidden (see SECURITY<br/>note above). |
+| shareHolder | `address` | Owner of the vault shares. An operator must have a<br/>router redemption allowance from the holder. |
 | assetRecipient | `address` | Address that receives redeemed USDC. The router<br/>forwards each leg's USDC here; it never custodies USDC. |
 | vaults | `address[]` | Explicit, caller-supplied list of vault addresses to<br/>redeem from. Each must be registered in the<br/>VaultRegistry. Drives the redeem legs directly, so a<br/>reweighted-out or retired position remains reachable<br/>(F-03). `sharesPerLeg[i]`/`minAssetsPerLeg[i]` bind to<br/>`vaults[i]` (identity binding, NC-5). |
 | sharesPerLeg | `uint256[]` | Shares to redeem per leg (parallel to `vaults`).<br/>Length must match `vaults`. Zero-share legs are<br/>accepted (and skipped) so the caller can specify<br/>partial positions. |
@@ -1452,6 +1556,28 @@ event QuarantineAddressUpdated(address indexed oldAddr, address indexed newAddr)
 | oldAddr | `address` | Previous quarantine address. |
 | newAddr | `address` | New quarantine address. |
 
+### RedemptionAllowanceSet
+
+```solidity
+event RedemptionAllowanceSet(
+        address indexed holder,
+        address indexed operator,
+        address indexed vault,
+        address recipient,
+        uint256 shares
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+| operator | `address` |  |
+| vault | `address` |  |
+| recipient | `address` |  |
+| shares | `uint256` |  |
+
 ## Errors
 
 ### ZeroAddress
@@ -1534,6 +1660,14 @@ The supplied `deadline` has passed (`block.timestamp > deadline`).
 
 ```solidity
 error DeadlineExpired();
+```
+
+### DepositRouteChanged
+
+The quoted vault identities differ from the effective deposit route.
+
+```solidity
+error DepositRouteChanged();
 ```
 
 ### RouterCapExceeded
@@ -1696,8 +1830,7 @@ error UsdcLegTransferFailed(address vault);
 
 ### UnauthorizedRedeemer
 
-Caller is not the shareHolder and has insufficient ERC-20
-allowance on the vault share token to redeem on its behalf.
+Caller has insufficient router redemption allowance for the holder.
 
 ```solidity
 error UnauthorizedRedeemer(address shareHolder, address caller);

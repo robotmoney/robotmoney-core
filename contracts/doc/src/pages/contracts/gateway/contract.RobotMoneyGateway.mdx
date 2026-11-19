@@ -5,7 +5,7 @@ description: "Policy-gated agent deposit into an owner-selected ERC-4626 vault. 
 
 # RobotMoneyGateway
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/gateway/RobotMoneyGateway.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5cb9063ea9f4ff0602f130be3e11798ca618c42d/contracts/gateway/RobotMoneyGateway.sol)
 
 **Inherits:** [AccessRoles](/contracts/gateway/abstract.AccessRoles), ReentrancyGuardUpgradeable, [IGateway](/contracts/gateway/interfaces/interface.IGateway), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -685,8 +685,7 @@ This is the gateway's only agent action.
 
 The only agent action. Deposits into `destination`, which must appear in the
 policy's non-empty `allowedDestinations`. No registry lookup, no pinned vault.
-Shares are minted to `shareReceiver`. `minSharesPerLeg` is bound into the
-`paymentId` (GW-2) and is not otherwise enforced: the gateway has no router leg.
+Shares are minted to the configured receiver. The optional floor is in destination share units.
 
 </i>
 
@@ -710,7 +709,7 @@ function depositTo(
 | deadline | `uint64` | Hard expiry; must be `&lt;= block.timestamp + 600`. |
 | idempotencyKey | `bytes32` | Caller-side dedup salt mixed into `paymentId`. |
 | destination | `address` | ERC-4626 vault named in the policy. |
-| minSharesPerLeg | `uint256[]` | Bound into `paymentId` only. Pass an empty array. |
+| minSharesPerLeg | `uint256[]` | Empty to omit a floor, or one minimum in destination vault share units. |
 
 **Returns**
 
@@ -906,6 +905,22 @@ Pre/post-call invariant: gateway must never custody vault shares or leftover USD
 
 ```solidity
 error ShareCustodyInvariantViolated();
+```
+
+### MinSharesLengthMismatch
+
+`depositTo` takes at most one share floor, for its single destination vault.
+
+```solidity
+error MinSharesLengthMismatch();
+```
+
+### SlippageExceeded
+
+The destination vault minted fewer shares than the caller's floor.
+
+```solidity
+error SlippageExceeded();
 ```
 
 ### InvalidShareReceiver
@@ -1147,6 +1162,7 @@ struct DepositArgs {
         address destination;
         uint64 windowId;
         uint256 balBefore;
+        uint256 minShares;
         /// @dev Captured from the in-memory policy snapshot so the rolling-window
         ///      cap check never performs a second cold SLOAD on `agents[msg.sender]`.
         uint256 maxPerWindow;
@@ -1164,5 +1180,6 @@ struct DepositArgs {
 | destination | `address` |  |
 | windowId | `uint64` |  |
 | balBefore | `uint256` |  |
+| minShares | `uint256` |  |
 | maxPerWindow | `uint256` |  |
 
