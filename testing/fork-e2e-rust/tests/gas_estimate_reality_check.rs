@@ -42,8 +42,10 @@ const MAX_GAS_APPROVE: u64 = 80_000;
 /// branch merged with dev (the deposit-path changes of QA plan D3 to D9 on dev's proxied vault)
 /// measured `deposit gasUsed=964197`, 4.8% over it. 1,060,000 is that cost plus about 10%. A
 /// deliberate deposit-path change that costs more raises this number in the same change, citing the
-/// new `deposit gasUsed=` line from CI.
-const MAX_GAS_DEPOSIT: u64 = 1_060_000;
+/// new `deposit gasUsed=` line from CI. The TestMachine audit fixes (findings 9, 10 and 22) add
+/// each lending adapter's withdrawal-liquidity probe to `maxDeposit`; CI then measured
+/// `deposit gasUsed=1080403`. 1,190,000 is that cost plus about 10%.
+const MAX_GAS_DEPOSIT: u64 = 1_190_000;
 
 /// Conservative ceiling for the vault redeem gas.
 const MAX_GAS_REDEEM: u64 = 1_100_000;

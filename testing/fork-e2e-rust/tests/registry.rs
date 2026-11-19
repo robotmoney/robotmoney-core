@@ -37,9 +37,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use alloy_primitives::{keccak256, Address, U256};
+use alloy_primitives::{keccak256, Address, Bytes, U256};
 use alloy_sol_types::SolCall;
-use rmpc_fork_e2e::{skip_if_no_fork, ForkFixture, IOnchainVaultRegistry};
+use rmpc_fork_e2e::{skip_if_no_fork, Account, ForkFixture, IOnchainVaultRegistry};
 use serde_json::Value;
 
 // ── Workspace helpers ────────────────────────────────────────────────────────
@@ -158,6 +158,19 @@ fn run_get_vaults(cfg: &Path) -> Value {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+/// Deploy a one-byte stub vault whose runtime is `STOP`. `registerVault` requires deployed
+/// code (TestMachine audit fix), and `setVaultStatus` calls the vault's `retire()` or
+/// `unretire()` hook, which a `STOP` runtime accepts with empty return data.
+fn deploy_stub_vault(deployer: &Account<'_>) -> Address {
+    // PUSH1 1 PUSH1 12 PUSH1 0 CODECOPY PUSH1 1 PUSH1 0 RETURN | runtime: STOP
+    let initcode: Vec<u8> = vec![
+        0x60, 0x01, 0x60, 0x0c, 0x60, 0x00, 0x39, 0x60, 0x01, 0x60, 0x00, 0xf3, 0x00,
+    ];
+    deployer
+        .deploy(Bytes::from(initcode), 200_000)
+        .expect("deploy stub vault")
+}
+
 /// Scenario 1: deploy the registry, register a vault, assert `VaultRegistered`
 /// event, and verify `listVaults` returns the vault address.
 /// Then run `rmpc get-vaults` and assert the vault appears in the JSON output.
@@ -183,12 +196,8 @@ fn registry_register_list() {
     .expect("deploy VaultRegistry");
     eprintln!("[registry_register_list] registry deployed at {registry_addr:#x}");
 
-    // Use a stable fake vault address — just a non-zero address. VaultRegistry
-    // never calls the vault contract during registration, so no code is needed
-    // at this address.
-    let fake_vault: Address = "0x0000000000000000000000000000000000000001"
-        .parse()
-        .unwrap();
+    // A stub vault with code: VaultRegistry refuses an address with no code.
+    let fake_vault = deploy_stub_vault(&deployer);
 
     // registerVault(fake_vault, VaultMetadata{name, asset, registeredAt})
     let meta = IOnchainVaultRegistry::VaultMetadata {
@@ -366,9 +375,7 @@ fn registry_status_change() {
     )
     .expect("deploy VaultRegistry");
 
-    let fake_vault: Address = "0x0000000000000000000000000000000000000002"
-        .parse()
-        .unwrap();
+    let fake_vault = deploy_stub_vault(&deployer);
     let meta = IOnchainVaultRegistry::VaultMetadata {
         name: "Test Vault".to_string(),
         asset: rmpc_fork_e2e::addresses::USDC,
