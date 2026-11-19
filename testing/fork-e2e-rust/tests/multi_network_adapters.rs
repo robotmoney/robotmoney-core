@@ -30,8 +30,8 @@
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{sol, SolCall};
 use rmpc_fork_e2e::{
-    base_testnet_addresses, parameterized_e2e, scenarios, skip_network_or_refuse,
-    Account, ForkFixture, HarnessError, Network, IERC20,
+    base_testnet_addresses, parameterized_e2e, scenarios, skip_network_or_refuse, Account,
+    ForkFixture, HarnessError, Network, IERC20,
 };
 
 sol! {
