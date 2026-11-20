@@ -112,6 +112,7 @@ What every Deploy 4 upgrade shares:
 - The live build is rebuilt in a separate checkout, and the new build is `{runDir}/v090` (the `--upgrade-build`). `{d4common}` (v0.8.0) and `{d4live}` (v0.9.0) are `{common}` with the live build's `--core-dir` and `--core-sha`.
 - The governed operations are scheduled in one timelock window and chained by predecessor, so they execute in order. Every execute goes through the Safe.
 - `publish-contracts/src/fund-upgrade-record.ts upgrade` re-records each executed proxy upgrade in the run's copies. `publish-contracts/src/ci/fund-claims.ts` proves the claims settled before the upgrade keep their `unlockAt`.
+- v0.9.0 step P6.87 claims the deployer's Deploy 4 deposit claims whose hold has ended, before the flow test claims its own (decision D4-18): the queue delivers oldest first.
 - The Twin fork runs on the stage host. P0.84 starts it and tunnels it to `{tunnelPort}`. P10.84 stops it. Foundry is 1.8.5 on both hosts.
 - The Twin proves only what the upgrade changes. No Twin step may depend on Base history before the fork pin: on 918453 the fund verifier's role scan checks the holders now plus the grants after the pin. The 8453 run keeps every full-history check.
 - The long checks are scripts with bun tests: `scripts/runbook/adapter-swap.ts` (deploy, plan, pending, check), `scripts/runbook/flow-params.ts` (snapshot, calldata, same, check) and `scripts/runbook/fund-state.ts` (proxies, timelock, counters).

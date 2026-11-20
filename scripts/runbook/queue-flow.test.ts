@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeFunctionResult, encodeFunctionResult, parseAbi, type Abi } from "../../publish-contracts/node_modules/viem";
-import { depositState, findClaim, loadAbi, main, newestRequest, quote, type QueueReader } from "./queue-flow.ts";
+import { depositState, findClaim, held, loadAbi, main, matured, newestRequest, quote, refresh, type ClaimRow, type QueueReader } from "./queue-flow.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const REQUEST = "address owner; uint8 kind; uint64 epoch; uint256 amount; uint256 remaining; bool closed; uint16 exitFeeBps; uint32 minHold; uint16 maxRoll; uint64 createdAt; uint64 expiryEpoch; uint64 expiresAt; uint64 noticeRound; uint64 era; bool enrolled; uint256 matchCycle; uint256 normBasis; uint256 entryCumScaled; uint256 entryUnmatchedFactor; uint256 nextMatchId";
@@ -17,6 +17,7 @@ const ABI: Abi = parseAbi([
   "function requestCount() view returns (uint256)", "function claimCount() view returns (uint256)",
   "function getRequest(uint256) view returns (Request)", "function requestStatus(uint256) view returns (uint8)",
   "function getClaim(uint256) view returns (Claim)", "function getSettlement(uint256) view returns (Settlement)",
+  "function claimableDepositRequest(uint256,address) view returns (uint256)",
   "function quoteDeposit(uint256) view returns (Quote)", "function quoteRedeem(uint256) view returns (Quote)",
 ]);
 
@@ -49,8 +50,9 @@ const claim = (requestId: bigint, settlementId: bigint, unlockAt: bigint) => ({ 
 const settlement = (time: bigint, holdEndsAt: bigint) => ({ time, settler: OWNER, matchedShares: 0n, matchedUsdc: 0n, matchSharePrice: 0n, usdcIn: 0n, sharesMinted: 0n, sharesBurned: 0n, usdcOut: 0n, frozenUntil: 0n, freezeSetAt: 0n, holdEndsAt });
 
 /** A reader whose answers go through the ABI encoder and decoder, as on chain. */
-function reader(answers: (fn: string, args: readonly unknown[]) => unknown): QueueReader {
+function reader(answers: (fn: string, args: readonly unknown[]) => unknown, now = 0n): QueueReader {
   return {
+    now: async () => now,
     read: async (functionName, args = []) => {
       const result = answers(functionName, args);
       const data = encodeFunctionResult({ abi: ABI, functionName, result } as never);
@@ -97,4 +99,50 @@ test("find-claim: the one claim of the request, its hold from the v0.9.0 Settlem
   expect(await findClaim(q(0n), 5n)).toBe(2n);
   await expect(findClaim(q(5601n), 5n, 3600n)).rejects.toThrow("the hold is not 3600 s");
   await expect(findClaim(q(5600n), 9n)).rejects.toThrow("has 0 claims");
+});
+
+// ─── P6.87 (decision D4-18): the Deploy 4 deposit claims whose hold has ended ───
+const ADMIN = "0xf3F582464De7BD2cBf9d2ad40429e31D0F4724A3";
+const row = (id: number, requestId: string, kind: number, unlockAt: number, claimed = "0", owner = ADMIN): ClaimRow =>
+  ({ id, requestId, owner, kind, settlementId: "1", unlockAt, shares: "1000", usdc: "998592", claimed, sharesClaimed: "0" });
+/** The shape of the live claims-before.json: three open deposit claims at one unlockAt, a delivered one, a redemption, one still held, another owner's. */
+const SNAP = [row(1, "1", 0, 1794704415), row(2, "2", 0, 1794704415), row(3, "3", 0, 1794704415), row(4, "5", 0, 1794643971, "1000"), row(5, "6", 1, 1794647572), row(6, "7", 0, 1900000000), row(7, "8", 0, 1, "0", "0x00000000000000000000000000000000000000b2")];
+
+test("held: only the owner's open deposit claims out of their hold; the sum of their requests' claimable", async () => {
+  expect(matured(SNAP, ADMIN.toLowerCase(), 1794704415n).map((c) => c.id)).toEqual([1, 2, 3]);
+  expect(matured(SNAP, ADMIN, 1794704414n)).toEqual([]);
+  const q = reader((fn, args) => (fn === "claimableDepositRequest" ? (args[0] === 1n ? 998592n : 998591n) : 0n), 1800000000n);
+  const r = await held(q, SNAP, ADMIN);
+  expect(r.claims.map((c) => c.id)).toEqual([1, 2, 3]);
+  expect(r.sum).toBe(998592n + 998591n + 998591n);
+  const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "queue-flow-held-"));
+  const snap = join(dir, "claims-before.json");
+  writeFileSync(snap, JSON.stringify(SNAP, null, 2) + "\n");
+  await main(q, "held", { snapshot: snap, owner: ADMIN, "out-sum": join(dir, "sum"), "out-claims": join(dir, "claims") });
+  expect(readFileSync(join(dir, "sum"), "utf8")).toBe(`${998592n + 998591n * 2n}\n`);
+  expect(readFileSync(join(dir, "claims"), "utf8")).toBe("1,2,3\n");
+});
+
+test("refresh rewrites only the claimed entries from the chain, refuses one still claimable, and a rerun claims 0", async () => {
+  const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "queue-flow-refresh-"));
+  const snap = join(dir, "claims-before.json"), ids = join(dir, "claims");
+  writeFileSync(snap, JSON.stringify(SNAP, null, 2) + "\n");
+  writeFileSync(ids, "1,2,3\n");
+  const chain = (left: bigint) => reader((fn, args) => {
+    if (fn === "claimableDepositRequest") return left;
+    const id = Number(args[0]);
+    return { requestId: BigInt(id), owner: ADMIN, kind: 0, settlementId: 1n, unlockAt: 1794704415n, shares: 1000n, usdc: 998592n, claimed: 1000n, sharesClaimed: 0n };
+  }, 1800000000n);
+  await expect(refresh(chain(5n), SNAP, ADMIN, [1])).rejects.toThrow("still has 5 claimable");
+  await main(chain(0n), "refresh", { snapshot: snap, owner: ADMIN, "claims-file": ids });
+  const after = JSON.parse(readFileSync(snap, "utf8")) as ClaimRow[];
+  expect(after.filter((c) => [1, 2, 3].includes(c.id)).map((c) => c.claimed)).toEqual(["1000", "1000", "1000"]);
+  expect(after.filter((c) => ![1, 2, 3].includes(c.id))).toEqual(SNAP.filter((c) => ![1, 2, 3].includes(c.id)));
+  expect(Object.keys(after[0]!)).toEqual(Object.keys(SNAP[0]!));
+  // the rerun: nothing matured is open any more, so the sum is 0 and no claim is listed
+  await main(chain(0n), "held", { snapshot: snap, owner: ADMIN, "out-sum": join(dir, "sum"), "out-claims": ids });
+  expect(readFileSync(join(dir, "sum"), "utf8")).toBe("0\n");
+  expect(readFileSync(ids, "utf8")).toBe("\n");
+  await main(chain(0n), "refresh", { snapshot: snap, owner: ADMIN, "claims-file": ids });
+  expect(JSON.parse(readFileSync(snap, "utf8"))).toEqual(after);
 });

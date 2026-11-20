@@ -8,8 +8,14 @@
 //   deposit-state --request ID --marker FILE                      writes the marker unless the deposit request has Expired (P6.89 then replaces it)
 //   find-claim    --request ID [--hold SECONDS]                   prints the id of the one claim of the request; with --hold its unlockAt is the
 //                                                                settlement's time plus SECONDS and equals the settlement's holdEndsAt
+//   held          --snapshot FILE --owner A --out-sum FILE --out-claims FILE
+//                                                                (P6.87, decision D4-18) the owner's deposit claims of the snapshot (fund-claims.ts
+//                                                                snapshot) that are not fully delivered and out of their hold at the latest block:
+//                                                                writes their claim ids and the sum of their requests' claimable USDC (0 when none)
+//   refresh       --snapshot FILE --owner A --claims-file FILE   after the claim: each listed claim's request reads claimable 0, and only those
+//                                                                entries of the snapshot are rewritten with the chain's values (as snapshot writes them)
 // Every subcommand takes --rpc URL --queue A --abi FILE. Exit 0 pass, 1 a failed check or call, 2 a usage error.
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createPublicClient, http, type Abi, type Address } from "../../publish-contracts/node_modules/viem";
 import { UsageError, check, need, options, runMain, writeState } from "./cast-io.ts";
 
@@ -20,6 +26,8 @@ export const KIND = { deposit: 0, redeem: 1 } as const;
 
 export interface QueueReader {
   read(functionName: string, args?: readonly unknown[]): Promise<unknown>;
+  /** The latest block's timestamp. */
+  now(): Promise<bigint>;
 }
 
 export function loadAbi(path: string): Abi {
@@ -30,7 +38,10 @@ export function loadAbi(path: string): Abi {
 
 export function viemReader(rpc: string, queue: string, abi: Abi): QueueReader {
   const client = createPublicClient({ transport: http(rpc) });
-  return { read: (functionName, args = []) => client.readContract({ address: queue as Address, abi, functionName, args } as never) };
+  return {
+    read: (functionName, args = []) => client.readContract({ address: queue as Address, abi, functionName, args } as never),
+    now: async () => (await client.getBlock()).timestamp,
+  };
 }
 
 /** A struct return by field name: viem gives an object for a named tuple. Refuses a positional array, which means the ABI has no names. */
@@ -82,6 +93,47 @@ export async function findClaim(q: QueueReader, requestId: bigint, hold?: bigint
   return id;
 }
 
+/** One entry of a fund-claims.ts snapshot, in its field order and formats. */
+export interface ClaimRow { id: number; requestId: string; owner: string; kind: number; settlementId: string; unlockAt: number; shares: string; usdc: string; claimed: string; sharesClaimed: string }
+const DEPOSIT = 0;
+
+/** PURE. The owner's deposit claims of the snapshot that are not fully delivered and whose hold has ended at `now`. */
+export function matured(rows: ClaimRow[], owner: string, now: bigint): ClaimRow[] {
+  return rows.filter((c) => c.kind === DEPOSIT && c.owner.toLowerCase() === owner.toLowerCase() && BigInt(c.claimed) < BigInt(c.shares) && BigInt(c.unlockAt) <= now);
+}
+
+export async function held(q: QueueReader, rows: ClaimRow[], owner: string): Promise<{ claims: ClaimRow[]; sum: bigint; now: bigint }> {
+  const now = await q.now();
+  const claims = matured(rows, owner, now);
+  let sum = 0n;
+  for (const r of [...new Set(claims.map((c) => c.requestId))]) {
+    const c = (await q.read("claimableDepositRequest", [BigInt(r), owner])) as bigint;
+    console.log(`request ${r} claimable ${c}`);
+    sum += c;
+  }
+  return { claims, sum, now };
+}
+
+/** A claim as fund-claims.ts snapshot writes it. */
+export async function claimRow(q: QueueReader, id: number): Promise<ClaimRow> {
+  const r = await q.read("getClaim", [BigInt(id)]);
+  const f = (n: string) => field(r, n);
+  return { id, requestId: str(f("requestId")), owner: str(f("owner")), kind: Number(f("kind")), settlementId: str(f("settlementId")), unlockAt: Number(f("unlockAt")), shares: str(f("shares")), usdc: str(f("usdc")), claimed: str(f("claimed")), sharesClaimed: str(f("sharesClaimed")) };
+}
+
+/** Each listed claim's request reads claimable 0; returns the snapshot with only those entries replaced by the chain's. */
+export async function refresh(q: QueueReader, rows: ClaimRow[], owner: string, ids: number[]): Promise<ClaimRow[]> {
+  const out = rows.map((r) => ({ ...r }));
+  for (const id of ids) {
+    const i = out.findIndex((r) => r.id === id);
+    check(i >= 0, `claim ${id} is not in the snapshot`);
+    const left = (await q.read("claimableDepositRequest", [BigInt(out[i]!.requestId), owner])) as bigint;
+    check(left === 0n, `request ${out[i]!.requestId} still has ${left} claimable`);
+    out[i] = await claimRow(q, id);
+  }
+  return out;
+}
+
 const kindOf = (k: string | undefined): "deposit" | "redeem" => {
   if (k !== "deposit" && k !== "redeem") throw new UsageError("--kind is deposit or redeem");
   return k;
@@ -107,11 +159,25 @@ export async function main(q: QueueReader, verb: string | undefined, o: Record<s
   } else if (verb === "find-claim") {
     const [request] = need(o, "request");
     console.log(String(await findClaim(q, BigInt(request!), o.hold === undefined ? undefined : BigInt(o.hold))));
+  } else if (verb === "held") {
+    const [snapshot, owner, outSum, outClaims] = need(o, "snapshot", "owner", "out-sum", "out-claims");
+    const rows = JSON.parse(readFileSync(snapshot!, "utf8")) as ClaimRow[];
+    const { claims, sum, now } = await held(q, rows, owner!);
+    writeState(outSum!, String(sum));
+    writeState(outClaims!, claims.map((c) => c.id).join(","));
+    console.log(`${claims.length} deposit claim(s) of ${owner} out of their hold at ${now}: ${claims.map((c) => `claim ${c.id} (request ${c.requestId})`).join(", ") || "none"}; claimable sum ${sum}`);
+  } else if (verb === "refresh") {
+    const [snapshot, owner, claimsFile] = need(o, "snapshot", "owner", "claims-file");
+    const ids = readFileSync(claimsFile!, "utf8").trim().split(",").filter(Boolean).map(Number);
+    const rows = JSON.parse(readFileSync(snapshot!, "utf8")) as ClaimRow[];
+    const next = await refresh(q, rows, owner!, ids);
+    writeFileSync(snapshot!, JSON.stringify(next, null, 2) + "\n");
+    console.log(ids.length ? `claims ${ids.join(",")} delivered; their entries in ${snapshot} now read the chain` : "no claim to refresh");
   } else throw new UsageError(`unknown subcommand ${verb ?? "(none)"}`);
 }
 
 if (import.meta.main) {
-  await runMain("usage: queue-flow.ts quote|request|deposit-state|find-claim --rpc URL --queue A --abi FILE ... (see the header)", async () => {
+  await runMain("usage: queue-flow.ts quote|request|deposit-state|find-claim|held|refresh --rpc URL --queue A --abi FILE ... (see the header)", async () => {
     const [verb, ...argv] = process.argv.slice(2);
     let o;
     try { o = options(argv).opts; } catch (e) { throw new UsageError((e as Error).message); }

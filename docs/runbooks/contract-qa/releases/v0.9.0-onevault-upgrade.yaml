@@ -34,8 +34,14 @@ notes: |
   Each execute waits the timelock delay from its schedule. The scripts each step calls are scripts/runbook/adapter-swap.ts, flow-params.ts and
   fund-state.ts (each with a bun test).
 
-  What stays the same. Every queue claim keeps the unlockAt fixed at its settlement: P0.94 snapshots them (claims-before.json) and P2.84, P6.93,
-  P6.94, P6.99 and P9.83 read them unchanged. The fund's supply, seed shares, plan id and request count read the same after the upgrade (P2.84).
+  What stays the same. Every queue claim keeps the unlockAt fixed at its settlement. P0.94 snapshots the claims (claims-before.json) and P2.84,
+  P6.93, P6.94, P6.99 and P9.83 read them unchanged. The fund's supply, seed shares, plan id and request count read the same after the upgrade (P2.84).
+
+  The Deploy 4 deposit claims. Deploy 4 left three 1 USDC deposit claims of the deployer, held until 2026-11-15 01:00:15 UTC and never claimed.
+  The queue delivers a receiver's deposit claims oldest first, so P6.87 claims every one whose hold has ended before the flow test claims its own
+  (decision D4-18). That also proves old claims deliver after the upgrade. P6.87 keeps the original snapshot as claims-before-upgrade.json and
+  refreshes only the claimed entries of claims-before.json. P9.84 (Twin) proves any claim still held becomes claimable.
+
   The flow test (P6.91 to P6.99) requests 1 USDC, settles, claims after the 1 h hold, redeems and claims.
 
   The Twin and 8453. The Twin proves only what this release changes. 8453 proves the whole live system.
@@ -105,6 +111,12 @@ decisions:
     answer: "Owner, 2026-11-19: swap adapters become OpenZeppelin UUPS proxies (GovernedUUPS, the fund timelock their upgrade authority), vetted by proxy and implementation code hash on every use; a governed setAssetAdapter moves each basket asset to the new adapter proxy before P2.86 (ADR-0019, steps P1.83 to P3.72). No legacy-adapter special case, no delist."
     decidedOn: "2026-11-19"
     ref: "docs/adr/ADR-0019-fund-swap-adapters-governed-uups-proxies.md"
+  - id: "D4-18"
+    question: "Deploy 4's deposit claims of the deployer are out of their hold and unclaimed, and the queue delivers a receiver's deposit claims oldest first, so the flow test's claim (P6.94) would take them. Who claims them?"
+    status: decided
+    answer: "this run claims the Deploy 4 deposit claims whose hold has ended, before its own flow-test claim; they are the deployer's own deposits; it also proves old claims deliver after the upgrade"
+    decidedOn: "2026-11-20"
+    ref: "Owner-side decision in the deployment session, 2026-11-20 (step P6.87-upg-claim-held)"
 recovery: |
   Before P1.80 nothing is sent: fix on the branch and run again. After it, every step reruns safely: deploys reuse a recorded contract that has
   code, and P0.93 marks each proxy already upgraded so its schedule and execute skip. A scheduled operation that must not run is cancelled by the
@@ -1455,6 +1467,27 @@ steps:
     irreversible: false
     exercises: "redeem"
   # ── v0.9.0-onevault-upgrade, flow fund-upgrade, phase 6 ──
+  - id: "P6.87-upg-claim-held"
+    standing: ["4.12"]
+    description: "Decision D4-18: the deployer claims its Deploy 4 deposit claims whose hold has ended, so the flow test's claim (P6.94) takes only its own. Their requests then read claimable 0 and only their entries of claims-before.json are refreshed from the chain (the original is kept as claims-before-upgrade.json); with none left it sends nothing"
+    host: "control"
+    phase: 6
+    cmds:
+      - ["bash", "-c", "test -f {runDir}/claims-before-upgrade.json || cp {runDir}/claims-before.json {runDir}/claims-before-upgrade.json"]
+      - ["bun", "scripts/runbook/queue-flow.ts", "held", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--snapshot", "{runDir}/claims-before.json", "--owner", "{sheet:ADMIN_ADDRESS}", "--out-sum", "{runDir}/state/upg-held-usdc", "--out-claims", "{runDir}/state/upg-held-claims"]
+      - ["bash", "-c", "cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1 > {runDir}/state/upg-shares-before-held"]
+      - ["bash", "-c", "s=$(cat {runDir}/state/upg-held-usdc); if [ \"$s\" = 0 ]; then echo \"no Deploy 4 deposit claim to take\"; else bash scripts/runbook/cast-send.sh {m:queue.queue} \"deposit(uint256,address)\" \"$s\" \"{sheet:ADMIN_ADDRESS}\" \"$@\"; fi", "_", "{cast}"]
+      - ["bash", "-c", "s=$(cat {runDir}/state/upg-held-usdc); if [ \"$s\" = 0 ]; then exit 0; fi; d=$(bun scripts/runbook/qa-assert.ts sub \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" \"$(cat {runDir}/state/upg-shares-before-held)\") && echo \"shares delivered $d\" && bun scripts/runbook/qa-assert.ts ge \"$d\" 1"]
+      - ["bun", "scripts/runbook/queue-flow.ts", "refresh", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--snapshot", "{runDir}/claims-before.json", "--owner", "{sheet:ADMIN_ADDRESS}", "--claims-file", "{runDir}/state/upg-held-claims"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["upg-held-usdc", "upg-held-claims", "upg-shares-before-held"]
+    added: "v0.9.0-onevault-upgrade"
   - id: "P6.90-upg-twin-feeds"
     standing: ["9", "4.4"]
     description: "On the Twin only: the fork serves each feed's pin round, so before the queue rows read the feeds they are restated. The Twin feed step (twin-feeds.ts refresh, decision D4-9): each basket and peg feed gets one new round on its real aggregator restating its answer at the pin block, stamped at the fork clock, journaled in feed-refresh.jsonl; no pool, token, fund or queue slot is written and no code is etched"
@@ -1573,7 +1606,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.94-upg-claim-deposit"
     standing: ["4.4"]
-    description: "After FLOW_MIN_HOLD (1 h after the settle; the Twin warps it) the deployer claims the new deposit's shares, and ONLY those: first the guard reads every other claim of the deployer, and a deposit claim that is not fully delivered must still be in its hold for 300 s more (the Deploy 4 claims of claims-before.json, held to 2026-11-15 01:00 UTC; the queue delivers oldest first, so after that time the v0.7.0-onevault run's own claim steps must take them first). Then deposit(the claim's USDC cost, the deployer) on the queue: the deployer's share balance rose, the new claim is fully delivered, and the claims of claims-before.json read the same"
+    description: "After FLOW_MIN_HOLD (the Twin warps it) the deployer claims the flow test's deposit shares, and only those: the guard first proves no other open deposit claim of the deployer is out of its hold within 300 s (P6.87 took the Deploy 4 ones). The deployer's shares rose, the claim is fully delivered, and claims-before.json reads the same"
     host: "control"
     phase: 6
     cmds:
@@ -1614,14 +1647,14 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.96-upg-request-redeem"
     standing: ["4.4"]
-    description: "The deployer approves the queue for the shares of P6.94 (its whole fund balance) and requests their redemption (v0.9.0 requestRedeem(shares, owner): no price limit). The newest request is the deployer's, a redemption, Pending, and the deployer holds no fund shares"
+    description: "The deployer approves the queue for its whole fund balance (P6.94's shares plus the Deploy 4 shares P6.87 claimed) and requests its redemption (v0.9.0 requestRedeem(shares, owner): no price limit). The newest request is the deployer's, a redemption, Pending, and the deployer holds no fund shares"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = \"{state:upg-shares-d}\""]
-      - ["bun", "scripts/runbook/queue-flow.ts", "quote", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "redeem", "--amount", "{state:upg-shares-d}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "approve(address,uint256)", "{m:queue.queue}", "{state:upg-shares-d}", "{cast}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestRedeem(uint256,address)", "{state:upg-shares-d}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
+      - ["bash", "-c", "b=$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1) && bun scripts/runbook/qa-assert.ts ge \"$b\" \"{state:upg-shares-d}\" && echo \"$b\" > {runDir}/state/upg-redeem-shares && echo \"redeem the whole balance $b (P6.94 delivered {state:upg-shares-d}, the rest is the Deploy 4 claims P6.87 took)\""]
+      - ["bun", "scripts/runbook/queue-flow.ts", "quote", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "redeem", "--amount", "{state:upg-redeem-shares}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "approve(address,uint256)", "{m:queue.queue}", "{state:upg-redeem-shares}", "{cast}"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestRedeem(uint256,address)", "{state:upg-redeem-shares}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
       - ["bun", "scripts/runbook/queue-flow.ts", "request", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "redeem", "--owner", "{sheet:ADMIN_ADDRESS}", "--out-id", "{runDir}/state/upg-request-r", "--out-epoch", "{runDir}/state/upg-request-r-epoch"]
       - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = 0"]
     env:
@@ -1631,7 +1664,7 @@ steps:
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["upg-request-r", "upg-request-r-epoch"]
+    writes: ["upg-redeem-shares", "upg-request-r", "upg-request-r-epoch"]
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.97-upg-twin-clock-settle-redeem"
     standing: ["9", "4.4"]
@@ -1844,12 +1877,12 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P9.84-upg-twin-held-claims"
     standing: ["9", "4.4"]
-    description: "On the Twin only, last: the deposits Deploy 4 settled under the 24 h hold stay claimable after the upgrade. The Twin clock moves past the latest unlockAt of claims-before.json, and each of those claims reads claimable (claimableDepositRequest above zero), and the deployer's claim of all of them succeeds in simulation (nothing sent: on 8453 the v0.7.0-onevault run claims them itself)"
+    description: "On the Twin only, last: every Deploy 4 deposit claim of claims-before.json not yet delivered becomes claimable once the clock passes its unlockAt, and the deployer's claim of them succeeds in simulation. When P6.87 already claimed them all, it says so and passes"
     host: "control"
     phase: 9
     cmds:
-      - ["bash", "-c", "u=$(jq \"[.[] | select(.kind == 0) | .unlockAt] | max\" {runDir}/claims-before.json); now=$(cast block latest -f timestamp); if [ \"$now\" -le \"$u\" ]; then bun publish-contracts/src/rehearsal/cli.ts warp --rpc \"{rpcUrl}\" --seconds $((u - now + 1)); fi; test \"$(cast block latest -f timestamp)\" -gt \"$u\""]
-      - ["bash", "-c", "sum=0; for r in $(jq -r \".[] | select(.kind == 0 and .claimed == \\\"0\\\") | .requestId\" {runDir}/claims-before.json); do c=$(cast call {m:queue.queue} \"claimableDepositRequest(uint256,address)(uint256)\" \"$r\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1); echo \"request $r claimable $c\"; bun scripts/runbook/qa-assert.ts ge \"$c\" 1 || exit 1; sum=$((sum + c)); done; cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:queue.queue} \"deposit(uint256,address)(uint256)\" \"$sum\" \"{sheet:ADMIN_ADDRESS}\""]
+      - ["bash", "-c", "f={runDir}/claims-before.json; if [ -z \"$(jq -r '.[] | select(.kind == 0 and .claimed != .shares) | .requestId' $f)\" ]; then echo \"every Deploy 4 deposit claim was claimed at P6.87\"; exit 0; fi; u=$(jq \"[.[] | select(.kind == 0 and .claimed != .shares) | .unlockAt] | max\" $f); now=$(cast block latest -f timestamp); if [ \"$now\" -le \"$u\" ]; then bun publish-contracts/src/rehearsal/cli.ts warp --rpc \"{rpcUrl}\" --seconds $((u - now + 1)); fi; test \"$(cast block latest -f timestamp)\" -gt \"$u\""]
+      - ["bash", "-c", "f={runDir}/claims-before.json; ids=$(jq -r '.[] | select(.kind == 0 and .claimed != .shares) | .requestId' $f); if [ -z \"$ids\" ]; then exit 0; fi; sum=0; for r in $ids; do c=$(cast call {m:queue.queue} \"claimableDepositRequest(uint256,address)(uint256)\" \"$r\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1); echo \"request $r claimable $c\"; bun scripts/runbook/qa-assert.ts ge \"$c\" 1 || exit 1; sum=$((sum + c)); done; cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:queue.queue} \"deposit(uint256,address)(uint256)\" \"$sum\" \"{sheet:ADMIN_ADDRESS}\""]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
