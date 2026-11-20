@@ -1326,6 +1326,107 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
         coverageCheckpoint();
     }
 
+    /// @notice Regression: the CI counterexample of run 44652468239 (forge-prototype-tests). A scarce match in
+    ///         settlement 5 shared by size (D31) left older deposit 9 a remainder while newer deposit 10 took its share;
+    ///         the claim-order check now leaves match settlements out.
+    function test_replay_ci_44652468239() public {
+        act_requestRedeem(16866293001463, 118979937589302805465953, true);
+        act_moveFeeds(461383896964868478898860967912510736383, false);
+        act_requestRedeem(
+            70304641, 1355593340068700800382798705786736462099145797377564654250318, true
+        );
+        act_settleAfterWindow(
+            17035652075876413674524569104487377300221,
+            115792089237316195423570985008687907853269984665640564039457584007913129639933,
+            true
+        );
+        act_wait(8634052585745200548852993490952694241137357045580064226395);
+        act_settleAfterWindow(27548638851524174, 54612048539444614967, true);
+        act_cancel(49);
+        act_settleAfterWindow(
+            3, 115792089237316195423570985008687907853269984665640564039457584007913129639932, true
+        );
+        act_wait(58032844278502819750382375289138);
+        act_settle(
+            1123808548111857149019485415392501115232493459197692260692983770966,
+            115792089237316195423570985008687907853269984665640564039457584007913129639934,
+            true,
+            false
+        );
+        act_moveFeeds(24521755728043615994688339250072, false);
+        act_settleAfterWindow(
+            1873190846955586753556385595681985368111283675558320938,
+            115792089237316195423570985008687907853269984665640564039457584007913129639932,
+            false
+        );
+        act_settleAfterWindow(
+            245147868036583163517,
+            579590253674332703600426014716894594928868475227706613709872618325635214,
+            true
+        );
+        act_settle(931911589, 2913171502322235330308424355, false, false);
+        act_requestDeposit(
+            280693052728044,
+            1727070417990530472702049974810422183143546483815404483010440746948718561259,
+            659531585212204081832921793394319267271302218
+        );
+        act_settleAfterWindow(
+            30977779,
+            10380755187512950743519444125046956900894372013995401272591306764314902061,
+            true
+        );
+        act_settleAfterWindow(
+            4801964398254078942874113214384420047370988955877132264438233667220367,
+            701076818636119125463161936356822354737367106862009998160,
+            true
+        );
+        act_moveFeeds(931842201022375633278, false);
+        act_cancel(257277578332091607999796962);
+        act_settle(
+            115792089237316195423570985008687907853269984665640564039457584007913129639934,
+            275584282973118934221553774839803522287401372798334495660,
+            true,
+            false
+        );
+        act_requestDeposit(18743762243582360747612883, 1, 8755680825995164839262841536739555308);
+        act_requestDeposit(
+            12390237195255063559261799349282874812604882253446290649397176246901,
+            40042106662313186579578228255880355268004557,
+            155901268616555771656284842945787726422555457611799214811913957709307752
+        );
+        act_settle(
+            13266366673836277194263151587233004411212,
+            2333814586490599061366632350473002,
+            true,
+            false
+        );
+        act_moveFeeds(118056068977756907863104932146844278558211739417002008027773516917679, false);
+        act_requestDeposit(
+            6129825612316926910767547527, 506466416904429266454, 2564143938871745935231855679
+        );
+        act_requestRedeem(
+            15621224386260394623900781638235010335347444934611260743330,
+            4591486221785188774740086863275408820,
+            false
+        );
+        act_settle(
+            19529037721954471256,
+            1471648299598528452701342393982475556690349339304044383275,
+            false,
+            true
+        );
+        act_settleAfterWindow(
+            115792089237316195423570985008687907853269984665640564039457584007913129639935,
+            67058279902157259365389289281125450391884482314151515126,
+            true
+        );
+        act_settleAfterWindow(
+            16859717559954930080142707357946032284597248803083851820300146868997468667289, 3, true
+        );
+        act_settle(0, 1, false, true);
+        assertEq(ghostViolations, 0, lastViolation);
+    }
+
     function _violation(string memory why) internal {
         ++ghostViolations;
         lastViolation = why;
@@ -1502,7 +1603,7 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
             _checkPostRequest(pre, k, f, maxRequests, noRoom, logs);
         }
 
-        _checkClaimOrder(pre, f.minUsdc, f.minSh);
+        _checkClaimOrder(pre, f.minUsdc, f.minSh, logs);
         keeperMidPass = f.depFailed || f.redFailed;
         if (noRoom) {
             ++callsNoRoom;
@@ -1553,12 +1654,17 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
         if (pre.inRange[k] && pre.remaining[k] != 0) ++admissibleChecked;
     }
 
-    function _checkClaimOrder(Pre memory pre, uint256 minUsdc, uint256 minSh) internal {
+    function _checkClaimOrder(Pre memory pre, uint256 minUsdc, uint256 minSh, Vm.Log[] memory logs)
+        internal
+    {
         uint256 cNow = queue.claimCount();
         for (uint256 cid = pre.claimCount0 + 1; cid <= cNow; ++cid) {
             Claim memory cl = queue.getClaim(cid);
             // Lazy sync on enqueue/enroll can emit a Claim belonging to an earlier match settlement.
             if (cl.settlementId <= pre.settlementCount0) continue;
+            // A match settlement shares a scarce match by size across every locked request (D31), so an older request
+            // keeps a remainder while a newer one takes its share. Oldest first binds the net side only.
+            if (_matchSettlement(logs, cl.settlementId)) continue;
             Request memory filledReq = queue.getRequest(cl.requestId);
             bool isDep = filledReq.kind == RequestKind.Deposit;
             for (uint256 k; k < pre.ids.length; ++k) {
@@ -1583,6 +1689,23 @@ contract FlowQueueOldestFirstInvariant is FlowQueueFixesBase {
         if (e1 != pre.kDepE || i1 != pre.kDepI || e2 != pre.kRedE || i2 != pre.kRedI) {
             _violation("no room: a call with maxUsdc 0 moved a cursor");
         }
+    }
+
+    function _matchSettlement(Vm.Log[] memory logs, uint256 settlementId)
+        internal
+        view
+        returns (bool)
+    {
+        for (uint256 k; k < logs.length; ++k) {
+            if (
+                logs[k].emitter == address(queue)
+                    && logs[k].topics[0] == IFlowEvents.Matched.selector
+                    && uint256(logs[k].topics[2]) == settlementId
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     function _matchedNow(Vm.Log[] memory logs) internal view returns (bool) {
