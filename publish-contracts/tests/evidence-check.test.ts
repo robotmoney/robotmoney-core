@@ -13,6 +13,7 @@ import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, check
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { pinnedMigrationData } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
+import { decodeFundMigration, fundMigrationData } from "../src/fund-migrations.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
@@ -933,5 +934,36 @@ describe("proxy_upgrades typed migration (issue 1910)", () => {
     const nopin = both(918453);
     expect((await checkGovernedUpgradesOnChain(ev, nopin.c)).join("\n")).toContain("not an anvil fork");
     expect(nopin.read).toEqual([]);
+  });
+});
+
+// v0.9.0 (contracts 588a68598): a fund-system proxy_upgrades entry may carry its proxy's own migrateV090 (fund_migration); arbitrary data never passes
+describe("proxy_upgrades fund_migration (v0.9.0)", () => {
+  const D = 172800;
+  const PROXIES = ["fund", "queue", "rebalancer", "fund-governance", "fund-receipt"];
+  const up = (proxy_name: string, data: Hex) => ({
+    step: "upgrade-proxy", proxy_name, proxy: a(70), from_implementation: a(71), from_code_hash: h(72), to_implementation: a(73), to_code_hash: h(74), build: "/core",
+    timelock: a(9), manifest_fields: { x_implementation: a(73) }, ...(data === "0x" ? {} : { fund_migration: decodeFundMigration(proxy_name, data).record }),
+    operation_id: id32(6000), schedule_tx: h(6001), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(6002), execute_status: 1, execute_block_timestamp: T0 + D,
+  });
+  const evOf = (u: any) => ({ timelock: { address: a(9) }, proxy_upgrades: [u] });
+  const chainOf = (u: any, scheduled: string): ChainReader => ({ getChainId: async () => 8453, getTransactionCount: async () => 0, getBlock: async () => ({ timestamp: 1n }), readContract: async () => undefined,
+    getTransactionReceipt: async ({ hash }: { hash: string }) => hash === u.execute_tx ? { status: "success", blockNumber: 2n, logs: [log("CallExecuted", 6000, 0n, u.proxy, scheduled)] } : { status: "success", blockNumber: 1n, logs: [log("CallScheduled", 6000, 172800n, u.proxy, scheduled)] } } as unknown as ChainReader);
+  const qData = fundMigrationData("queue", [900, 259200, 10]);
+
+  test("an entry with its proxy's migration passes offline and against the scheduled call", async () => {
+    const u = up("queue", qData);
+    expect(governedUpgradeProblems(evOf(u), D, PROXIES)).toEqual([]);
+    expect(await checkGovernedUpgradesOnChain(evOf(u), chainOf(u, upgradeCalldata(u.to_implementation, qData)))).toEqual([]);
+    const r = up("rebalancer", fundMigrationData("rebalancer", []));
+    expect(governedUpgradeProblems(evOf(r), D, PROXIES)).toEqual([]);
+  });
+  test("refused: the migration on another proxy, edited args, data the chain did not schedule", async () => {
+    const wrong = { ...up("queue", qData), proxy_name: "fund" };
+    expect(governedUpgradeProblems(evOf(wrong), D, PROXIES).join("\n")).toContain("selector");
+    const edited = up("queue", qData); (edited.fund_migration as any).args = ["1", "2", "3"];
+    expect(governedUpgradeProblems(evOf(edited), D, PROXIES).join("\n")).toContain("are not the decoded data");
+    const u = up("queue", qData);
+    expect((await checkGovernedUpgradesOnChain(evOf(u), chainOf(u, upgradeCalldata(u.to_implementation)))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
   });
 });

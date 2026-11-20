@@ -68,6 +68,7 @@ const RECEIPT = A(0xf005);
 const SUBMITTER = A(0x50b1);
 const KEEPER_OWNER = A(0x8801);
 const KEEPER_BOT = A(0x8802);
+const LEDGER = A(0x1ed1);
 
 const LIB_NESTED = A(0x7701); // FlowMatchLib
 const LIB_FIRST_HOP = A(0x7702); // FundDelistLib (links FlowMatchLib)
@@ -108,6 +109,7 @@ const ARTIFACT_BYTECODES: Record<string, { artifact: Hex; onchain: Hex; linkName
   Rebalancer: { artifact: "0x6080604052dd030000", onchain: "0x6080604052dd030000" },
   RebalanceGovernance: { artifact: "0x6080604052dd040000", onchain: "0x6080604052dd040000" },
   FlowQueue: { artifact: "0x6080604052dd050000", onchain: "0x6080604052dd050000" },
+  FundExclusionLedger: { artifact: "0x6080604052dd060000", onchain: "0x6080604052dd060000" },
 };
 
 function writeArtifacts(outDir: string): void {
@@ -130,7 +132,7 @@ function writeManifests(manifestDir: string, chainId = 8453, upgradeMode: "upgra
   wr("safe", { safe: SAFE });
   wr("fund-libs", { chain_id: chainId });
   wr("fund-receipt", { chain_id: chainId, consensus_receipt: RECEIPT, upgrade_timelock: TIMELOCK, upgrade_mode: upgradeMode });
-  wr("fund", { chain_id: chainId, fund: FUND, upgrade_timelock: TIMELOCK, upgrade_mode: upgradeMode, seed_shares: SEED_SHARES.toString() });
+  wr("fund", { chain_id: chainId, fund: FUND, upgrade_timelock: TIMELOCK, upgrade_mode: upgradeMode, seed_shares: SEED_SHARES.toString(), exclusion_ledger: LEDGER });
   wr("rebalancer", { chain_id: chainId, rebalancer: REBALANCER, upgrade_timelock: TIMELOCK, upgrade_mode: upgradeMode });
   wr("fund-governance", { chain_id: chainId, governance: GOVERNANCE, upgrade_timelock: TIMELOCK, upgrade_mode: upgradeMode });
   wr("queue", { chain_id: chainId, queue: QUEUE, upgrade_timelock: TIMELOCK, upgrade_mode: upgradeMode });
@@ -278,6 +280,7 @@ class FakeFundChain implements ChainReader {
   constructor(private readonly sheet: VerifySheet) {
     this.codes.set(lc(USDC_ADDRESS), USDC_CODE);
     this.codes.set(lc(TIMELOCK), "0x60806040");
+    this.codes.set(lc(LEDGER), ARTIFACT_BYTECODES.FundExclusionLedger!.onchain);
     this.codes.set(lc(KEEPER), "0x");
     this.codes.set(lc(LIB_NESTED), ARTIFACT_BYTECODES.FlowMatchLib!.onchain);
     this.codes.set(lc(LIB_FIRST_HOP), ARTIFACT_BYTECODES.FundDelistLib!.onchain);
@@ -321,6 +324,12 @@ class FakeFundChain implements ChainReader {
     this.setRole(FUND, FUND_ROLES.REBALANCER, [REBALANCER]);
     this.setRole(FUND, FUND_ROLES.FLOW, [QUEUE]);
   }
+
+  fundRebalancer: Address = REBALANCER;
+  fundLedger: Address = LEDGER;
+  ledgerVault: Address = FUND;
+  matchBandBps = 10n;
+  stepParamsOverride: Record<string, bigint | number> = {};
 
   setRole(contract: Address, role: Hex, holders: Address[]): void {
     this.roles.set(`${lc(contract)}:${lc(role)}`, holders.map((h) => lc(h) as Address));
@@ -395,6 +404,8 @@ class FakeFundChain implements ChainReader {
 
     if (a === lc(FUND)) {
       if (fn === "flowQueue") return QUEUE;
+      if (fn === "rebalancer") return this.fundRebalancer;
+      if (fn === "exclusionLedger") return this.fundLedger;
       if (fn === "assetCount") return BigInt((f.assets ?? defaultAssets()).length);
       if (fn === "config") {
         const feeRec = f.feeRecipient === "@safe" ? SAFE : (f.feeRecipient ?? SAFE);
@@ -425,7 +436,13 @@ class FakeFundChain implements ChainReader {
     if (a === lc(REBALANCER)) {
       if (fn === "fund") return FUND;
       if (fn === "stepDepthBps") return f.params.REBALANCER_STEP_DEPTH_BPS;
+      if (fn === "stepParams") return { stepInterval: 1800, maxOverrun: f.params.REBALANCER_MAX_OVERRUN, maxStepCostBps: f.params.REBALANCER_MAX_STEP_COST_BPS, toleranceBps: f.params.REBALANCER_TOLERANCE_BPS, minStepUsdc: f.params.REBALANCER_MIN_STEP_USDC, ...this.stepParamsOverride };
       if (fn === "lastBasketStepAt") return this.fundState.lastBasketStepAt;
+    }
+
+    if (a === lc(LEDGER)) {
+      if (fn === "VAULT") return this.ledgerVault;
+      if (fn === "USDC") return USDC_ADDRESS;
     }
 
     if (a === lc(GOVERNANCE)) {
@@ -438,7 +455,7 @@ class FakeFundChain implements ChainReader {
         const is20 = signature.includes("cancelBuffer") && signature.includes("maxPause");
         if (is20 && this.legacyFlowParams) throw new Error("execution reverted: legacy 18-field ABI");
         const base: Record<string, bigint> = Object.fromEntries(FLOW_PARAM_FIELDS.map(([field, name]) => [field, f.params[name]!]));
-        return is20 ? { ...base, cancelBuffer: f.params.FLOW_CANCEL_BUFFER ?? 0n, maxPause: f.params.FLOW_MAX_PAUSE ?? 0n } : base;
+        return is20 ? { ...base, cancelBuffer: f.params.FLOW_CANCEL_BUFFER ?? 0n, maxPause: f.params.FLOW_MAX_PAUSE ?? 0n, matchBandBps: this.matchBandBps } : base;
       }
       if (fn === "cancelBuffer") {
         if (this.failDirectCancelBuffer) throw new Error("execution reverted: no direct cancelBuffer()");
@@ -836,5 +853,26 @@ describe("after-upgrade state comparison covers Step 3f state (E47, ARCH-08)", (
     lost.chain.step3fGetters = false;
     const rep = await verifyFundUpgradeSafety({ chain: lost.chain, timelock: TIMELOCK, addresses, preState: pre2, artifactsDir: lost.artifactsDir });
     expect(rep.checks.filter((c) => !c.ok).map((c) => c.label)).toContain("fund upgrade: currentMatchIndexes() preserved");
+  });
+});
+
+// v0.9.0 (contracts 588a68598): what the fund, queue and Rebalancer migrations write, read back by the verifier
+describe("verifyFundSystem: the v0.9.0 migrated state", () => {
+  const failing = async (mut: (f: ReturnType<typeof makeFixture>) => void) => { const f = makeFixture({ params: { ...defaultSheetParams(), REBALANCER_MAX_OVERRUN: 604800n, REBALANCER_MAX_STEP_COST_BPS: 50n, REBALANCER_TOLERANCE_BPS: 50n, REBALANCER_MIN_STEP_USDC: 1000000n } }); mut(f); return (await failedLabels(f.opts)).join("\n"); };
+  test("a migrated system passes: rebalancer(), the new ledger, matchBandBps and the step params", async () => {
+    expect(await failing(() => {})).toBe("");
+  });
+  test("fails: rebalancer() still zero (an upgrade without the fund migration)", async () => {
+    expect(await failing((f) => { f.chain.fundRebalancer = ZERO; })).toContain("fund: rebalancer() is the rebalancer");
+  });
+  test("fails: the ledger is not the manifest's, not bound to the fund, or not the build's code", async () => {
+    expect(await failing((f) => { f.chain.fundLedger = A(0x1ed0); f.chain.codes.set(lc(A(0x1ed0)), ARTIFACT_BYTECODES.FundExclusionLedger!.onchain); })).toContain("fund.json exclusion_ledger is");
+    expect(await failing((f) => { f.chain.ledgerVault = A(0xbad); })).toContain("fund: exclusionLedger()");
+    expect(await failing((f) => { f.chain.codes.set(lc(LEDGER), "0x6080604052ee060000"); })).toContain("fund: exclusionLedger()");
+  });
+  test("fails: matchBandBps 0, a shifted step param (an upgrade without the Rebalancer migration)", async () => {
+    expect(await failing((f) => { f.chain.matchBandBps = 0n; })).toContain("matchBandBps is set");
+    expect(await failing((f) => { f.chain.stepParamsOverride = { maxOverrun: 21600n }; })).toContain("maxOverrun 21600 != REBALANCER_MAX_OVERRUN 604800");
+    expect(await failing((f) => { f.chain.stepParamsOverride = { stepInterval: 0 }; })).toContain("stepInterval 0 is under 1800");
   });
 });

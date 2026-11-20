@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Collector } from "./collector.ts";
-import { ERC1967_PROXY_ARTIFACT, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact, verifyLinkedLibraries } from "./codehash.ts";
+import { ERC1967_PROXY_ARTIFACT, compareCode, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact, verifyLinkedLibraries } from "./codehash.ts";
 import { ADMIN_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT, SAFE_GUARD_SLOT, SAFE_SENTINEL, SIG_ROLE_GRANTED, Z32, ZERO } from "./constants.ts";
 import { scanLogs, topicToAddress } from "./logs.ts";
 import { isAddress, lc } from "./manifests.ts";
@@ -348,6 +348,24 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   await verifyExclusiveRole(c, chain, "fund: REBALANCER_ROLE held exclusively by the rebalancer", addr.fund, FUND_ROLES.REBALANCER, [addr.rebalancer], opts, scanCtx);
   await verifyExclusiveRole(c, chain, "fund: FLOW_ROLE held exclusively by the queue", addr.fund, FUND_ROLES.FLOW, [addr.queue], opts, scanCtx);
   await c.runEq("fund: flowQueue() is the queue", async () => lc((await chain.read(addr.fund, "function flowQueue() view returns (address)")) as string), lc(addr.queue));
+  // v0.9.0 (contracts 588a68598): a fresh fund writes rebalancer() in bindRebalanceRoles; a fund upgraded in place from 0.8.0 writes it in migrateV090. Either way it is the Rebalancer proxy.
+  await c.runEq("fund: rebalancer() is the rebalancer", async () => lc((await chain.read(addr.fund, "function rebalancer() view returns (address)")) as string), lc(addr.rebalancer));
+  // The exclusion ledger: the fund's own (a fresh fund creates it at initialize, the v0.9.0 migration replaces it; fund-upgrade-record.ts re-records fund.json's exclusion_ledger).
+  // It must be the manifest's, run the FundExclusionLedger code of the fund's build (the upgrade build once the fund is upgraded) and be bound to this fund and USDC.
+  await c.run("fund: exclusionLedger() is the manifest's exclusion_ledger, FundExclusionLedger of the fund's build, bound to the fund and USDC", async () => {
+    const ledger = String(await chain.read(addr.fund, "function exclusionLedger() view returns (address)")) as Address;
+    const recorded = files.fund.exclusion_ledger;
+    if (!isAddress(ledger) || lc(ledger) === ZERO) return { ok: false, detail: `exclusionLedger() is ${ledger}` };
+    if (typeof recorded !== "string" || lc(recorded) !== lc(ledger)) return { ok: false, detail: `exclusionLedger() is ${ledger}, fund.json exclusion_ledger is ${String(recorded)}` };
+    const built = fundProxyBuildDir("fund", opts);
+    const art = tryLoadArtifact(built, "FundExclusionLedger");
+    if (!art) return { ok: false, detail: `${built} has no FundExclusionLedger artifact` };
+    const code = compareCode(await chain.getCode(ledger), art);
+    const vault = lc(String(await chain.read(ledger, "function VAULT() view returns (address)")));
+    const usdc = lc(String(await chain.read(ledger, "function USDC() view returns (address)")));
+    const ok = code.ok && vault === lc(addr.fund) && usdc === lc(USDC_ADDRESS);
+    return { ok, detail: `ledger ${ledger}: code ${code.detail}; VAULT ${vault}; USDC ${usdc}` };
+  });
   for (const r of ["GOVERNANCE", "REBALANCER", "FLOW"] as const) await c.runEq(`fund: ${r}_ROLE not held by the deployer`, () => hasRole(chain, addr.fund, FUND_ROLES[r], D), false);
   await c.runEq("rebalancer: fund() is the fund", async () => lc((await chain.read(addr.rebalancer, "function fund() view returns (address)")) as string), lc(addr.fund));
   await c.runEq("governance: fund() is the fund", async () => lc((await chain.read(addr.governance, "function fund() view returns (address)")) as string), lc(addr.fund));
@@ -421,6 +439,23 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
       String(f.params[sheetName]),
     );
   }
+
+  // v0.9.0: the queue's matchBandBps has no sheet key; 0 skips every match (audit hazard 8), so it must be set (a fresh queue's initialize or the migration writes it).
+  await c.run("queue: flowParams().matchBandBps is set (non-zero)", async () => {
+    let fp: Record<string, bigint | number>;
+    try { fp = (await chain.read(addr.queue, FLOW_PARAMS_SIG)) as Record<string, bigint | number>; }
+    catch (e) { if (isRpcFailure(e)) throw e; return { ok: true, detail: "flowParams() has the pre-0.9.0 layout (no matchBandBps): nothing to check" }; }
+    return { ok: BigInt(fp.matchBandBps ?? 0) > 0n, detail: `matchBandBps ${String(fp.matchBandBps)}` };
+  });
+  // The Rebalancer's step parameters against the sheet (DeployRebalancer.s.sol writes them; the v0.9.0 Rebalancer migration re-reads them from the 0.8.0 slot layout,
+  // which shifted when keeperGrace was dropped). stepInterval has no sheet key: the deploy sets max(30 minutes, the fund's longest TWAP window), so it must be at least 1800.
+  await c.run("rebalancer: stepParams() equals the sheet", async () => {
+    const sp = (await chain.read(addr.rebalancer, "function stepParams() view returns ((uint32 stepInterval, uint32 maxOverrun, uint16 maxStepCostBps, uint16 toleranceBps, uint128 minStepUsdc))")) as Record<string, bigint | number>;
+    const fields = [["maxOverrun", "REBALANCER_MAX_OVERRUN"], ["maxStepCostBps", "REBALANCER_MAX_STEP_COST_BPS"], ["toleranceBps", "REBALANCER_TOLERANCE_BPS"], ["minStepUsdc", "REBALANCER_MIN_STEP_USDC"]] as const;
+    const diff = fields.filter(([k, n]) => n in f.params && BigInt(sp[k] ?? -1) !== f.params[n]).map(([k, n]) => `${k} ${String(sp[k])} != ${n} ${String(f.params[n])}`);
+    if (BigInt(sp.stepInterval ?? 0) < 1800n) diff.push(`stepInterval ${String(sp.stepInterval)} is under 1800`);
+    return { ok: diff.length === 0, detail: diff.length ? diff.join("; ") : `stepInterval ${String(sp.stepInterval)}, ${fields.filter(([, n]) => n in f.params).length} sheet fields equal` };
+  });
 
   // ---- the two levers the initializers set (Rebalancer.initialize: stepDepthBps; FlowQueue.initialize: FlowLevers.basketCallBps), against the sheet
   await c.runEq("rebalancer: stepDepthBps() equals the sheet", async () => String(await chain.read(addr.rebalancer, "function stepDepthBps() view returns (uint16)")), String(f.params.REBALANCER_STEP_DEPTH_BPS));

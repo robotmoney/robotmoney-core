@@ -24,6 +24,7 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProblem } from "./floors.ts";
+import { fundMigrationRecordProblems } from "./fund-migrations.ts";
 import { DEPLOYMENT_KINDS, TWIN_CHAIN_ID, kindLabel, type DeploymentKind } from "./chains.ts";
 import { HISTORICAL_REGISTER_ROW, buildHistoricalRegisterCalls } from "./committee-register.ts";
 import { REGISTER_ROW, buildRegisterCall } from "./submitter-register.ts";
@@ -403,6 +404,11 @@ export function governedUpgradeProblems(ev: any, floor: number = MAINNET_DELAY_F
       if (!fields.some((v) => typeof v === "string" && lc(v) === lc(String(e?.to_implementation ?? "")))) bad(`${w}: manifest_fields does not re-record the implementation field to ${e?.to_implementation}`);
       if (typeof e?.build !== "string" || e.build === "") bad(`${w}: build names no core checkout`);
       migrationEntryProblems(e, w, ev?.governance?.address, bad);
+      // v0.9.0 (contracts 588a68598): a fund-system upgrade may carry its proxy's own migrateV090 as the upgradeToAndCall data (fund-migrations.ts allowlist).
+      if (e?.fund_migration !== undefined) {
+        if (e?.migration !== undefined) bad(`${w}: an entry carries both a typed migration and a fund_migration`);
+        for (const x of fundMigrationRecordProblems(e.fund_migration, String(e?.proxy_name))) bad(`${w}: ${x}`);
+      }
     }
   }
   return p;
@@ -1023,6 +1029,10 @@ export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader, 
       if (!Object.prototype.hasOwnProperty.call(UPGRADE_MIGRATIONS, name) || !ADDR.test(e.migration?.releaser ?? "")) continue; // the offline check already named it
       data = pinnedMigrationData(name, e.migration.releaser);
     }
+    if (e.fund_migration !== undefined) {
+      if (fundMigrationRecordProblems(e.fund_migration, String(e.proxy_name)).length) continue; // the offline check already named it
+      data = e.fund_migration.data;
+    }
     const schedPre = prePin(e.schedule_block_timestamp);
     if (schedPre && (!TX.test(e.execute_tx ?? "") || prePin(e.execute_block_timestamp))) { notes.push(`${w}: ${BEFORE_PIN_NOTE}`); continue; }
     if (schedPre) {
@@ -1049,7 +1059,7 @@ export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader, 
     if (lc(s.target) !== lc(e.proxy)) bad(`${w}: CallScheduled target ${s.target} is not the proxy ${e.proxy}`);
     if (lc(s.data) !== lc(want)) {
       const got = decodeUpgradeCall(s.data as Hex);
-      bad(`${w}: CallScheduled calldata is not upgradeToAndCall(${e.to_implementation}, ${e.migration ? `${e.migration.function}(${e.migration.releaser})` : '""'}): ${got ? `it schedules upgradeToAndCall(${got.implementation}, ${got.data === "0x" ? '""' : got.data})` : "it is not an upgradeToAndCall"}`);
+      bad(`${w}: CallScheduled calldata is not upgradeToAndCall(${e.to_implementation}, ${e.migration ? `${e.migration.function}(${e.migration.releaser})` : e.fund_migration ? `${e.fund_migration.signature} [${e.fund_migration.args.join(", ")}]` : '""'}): ${got ? `it schedules upgradeToAndCall(${got.implementation}, ${got.data === "0x" ? '""' : got.data})` : "it is not an upgradeToAndCall"}`);
     }
     if (typeof e.operation_id === "string" && lc(e.operation_id) !== lc(s.id)) bad(`${w}: operation_id ${e.operation_id} is not the scheduled operation ${s.id}`);
     if (TX.test(e.execute_tx ?? "")) {

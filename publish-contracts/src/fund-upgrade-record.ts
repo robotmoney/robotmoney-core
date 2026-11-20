@@ -6,7 +6,10 @@
 //   bun publish-contracts/src/fund-upgrade-record.ts upgrade  --evidence DIR --manifest-dir DIR --rpc URL --proxy NAME --upgrade-build DIR --schedule-bundle F --execute-bundle F
 //   bun publish-contracts/src/fund-upgrade-record.ts executor --evidence DIR --manifest-dir DIR --rpc URL --schedule-bundle F --execute-bundle F
 //
-// upgrade: the schedule bundle is ONE timelock call, schedule(proxy, 0, upgradeToAndCall(new, ""), ...), executed by the Safe; the execute bundle is the execute of that same
+// upgrade: the schedule bundle is ONE timelock call, schedule(proxy, 0, upgradeToAndCall(new, data), predecessor, salt, delay), executed by the Safe. `data` is "" or, from v0.9.0, the
+//   proxy's own migrateV090 (fund-migrations.ts: rebalancer migrateV090(), fund migrateV090(the rebalancer proxy), queue migrateV090(cancelBuffer, maxPause, matchBandBps)); any
+//   other data is refused. The operation id is recomputed from the scheduled call (real data, predecessor, salt). A non-zero predecessor (the runbook chains rebalancer -> fund ->
+//   queue) must read done. A fund migration replaces the exclusion ledger: fund.json's exclusion_ledger is re-recorded from fund.exclusionLedger(). The execute bundle is the execute of that same
 //   operation, executed by the Safe; the timelock reads the operation done; the proxy's ERC-1967 slot reads the new implementation; the run manifest's implementation_deploys
 //   records that implementation from that --upgrade-build (deploy-implementation --system fund). Then the proxy's stage manifest re-records its implementation field (and
 //   fund-timelock.json its code hash), and the run manifest gains a `proxy_upgrades` entry in the shape `govern --row upgrade-proxy` writes, with the build: the fund verifier
@@ -17,7 +20,8 @@
 // Nothing is sent. Every check runs before any file is written; a rerun with the same bundles rewrites the same entry. Exit 1: a check failed (nothing written). Exit 2: usage.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createPublicClient, decodeFunctionData, encodeFunctionData, getAddress, http, keccak256, parseAbi, toHex, type Address, type Hex } from "viem";
+import { createPublicClient, decodeFunctionData, encodeAbiParameters, encodeFunctionData, getAddress, http, keccak256, parseAbi, parseAbiParameters, toHex, type Address, type Hex } from "viem";
+import { decodeFundMigration } from "./fund-migrations.ts";
 import { loadRunManifest, saveRunManifest, type RunManifest } from "./runner.ts";
 import { loadStageTable, manifestBase, scopeTable } from "./stage-table.ts";
 import { UPGRADE_ROW, codeHashOf, rerecordProxyManifest } from "./upgrade-rows.ts";
@@ -49,7 +53,17 @@ export interface ChainFacts {
   isOperationDone: (timelock: Address, id: Hex) => Promise<boolean>;
   hasRole: (at: Address, role: Hex, who: Address) => Promise<boolean>;
   tx: (hash: Hex) => Promise<{ status: "success" | "reverted"; timestamp: number }>;
+  /** The fund's exclusionLedger() now (read after a fund migration, which replaces it). */
+  exclusionLedger: (fund: Address) => Promise<Address>;
 }
+
+/** OpenZeppelin TimelockController.hashOperation: the id of one call. */
+export const hashOperation = (target: Address, value: bigint, data: Hex, predecessor: Hex, salt: Hex): Hex =>
+  keccak256(encodeAbiParameters(parseAbiParameters("address, uint256, bytes, bytes32, bytes32"), [target, value, data, predecessor, salt]));
+/** OpenZeppelin TimelockController.hashOperationBatch: the id of a batch. */
+export const hashOperationBatch = (targets: readonly Address[], values: readonly bigint[], payloads: readonly Hex[], predecessor: Hex, salt: Hex): Hex =>
+  keccak256(encodeAbiParameters(parseAbiParameters("address[], uint256[], bytes[], bytes32, bytes32"), [targets, values, payloads, predecessor, salt]));
+const ZERO32 = `0x${"00".repeat(32)}` as Hex;
 
 /** PURE. Why a pair of Safe bundles is not one executed timelock operation with these calls; the decoded calls when it is. */
 export function operationProblems(schedule: SafeTxBundle, execute: SafeTxBundle, timelock: Address, safe: Address, batch: boolean): { problems: string[]; calls: { target: Address; value: bigint; data: Hex }[]; id?: Hex; predecessor?: Hex } {
@@ -64,15 +78,21 @@ export function operationProblems(schedule: SafeTxBundle, execute: SafeTxBundle,
   if (!schedule.timelock_operation_id || lc(schedule.timelock_operation_id) !== lc(execute.timelock_operation_id ?? "")) p.push(`the bundles name different timelock operations (${schedule.timelock_operation_id}, ${execute.timelock_operation_id})`);
   let calls: { target: Address; value: bigint; data: Hex }[] = [];
   let predecessor: Hex | undefined;
+  let computed: Hex | undefined;
   try {
     const d = decodeFunctionData({ abi: TIMELOCK_ABI, data: schedule.data });
-    if (!batch && d.functionName === "schedule") { const [t, v, data, pred] = d.args as unknown as [Address, bigint, Hex, Hex]; calls = [{ target: t, value: v, data }]; predecessor = pred; }
-    else if (batch && d.functionName === "scheduleBatch") { const [ts, vs, ds, pred] = d.args as unknown as [readonly Address[], readonly bigint[], readonly Hex[], Hex]; calls = ts.map((t, i) => ({ target: t, value: vs[i]!, data: ds[i]! })); predecessor = pred; }
+    // The operation id is computed from the scheduled calls with their real data, predecessor and salt, and must be the id the bundles name.
+    if (!batch && d.functionName === "schedule") { const [t, v, data, pred, salt] = d.args as unknown as [Address, bigint, Hex, Hex, Hex]; calls = [{ target: t, value: v, data }]; predecessor = pred; computed = hashOperation(t, v, data, pred, salt); }
+    else if (batch && d.functionName === "scheduleBatch") { const [ts, vs, ds, pred, salt] = d.args as unknown as [readonly Address[], readonly bigint[], readonly Hex[], Hex, Hex]; calls = ts.map((t, i) => ({ target: t, value: vs[i]!, data: ds[i]! })); predecessor = pred; computed = hashOperationBatch(ts, vs, ds, pred, salt); }
     else p.push(`the schedule bundle's calldata is ${d.functionName}, not ${want[0]}`);
     const e = decodeFunctionData({ abi: TIMELOCK_ABI, data: execute.data });
     const eCalls = e.functionName === "execute" ? [{ target: e.args[0] as Address, value: e.args[1] as bigint, data: e.args[2] as Hex }]
       : e.functionName === "executeBatch" ? (e.args[0] as readonly Address[]).map((t, i) => ({ target: t, value: (e.args[1] as readonly bigint[])[i]!, data: (e.args[2] as readonly Hex[])[i]! })) : [];
     if (eCalls.length !== calls.length || eCalls.some((c, i) => lc(c.target) !== lc(calls[i]!.target) || c.value !== calls[i]!.value || lc(c.data) !== lc(calls[i]!.data))) p.push("the execute bundle does not execute the calls the schedule bundle scheduled");
+    const ePred = e.functionName === "execute" ? e.args[3] : e.functionName === "executeBatch" ? e.args[3] : undefined, eSalt = e.functionName === "execute" ? e.args[4] : e.functionName === "executeBatch" ? e.args[4] : undefined;
+    const sSalt = (d.args as readonly unknown[])[4];
+    if (ePred !== undefined && (lc(String(ePred)) !== lc(predecessor ?? "") || lc(String(eSalt)) !== lc(String(sSalt)))) p.push("the execute bundle's predecessor or salt is not the schedule's");
+    if (computed && schedule.timelock_operation_id && lc(computed) !== lc(schedule.timelock_operation_id)) p.push(`the bundles name operation ${schedule.timelock_operation_id}, but the scheduled calls hash to ${computed}`);
   } catch (x) { p.push(`a bundle's calldata does not decode as a timelock call: ${(x as Error).message}`); }
   return { problems: p, calls, ...(schedule.timelock_operation_id ? { id: schedule.timelock_operation_id } : {}), ...(predecessor ? { predecessor } : {}) };
 }
@@ -108,6 +128,7 @@ export async function recordUpgrade(i: RecordInput & { proxy: string; upgradeBui
   const op = operationProblems(i.scheduleBundle, i.executeBundle, timelock, safe, false);
   p.push(...op.problems);
   let to: Address | undefined;
+  let migration: ReturnType<typeof decodeFundMigration>["record"];
   if (op.calls.length === 1) {
     const c = op.calls[0]!;
     if (lc(c.target) !== lc(proxy)) p.push(`the operation calls ${c.target}, not the ${spec.name} proxy ${proxy}`);
@@ -115,11 +136,22 @@ export async function recordUpgrade(i: RecordInput & { proxy: string; upgradeBui
     try {
       const d = decodeFunctionData({ abi: UPGRADE_ABI, data: c.data });
       to = getAddress(d.args[0]);
-      if (d.args[1] !== "0x") p.push(`the upgrade carries migration data ${d.args[1]}: a fund-system upgrade here is upgradeToAndCall(new, "") only`);
+      // v0.9.0 (contracts 588a68598): the data is empty or the proxy's own migrateV090 (fund-migrations.ts). Any other calldata is refused.
+      const dec = decodeFundMigration(spec.name, d.args[1] as Hex);
+      if (dec.problem) p.push(dec.problem);
+      migration = dec.record;
     } catch { p.push("the operation's call is not upgradeToAndCall(address,bytes)"); }
   }
-  if (op.predecessor && op.predecessor !== `0x${"00".repeat(32)}`) p.push(`the upgrade names a predecessor ${op.predecessor}: it is one operation of its own`);
+  // The fund migration's one argument is the Rebalancer proxy (FundMigrateLib requires it hold REBALANCER_ROLE and run 0.9.0).
+  if (migration && spec.name === "fund") {
+    const rp = join(i.manifestDir, "rebalancer.json");
+    const reb = existsSync(rp) ? String(readJson(rp).rebalancer ?? "") : "";
+    if (lc(migration.args[0] ?? "") !== lc(reb)) p.push(`the fund migration names the rebalancer ${migration.args[0]}, not the rebalancer proxy ${reb || "(rebalancer.json names none)"}`);
+  }
+  // A predecessor chains the operations (rebalancer -> fund -> queue): it must be an operation the timelock reads done.
+  const predecessor = op.predecessor && lc(op.predecessor) !== lc(ZERO32) ? op.predecessor : undefined;
   if (p.length || !to || !op.id) return { problems: p };
+  if (predecessor && !(await chain.isOperationDone(timelock, predecessor))) p.push(`the upgrade's predecessor ${predecessor} is not an operation the timelock reads done`);
   const deploys = ((manifest as { implementation_deploys?: Record<string, unknown>[] }).implementation_deploys ?? []).filter((e) => e.system === "fund" && e.proxy_name === spec.name && lc(String(e.implementation)) === lc(to!));
   if (!deploys.some((e) => e.build === i.upgradeBuild)) p.push(`the run manifest records no deploy-implementation --system fund of ${to} for ${spec.name} from the build ${i.upgradeBuild}`);
   const from = getAddress(String(m[spec.implementationField]));
@@ -130,13 +162,25 @@ export async function recordUpgrade(i: RecordInput & { proxy: string; upgradeBui
   const sched = await chain.tx(i.scheduleBundle.executed!.tx_hash), exec = await chain.tx(i.executeBundle.executed!.tx_hash);
   if (sched.status !== "success") p.push("the schedule transaction did not succeed on chain");
   if (exec.status !== "success") p.push("the execute transaction did not succeed on chain");
+  // The fund migration replaces the exclusion ledger (ExclusionLedgerReplaced): the manifest copy's exclusion_ledger is re-recorded from the chain.
+  let ledger: { from: string | null; to: Address } | undefined;
+  if (migration && spec.name === "fund") {
+    const now = getAddress(await chain.exclusionLedger(proxy));
+    const was = typeof m.exclusion_ledger === "string" ? m.exclusion_ledger : null;
+    if (lc(now) === lc(ZERO)) p.push("the fund reads no exclusionLedger() after its migration");
+    else if (was && lc(was) === lc(now)) p.push(`the fund's exclusionLedger() is still ${now}: the migration did not replace it`);
+    else if ((await chain.code(now)) === "0x") p.push(`the fund's new exclusion ledger ${now} has no code`);
+    ledger = { from: was, to: now };
+  }
   if (p.length) return { problems: p };
   const toHash = codeHashOf(await chain.code(to))!, fromHash = codeHashOf(await chain.code(from)), proxyHash = codeHashOf(await chain.code(proxy))!;
   const fields = rerecordProxyManifest(stageManifest, spec, to, toHash, proxyHash);
+  if (ledger) { const fm = readJson(stageManifest); fm.exclusion_ledger = ledger.to; writeJson(stageManifest, fm); }
   if (tm.code_hashes && typeof tm.code_hashes === "object" && spec.implementationField in tm.code_hashes) { tm.code_hashes[spec.implementationField] = toHash; writeJson(tmPath, tm); }
   const entry = {
     step: UPGRADE_ROW, system: "fund", via: "publish-contracts/src/safe/cli.ts", proxy_name: spec.name, proxy, from_implementation: from, to_implementation: to, from_code_hash: fromHash, to_code_hash: toHash,
-    build: i.upgradeBuild, timelock, manifest_fields: fields, operation_id: op.id,
+    build: i.upgradeBuild, timelock, manifest_fields: ledger ? { ...fields, exclusion_ledger: ledger.to } : fields, operation_id: op.id, predecessor: predecessor ?? null,
+    ...(migration ? { fund_migration: migration } : {}), ...(ledger ? { exclusion_ledger_replaced: ledger } : {}),
     schedule_tx: i.scheduleBundle.executed!.tx_hash, schedule_status: 1, schedule_block_timestamp: sched.timestamp, schedule_safe_tx_hash: i.scheduleBundle.safe_tx_hash,
     execute_tx: i.executeBundle.executed!.tx_hash, execute_status: 1, execute_block_timestamp: exec.timestamp, execute_safe_tx_hash: i.executeBundle.safe_tx_hash,
   };
@@ -195,6 +239,7 @@ export function viemFacts(rpc: string): ChainFacts {
     isOperationDone: async (tl, id) => (await c.readContract({ address: tl, abi: TIMELOCK_ABI, functionName: "isOperationDone", args: [id] })) as boolean,
     hasRole: async (at, role, who) => (await c.readContract({ address: at, abi: TIMELOCK_ABI, functionName: "hasRole", args: [role, who] })) as boolean,
     tx: async (hash) => { const r = await c.getTransactionReceipt({ hash }); const b = await c.getBlock({ blockNumber: r.blockNumber }); return { status: r.status, timestamp: Number(b.timestamp) }; },
+    exclusionLedger: async (fund) => getAddress((await c.readContract({ address: fund, abi: parseAbi(["function exclusionLedger() view returns (address)"]), functionName: "exclusionLedger" })) as string),
   };
 }
 

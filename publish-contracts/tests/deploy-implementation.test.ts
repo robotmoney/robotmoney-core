@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { keccak256, type Address, type Hex } from "viem";
-import { DEPLOY_IMPL_VERB, FUND_SECOND_IMPLEMENTATIONS, implementationDeploysOf, linkCreationCode, realDeployImplApi, runDeployImplementation, type DeployImplApi } from "../src/deploy-implementation.ts";
+import { DEPLOY_IMPL_VERB, FUND_SECOND_IMPLEMENTATIONS, implementationDeploysOf, linkCreationCode, realDeployImplApi, runDeployImplementation, fundMigrationExpr, type DeployImplApi } from "../src/deploy-implementation.ts";
 import { loadRunManifest, newManifest, saveRunManifest, type RunContext } from "../src/runner.ts";
 import { getStageTable, peekStageState, restoreStageState, useStageTable } from "../src/stages.ts";
 import { loadStageTable, scopeTable } from "../src/stage-table.ts";
@@ -297,7 +297,7 @@ describe("issue 1927: deploy-implementation against the live v0.5.0 build", () =
     expect(specs.find((x) => x.name === "vault[rmAGENT]")).toMatchObject({ stage: "agent" });
     const pins = t.upgradeAuthority!.layoutPins;
     expect(layoutId(V050, specs.find((x) => x.name === "receipt")!.layout, pins)).toBe("0xe2ca7434dbf653b43914d8856a31a0c4f5523292eae0a3f514d8dee68bb221a0");
-    expect(layoutId(REPO, specs.find((x) => x.name === "receipt")!.layout, pins)).toBe("0x35a244a88c20f3fafb46c41caa6e049660d60ec6ccbc996c8853bf2b210026e6");
+    expect(layoutId(REPO, specs.find((x) => x.name === "receipt")!.layout, pins)).toBe("0x4eab8eef1c73330471c33c9cf37331c1747daaf61ad51df76156eff6b941ca09");
     expect(layoutId(V050, specs.find((x) => x.name === "gateway")!.layout, pins)).toBe(layoutId(REPO, specs.find((x) => x.name === "gateway")!.layout, pins));
   });
 
@@ -428,6 +428,30 @@ describe("Deploy 4: deploy-implementation --system fund", () => {
     expect(w.s.creates.length).toBe(1);
     expect(w.s.creates[0]!).toContain(LIVE_TAIL);
     expect(res.entry).toMatchObject({ system: "fund", contract: "Rebalancer" });
+    // the stub build's Rebalancer has no migrateV090 in its ABI: the data stays 0x
+    expect(res.next).toContain(`upgradeToAndCall(address,bytes)" ${NEW} 0x)`);
+  });
+
+  test("v0.9.0: a build whose Rebalancer has migrateV090 prints it as the upgrade data, with the predecessor chain; the fund and queue print their arguments or placeholders", async () => {
+    const w = fundWorld();
+    const art = join(w.ctx.coreDir, "out", "Rebalancer.sol", "Rebalancer.json");
+    const j = JSON.parse(readFileSync(art, "utf8"));
+    j.abi = [{ type: "function", name: "migrateV090", inputs: [], outputs: [], stateMutability: "nonpayable" }];
+    writeFileSync(art, JSON.stringify(j));
+    const res = await w.run();
+    expect(res.entry.contract).toBe("Rebalancer");
+    expect(res.next).toContain(`upgradeToAndCall(address,bytes)" ${NEW} $(cast calldata "migrateV090()"))`);
+    expect(res.next).toContain("--predecessor <the operation id of the previous upgrade in the order rebalancer -> fund -> queue");
+    const fundArt = join(w.ctx.coreDir, "out", "RobotMoneyFund.sol");
+    mkdirSync(fundArt, { recursive: true });
+    writeFileSync(join(fundArt, "RobotMoneyFund.json"), JSON.stringify({ abi: [{ type: "function", name: "migrateV090", inputs: [{ type: "address" }] }] }));
+    expect(fundMigrationExpr(join(w.ctx.coreDir, "out"), "fund", "RobotMoneyFund", { rebalancer_: RB_PROXY })).toBe(`$(cast calldata "migrateV090(address)" ${RB_PROXY})`);
+    const qArt = join(w.ctx.coreDir, "out", "FlowQueue.sol");
+    mkdirSync(qArt, { recursive: true });
+    writeFileSync(join(qArt, "FlowQueue.json"), JSON.stringify({ abi: [{ type: "function", name: "migrateV090", inputs: [] }] }));
+    expect(fundMigrationExpr(join(w.ctx.coreDir, "out"), "queue", "FlowQueue", { FLOW_CANCEL_BUFFER: "900", FLOW_MAX_PAUSE: "259200" })).toBe(`$(cast calldata "migrateV090(uint32,uint32,uint16)" 900 259200 <FLOW_MATCH_BAND_BPS>)`);
+    // RebalancerV2 (test-only) is no migration target
+    expect(fundMigrationExpr(join(w.ctx.coreDir, "out"), "rebalancer", "RebalancerV2", {})).toBeUndefined();
   });
 
   test("a subsequent fund upgrade checks layout against that proxy's last build", async () => {

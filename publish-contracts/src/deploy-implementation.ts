@@ -39,6 +39,7 @@ import { viemReader } from "./verify/reader.ts";
 import { layoutId, proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
 import { proxyBuildDirsOf, UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
 import { upgradeLibraries } from "./upgrade-libraries.ts";
+import { FUND_MIGRATIONS, FUND_MIGRATION_ORDER } from "./fund-migrations.ts";
 
 export const DEPLOY_IMPL_VERB = "deploy-implementation";
 
@@ -96,8 +97,25 @@ export function upgradeCommand(ctx: Pick<RunContext, "chainId" | "coreSha" | "co
 }
 
 /** Deploy 4: the fund system has no govern row. Its upgrade is ONE call the fund Safe schedules on the fund-system timelock with the Safe tool, then executes after the delay. */
-export function fundUpgradeCommand(ctx: Pick<RunContext, "chainId">, d: Pick<ImplementationDeploy, "proxy" | "implementation">): string {
-  return `bun publish-contracts/src/safe/cli.ts propose --action schedule --chain-id ${ctx.chainId} --target ${d.proxy} --data "$(cast calldata "upgradeToAndCall(address,bytes)" ${d.implementation} 0x)" (plus --rpc, --safe <the fund Safe>, --timelock <the fund-system timelock>, --salt and --out), then sign with two owners and execute; after the delay the same with --action execute`;
+export function fundUpgradeCommand(ctx: Pick<RunContext, "chainId">, d: Pick<ImplementationDeploy, "proxy" | "implementation">, migration?: string): string {
+  const data = migration ?? "0x";
+  const chain = migration ? ` --predecessor <the operation id of the previous upgrade in the order ${FUND_MIGRATION_ORDER.join(" -> ")}, or omit it for the first>` : "";
+  return `bun publish-contracts/src/safe/cli.ts propose --action schedule --chain-id ${ctx.chainId} --target ${d.proxy} --data "$(cast calldata "upgradeToAndCall(address,bytes)" ${d.implementation} ${data})"${chain} (plus --rpc, --safe <the fund Safe>, --timelock <the fund-system timelock>, --salt and --out), then sign with two owners and execute; after the delay the same with --action execute (same --salt${migration ? " and --predecessor" : ""})`;
+}
+
+/**
+ * v0.9.0 (contracts 588a68598): the `cast calldata` expression of `proxy`'s migrateV090 when the build's `contract` has one (its ABI names migrateV090), else undefined
+ * (the upgrade data stays 0x). Arguments come from `known` (the Rebalancer proxy for the fund; FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE, FLOW_MATCH_BAND_BPS from the sheet for the
+ * queue); a missing one is printed as a <NAME> placeholder the operator fills in.
+ */
+export function fundMigrationExpr(outDir: string, proxy: string, contract: string, known: Record<string, string | undefined>): string | undefined {
+  const def = FUND_MIGRATIONS[proxy];
+  if (!def || def.contract !== contract) return undefined;
+  let abi: unknown[] = [];
+  try { abi = (artifactJson(outDir, contract).abi ?? []) as unknown[]; } catch { return undefined; }
+  if (!abi.some((x: any) => x?.type === "function" && x?.name === "migrateV090")) return undefined;
+  const args = def.args.map((a) => known[a.sheet ?? a.name] ?? `<${a.sheet ?? (a.name === "rebalancer_" ? "REBALANCER_PROXY" : a.name)}>`);
+  return `$(cast calldata "${def.signature}"${args.map((x) => ` ${x}`).join("")})`;
 }
 
 /**
@@ -207,7 +225,14 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
     else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(layoutBase, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract, libraryRenames(build)).map((p) => `${contract}: ${p}`));
   }
   if (layout.length) refuse(`the storage layout gate refuses the build ${build}${contract !== spec.contract ? ` (${contract})` : ""}: ${layout.join("; ")}`, { layout });
-  const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e) : upgradeCommand(ctx, e));
+  // v0.9.0: the fund-system next step carries the proxy's migrateV090 when the build has one (fund-migrations.ts), with the arguments this run knows.
+  const migrationKnown = (): Record<string, string | undefined> => {
+    const params = (ctx.sheet as { fund?: { params?: Record<string, bigint> } } | undefined)?.fund?.params ?? {};
+    const rebPath = join(manifestDir(ctx), "rebalancer.json");
+    const reb = existsSync(rebPath) ? String(JSON.parse(readFileSync(rebPath, "utf8")).rebalancer ?? "") : "";
+    return { rebalancer_: /^0x[0-9a-fA-F]{40}$/.test(reb) ? reb : undefined, ...Object.fromEntries(["FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS"].map((k) => [k, params[k] === undefined ? undefined : String(params[k])])) };
+  };
+  const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e, fundMigrationExpr(outDir, spec.name, contract, migrationKnown())) : upgradeCommand(ctx, e));
 
   // A rerun with the same arguments: the recorded implementation, when it still has the build's code, is the answer.
   const list = implementationDeploysOf(manifest);
