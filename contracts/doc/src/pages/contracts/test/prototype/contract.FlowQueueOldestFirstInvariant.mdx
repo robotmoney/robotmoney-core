@@ -5,7 +5,7 @@ description: "Step 3 finish plan §3.1 item 2: \"the oldest fillable request alw
 
 # FlowQueueOldestFirstInvariant
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/686fb6eee37ebea70d3c4d3ec214392afc74d9f7/contracts/test/prototype/FlowQueueFixes.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3dbb97a08d99eefdaa58748abc6d0f614b475645/contracts/test/prototype/FlowQueueFixes.t.sol)
 
 **Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
 
@@ -92,6 +92,18 @@ bool internal keeperMidPass;
 
 ```solidity
 function setUp() public override;
+```
+
+<a id="test_replay_ci_44652468239"></a>
+
+### test_replay_ci_44652468239
+
+Regression: the CI counterexample of run 44652468239 (forge-prototype-tests). A scarce match in
+settlement 5 shared by size (D31) left older deposit 9 a remainder while newer deposit 10 took its share;
+the claim-order check now leaves match settlements out.
+
+```solidity
+function test_replay_ci_44652468239() public;
 ```
 
 <a id="_violation-string"></a>
@@ -346,12 +358,13 @@ function _checkPostRequest(
 | noRoom | `bool` |  |
 | logs | `Vm.Log[]` |  |
 
-<a id="_checkclaimorder-pre-uint256-uint256"></a>
+<a id="_checkclaimorder-pre-uint256-uint256-vm-log"></a>
 
 ### _checkClaimOrder
 
 ```solidity
-function _checkClaimOrder(Pre memory pre, uint256 minUsdc, uint256 minSh) internal;
+function _checkClaimOrder(Pre memory pre, uint256 minUsdc, uint256 minSh, Vm.Log[] memory logs)
+        internal;
 ```
 
 **Parameters**
@@ -361,6 +374,7 @@ function _checkClaimOrder(Pre memory pre, uint256 minUsdc, uint256 minSh) intern
 | pre | `Pre` |  |
 | minUsdc | `uint256` |  |
 | minSh | `uint256` |  |
+| logs | `Vm.Log[]` |  |
 
 <a id="_samecursor-pre"></a>
 
@@ -375,6 +389,30 @@ function _sameCursor(Pre memory pre) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | pre | `Pre` |  |
+
+<a id="_matchsettlement-vm-log-uint256"></a>
+
+### _matchSettlement
+
+```solidity
+function _matchSettlement(Vm.Log[] memory logs, uint256 settlementId)
+        internal
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| logs | `Vm.Log[]` |  |
+| settlementId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="_matchednow-vm-log"></a>
 
