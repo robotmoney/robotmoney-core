@@ -1761,6 +1761,14 @@ stays §8 because other documents cite it by number.
   behind governed UUPS proxies, and the fund checks both the proxy and the
   implementation code hash on every use (ADR-0019). See ADR-0014 and the
   contract upgradeability plan.
+- An in-place upgrade whose new code adds state that old entries need, or
+  changes a struct reachable from storage, runs a one-time migration as the
+  data of `upgradeToAndCall`. The migration runs once and only from the
+  upgrade timelock (ADR-0020).
+- The storage layout gate compares the members of every struct reachable
+  from proxy storage against the live release's baseline. A mid-struct change
+  passes only with an allowlist entry that names an existing migration
+  (`scripts/ci/storage-layout-migrations.json`, ADR-0020).
 
 ### Negative Invariants
 
