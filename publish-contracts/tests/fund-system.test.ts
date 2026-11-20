@@ -158,7 +158,7 @@ describe("Step 3f fund sheet fields and buildFundVerifySheet", () => {
 
   test("Step 3f optional uints parse into sheet.fund.params and reject non-uint or vaults sheets", () => {
     expect(FUND_STEP3F_UINT_NAMES).toEqual([
-      "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FUND_MIN_POOL_DEPTH_USDC",
+      "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS", "FUND_MIN_POOL_DEPTH_USDC",
       "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
     ]);
     const s = fundSheet(withExtras({

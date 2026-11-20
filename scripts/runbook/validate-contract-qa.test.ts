@@ -1001,7 +1001,7 @@ test("Step 3f OPS-03 and sheet model: scheduleBatch/executeBatch Safe actions an
   expect(model.safeActions?.has("scheduleBatch")).toBe(true);
   expect(model.safeActions?.has("executeBatch")).toBe(true);
   for (const n of [
-    "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FUND_MIN_POOL_DEPTH_USDC",
+    "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS", "FUND_MIN_POOL_DEPTH_USDC",
     "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
     "KEEPER_TYPE", "KEEPER_OWNERS", "KEEPER_BOT_KEYS", "RECEIPT_SUBMITTERS",
   ]) {
@@ -1091,8 +1091,8 @@ test("v0.9.0 fund-upgrade: every fund-flow rule holds for the upgrade flow, and 
   const direct = { ...r, steps: r.steps.map((s) => (s.id === "P9.82-upg-unpause-execute" ? { ...s, cmds: [...s.cmds, ["bash", "scripts/runbook/cast-send.sh", "{m:fund-timelock.timelock}", "executeBatch(address[],uint256[],bytes[],bytes32,bytes32)", "{cast}"]] } : s)) };
   expect(fundExecuteProblems(direct).join("\n")).toContain("P9.82-upg-unpause-execute calls the fund timelock's execute directly");
   // an execute signed by one owner: refused
-  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P3.81-upg-params-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
-  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P3.81-upg-params-execute proposes a fund timelock execute");
+  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P2.83-upg-queue-upgrade-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
+  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P2.83-upg-queue-upgrade-execute proposes a fund timelock execute");
   // the claim inside the hold: refused
   const early = { ...r, steps: r.steps.map((s) => (s.id === "P6.94-upg-claim-deposit" ? { ...s, notBefore: { afterStep: "P6.93-upg-settle-deposit", hours: 0.5 } } : s)) };
   expect(holdWaitProblems(early, sheet).join("\n")).toContain("P6.94-upg-claim-deposit claims deposit shares 0.5 h after");
@@ -1109,20 +1109,27 @@ test("v0.9.0 fund-upgrade: Deploy 4 in-place upgrade constraints (order, live re
   for (const target of ["twin", "rehearsal"]) {
     const ids = applicableSteps(r, target).map((s) => s.id);
     const at = (id: string) => { const i = ids.indexOf(id); expect(i, `${id} on ${target}`).toBeGreaterThanOrEqual(0); return i; };
-    // One timelock window (ADR-0019): the upgrades, the adapter batch and the params are scheduled together, chained by predecessor,
-    // and executed in that order.
-    expect(at("P2.81-upg-queue-upgrade-schedule")).toBeLessThan(at("P2.85-upg-adapter-schedule"));
-    expect(at("P2.85-upg-adapter-schedule")).toBeLessThan(at("P2.86-upg-params-schedule"));
-    expect(at("P2.86-upg-params-schedule")).toBeLessThan(at("P2.82-upg-fund-upgrade-execute"));
-    expect(at("P2.83-upg-queue-upgrade-execute")).toBeLessThan(at("P3.72-upg-adapter-execute"));
-    expect(at("P3.72-upg-adapter-execute")).toBeLessThan(at("P3.81-upg-params-execute"));
+    // One timelock window (ADR-0019, decision D4-19): the three upgrades with their migrations and the adapter batch are scheduled together,
+    // chained by predecessor (rebalancer -> fund -> queue -> adapter batch), and executed in that order. The simulation runs before any schedule.
+    const order = ["P1.84-upg-deploy-rebalancer-impl", "P1.85-upg-simulate-upgrades", "P2.87-upg-rebalancer-upgrade-schedule", "P2.80-upg-fund-upgrade-schedule", "P2.81-upg-queue-upgrade-schedule",
+      "P2.85-upg-adapter-schedule", "P2.88-upg-rebalancer-upgrade-execute", "P2.82-upg-fund-upgrade-execute", "P2.83-upg-queue-upgrade-execute", "P2.84-upg-after-upgrade", "P3.72-upg-adapter-execute", "P3.83-upg-verify"];
+    for (let k = 1; k < order.length; k++) expect(at(order[k - 1]!), `${order[k - 1]} before ${order[k]}`).toBeLessThan(at(order[k]!));
+    expect(at("P1.81-upg-deploy-fund-impl")).toBeLessThan(at("P1.85-upg-simulate-upgrades"));
+    expect(at("P1.82-upg-deploy-queue-impl")).toBeLessThan(at("P1.85-upg-simulate-upgrades"));
     expect(at("P0.85-upg-copy-record")).toBeLessThan(at("P1.80-upg-record-go"));
     expect(at("P9.83-upg-verify-final")).toBeGreaterThan(at("P9.82-upg-unpause-execute"));
   }
   const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
-  // one governed call on the queue; the executor is the Safe only already (v0.8.0-onevault-upgrade), so no timelock batch grants or revokes a role
-  expect(j("P2.86-upg-params-schedule")).toContain("--action schedule --target {state:target-upg-params} --data {state:data-upg-params} --salt {state:salt-upg-params} --predecessor {state:upg-adapter-op}");
-  expect(j("P2.85-upg-adapter-schedule")).toContain("--predecessor {state:upg-fund-op}");
+  // no governed setFlowParams (the queue migration writes the three new fields); the chain of predecessors; the executor is already the Safe only
+  expect(r.steps.some((x) => x.id === "P2.86-upg-params-schedule" || x.id === "P3.81-upg-params-execute")).toBe(false);
+  expect(j("P2.87-upg-rebalancer-upgrade-schedule")).not.toContain("--predecessor");
+  expect(j("P2.80-upg-fund-upgrade-schedule")).toContain("--predecessor {state:upg-rebalancer-op}");
+  expect(j("P2.81-upg-queue-upgrade-schedule")).toContain("--predecessor {state:upg-fund-op}");
+  expect(j("P2.85-upg-adapter-schedule")).toContain("--predecessor {state:upg-queue-op}");
+  expect(j("P2.82-upg-fund-upgrade-execute")).toContain("--predecessor {state:upg-rebalancer-op}");
+  expect(j("P2.83-upg-queue-upgrade-execute")).toContain("--predecessor {state:upg-fund-op}");
+  expect(j("P3.72-upg-adapter-execute")).toContain("--predecessor {state:upg-queue-op}");
+  for (const n of ["rebalancer", "fund", "queue"]) expect(j("P1.85-upg-simulate-upgrades")).toContain(`publish-contracts/src/fund-migrations.ts data --proxy ${n}`);
   expect(r.steps.some((s) => s.cmds.some((c) => c.join(" ").includes("grantRole(")))).toBe(false);
   // new v0.9.0 build is the upgrade build and the release records the rc tag for 8453
   expect(j("P0.92-upg-new-build")).toContain("{runDir}/v090");
@@ -1193,7 +1200,7 @@ test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in 
   expect(flowParamsTypes(sol).length).toBe(21);
   const sig = flowParamsSig(sol);
   expect(selectorOf(sig)).toBe("0xa0e15366");
-  // P2.86 builds the calldata with scripts/runbook/flow-params.ts, so its tuple is checked there as well as in the runbook
+  // P3.72 re-validates the live flowParams with scripts/runbook/flow-params.ts resubmit, so its tuple is checked there as well as in the runbook
   const runbook = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8") + readFileSync(join(ROOT, "scripts", "runbook", "flow-params.ts"), "utf8");
   const used = [...runbook.matchAll(/setFlowParams\(\(([^)]*)\)\)/g)].map((m) => `setFlowParams((${m[1]}))`);
   expect(used.length).toBeGreaterThan(0);
@@ -1216,13 +1223,13 @@ test("v0.9.0 header: the rc tag is release/v0.9.0-rc.N-rehearsal, which RC_TAG_P
   expect(rcTagHeaderProblems(planted, "v0.9.0", r.decisions, pattern).join("\n")).toContain("release/v0.9.0-onevault-rc.N-rehearsal does not match RC_TAG_PATTERN");
 });
 
-test("v0.9.0 done markers count only this run's build, and P2.84 and P3.81 read flowParams word by word through flow-params.ts (18 live words, 3 appended)", () => {
+test("v0.9.0 done markers count only this run's build (three proxies), and the setFlowParams re-validation reads the queue's own 21 words", () => {
   const r = upgradeRelease090();
   const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
   expect(j("P0.93-upg-done-markers")).toContain('--arg b "{runDir}/v090"');
   expect(j("P0.93-upg-done-markers")).toContain('.build == \\$b');
-  // the word-by-word reads live in scripts/runbook/flow-params.ts (flow-params.test.ts): 18 live words unchanged, 3 appended
-  expect(j("P2.84-upg-after-upgrade")).toContain("scripts/runbook/flow-params.ts same --queue {m:queue.queue} --before {state:upg-flow-params-before}");
-  expect(j("P3.81-upg-params-execute")).toContain("scripts/runbook/flow-params.ts check --queue {m:queue.queue} --before {state:upg-flow-params-before} --min-hold {sheet:FLOW_MIN_HOLD} --cancel-buffer 900 --max-pause 259200 --match-band-bps 10");
+  expect(j("P0.93-upg-done-markers")).toContain("done_upgrade rebalancer {m:rebalancer.rebalancer}");
+  expect(j("P3.72-upg-adapter-execute")).toContain("scripts/runbook/flow-params.ts resubmit --queue {m:queue.queue} --timelock {m:fund-timelock.timelock}");
+  expect(j("P2.84-upg-after-upgrade")).not.toContain("flow-params.ts");
   expect(r.steps.some((x) => x.id === "P3.82-upg-executor-execute" || x.id === "P3.85-upg-epoch-schedule")).toBe(false);
 });

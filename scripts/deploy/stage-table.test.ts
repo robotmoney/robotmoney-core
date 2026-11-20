@@ -110,7 +110,7 @@ describe("stage-table.json", () => {
     ]);
     for (const l of c2.filter((x) => !DELETED_LIBRARIES.has(x.name))) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
     const queueStage = table.stages.find((s) => s.name === "queue");
-    expect(queueStage?.optionalEnv).toEqual(["EXPECTED_CHAIN_ID", "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE"]);
+    expect(queueStage?.optionalEnv).toEqual(["EXPECTED_CHAIN_ID", "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS"]);
     // The sources of the proxied contracts each stage deploys. A library is linked when one of them imports from its file
     // (GovernedUpgrade is linked through the GovernedUUPS base, declared in the same file).
     const sources: Record<string, string[]> = {

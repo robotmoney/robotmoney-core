@@ -64,3 +64,36 @@ export function fundMigrationRecordProblems(rec: unknown, proxyName: string): st
   if (!Array.isArray(r.args) || r.args.map(String).join(",").toLowerCase() !== w.args.join(",").toLowerCase()) p.push(`fund_migration args ${JSON.stringify(r.args)} are not the decoded data (${w.args.join(", ")})`);
   return p;
 }
+
+/** PURE. The migration arguments of `proxy` from the run sheet's text and the Rebalancer proxy address (the fund's one argument). */
+export function migrationArgsFrom(proxy: string, sheetText: string, rebalancer: string | undefined): string[] {
+  const d = FUND_MIGRATIONS[proxy];
+  if (!d) throw new Error(`the ${proxy} proxy has no v0.9.0 migration (rebalancer, fund, queue)`);
+  const sheet = Object.fromEntries(sheetText.split("\n").map((l) => /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(l.trim())).filter((m): m is RegExpExecArray => !!m).map((m) => [m[1]!, m[2]!.trim()]));
+  return d.args.map((a) => {
+    const v = a.type === "address" ? rebalancer : a.sheet ? sheet[a.sheet] : undefined;
+    if (!v) throw new Error(`the ${proxy} migration needs ${a.type === "address" ? "the rebalancer proxy (rebalancer.json rebalancer)" : `the sheet's ${a.sheet}`}`);
+    return v;
+  });
+}
+
+// CLI (releases/v0.9.0-onevault-upgrade.yaml): the one encoder of the runbook's migration data.
+//   bun publish-contracts/src/fund-migrations.ts data --proxy rebalancer|fund|queue --manifest-dir DIR --sheet FILE
+// prints the proxy's migrateV090 calldata (the second argument of upgradeToAndCall): the fund's from rebalancer.json, the queue's from the sheet's
+// FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE and FLOW_MATCH_BAND_BPS. Exit 2 on a usage error or a missing input.
+if (import.meta.main) {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const [verb, ...rest] = process.argv.slice(2);
+  const f: Record<string, string> = {};
+  for (let i = 0; i < rest.length; i += 2) f[(rest[i] ?? "").replace(/^--/, "")] = rest[i + 1] ?? "";
+  try {
+    if (verb !== "data" || !f.proxy || !f["manifest-dir"] || !f.sheet) throw new Error("usage: fund-migrations.ts data --proxy rebalancer|fund|queue --manifest-dir DIR --sheet FILE");
+    const rp = join(f["manifest-dir"], "rebalancer.json");
+    const reb = existsSync(rp) ? String((JSON.parse(readFileSync(rp, "utf8")) as Record<string, unknown>).rebalancer ?? "") : undefined;
+    console.log(fundMigrationData(f.proxy, migrationArgsFrom(f.proxy, readFileSync(f.sheet, "utf8"), reb || undefined)));
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(2);
+  }
+}

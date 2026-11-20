@@ -875,4 +875,13 @@ describe("verifyFundSystem: the v0.9.0 migrated state", () => {
     expect(await failing((f) => { f.chain.stepParamsOverride = { maxOverrun: 21600n }; })).toContain("maxOverrun 21600 != REBALANCER_MAX_OVERRUN 604800");
     expect(await failing((f) => { f.chain.stepParamsOverride = { stepInterval: 0 }; })).toContain("stepInterval 0 is under 1800");
   });
+  test("FLOW_MATCH_BAND_BPS: matchBandBps equals the sheet when the sheet has it", async () => {
+    const withKey = async (sheet: bigint, chain: bigint) => {
+      const f = makeFixture({ params: { ...defaultSheetParams(), FLOW_MATCH_BAND_BPS: sheet } });
+      f.chain.matchBandBps = chain;
+      return (await failedLabels(f.opts)).join("\n");
+    };
+    expect(await withKey(10n, 10n)).not.toContain("matchBandBps");
+    expect(await withKey(10n, 25n)).toContain("queue: matchBandBps() equals the sheet");
+  });
 });

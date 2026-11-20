@@ -75,17 +75,17 @@ function runDir(): string {
   return mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "adapter-swap-"));
 }
 
-test("plan writes the five state files the runner reads, and refuses a basket with no legacy asset", () => {
+test("plan writes the four batch state files the runner reads, and refuses a basket with no legacy asset", () => {
   const dir = runDir();
-  const { cast } = fakeCast(ASSETS, { [`call ${TL} hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32) ${FUND} 0 0xdata 0x${"0".repeat(64)} 0xsalt`]: "0xfundop" });
-  const o = { "state-dir": dir, "run-dir": "/run", timelock: TL, fund: FUND, legacy: LEGACY, proxy: PROXY, "impl-hash": "0xI", "proxy-hash": "0xP", "fund-target": FUND, "fund-data": "0xdata", "fund-salt": "0xsalt" };
+  const { cast } = fakeCast(ASSETS);
+  const o = { "state-dir": dir, "run-dir": "/run", fund: FUND, legacy: LEGACY, proxy: PROXY, "impl-hash": "0xI", "proxy-hash": "0xP" };
   plan(cast, o);
   const r = (f: string) => readFileSync(join(dir, f), "utf8");
   expect(r("target-upg-adapter")).toBe(`${Array(5).fill(FUND).join(",")}\n`);
   expect(r("values-upg-adapter")).toBe("0,0,0,0,0\n");
   expect(r("data-upg-adapter").split(",")).toHaveLength(5);
   expect(r("salt-upg-adapter")).toBe("0xkeccak(robotmoney.deploy4-upgrade.adapter./run)\n");
-  expect(r("upg-fund-op")).toBe("0xfundop\n");
+  expect(existsSync(join(dir, "upg-fund-op"))).toBe(false);
   const none = fakeCast([config(1, 1, PROXY, POOL(1))]).cast;
   expect(() => plan(none, { ...o, "state-dir": runDir() })).toThrow("no basket asset uses the legacy adapter");
 });

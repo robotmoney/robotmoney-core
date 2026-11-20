@@ -412,7 +412,7 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   });
 
   // ---- Step 3f queue and fund parameters when configured on the sheet (E47 / DEP-01)
-  for (const [field, sheetName] of [["cancelBuffer", "FLOW_CANCEL_BUFFER"], ["maxPause", "FLOW_MAX_PAUSE"]] as const) {
+  for (const [field, sheetName] of [["cancelBuffer", "FLOW_CANCEL_BUFFER"], ["maxPause", "FLOW_MAX_PAUSE"], ["matchBandBps", "FLOW_MATCH_BAND_BPS"]] as const) {
     if (!(sheetName in f.params)) continue;
     await c.runEq(`queue: ${field}() equals the sheet`, async () => {
       try {
@@ -440,7 +440,7 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
     );
   }
 
-  // v0.9.0: the queue's matchBandBps has no sheet key; 0 skips every match (audit hazard 8), so it must be set (a fresh queue's initialize or the migration writes it).
+  // v0.9.0: matchBandBps equals FLOW_MATCH_BAND_BPS when the sheet has it (above); without the key it must still be set: 0 skips every match (audit hazard 8), so it must be set (a fresh queue's initialize or the migration writes it).
   await c.run("queue: flowParams().matchBandBps is set (non-zero)", async () => {
     let fp: Record<string, bigint | number>;
     try { fp = (await chain.read(addr.queue, FLOW_PARAMS_SIG)) as Record<string, bigint | number>; }

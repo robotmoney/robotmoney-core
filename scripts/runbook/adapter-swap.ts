@@ -7,9 +7,8 @@
 //              --rpc URL --build DIR --state-dir DIR --router A --governed-upgrade A --twap-tick-math A --timelock A --fund A -- {cast}
 //   plan     (P2.85) the one timelock batch: setAdapterCodeHashAllowed(impl hash), setAdapterCodeHashAllowed(proxy hash),
 //            setAdapterProxyCodeHash(proxy hash), then setAssetAdapter(i, proxy) for each active basket asset on the legacy adapter. Writes
-//            target-, data-, values- and salt-upg-adapter, and upg-fund-op (the batch's predecessor: the fund upgrade operation).
-//              --state-dir DIR --run-dir DIR --timelock A --fund A --legacy A --proxy A --impl-hash H --proxy-hash H
-//              --fund-target A --fund-data HEX --fund-salt H
+//            target-, data-, values- and salt-upg-adapter. Its predecessor (the queue upgrade, upg-queue-op) is written by migration-data.ts.
+//              --state-dir DIR --run-dir DIR --fund A --legacy A --proxy A --impl-hash H --proxy-hash H
 //   pending  (P2.85, after the Safe schedules it) writes the batch's operation id and requires it pending.
 //   check    (P3.72, after the Safe executes it) the batch reads done, both hashes are allowed, no basket asset uses the legacy adapter,
 //            at least one uses the proxy; prints NAV.
@@ -18,7 +17,7 @@
 // Reads the chain through cast with ETH_RPC_URL (cast-io.ts). Exit 0 pass, 1 a failed check or call, 2 a usage error.
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { UsageError, ZERO_HASH, check, firstToken, lower, need, options, readState, realCast, runMain, sameAddress, writeState, type Cast } from "./cast-io.ts";
+import { UsageError, check, firstToken, lower, need, options, readState, realCast, runMain, sameAddress, writeState, type Cast } from "./cast-io.ts";
 import { codeAt } from "./code-matches-build.ts";
 import { compareCode, loadArtifact } from "../../publish-contracts/src/verify/codehash.ts";
 
@@ -140,8 +139,7 @@ export function adapterBatch(cast: Cast, b: { fund: string; proxy: string; legac
 }
 
 export function plan(cast: Cast, o: Record<string, string>): void {
-  const [stateDir, runDir, timelock, fund, legacy, proxy, implHash, proxyHash, fundTarget, fundData, fundSalt] =
-    need(o, "state-dir", "run-dir", "timelock", "fund", "legacy", "proxy", "impl-hash", "proxy-hash", "fund-target", "fund-data", "fund-salt");
+  const [stateDir, runDir, fund, legacy, proxy, implHash, proxyHash] = need(o, "state-dir", "run-dir", "fund", "legacy", "proxy", "impl-hash", "proxy-hash");
   const b = adapterBatch(cast, { fund: fund!, proxy: proxy!, legacy: legacy!, implHash: implHash!, proxyHash: proxyHash!, assets: basket(cast, fund!) });
   for (const a of b.moved) console.log(`asset ${a.index}: ${a.adapter} -> ${proxy}`);
   check(b.moved.length > 0, "no basket asset uses the legacy adapter");
@@ -149,7 +147,6 @@ export function plan(cast: Cast, o: Record<string, string>): void {
   writeState(join(stateDir!, "data-upg-adapter"), b.datas.join(","));
   writeState(join(stateDir!, "values-upg-adapter"), b.values.join(","));
   writeState(join(stateDir!, "salt-upg-adapter"), cast(["keccak", `robotmoney.deploy4-upgrade.adapter.${runDir}`]));
-  writeState(join(stateDir!, "upg-fund-op"), cast(["call", timelock!, "hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)", fundTarget!, "0", fundData!, ZERO_HASH, fundSalt!]));
 }
 
 /** The batch's operation id on the timelock. */

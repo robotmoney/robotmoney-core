@@ -690,7 +690,8 @@
       "optionalEnv": [
         "EXPECTED_CHAIN_ID",
         "FLOW_CANCEL_BUFFER",
-        "FLOW_MAX_PAUSE"
+        "FLOW_MAX_PAUSE",
+        "FLOW_MATCH_BAND_BPS"
       ],
       "manifest": "deployments/<chain>/queue.json",
       "libraries": [],
