@@ -1,0 +1,45 @@
+{
+  "_comment": "Declared, migrated breaks of a struct's storage layout. check-core-storage-layout.sh requires every struct reachable from a proxied contract's storage to extend its baseline append-only. A break passes only when an entry here matches the contract, the struct, the layout hash of the baseline struct (from) and the layout hash of the live struct (to). `scripts/ci/storage_layout_nested.py hashes <snapshot>` prints the hashes. `migration` is the Contract.function that rewrites every legacy entry in the same upgrade transaction (upgradeToAndCall); --require-migrations checks that the function is in the contract's ABI. Do not add an entry for a break that no migration repairs.",
+  "migrations": [
+    {
+      "contract": "FlowQueue",
+      "struct": "Request",
+      "from": "91d65e0ddd18146c19e612ec51d6d077cb8553e365333c4d909bfce4aee45177",
+      "to": "7a71003714569d02d391bfcac6d8c49955499fe58e2495e026f11b987a87e112",
+      "migration": "FlowQueue.migrateV090",
+      "release": "0.9.0",
+      "baseline": "fa7c47182 (contracts 0.8.0, Deploy 4)",
+      "reason": "v0.9.0 replaced `limit` (slot 3) with `closed, exitFeeBps, minHold, maxRoll, createdAt, expiryEpoch` and moved `closed` out of slot 4. A legacy request decodes as garbage. The queue migration normalises every legacy request into the v0.9.0 layout."
+    },
+    {
+      "contract": "FlowQueue",
+      "struct": "Settlement",
+      "from": "fa4b60c4d119cddbf50e295c20644cdc4591a6c8b4657f08be90b5f2783f0cd0",
+      "to": "a90d63503aade49d7e5948b2f918f0c992a49552c2b538dd3d1e9612454621f4",
+      "migration": "FlowQueue.migrateV090",
+      "release": "0.9.0",
+      "baseline": "fa7c47182 (contracts 0.8.0, Deploy 4)",
+      "reason": "v0.9.0 replaced `depositBoundPrice, redeemBoundPrice` (slots 1 and 2) with `matchedShares, matchedUsdc, matchSharePrice` (slots 1 to 3): every member after slot 0 moved by one slot. The queue migration normalises every legacy settlement into the v0.9.0 layout."
+    },
+    {
+      "contract": "Rebalancer",
+      "struct": "StepParams",
+      "from": "8d3a74672dac643075e0635fa35e254daca75335c0ff66de78196693a06bb469",
+      "to": "2a813fcbd0dc2e066956609084834291a67db40d065e19a4069276754ee7b241",
+      "migration": "Rebalancer.migrateV090",
+      "release": "0.9.0",
+      "baseline": "fa7c47182 (contracts 0.8.0, Deploy 4)",
+      "reason": "v0.9.0 dropped `keeperGrace` from the middle of `_stepParams`: every later member moved down. The rebalancer migration rewrites `_stepParams`."
+    },
+    {
+      "contract": "RebalancerV2",
+      "struct": "StepParams",
+      "from": "8d3a74672dac643075e0635fa35e254daca75335c0ff66de78196693a06bb469",
+      "to": "2a813fcbd0dc2e066956609084834291a67db40d065e19a4069276754ee7b241",
+      "migration": "Rebalancer.migrateV090",
+      "release": "0.9.0",
+      "baseline": "fa7c47182 (contracts 0.8.0, Deploy 4)",
+      "reason": "RebalancerV2 is the Rebalancer plus one marker getter (contracts/test/helpers/FundUpgradeV2.sol) and inherits its layout and its migration."
+    }
+  ]
+}

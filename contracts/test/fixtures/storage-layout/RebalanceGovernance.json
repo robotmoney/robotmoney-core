@@ -22,6 +22,158 @@
       "bool upgradesFrozen;"
     ]
   },
+  "nested": {
+    "openzeppelin.storage.AccessControl": {
+      "t_struct(AccessControlStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_roles",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_bytes32,t_struct(RoleData)_storage)"
+          }
+        ]
+      },
+      "t_struct(RoleData)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "hasRole",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_address,t_bool)"
+          },
+          {
+            "label": "adminRole",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_bytes32"
+          }
+        ]
+      }
+    },
+    "openzeppelin.storage.AccessControlEnumerable": {
+      "t_struct(AccessControlEnumerableStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_roleMembers",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_bytes32,t_struct(AddressSet)_storage)"
+          }
+        ]
+      },
+      "t_struct(AddressSet)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "_inner",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_struct(Set)_storage"
+          }
+        ]
+      },
+      "t_struct(Set)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "_values",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_array(t_bytes32)dyn_storage"
+          },
+          {
+            "label": "_positions",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_mapping(t_bytes32,t_uint256)"
+          }
+        ]
+      }
+    },
+    "openzeppelin.storage.Initializable": {
+      "t_struct(InitializableStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_initialized",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "_initializing",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_bool"
+          }
+        ]
+      }
+    },
+    "openzeppelin.storage.ReentrancyGuard": {
+      "t_struct(ReentrancyGuardStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_status",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint256"
+          }
+        ]
+      }
+    },
+    "robotmoney.storage.GovernedUUPS": {
+      "t_struct(Layout)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "upgradeTimelock",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "label": "upgradesFrozen",
+            "offset": 20,
+            "slot": "0",
+            "type": "t_bool"
+          }
+        ]
+      }
+    },
+    "storage": {
+      "t_struct(PlanParams)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "duration",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "costBudgetBps",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_uint16"
+          }
+        ]
+      }
+    }
+  },
   "storage": [
     {
       "label": "fund",
