@@ -168,7 +168,7 @@ export function pendingUpgrades(scheduled: readonly { id: Hex; target: Address; 
  * every member of every stored struct and every ERC-7201 namespace member of the deployed snapshot at the same position with the same type, and drop no linked library.
  * New rows and members may only follow the old ones. An empty list passes.
  */
-export function layoutExtensionProblems(deployed: any, candidate: any, renames: readonly LayoutRename[] = [], contract = "", libraryRenames: readonly LibraryRename[] = []): string[] {
+export function layoutExtensionProblems(deployed: any, candidate: any, renames: readonly LayoutRename[] = [], contract = "", libraryRenames: readonly LibraryRename[] = [], migrated: readonly string[] = []): string[] {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const ext = (old: unknown[] = [], neu: unknown[] = []) => old.length <= neu.length && old.every((x, i) => same(x, neu[i]));
   const bad: string[] = [];
@@ -178,7 +178,9 @@ export function layoutExtensionProblems(deployed: any, candidate: any, renames: 
     return m ? { ...r, label: m.to } : r;
   });
   if (!ext(storage, candidate?.storage)) bad.push("storage: a variable moved, was retyped or removed");
-  for (const [k, v] of Object.entries<unknown[]>(deployed?.structs ?? {})) if (!ext(v, candidate?.structs?.[k])) bad.push(`struct ${k}: a member moved, was retyped or removed`);
+  // ADR-0020: a struct break the build declares with an existing migration (declaredStructMigrations) passes: its legacy entries are rewritten inside upgradeToAndCall.
+  const declared = (k: string) => migrated.some((name) => k.includes(`(${name})`));
+  for (const [k, v] of Object.entries<unknown[]>(deployed?.structs ?? {})) if (!ext(v, candidate?.structs?.[k]) && !declared(k)) bad.push(`struct ${k}: a member moved, was retyped or removed`);
   for (const [k, v] of Object.entries<unknown[]>(deployed?.namespaces ?? {})) if (!ext(v, candidate?.namespaces?.[k])) bad.push(`namespace ${k}: a member moved, was retyped or removed`);
   // PR 2042: a reviewed library source-path rename (libraryRenames) is applied to the deployed library names, as the shell gate does
   const libName = (l: string): string => libraryRenames.find((x) => x.from === l)?.to ?? l;
@@ -194,7 +196,31 @@ export function layoutGateProblems(spec: ProxySpec, coreDir: string, buildDir: s
   for (const [dir, f] of [[coreDir, spec.layout], [coreDir, pins], [buildDir, spec.layout]] as const) if (!existsSync(join(dir, f))) return [`${join(dir, f)} does not exist`];
   const deployedId = layoutId(coreDir, spec.layout, pins);
   if (!recordedLayoutId || lc(recordedLayoutId) !== lc(deployedId)) return [`the deployed snapshot ${spec.layout} (layout id ${deployedId}) is not the one verify recorded (${String(recordedLayoutId)}): run verify on the DEPLOY_SHA checkout first`];
-  return layoutExtensionProblems(JSON.parse(readFileSync(join(coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(join(buildDir, spec.layout), "utf8")), layoutRenames(buildDir), spec.contract, libraryRenames(buildDir));
+  return layoutExtensionProblems(JSON.parse(readFileSync(join(coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(join(buildDir, spec.layout), "utf8")), layoutRenames(buildDir), spec.contract, libraryRenames(buildDir), declaredStructMigrations(buildDir, spec.contract));
+}
+
+export const LAYOUT_MIGRATIONS_REL = join("scripts", "ci", "storage-layout-migrations.json");
+/**
+ * ADR-0020: the structs of `contract` whose mid-struct layout change the candidate build declares as migrated (its own scripts/ci/storage-layout-migrations.json, the
+ * allowlist check-core-storage-layout.sh enforces with the layout hashes in CI), kept only when the migration it names is a function of that contract in the build's ABI.
+ * A build without the file declares none; a malformed file throws.
+ */
+export function declaredStructMigrations(buildDir: string, contract: string): string[] {
+  const p = join(buildDir, LAYOUT_MIGRATIONS_REL);
+  if (!existsSync(p)) return [];
+  const list = JSON.parse(readFileSync(p, "utf8"))?.migrations;
+  if (!Array.isArray(list) || !list.every((m: any) => typeof m?.contract === "string" && typeof m.struct === "string" && typeof m.migration === "string" && /^\w+\.\w+$/.test(m.migration))) {
+    throw new Error(`${p}: migrations must be a list of {contract, struct, migration: "Contract.function"}`);
+  }
+  const out: string[] = [];
+  for (const m of list as { contract: string; struct: string; migration: string }[]) {
+    if (m.contract !== contract) continue;
+    const [owner, fn] = m.migration.split(".") as [string, string];
+    let abi: any[] = [];
+    try { abi = artifactJson(join(buildDir, "out"), owner).abi ?? []; } catch { abi = []; }
+    if (abi.some((e) => e?.type === "function" && e.name === fn)) out.push(m.struct);
+  }
+  return out;
 }
 
 /** Issue 1927: one reviewed label-only rename of a proxy storage row (scripts/ci/storage-layout-renames.json): the slot, offset and type are pinned, only the name changes. */
