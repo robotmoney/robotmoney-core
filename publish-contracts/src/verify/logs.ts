@@ -12,7 +12,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const own = (m: unknown) => String(m ?? "").split(/\n\s*(?:URL|Request body|Raw Call Arguments):/)[0]!;
 const errText = (e: any) => own(e?.message ?? e) + " " + own(e?.cause?.message) + " " + String(e?.details ?? "");
 const statusOf = (e: any): number | undefined => { for (let x = e, i = 0; x && i < 6; x = x.cause, i++) if (typeof x.status === "number") return x.status; return undefined; };
-const isRateLimit = (e: any) => statusOf(e) === 429 || /\b429\b|rate.?limit|too many requests/i.test(errText(e));
+const codeOf = (e: any): number | undefined => { for (let x = e, i = 0; x && i < 6; x = x.cause, i++) if (typeof x.code === "number") return x.code; return undefined; };
+/** Issue 2044: a throttle is HTTP 429, JSON-RPC -32011 (publicnode "request limit reached") or -32005 (limit exceeded), or a rate-limit message. It is retried with backoff. */
+const isRateLimit = (e: any) => statusOf(e) === 429 || codeOf(e) === -32011 || codeOf(e) === -32005 || /\b429\b|rate.?limit|too many requests|request limit reached/i.test(errText(e));
+/** Issue 2044: the smallest window an unnamed range limit halves down to. Below it the scan fails RPC_REFUSED. */
+export const MIN_LOG_WINDOW = 50n;
+/** Issue 2044: the longest wait between two tries of a throttled call. */
+const MAX_BACKOFF_MS = 30_000;
 
 /**
  * Issue 1977: the most addresses one shared eth_getLogs call asks for. publicnode (the Base RPC that serves 50,000-block ranges) answers "A maximum of 10 addresses
@@ -33,7 +39,7 @@ export function rangeLimit(e: unknown): bigint | undefined {
   const t = errText(e);
   const n = /exceed maximum block range:\s*(\d+)/i.exec(t) ?? /ranges over (\d+) blocks are not supported/i.exec(t);
   if (n) return BigInt(n[1]!);
-  if (/block range too large/i.test(t)) return 0n;
+  if (/block range too large|range too large|block range/i.test(t) || statusOf(e) === 413) return 0n;
   return undefined;
 }
 
@@ -72,15 +78,17 @@ async function walk(chain: ChainReader, f: Filter, from: bigint, to: bigint, chu
         } catch (e: any) {
           const lim = rangeLimit(e), size = hi - lo + 1n, alim = addressLimit(e);
           if (list && alim !== undefined && alim >= 1 && alim < group) { group = alim; shrunk = true; break; }
-          if (lim !== undefined && size > 1n) {
-            step = lim > 0n && lim < size ? lim : size / 2n;
+          // Issue 2044: an unnamed range limit (HTTP 413, "range too large") halves the window down to MIN_LOG_WINDOW, then the chunk fails RPC_REFUSED below.
+          const halvable = lim === 0n ? size > MIN_LOG_WINDOW : size > 1n;
+          if (lim !== undefined && halvable) {
+            step = lim > 0n && lim < size ? lim : size / 2n > MIN_LOG_WINDOW ? size / 2n : MIN_LOG_WINDOW;
             hi = lo + step - 1n;
             if (hi > to) hi = to;
             if (g > 0) { shrunk = true; break; } // the groups already read covered the wider window: read this chunk again from the first group
             continue;
           }
           if (!isRateLimit(e) || attempt >= maxRetries) throw new Error(`${RPC_REFUSED_DETAIL}: getLogs ${lo}-${hi} failed: ${String(own(e?.message ?? e)).slice(0, 200)}`);
-          await sleep(retryBaseMs * 2 ** attempt);
+          await sleep(Math.min(retryBaseMs * 2 ** attempt, MAX_BACKOFF_MS));
           attempt++;
         }
       }

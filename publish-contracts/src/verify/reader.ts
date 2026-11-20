@@ -53,6 +53,13 @@ export function viemReader(rpcUrl: string): ChainReader {
       } as any) as any[];
       return logs.map((l): LogEntry => ({ address: l.address as Address, topics: l.topics, data: l.data, blockNumber: BigInt(l.blockNumber), transactionHash: l.transactionHash }));
     },
+    forkPin: async () => {
+      try {
+        const info = await client.request({ method: "anvil_nodeInfo" } as any) as { forkConfig?: { forkBlockNumber?: number | string } } | undefined;
+        const n = info?.forkConfig?.forkBlockNumber;
+        return n === undefined || n === null ? undefined : BigInt(n);
+      } catch { return undefined; }
+    },
   };
 }
 

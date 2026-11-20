@@ -15,6 +15,7 @@ import { manifestBase, scopeTable } from "../stage-table.ts";
 import { layoutExtensionProblems, type LayoutRename } from "../upgrade-rows.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
 import { FUND_PROXY_NAMES } from "./upgradeability.ts";
+import { TWIN_CHAIN_ID } from "../chains.ts";
 import { keccak256, toHex } from "viem";
 import type { Address, ChainReader, ExpectedFundAsset, Hex, VerifyOptions, VerifyReport } from "./types.ts";
 
@@ -31,24 +32,37 @@ const slotAddr = (v: Hex): Address => (`0x${v.replace(/^0x/, "").padStart(64, "0
 const isRpcFailure = (e: unknown): boolean => /RPC_REFUSED|rate.?limit|\b429\b|timeout/i.test(String((e as Error)?.message ?? e));
 const normAddrs = (xs: readonly Address[]): Address[] => [...new Set(xs.map((a) => lc(a) as Address))].sort();
 
+const SIG_ROLE_REVOKED = "RoleRevoked(bytes32,address,address)";
+/** Issue 2044: the label suffix of a Twin (918453) role check, which proves holders now and grants after the fork pin, never history before the pin. */
+export const TWIN_ROLE_SUFFIX = " (Twin: holders now, grants after the fork pin)";
+
+/** The verifier's scan context: the head, read once, and the Twin's fork pin, read once (null: not an anvil fork). */
+export interface RoleScanCtx { head?: bigint; pin?: bigint | null }
+
 /**
  * Prove exclusive role membership (`DEP-03`). Uses AccessControlEnumerable when supported
  * (`FlowQueue`, `Rebalancer`, `RebalanceGovernance`, `ConsensusRecommendationReceipt`); on contracts that
  * use plain `AccessControl` or `AdminFloorAccessControlCounter` (`TimelockController`, `RobotMoneyFund`),
  * falls back only on VM revert to `RoleGranted` log scan + `hasRole` (and `adminCount()` on Fund ADMIN_ROLE).
+ *
+ * Issue 2044, owner decision 2026-11-20: on the Twin (chain 918453, an anvil fork of Base) no check reads logs before the fork pin. Anvil forwards those reads to the
+ * public Base RPC, which refuses eth_getLogs, and the history before the pin is real Base, proven by the live 8453 run. The Twin's log fallback proves instead that every
+ * expected holder holds the role now (hasRole at head) and that no RoleGranted after the pin went to anyone else and no RoleRevoked after the pin removed an expected holder.
+ * The label says so. The vaults system's creation proof (verify/index.ts) needs logs from the deploy block on, so it has no part in this path.
  */
-async function verifyExclusiveRole(
+export async function verifyExclusiveRole(
   c: Collector,
   chain: ChainReader,
   label: string,
   at: Address,
   r: Hex,
   expected: readonly Address[],
-  opts: VerifyOptions,
-  scanCtx: { head?: bigint } = {},
+  opts: Pick<VerifyOptions, "fromBlock" | "logChunk" | "retryBaseMs" | "logTries" | "sheet">,
+  scanCtx: RoleScanCtx = {},
   isFundAdmin = false,
 ): Promise<void> {
-  await c.run(label, async () => {
+  const twin = opts.sheet.chainId === TWIN_CHAIN_ID;
+  await c.run(twin ? label + TWIN_ROLE_SUFFIX : label, async () => {
     const want = normAddrs(expected);
     let members: Address[];
     let extraErr: string | undefined;
@@ -61,14 +75,9 @@ async function verifyExclusiveRole(
     } catch (e) {
       if (isRpcFailure(e)) throw e;
       const head = scanCtx.head ?? (scanCtx.head = await chain.blockNumber());
-      const logs = await scanLogs(chain, {
-        address: at,
-        topics: [keccak256(toHex(SIG_ROLE_GRANTED)), r],
-        fromBlock: opts.fromBlock,
-        toBlock: head,
-        chunk: opts.logChunk ?? 1999,
-        retryBaseMs: opts.retryBaseMs ?? 500,
-      });
+      const scan = { chunk: opts.logChunk ?? 1999, retryBaseMs: opts.retryBaseMs ?? 500, ...(opts.logTries !== undefined ? { maxRetries: Math.max(0, opts.logTries - 1) } : {}) };
+      if (twin) return await twinExclusive(chain, at, r, want, head, scan, scanCtx, isFundAdmin);
+      const logs = await scanLogs(chain, { address: at, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), r], fromBlock: opts.fromBlock, toBlock: head, ...scan });
       members = [];
       for (const who of new Set(logs.map((l) => lc(topicToAddress(l.topics[2])) as Address))) {
         if (await hasRole(chain, at, r, who)) members.push(who);
@@ -82,6 +91,35 @@ async function verifyExclusiveRole(
     const ok = !extraErr && got.length === want.length && got.every((a, i) => a === want[i]);
     return { ok, detail: extraErr ?? `got [${got.join(",")}], expected [${want.join(",")}]` };
   });
+}
+
+/** Issue 2044: the Twin's exclusivity proof of a non-enumerable role: holders now, and RoleGranted/RoleRevoked over (pin, head] only. No log below the pin is asked for. */
+async function twinExclusive(
+  chain: ChainReader, at: Address, r: Hex, want: Address[], head: bigint,
+  scan: { chunk: number; retryBaseMs: number; maxRetries?: number }, scanCtx: RoleScanCtx, isFundAdmin: boolean,
+): Promise<{ ok: boolean; detail: string }> {
+  if (scanCtx.pin === undefined) scanCtx.pin = (await chain.forkPin?.()) ?? null;
+  const pin = scanCtx.pin;
+  if (pin === null) return { ok: false, detail: "chain 918453 is not an anvil fork (anvil_nodeInfo names no fork block): the Twin role check reads no history before a pin it cannot name" };
+  const problems: string[] = [];
+  for (const who of want) if (!(await hasRole(chain, at, r, who))) problems.push(`expected holder ${who} does not hold the role now`);
+  if (pin < head) {
+    const granted = keccak256(toHex(SIG_ROLE_GRANTED)), revoked = keccak256(toHex(SIG_ROLE_REVOKED));
+    const logs = await scanLogs(chain, { address: at, topics: [[granted, revoked], r], fromBlock: pin + 1n, toBlock: head, ...scan });
+    for (const l of logs) {
+      const who = lc(topicToAddress(l.topics[2]!)) as Address;
+      const t0 = l.topics[0]!.toLowerCase();
+      if (t0 === granted.toLowerCase() && !want.includes(who)) problems.push(`block ${l.blockNumber}: RoleGranted to unexpected ${who}`);
+      if (t0 === revoked.toLowerCase() && want.includes(who)) problems.push(`block ${l.blockNumber}: RoleRevoked from expected holder ${who}`);
+    }
+  }
+  if (isFundAdmin) {
+    const adminCount = Number((await chain.read(at, "function adminCount() view returns (uint256)")) as bigint);
+    if (adminCount !== want.length) problems.push(`adminCount() is ${adminCount}, expected ${want.length}`);
+  }
+  return problems.length
+    ? { ok: false, detail: problems.slice(0, 5).join("; ") }
+    : { ok: true, detail: `holders [${want.join(",")}] hold the role now; no grant to another account and no revoke of a holder in blocks ${pin + 1n}-${head} (history before the fork pin ${pin} is Base, not claimed here)` };
 }
 
 async function readFirstAddressArray(chain: ChainReader, at: Address, signatures: readonly string[]): Promise<Address[]> {
@@ -232,7 +270,7 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   }
 
   // ---- the timelock, the Safe, and keeper smart account checks (DEP-03, E56)
-  const scanCtx: { head?: bigint } = {};
+  const scanCtx: RoleScanCtx = {};
   await c.run("timelock: has code", async () => (await chain.getCode(addr.timelock)).length > 2);
   await c.runEq("timelock: getMinDelay() equals the sheet", async () => Number(await chain.read(addr.timelock, "function getMinDelay() view returns (uint256)")), sheet.timelockDelay);
   await verifyExclusiveRole(c, chain, "timelock: PROPOSER_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.PROPOSER, [addr.safe], opts, scanCtx);

@@ -9,7 +9,7 @@ import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { checkVaultRetirements, checkVaultRetirementsOnChain } from "../src/evidence-check.ts";
 import { buildRetireCalls } from "../src/retire-vault.ts";
-import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems, checkGovernedUpgradesOnChain } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems, checkGovernedUpgradesOnChain, BEFORE_PIN_NOTE } from "../src/evidence-check.ts";
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { pinnedMigrationData } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
@@ -902,5 +902,36 @@ describe("proxy_upgrades typed migration (issue 1910)", () => {
     const read = chain.getTransactionReceipt.bind(chain);
     chain.getTransactionReceipt = async (args: any) => args.hash === up.execute_tx ? { status: "success", blockNumber: 2n, logs: [] } as any : read(args);
     expect((await checkGovernedUpgradesOnChain(evOf(up), chain)).join("\n")).toContain("execute tx does not contain exactly one matching CallExecuted event");
+  });
+
+  // issue 2044: on the Twin (918453) no transaction at or before the fork pin is read; on 8453 every entry is read
+  test("Twin: a pre-pin entry is not read and is noted; a post-pin entry is read; on 8453 both are read", async () => {
+    const want = (u: any) => upgradeCalldata(u.to_implementation, pinnedMigrationData("receipt-submitter-roles", RELEASER));
+    const pre = upgrade(), post = { ...upgrade(), operation_id: h(7000), schedule_tx: h(7001), execute_tx: h(7002), schedule_block_timestamp: T0 + 10 * D, execute_block_timestamp: T0 + 11 * D };
+    const PIN_TS = T0 + 5 * D;
+    const both = (chainId: number, pin?: bigint) => {
+      const a1 = chainOf(pre, want(pre)), a2 = chainOf({ ...post }, want(post));
+      const read: string[] = [];
+      const c = { ...a1, getChainId: async () => chainId, getBlock: async () => ({ timestamp: BigInt(PIN_TS) }), ...(pin !== undefined ? { forkPin: async () => pin } : {}),
+        getTransactionReceipt: async (x: { hash: Hex }) => {
+          read.push(x.hash);
+          const r = [pre.schedule_tx, pre.execute_tx].includes(x.hash) ? await a1.getTransactionReceipt(x) : await a2.getTransactionReceipt(x);
+          // the post entry's operation id is its own
+          return { ...r, logs: r.logs.map((l: any) => x.hash === post.schedule_tx || x.hash === post.execute_tx ? { ...l, topics: [l.topics[0], h(7000), ...l.topics.slice(2)] } : l) };
+        } } as unknown as ChainReader;
+      return { c, read };
+    };
+    const ev = { timelock: { address: a(9) }, governance: { address: RELEASER }, proxy_upgrades: [pre, post] };
+    const twin = both(918453, 100n), notes: string[] = [];
+    expect(await checkGovernedUpgradesOnChain(ev, twin.c, notes)).toEqual([]);
+    expect(twin.read).toEqual([post.schedule_tx, post.execute_tx]);
+    expect(notes.join("\n")).toContain(BEFORE_PIN_NOTE);
+    const base = both(8453);
+    expect(await checkGovernedUpgradesOnChain(ev, base.c)).toEqual([]);
+    expect(base.read).toEqual([pre.schedule_tx, pre.execute_tx, post.schedule_tx, post.execute_tx]);
+    // a Twin node that names no fork pin reads nothing and fails
+    const nopin = both(918453);
+    expect((await checkGovernedUpgradesOnChain(ev, nopin.c)).join("\n")).toContain("not an anvil fork");
+    expect(nopin.read).toEqual([]);
   });
 });

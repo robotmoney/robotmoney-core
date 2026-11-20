@@ -1193,7 +1193,8 @@ test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in 
   expect(flowParamsTypes(sol).length).toBe(21);
   const sig = flowParamsSig(sol);
   expect(selectorOf(sig)).toBe("0xa0e15366");
-  const runbook = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8");
+  // P2.86 builds the calldata with scripts/runbook/flow-params.ts, so its tuple is checked there as well as in the runbook
+  const runbook = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8") + readFileSync(join(ROOT, "scripts", "runbook", "flow-params.ts"), "utf8");
   const used = [...runbook.matchAll(/setFlowParams\(\(([^)]*)\)\)/g)].map((m) => `setFlowParams((${m[1]}))`);
   expect(used.length).toBeGreaterThan(0);
   for (const u of used) expect(u, "the runbook's setFlowParams tuple").toBe(sig);
@@ -1215,13 +1216,13 @@ test("v0.9.0 header: the rc tag is release/v0.9.0-rc.N-rehearsal, which RC_TAG_P
   expect(rcTagHeaderProblems(planted, "v0.9.0", r.decisions, pattern).join("\n")).toContain("release/v0.9.0-onevault-rc.N-rehearsal does not match RC_TAG_PATTERN");
 });
 
-test("v0.9.0 done markers count only this run's build, and P2.84 and P3.81 read flowParams word by word (18 live words, 3 appended)", () => {
+test("v0.9.0 done markers count only this run's build, and P2.84 and P3.81 read flowParams word by word through flow-params.ts (18 live words, 3 appended)", () => {
   const r = upgradeRelease090();
   const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
   expect(j("P0.93-upg-done-markers")).toContain('--arg b "{runDir}/v090"');
   expect(j("P0.93-upg-done-markers")).toContain('.build == \\$b');
-  expect(j("P2.84-upg-after-upgrade")).toContain("seq 0 17");
-  expect(j("P2.84-upg-after-upgrade")).toContain('test "${#a}" = 1346');
-  expect(j("P3.81-upg-params-execute")).toContain('test "$(cast to-dec 0x${n:1154:64})" = 900');
+  // the word-by-word reads live in scripts/runbook/flow-params.ts (flow-params.test.ts): 18 live words unchanged, 3 appended
+  expect(j("P2.84-upg-after-upgrade")).toContain("scripts/runbook/flow-params.ts same --queue {m:queue.queue} --before {state:upg-flow-params-before}");
+  expect(j("P3.81-upg-params-execute")).toContain("scripts/runbook/flow-params.ts check --queue {m:queue.queue} --before {state:upg-flow-params-before} --min-hold {sheet:FLOW_MIN_HOLD} --cancel-buffer 900 --max-pause 259200 --match-band-bps 10");
   expect(r.steps.some((x) => x.id === "P3.82-upg-executor-execute" || x.id === "P3.85-upg-epoch-schedule")).toBe(false);
 });

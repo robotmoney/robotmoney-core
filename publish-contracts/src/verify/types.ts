@@ -244,6 +244,8 @@ export interface VerifyOptions {
   consumedVaultsManifests?: Record<string, string>;
   /** Delay in ms between 429 retries (tests set 0). */
   retryBaseMs?: number;
+  /** Issue 2044: tries of one throttled eth_getLogs call (--logs-tries). Absent: the scan's default (7 tries). */
+  logTries?: number;
 }
 
 /** Issue 1851: what the creation proof of the log scans reads from one deploy transaction's receipt. */
@@ -296,4 +298,9 @@ export interface ChainReader {
   callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult>;
   /** `address` may be a list (eth_getLogs matches any of them): the shared verify scan reads every scanned contract in one pass (issue 1977). */
   getLogs(params: { address?: Address | Address[]; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]>;
+  /**
+   * Issue 2044: the fork pin block of an anvil fork (anvil_nodeInfo forkConfig.forkBlockNumber), or undefined when the node is not an anvil fork or does not answer.
+   * Optional: only the Twin (918453) role checks read it, so they never ask for logs before the pin.
+   */
+  forkPin?(): Promise<bigint | undefined>;
 }
