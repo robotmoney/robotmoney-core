@@ -1,0 +1,88 @@
+---
+title: "FundAdapterGuard"
+description: "ADR-0019: the fund's check of a basket swap adapter before each use. A direct-deployment adapter keeps the rule it had before (its code hash is checked at admission and at `setAssetAdapter`). An adapter whose code hash is a marked proxy hash (`adapterProxyCodeHash`) must keep that hash allowed AND report an implementation whose code hash is allowed and is not itself a proxy hash, on every use. So an upgrade of the proxy to an implementation the timelock has not allowed stops every swap and price read through it."
+---
+
+# FundAdapterGuard
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3dbb97a08d99eefdaa58748abc6d0f614b475645/contracts/lib/FundAdapterGuard.sol)
+
+**Title:** FundAdapterGuard
+
+ADR-0019: the fund's check of a basket swap adapter before each use. A direct-deployment adapter keeps the
+rule it had before (its code hash is checked at admission and at `setAssetAdapter`). An adapter whose code
+hash is a marked proxy hash (`adapterProxyCodeHash`) must keep that hash allowed AND report an
+implementation whose code hash is allowed and is not itself a proxy hash, on every use. So an upgrade of
+the proxy to an implementation the timelock has not allowed stops every swap and price read through it.
+
+<i>
+
+Internal: inlined into each delegatecall-linked fund library, so it reads the fund's own storage.
+
+</i>
+
+## Functions
+
+<a id="vet-address"></a>
+
+### vet
+
+Revert `AdapterCodeHashNotAllowed` unless `adapter` passes the ADR-0019 check; return it.
+
+```solidity
+function vet(address adapter) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="vet-fundstate-address"></a>
+
+### vet
+
+As `vet(address)`, with the fund state the caller holds.
+
+```solidity
+function vet(FundState storage s, address adapter) internal view returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="requireadmissible-fundstate-address"></a>
+
+### requireAdmissible
+
+Admission rule (`addAsset`, `setAssetAdapter`): the adapter's own code hash must be allowed, then the
+proxy rule above applies.
+
+```solidity
+function requireAdmissible(FundState storage s, address adapter) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| adapter | `address` |  |
+

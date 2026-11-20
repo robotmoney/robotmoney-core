@@ -30,6 +30,7 @@ import {IExactOutSwapAdapter} from "../interfaces/IFlowAdapters.sol";
 import {IFlowQueue} from "../interfaces/IFlowQueue.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
 import {DelistClaimAccount, FundState, FundStorage} from "./FundStorage.sol";
+import {FundAdapterGuard} from "./FundAdapterGuard.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 
 /// @title FundDelistLib
@@ -69,6 +70,7 @@ library FundDelistLib {
         address pool,
         uint24 poolFeePips
     ) public view {
+        FundAdapterGuard.vet(s, adapter);
         bool fixedFee;
         try IExactOutSwapAdapter(adapter).isFixedFeePool(pool) returns (bool isFixed) {
             fixedFee = isFixed;
@@ -137,7 +139,7 @@ library FundDelistLib {
         (bool ok,, uint256 px) = FundValuationLib.feedPricePerToken(s, index);
         if (ok && px != 0) return px;
         if (s.lastGoodAssetPrice[index] != 0) return s.lastGoodAssetPrice[index];
-        try IBasketSwapAdapter(a.adapter)
+        try IBasketSwapAdapter(FundAdapterGuard.vet(s, a.adapter))
             .twapPrice(a.pool, a.token, s.usdc, tokenUnit, a.twapWindow) returns (
             uint256 twapPx
         ) {

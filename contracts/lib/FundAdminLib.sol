@@ -41,6 +41,7 @@ import {FundState, FundStorage} from "./FundStorage.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
 import {FundDelistLib} from "./FundDelistLib.sol";
+import {FundAdapterGuard} from "./FundAdapterGuard.sol";
 
 /// @dev The identity views every in-tree lending adapter exposes (immutables `USDC` and `VAULT`).
 interface IFundLendingIdentity {
@@ -74,6 +75,10 @@ library FundAdminLib {
     uint8 internal constant ADMIN_UNPAUSE_DEPOSITS = 16;
     uint8 internal constant ADMIN_SHUTDOWN = 17;
     uint8 internal constant ADMIN_RESTORE = 18;
+    /// @dev ADR-0019 adapter ops (`val` = code hash or asset index, `addr` = adapter).
+    uint8 internal constant ADMIN_MARK_ADAPTER_PROXY = 19;
+    uint8 internal constant ADMIN_UNMARK_ADAPTER_PROXY = 20;
+    uint8 internal constant ADMIN_SET_ASSET_ADAPTER = 21;
 
     // ═════════════════════════════════════════════════════════════════════════
     //  Assets (§4.1)
@@ -107,10 +112,7 @@ library FundAdminLib {
         index = s.assets.length;
         if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.adapter == address(0)) revert IFundEvents.ZeroAddress();
-        bytes32 hash = c.adapter.codehash;
-        if (!s.codeHashAllowed[hash]) {
-            revert IRobotMoneyFund.AdapterCodeHashNotAllowed(c.adapter, hash);
-        }
+        FundAdapterGuard.requireAdmissible(s, c.adapter);
         if (c.kind == AssetKind.Lending) {
             _checkLending(s, c);
         } else {
@@ -450,7 +452,9 @@ library FundAdminLib {
     function adminOp(FundState storage s, uint8 op, uint256 val, address addr, address caller)
         public
     {
-        if (op <= ADMIN_SET_MAX_BASKET_BPS) {
+        if (op >= ADMIN_MARK_ADAPTER_PROXY) {
+            _adapterOp(s, op, val, addr);
+        } else if (op <= ADMIN_SET_MAX_BASKET_BPS) {
             _adminParamOp(s, op, val, addr);
         } else {
             _adminLifecycleOp(s, op, val, caller);
@@ -628,5 +632,30 @@ library FundAdminLib {
         s.depositsPaused = false;
         s.depositsPausedUntil = 0;
         emit IRobotMoneyFund.DepositsUnpaused(caller);
+    }
+
+    /// @dev ADR-0019. Mark or unmark a governed UUPS adapter proxy code hash, or point active basket asset `val` at
+    ///      `addr`. The new adapter must pass the admission check, report the asset's pool as fixed-fee and fit the
+    ///      fee band (`requireBasketFeeAdmission`, E43). A swap adapter holds no tokens between calls, so the swap
+    ///      moves nothing and is allowed while a plan is live. Lending assets are refused: their adapter holds the
+    ///      fund's deposit (their path stays revoke-and-exclude, ADP-2).
+    function _adapterOp(FundState storage s, uint8 op, uint256 val, address addr) private {
+        if (op == ADMIN_SET_ASSET_ADAPTER) {
+            if (val >= s.assets.length) revert IFundEvents.InvalidAssetIndex(val);
+            AssetConfig storage a = s.assets[val];
+            if (!a.active || a.kind != AssetKind.Basket) revert IFundEvents.InvalidAssetIndex(val);
+            if (addr == address(0)) revert IFundEvents.ZeroAddress();
+            FundAdapterGuard.requireAdmissible(s, addr);
+            FundDelistLib.requireBasketFeeAdmission(s, addr, a.pool, a.poolFee);
+            address old = a.adapter;
+            a.adapter = addr;
+            emit IRobotMoneyFund.AssetAdapterSet(val, old, addr);
+        } else {
+            bytes32 h = bytes32(val);
+            if (h == bytes32(0)) revert IFundEvents.InvalidParam();
+            bool isProxy = op == ADMIN_MARK_ADAPTER_PROXY;
+            s.adapterProxyCodeHash[h] = isProxy;
+            emit IRobotMoneyFund.AdapterProxyCodeHashSet(h, isProxy);
+        }
     }
 }

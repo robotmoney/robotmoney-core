@@ -25,6 +25,7 @@ import {
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
 import {FundState} from "./FundStorage.sol";
+import {FundAdapterGuard} from "./FundAdapterGuard.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
 import {FundDelistLib} from "./FundDelistLib.sol";
@@ -286,7 +287,13 @@ library FundStepLib {
     ) private returns (uint256 got) {
         uint256 before = IERC20(tokenOut).balanceOf(address(this));
         BasketSwaps.swap(
-            a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0))
+            FundAdapterGuard.vet(a.adapter),
+            tokenIn,
+            tokenOut,
+            a.poolFee,
+            amountIn,
+            minOut,
+            ISwapRouter(address(0))
         );
         got = IERC20(tokenOut).balanceOf(address(this)) - before;
     }

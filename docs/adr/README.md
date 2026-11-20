@@ -33,3 +33,4 @@ ADR takes the next number after the highest one in the table.
 | 0016 | [BNKR is the rmAGENT test asset on Uniswap V4 while RM is parked](ADR-0016-bnkr-is-the-rmagent-test-asset-on-uniswap-v4-while-rm-is-parked.md) | Superseded (ADR-0017) |
 | 0017 | [rmAGENT is retired and the router routes across three vaults (rmUSDC, rmPROTO, rmRWA)](ADR-0017-rmagent-retired-router-uses-three-vaults.md) | Accepted, decision 1 and the receipt mapping superseded in part (ADR-0018) |
 | 0018 | [rmHARD, a Hard Assets basket holding PAXG on its Aero pool, is the fourth router vault in the retired rmAGENT slot](ADR-0018-hard-assets-vault-fourth-router-vault.md) | Accepted |
+| 0019 | [Fund swap adapters run behind governed UUPS proxies, vetted by proxy and implementation code hash](ADR-0019-fund-swap-adapters-governed-uups-proxies.md) | Accepted |

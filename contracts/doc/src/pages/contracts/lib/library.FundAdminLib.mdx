@@ -5,7 +5,7 @@ description: "Asset configuration, ADP-2 exclusion sync, plan opening, admin set
 
 # FundAdminLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/lib/FundAdminLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3dbb97a08d99eefdaa58748abc6d0f614b475645/contracts/lib/FundAdminLib.sol)
 
 **Title:** FundAdminLib
 
@@ -127,6 +127,30 @@ uint8 internal constant ADMIN_SHUTDOWN = 17;
 
 ```solidity
 uint8 internal constant ADMIN_RESTORE = 18;
+```
+
+### ADMIN_MARK_ADAPTER_PROXY
+
+<i>
+
+ADR-0019 adapter ops (`val` = code hash or asset index, `addr` = adapter).
+
+</i>
+
+```solidity
+uint8 internal constant ADMIN_MARK_ADAPTER_PROXY = 19;
+```
+
+### ADMIN_UNMARK_ADAPTER_PROXY
+
+```solidity
+uint8 internal constant ADMIN_UNMARK_ADAPTER_PROXY = 20;
+```
+
+### ADMIN_SET_ASSET_ADAPTER
+
+```solidity
+uint8 internal constant ADMIN_SET_ASSET_ADAPTER = 21;
 ```
 
 ## Functions
@@ -591,6 +615,33 @@ function _unpauseDeposits(FundState storage s, address caller) private;
 | ---- | ---- | ----------- |
 | s | `FundState` |  |
 | caller | `address` |  |
+
+<a id="_adapterop-fundstate-uint8-uint256-address"></a>
+
+### _adapterOp
+
+<i>
+
+ADR-0019. Mark or unmark a governed UUPS adapter proxy code hash, or point active basket asset `val` at
+`addr`. The new adapter must pass the admission check, report the asset's pool as fixed-fee and fit the
+fee band (`requireBasketFeeAdmission`, E43). A swap adapter holds no tokens between calls, so the swap
+moves nothing and is allowed while a plan is live. Lending assets are refused: their adapter holds the
+fund's deposit (their path stays revoke-and-exclude, ADP-2).
+
+</i>
+
+```solidity
+function _adapterOp(FundState storage s, uint8 op, uint256 val, address addr) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| op | `uint8` |  |
+| val | `uint256` |  |
+| addr | `address` |  |
 
 ## Enums
 

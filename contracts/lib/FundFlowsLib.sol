@@ -34,6 +34,7 @@ import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
 import {IExactOutSwapAdapter} from "../interfaces/IFlowAdapters.sol";
 import {FundState} from "./FundStorage.sol";
+import {FundAdapterGuard} from "./FundAdapterGuard.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
 import {FundDelistLib} from "./FundDelistLib.sol";
@@ -299,7 +300,7 @@ library FundFlowsLib {
         uint256 amountOut,
         uint256 limit
     ) private returns (uint256 amountIn) {
-        address adapter = a.adapter;
+        address adapter = FundAdapterGuard.vet(a.adapter);
         IERC20(usdc).forceApprove(adapter, limit);
         amountIn = IExactOutSwapAdapter(adapter)
             .swapExactOut(
@@ -565,7 +566,7 @@ library FundFlowsLib {
             }
             uint256 bal = FundValuationLib.heldBalance(s, i);
             if (bal == 0) continue;
-            try IBasketSwapAdapter(a.adapter)
+            try IBasketSwapAdapter(FundAdapterGuard.vet(a.adapter))
                 .twapPrice(a.pool, a.token, usdc, bal, a.twapWindow) returns (
                 uint256 v
             ) {
@@ -591,7 +592,7 @@ library FundFlowsLib {
             return;
         }
         uint256 floor;
-        try IBasketSwapAdapter(a.adapter)
+        try IBasketSwapAdapter(FundAdapterGuard.vet(a.adapter))
             .twapPrice(a.pool, a.token, usdc, totalTok, a.twapWindow) returns (
             uint256 v
         ) {
@@ -740,7 +741,13 @@ library FundFlowsLib {
     ) private returns (uint256 got) {
         uint256 before = IERC20(tokenOut).balanceOf(address(this));
         BasketSwaps.swap(
-            a.adapter, tokenIn, tokenOut, a.poolFee, amountIn, minOut, ISwapRouter(address(0))
+            FundAdapterGuard.vet(a.adapter),
+            tokenIn,
+            tokenOut,
+            a.poolFee,
+            amountIn,
+            minOut,
+            ISwapRouter(address(0))
         );
         got = IERC20(tokenOut).balanceOf(address(this)) - before;
     }

@@ -756,6 +756,22 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
+    function setAdapterProxyCodeHash(bytes32 codeHash, bool isProxy) external {
+        _adminOp(
+            isProxy
+                ? FundAdminLib.ADMIN_MARK_ADAPTER_PROXY
+                : FundAdminLib.ADMIN_UNMARK_ADAPTER_PROXY,
+            uint256(codeHash),
+            address(0)
+        );
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function setAssetAdapter(uint256 index, address adapter) external {
+        _adminOp(FundAdminLib.ADMIN_SET_ASSET_ADAPTER, index, adapter);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
     function addAsset(AssetConfig calldata c)
         external
         onlyRole(ADMIN_ROLE)

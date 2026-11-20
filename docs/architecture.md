@@ -1756,9 +1756,11 @@ stays §8 because other documents cite it by number.
   emergency key, RouterGovernance) can upgrade. The timelock stays the last
   deploy stage: every proxy names its CREATE2 address from the first block and
   the timelock stage refuses a proxy that names another authority. A final
-  release must record and verify its freeze choice. Adapter no-proxy and
-  codehash checks continue to apply. See ADR-0014 and the contract
-  upgradeability plan.
+  release must record and verify its freeze choice. Lending adapters stay
+  direct deployments with codehash checks. Fund basket swap adapters run
+  behind governed UUPS proxies, and the fund checks both the proxy and the
+  implementation code hash on every use (ADR-0019). See ADR-0014 and the
+  contract upgradeability plan.
 
 ### Negative Invariants
 

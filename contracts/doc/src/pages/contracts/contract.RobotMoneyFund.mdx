@@ -5,7 +5,7 @@ description: "The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind
 
 # RobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5caec0de0f4306dd0140efcb9fb7b38bed8daae4/contracts/RobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3dbb97a08d99eefdaa58748abc6d0f614b475645/contracts/RobotMoneyFund.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRobotMoneyFund](/contracts/interfaces/interface.IRobotMoneyFund)
 
@@ -2126,6 +2126,42 @@ function setAdapterCodeHashAllowed(bytes32 codeHash, bool allowed)
 | ---- | ---- | ----------- |
 | codeHash | `bytes32` |  |
 | allowed | `bool` |  |
+
+<a id="setadapterproxycodehash-bytes32-bool"></a>
+
+### setAdapterProxyCodeHash
+
+ADR-0019 (ADMIN_ROLE): mark `codeHash` as a governed UUPS adapter proxy. An adapter with that code hash
+must also report an implementation whose code hash is allowed, on every use.
+
+```solidity
+function setAdapterProxyCodeHash(bytes32 codeHash, bool isProxy) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| codeHash | `bytes32` |  |
+| isProxy | `bool` |  |
+
+<a id="setassetadapter-uint256-address"></a>
+
+### setAssetAdapter
+
+ADR-0019 (ADMIN_ROLE): point active basket asset `index` at another vetted swap adapter. The adapter
+must report the asset's pool as fixed-fee and the fee band must fit (E43). Moves no tokens.
+
+```solidity
+function setAssetAdapter(uint256 index, address adapter) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| adapter | `address` |  |
 
 <a id="addasset-assetconfig"></a>
 

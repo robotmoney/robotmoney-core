@@ -16,6 +16,11 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
 import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {
+    UniswapV3ExactOutSwapAdapterUpgradeable
+} from "../../adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol";
+import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {FlowParams, IFlowEvents} from "../../FlowTypes.sol";
 import {AssetConfig} from "../../FundTypes.sol";
 import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
@@ -745,5 +750,115 @@ contract FundCoreTest is PrototypeHarness {
         mocked.setFixedFeePool(true);
         vm.prank(address(timelock));
         queue.setFlowParams(p);
+    }
+
+    // ─── ADR-0019: governed UUPS swap adapters ───────────────────────────────
+
+    /// @dev Deploy an upgradeable adapter implementation for `router` and an ERC-1967 proxy over it, timelock-owned.
+    function _proxyAdapter(address router) internal returns (address proxy, address impl) {
+        impl = address(new UniswapV3ExactOutSwapAdapterUpgradeable(router));
+        proxy = address(
+            new ERC1967Proxy(
+                impl,
+                abi.encodeCall(
+                    UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (address(timelock))
+                )
+            )
+        );
+    }
+
+    function _allow(bytes32 h) internal {
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (h, true))
+        );
+    }
+
+    function _markProxy(bytes32 h) internal {
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterProxyCodeHash, (h, true))
+        );
+    }
+
+    function test_adr0019_setAssetAdapter_movesBasketAssetToVettedProxy() public {
+        _seedAndInvest();
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        assertEq(
+            UniswapV3ExactOutSwapAdapterUpgradeable(proxy).implementation(),
+            impl,
+            "proxy reports impl"
+        );
+        _allow(proxy.codehash);
+        _allow(impl.codehash);
+        _markProxy(proxy.codehash);
+        address old = fund.assetConfig(IDX_WETH).adapter;
+        uint256 navBefore = fund.totalAssets();
+        vm.expectEmit(address(fund));
+        emit IRobotMoneyFund.AssetAdapterSet(IDX_WETH, old, proxy);
+        vm.prank(address(timelock));
+        fund.setAssetAdapter(IDX_WETH, proxy);
+        assertEq(fund.assetConfig(IDX_WETH).adapter, proxy, "asset now uses the proxy");
+        assertEq(fund.totalAssets(), navBefore, "same pool, same TWAP: NAV unchanged");
+    }
+
+    function test_adr0019_setAssetAdapter_refusesUnallowedImplementation() public {
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(proxy.codehash);
+        _markProxy(proxy.codehash);
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl, impl.codehash
+            )
+        );
+        fund.setAssetAdapter(IDX_WETH, proxy);
+    }
+
+    function test_adr0019_setAssetAdapter_refusesUnallowedProxy() public {
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(impl.codehash);
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, proxy, proxy.codehash
+            )
+        );
+        fund.setAssetAdapter(IDX_WETH, proxy);
+    }
+
+    function test_adr0019_setAssetAdapter_refusesLendingAndNonAdmin() public {
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(proxy.codehash);
+        _allow(impl.codehash);
+        _markProxy(proxy.codehash);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFundEvents.InvalidAssetIndex.selector, IDX_AAVE));
+        fund.setAssetAdapter(IDX_AAVE, proxy);
+        vm.expectRevert();
+        fund.setAssetAdapter(IDX_WETH, proxy);
+    }
+
+    function test_adr0019_unallowedUpgradeStopsEveryUse() public {
+        _seedAndInvest();
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(proxy.codehash);
+        _allow(impl.codehash);
+        _markProxy(proxy.codehash);
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAssetAdapter, (IDX_WETH, proxy))
+        );
+
+        // A different router immutable gives a different implementation code hash, not on the allowlist.
+        address impl2 = address(new UniswapV3ExactOutSwapAdapterUpgradeable(address(0xBEEF)));
+        timelockExecute(proxy, abi.encodeCall(GovernedUUPS.upgradeToAndCall, (impl2, "")));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl2, impl2.codehash
+            )
+        );
+        fund.totalAssets();
+
+        // Allowing the new implementation hash restores it.
+        _allow(impl2.codehash);
+        fund.totalAssets();
     }
 }
