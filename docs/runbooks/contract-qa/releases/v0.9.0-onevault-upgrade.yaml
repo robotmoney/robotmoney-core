@@ -56,8 +56,8 @@ notes: |
   {runDir}/v080; their recorded schedule and execute transactions are checked on chain and their copied build paths relocated with the original paths preserved. The new build
   ({runDir}/v090, the run's sha) is deploy-implementation's --upgrade-build. The verifier compares each upgraded proxy with its recorded build and every other proxy with v0.7.
 
-  The Twin. A fork of Base at a current block (it holds the live Deploy 4), chain 918453, started by the operator before the run and stopped after it: on this machine
-  for this rehearsal (owner instruction 2026-11-14), so no step starts or stops it (README Hosts). The Twin signs with the live keystores (the deployer, the keeper, the
+  The Twin. A fork of Base at a current block (it holds the live Deploy 4), chain 918453, started on the stage host by P0.84 and stopped there by
+  P10.84, as the template's P0.12 and P10.07 do (README Hosts: no rehearsal chain runs on the operator machine); an ssh tunnel brings it to {tunnelPort}. The Twin signs with the live keystores (the deployer, the keeper, the
   emergency key and Safe owners A and B), with a passphrase file, which only chain 918453 accepts; the config adds it to {signer}, {ownerSigner}, {ownerSigner2} and the
   cast lists. P0.86 and P0.88 set the Twin chain id in the run's copies (manifests and sheet); nothing else differs from an 8453 run. The Twin rows P6.90, P6.92,
   P6.95 and P6.97 are the feed step of decision D4-9; P9.84 reads the held claims claimable. The Twin config gives the cast lists Base's fee level
@@ -379,16 +379,22 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P0.84-upg-twin-fork-check"
     standing: ["9"]
-    description: "On the Twin only: the RPC is the Twin chain (918453), an anvil fork of Base at a block after the Deploy 4 deployment, so the live fund system is on it (the fund proxy of the live record has code). The fork is started by the operator before the run (on this machine for this rehearsal, owner instruction 2026-11-14; scripts/devnet/twin-fork.ts start), so no step here starts or stops it (README Hosts)"
+    description: "On the Twin only: the Twin chain (918453), an anvil fork of Base at a block after the Deploy 4 deployment, runs on the stage host {stageHost} (never on this machine, README Hosts), as in the template's P0.12: the host checkout is brought to the run's sha, port 8545 is checked free, the fork starts and is ready, an ssh tunnel brings it to {tunnelPort}, and its anvil.json is copied back. Then the RPC is that chain and the live fund system is on it (the fund proxy of the live record has code). A rerun finds the fork running and reopens a dead tunnel"
     host: "control"
     phase: 0
     cmds:
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; mkdir -p $HOME/{stageDir} && cd {stageCore} && git fetch -q origin && git checkout -q --detach {coreSha} && git submodule update -q --init --recursive && test -z \"$(git status --porcelain)\" && test \"$(git rev-parse HEAD)\" = {coreSha} && if test -s $HOME/{stageDir}/twin/anvil.json && (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"the fork on 8545 already runs\"; elif (echo >/dev/tcp/127.0.0.1/8545) 2>/dev/null; then echo \"port 8545 is busy on the stage host\" >&2; exit 70; else bun scripts/devnet/twin-fork.ts start --port 8545 --state-dir $HOME/{stageDir}/twin; fi"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts wait-ready --port 8545 --state-dir $HOME/{stageDir}/twin"]
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O check {stageHost} 2>/dev/null || { rm -f {runDir}/tunnel-8545.sock; ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -f -N -M -S {runDir}/tunnel-8545.sock -L {tunnelPort}:127.0.0.1:8545 {stageHost}; }"]
+      - ["bash", "-c", "mkdir -p {runDir}/twin && scp -q {stageHost}:{stageDir}/twin/anvil.json {runDir}/twin/anvil.json"]
       - ["bash", "-c", "test \"$(cast chain-id)\" = 918453 && cast rpc anvil_nodeInfo > /dev/null && f=$(jq -r .fund {liveManifestDir}/fund.json) && test \"$(cast code \"$f\" | wc -c)\" -gt 100 && echo \"fork head $(cast block-number), fund $f has code\""]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
-    receipts: []
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "anvil.json", "required": true}
     irreversible: false
+    refresh: true
     flow: "fund-upgrade"
     onlyFor: "twin"
     added: "v0.9.0-onevault-upgrade"
@@ -1992,4 +1998,18 @@ steps:
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
+    added: "v0.9.0-onevault-upgrade"
+  - id: "P10.84-upg-twin-teardown"
+    standing: ["9"]
+    description: "On the Twin only, after the sign-off: the tunnel closes and the Twin fork stops on the stage host {stageHost} (README Hosts), as the template's P10.07"
+    host: "control"
+    phase: 10
+    cmds:
+      - ["bash", "-c", "ssh -o BatchMode=yes -S {runDir}/tunnel-8545.sock -O exit {stageHost} 2>/dev/null; true"]
+      - ["ssh", "-o", "BatchMode=yes", "{stageHost}", "export PATH=$HOME/.foundry/bin:$PATH; cd {stageCore} && bun scripts/devnet/twin-fork.ts stop --port 8545 --state-dir $HOME/{stageDir}/twin"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin"]
     added: "v0.9.0-onevault-upgrade"
