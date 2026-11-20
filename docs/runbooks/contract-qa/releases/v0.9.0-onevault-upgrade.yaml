@@ -1463,7 +1463,8 @@ steps:
     cmds:
       - ["mkdir", "-p", "{runDir}/twin"]
       - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P6.90.json"]
-      - ["bash", "-c", "cast call {m:fund.fund} \"totalAssets()(uint256)\" && cast call {m:queue.queue} \"quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))\" \"{sheet:FLOW_MIN_REQUEST_USDC}\""]
+      - ["bash", "-c", "cast call {m:fund.fund} \"totalAssets()(uint256)\""]
+      - ["bun", "scripts/runbook/queue-flow.ts", "quote", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "deposit", "--amount", "{sheet:FLOW_MIN_REQUEST_USDC}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1475,15 +1476,15 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.91-upg-request-deposit"
     standing: ["4.4"]
-    description: "The limit is the quoted bound plus 0.5% (a depositor's slippage margin: on 8453 the share price moved 0.001% between request and settle and the queue skipped a zero-margin request, RequestSkipped, 2026-11-14). The deployer approves the queue for 1 USDC and requests one deposit of 1 USDC (FLOW_MIN_REQUEST_USDC) bounded by quoteDeposit's boundPrice: the request is the newest id, owned by the deployer, pending, and the deployer's USDC fell by exactly 1 USDC"
+    description: "The deployer approves the queue for 1 USDC and requests one 1 USDC deposit (v0.9.0 requestDeposit(usdc, owner): no price limit, it settles at the epoch's NAV). The newest request is the deployer's, a deposit, Pending, and the deployer's USDC fell by exactly 1 USDC"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", "cast call {m:queue.queue} \"quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))\" 1000000 | tr -d \"()\" | cut -d, -f1 | cut -d\" \" -f1 > {runDir}/state/upg-deposit-bound && echo \"$(bun -e \"console.log((BigInt(process.argv[1])*10050n/10000n).toString())\" \"$(cat {runDir}/state/upg-deposit-bound)\")\" > {runDir}/state/upg-deposit-limit && cat {runDir}/state/upg-deposit-bound {runDir}/state/upg-deposit-limit"]
+      - ["bun", "scripts/runbook/queue-flow.ts", "quote", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "deposit", "--amount", "1000000"]
       - ["bash", "-c", "cast call \"{usdc}\" \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1 > {runDir}/state/upg-usdc-before-request"]
       - ["bash", "scripts/runbook/cast-send.sh", "{usdc}", "approve(address,uint256)", "{m:queue.queue}", "1000000", "{cast}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestDeposit(uint256,uint256,address)", "1000000", "{state:upg-deposit-limit}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", "cast call {m:queue.queue} \"requestCount()(uint256)\" | cut -d\" \" -f1 > {runDir}/state/upg-request-d && r=$(cast call {m:queue.queue} \"getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))\" \"$(cat {runDir}/state/upg-request-d)\") && bun scripts/runbook/qa-assert.ts eq \"$(echo \"$r\" | tr -d \"()\" | cut -d, -f1)\" \"{sheet:ADMIN_ADDRESS}\" && test \"$(cast call {m:queue.queue} \"requestStatus(uint256)(uint8)\" \"$(cat {runDir}/state/upg-request-d)\")\" = 1 && echo \"$r\" | tr -d \"()\" | cut -d, -f3 | tr -d \" \" | sed \"s/[[].*//\" > {runDir}/state/upg-request-d-epoch"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestDeposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "{cast}"]
+      - ["bun", "scripts/runbook/queue-flow.ts", "request", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "deposit", "--owner", "{sheet:ADMIN_ADDRESS}", "--out-id", "{runDir}/state/upg-request-d", "--out-epoch", "{runDir}/state/upg-request-d-epoch"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(bun scripts/runbook/qa-assert.ts sub {state:upg-usdc-before-request} \"$(cast call \"{usdc}\" \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\")\" 1000000"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1492,15 +1493,15 @@ steps:
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["upg-deposit-bound", "upg-deposit-limit", "upg-usdc-before-request", "upg-request-d", "upg-request-d-epoch"]
+    writes: ["upg-usdc-before-request", "upg-request-d", "upg-request-d-epoch"]
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.88-upg-deposit-still-admitted"
     standing: ["4.4"]
-    description: "Writes the marker upg-deposit-admitted when the open deposit request is still Pending and its limit covers the bound quoteDeposit gives now, so P6.89 skips. Otherwise P6.89 replaces the request"
+    description: "Writes the marker upg-deposit-admitted unless the open deposit request has Expired (maxRoll epochs unfilled), so P6.89 skips. A v0.9.0 request has no price limit, so a Pending request is never skipped for price"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", 'd=$(cat {runDir}/state/upg-request-d); st=$(cast call {m:queue.queue} "requestStatus(uint256)(uint8)" "$d"); lim=$(cast call {m:queue.queue} "getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))" "$d" | tr -d "()" | cut -d, -f6 | tr -d " " | sed "s/[[].*//"); b=$(cast call {m:queue.queue} "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" 1000000 | tr -d "()" | cut -d, -f1 | cut -d" " -f1); echo "request $d status $st limit $lim bound now $b"; rm -f {runDir}/state/upg-deposit-admitted; if [ "$st" = 1 ] && bun scripts/runbook/qa-assert.ts ge "$lim" "$b" >/dev/null 2>&1; then echo admitted > {runDir}/state/upg-deposit-admitted; echo "the request still admits the price"; else echo "the request no longer admits the price: P6.89 replaces it"; fi']
+      - ["bun", "scripts/runbook/queue-flow.ts", "deposit-state", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--request", "{state:upg-request-d}", "--marker", "{runDir}/state/upg-deposit-admitted"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1512,17 +1513,15 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.89-upg-replace-deposit"
     standing: ["4.4"]
-    description: "Only when P6.88 found the open request no longer admits the price: the deployer cancels it, withdraws the 1 USDC credit, and requests 1 USDC again with the quoted bound plus 0.5%; the new request id and epoch replace the old ones for the settle and claim rows"
+    description: "Only when P6.88 found the request Expired: the deployer withdraws it (withdrawExpired pays the USDC back at once) and requests 1 USDC again. The new request id and epoch replace the old ones for the settle and claim rows"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "cancel(uint256)", "{state:upg-request-d}", "{cast}"]
-      - ["bash", "-c", 'test "$(cast call {m:queue.queue} "requestStatus(uint256)(uint8)" "{state:upg-request-d}")" = 3']
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "withdrawCredit()", "{cast}"]
-      - ["bash", "-c", 'cast call {m:queue.queue} "quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))" 1000000 | tr -d "()" | cut -d, -f1 | cut -d" " -f1 > {runDir}/state/upg-deposit-bound && echo "$(bun -e "console.log((BigInt(process.argv[1])*10050n/10000n).toString())" "$(cat {runDir}/state/upg-deposit-bound)")" > {runDir}/state/upg-deposit-limit && cat {runDir}/state/upg-deposit-bound {runDir}/state/upg-deposit-limit']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "withdrawExpired(uint256)", "{state:upg-request-d}", "{cast}"]
+      - ["bash", "-c", "test \"$(cast call {m:queue.queue} \"requestStatus(uint256)(uint8)\" \"{state:upg-request-d}\")\" = 3"]
       - ["bash", "scripts/runbook/cast-send.sh", "{usdc}", "approve(address,uint256)", "{m:queue.queue}", "1000000", "{cast}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestDeposit(uint256,uint256,address)", "1000000", "{state:upg-deposit-limit}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", 'cast call {m:queue.queue} "requestCount()(uint256)" | cut -d" " -f1 > {runDir}/state/upg-request-d && r=$(cast call {m:queue.queue} "getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))" "$(cat {runDir}/state/upg-request-d)" | tr -d "()") && test "$(echo "$r" | cut -d, -f1 | tr -d " ")" = "{sheet:ADMIN_ADDRESS}" && echo "$r" | cut -d, -f3 | tr -d " " | sed "s/[[].*//" > {runDir}/state/upg-request-d-epoch && echo "new request $(cat {runDir}/state/upg-request-d) in epoch $(cat {runDir}/state/upg-request-d-epoch)"']
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestDeposit(uint256,address)", "1000000", "{sheet:ADMIN_ADDRESS}", "{cast}"]
+      - ["bun", "scripts/runbook/queue-flow.ts", "request", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "deposit", "--owner", "{sheet:ADMIN_ADDRESS}", "--out-id", "{runDir}/state/upg-request-d", "--out-epoch", "{runDir}/state/upg-request-d-epoch"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1532,7 +1531,7 @@ steps:
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     gateAbsent: "{runDir}/state/upg-deposit-admitted"
-    writes: ["upg-deposit-bound", "upg-deposit-limit", "upg-request-d", "upg-request-d-epoch"]
+    writes: ["upg-request-d", "upg-request-d-epoch"]
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.92-upg-twin-clock-settle-deposit"
     standing: ["9", "4.4"]
@@ -1552,7 +1551,7 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.93-upg-settle-deposit"
     standing: ["4.4"]
-    description: "The keeper settles the deposit: the step waits on chain time until settleableAt(the request's epoch), at most 7 h on 8453 (FLOW_EPOCH_LENGTH 21600 plus FLOW_SETTLE_WINDOW 3600, kept as they are: the release notes), reads checkSettle() Ok for the keeper, the keeper sends settle; the request reads Closed with nothing pending, its one claim is held exactly FLOW_MIN_HOLD (3600 s) from its settlement (unlockAt = time + 3600 = holdEndsAt), and the claims of claims-before.json read the same"
+    description: "The keeper settles the deposit once chain time reaches settleableAt (the epoch's end plus the settle window, 1 h 12 min at most on the live params) and checkSettle() reads Ok. The request reads Closed, its one claim is held exactly FLOW_MIN_HOLD from its settlement (queue-flow.ts find-claim against the v0.9.0 Settlement), and the claims of claims-before.json read the same"
     host: "control"
     phase: 6
     cmds:
@@ -1560,7 +1559,7 @@ steps:
       - ["bash", "-c", "c=$(cast call --from \"{sheet:KEEPER_ADDRESS}\" {m:queue.queue} \"checkSettle()(uint8,uint256)\"); echo \"$c\"; test \"$(echo \"$c\" | head -n 1 | cut -d\" \" -f1)\" = 0"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "settle(uint256,uint256)", "50", "{sheet:FUND_PER_DEPOSIT_CAP}", "{keepercast}"]
       - ["bash", "-c", "test \"$(cast call {m:queue.queue} \"requestStatus(uint256)(uint8)\" \"{state:upg-request-d}\")\" = 3 && test \"$(cast call {m:queue.queue} \"pendingDepositRequest(uint256,address)(uint256)\" \"{state:upg-request-d}\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = 0"]
-      - ["bash", "-c", "bun publish-contracts/src/ci/fund-claims.ts find --rpc \"{rpcUrl}\" --queue {m:queue.queue} --request \"{state:upg-request-d}\" --hold \"{sheet:FLOW_MIN_HOLD}\" > {runDir}/state/upg-claim-d && cat {runDir}/state/upg-claim-d"]
+      - ["bash", "-c", "bun scripts/runbook/queue-flow.ts find-claim --rpc {rpcUrl} --queue {m:queue.queue} --abi {runDir}/v090/out/FlowQueue.sol/FlowQueue.json --request \"{state:upg-request-d}\" --hold \"{sheet:FLOW_MIN_HOLD}\" > {runDir}/state/upg-claim-d && cat {runDir}/state/upg-claim-d"]
       - ["bun", "publish-contracts/src/ci/fund-claims.ts", "same", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--snapshot", "{runDir}/claims-before.json"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1602,7 +1601,8 @@ steps:
     cmds:
       - ["mkdir", "-p", "{runDir}/twin"]
       - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P6.95.json"]
-      - ["bash", "-c", "cast call {m:fund.fund} \"totalAssets()(uint256)\" && cast call {m:queue.queue} \"quoteDeposit(uint256)((uint256,uint256,uint256,uint64,uint64))\" \"{sheet:FLOW_MIN_REQUEST_USDC}\""]
+      - ["bash", "-c", "cast call {m:fund.fund} \"totalAssets()(uint256)\""]
+      - ["bun", "scripts/runbook/queue-flow.ts", "quote", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "deposit", "--amount", "{sheet:FLOW_MIN_REQUEST_USDC}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1614,14 +1614,16 @@ steps:
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.96-upg-request-redeem"
     standing: ["4.4"]
-    description: "The deployer approves the queue for the shares of P6.94 (its whole fund balance) and requests their redemption bounded by quoteRedeem's boundPrice: the request is the newest id, pending, and the deployer holds no fund shares"
+    description: "The deployer approves the queue for the shares of P6.94 (its whole fund balance) and requests their redemption (v0.9.0 requestRedeem(shares, owner): no price limit). The newest request is the deployer's, a redemption, Pending, and the deployer holds no fund shares"
     host: "control"
     phase: 6
     cmds:
-      - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = \"{state:upg-shares-d}\" && cast call {m:queue.queue} \"quoteRedeem(uint256)((uint256,uint256,uint256,uint64,uint64))\" \"{state:upg-shares-d}\" | tr -d \"()\" | cut -d, -f1 | cut -d\" \" -f1 > {runDir}/state/upg-redeem-bound && echo \"$(bun -e \"console.log((BigInt(process.argv[1])*9950n/10000n).toString())\" \"$(cat {runDir}/state/upg-redeem-bound)\")\" > {runDir}/state/upg-redeem-limit && cat {runDir}/state/upg-redeem-bound {runDir}/state/upg-redeem-limit"]
+      - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = \"{state:upg-shares-d}\""]
+      - ["bun", "scripts/runbook/queue-flow.ts", "quote", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "redeem", "--amount", "{state:upg-shares-d}"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "approve(address,uint256)", "{m:queue.queue}", "{state:upg-shares-d}", "{cast}"]
-      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestRedeem(uint256,uint256,address)", "{state:upg-shares-d}", "{state:upg-redeem-limit}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
-      - ["bash", "-c", "cast call {m:queue.queue} \"requestCount()(uint256)\" | cut -d\" \" -f1 > {runDir}/state/upg-request-r && test \"$(cast call {m:queue.queue} \"requestStatus(uint256)(uint8)\" \"$(cat {runDir}/state/upg-request-r)\")\" = 1 && cast call {m:queue.queue} \"getRequest(uint256)((address,uint8,uint64,uint256,uint256,uint256,bool))\" \"$(cat {runDir}/state/upg-request-r)\" | tr -d \"()\" | cut -d, -f3 | tr -d \" \" | sed \"s/[[].*//\" > {runDir}/state/upg-request-r-epoch && test \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = 0"]
+      - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "requestRedeem(uint256,address)", "{state:upg-shares-d}", "{sheet:ADMIN_ADDRESS}", "{cast}"]
+      - ["bun", "scripts/runbook/queue-flow.ts", "request", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--abi", "{runDir}/v090/out/FlowQueue.sol/FlowQueue.json", "--kind", "redeem", "--owner", "{sheet:ADMIN_ADDRESS}", "--out-id", "{runDir}/state/upg-request-r", "--out-epoch", "{runDir}/state/upg-request-r-epoch"]
+      - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1)\" = 0"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1629,7 +1631,7 @@ steps:
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["upg-redeem-bound", "upg-redeem-limit", "upg-request-r", "upg-request-r-epoch"]
+    writes: ["upg-request-r", "upg-request-r-epoch"]
     added: "v0.9.0-onevault-upgrade"
   - id: "P6.97-upg-twin-clock-settle-redeem"
     standing: ["9", "4.4"]
@@ -1657,7 +1659,7 @@ steps:
       - ["bash", "-c", "c=$(cast call --from \"{sheet:KEEPER_ADDRESS}\" {m:queue.queue} \"checkSettle()(uint8,uint256)\"); echo \"$c\"; test \"$(echo \"$c\" | head -n 1 | cut -d\" \" -f1)\" = 0"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "settle(uint256,uint256)", "50", "{sheet:FUND_PER_DEPOSIT_CAP}", "{keepercast}"]
       - ["bash", "-c", "test \"$(cast call {m:queue.queue} \"requestStatus(uint256)(uint8)\" \"{state:upg-request-r}\")\" = 3 && cast call {m:queue.queue} \"claimableRedeemRequest(uint256,address)(uint256)\" \"{state:upg-request-r}\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1 > {runDir}/state/upg-claim-r-shares && bun scripts/runbook/qa-assert.ts ge \"$(cat {runDir}/state/upg-claim-r-shares)\" 1"]
-      - ["bash", "-c", "bun publish-contracts/src/ci/fund-claims.ts find --rpc \"{rpcUrl}\" --queue {m:queue.queue} --request \"{state:upg-request-r}\" > {runDir}/state/upg-claim-r && cat {runDir}/state/upg-claim-r"]
+      - ["bash", "-c", "bun scripts/runbook/queue-flow.ts find-claim --rpc {rpcUrl} --queue {m:queue.queue} --abi {runDir}/v090/out/FlowQueue.sol/FlowQueue.json --request \"{state:upg-request-r}\" > {runDir}/state/upg-claim-r && cat {runDir}/state/upg-claim-r"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1764,7 +1766,7 @@ steps:
       - ["bash", "scripts/runbook/cast-send.sh", "{m:fund.fund}", "pauseDeposits()", "{emergencycast}"]
       - ["bash", "scripts/runbook/cast-send.sh", "{m:queue.queue}", "pauseQueue()", "{emergencycast}"]
       - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"depositsPaused()(bool)\")\" = true && test \"$(cast call {m:queue.queue} \"queuePaused()(bool)\")\" = true"]
-      - ["bash", "-c", "! cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:queue.queue} \"requestDeposit(uint256,uint256,address)\" 1000000 1 \"{sheet:ADMIN_ADDRESS}\" > /dev/null 2>&1"]
+      - ["bash", "-c", "! cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:queue.queue} \"requestDeposit(uint256,address)\" 1000000 \"{sheet:ADMIN_ADDRESS}\" > /dev/null 2>&1"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
