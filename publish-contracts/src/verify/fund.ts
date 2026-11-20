@@ -218,8 +218,9 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
     });
     await c.run(`${label}: linked libraries equal build`, async () => {
       const implCode = await logicCode(chain, at, proxyArtifact);
-      const buildDir = opts.proxyBuildDirs?.[p.field] ?? opts.artifactsDir;
-      const r = await verifyLinkedLibraries(chain, implCode, p.contract, opts.artifactsDir, buildDir);
+      // An upgraded proxy's libraries are the upgrade build's (v0.9.0 deploys changed libraries with the implementation):
+      // compare its links, and every library they reach, with the same build its own code is compared with.
+      const r = await verifyLinkedLibraries(chain, implCode, p.contract, built, built);
       return { ok: r.ok, detail: r.detail };
     });
     await c.runEq(`${label}: ERC-1967 admin slot is zero`, async () => slotAddr(await chain.getStorageAt(at, ERC1967_ADMIN_SLOT)), ZERO);
@@ -569,7 +570,8 @@ export async function verifyFundUpgradeSafety(opts: FundUpgradeSafetyOptions): P
     if (opts.artifactsDir && contractName) {
       await c.run(`fund upgrade: ${name} linked libraries equal build`, async () => {
         const implCode = await logicCode(chain, proxyAddr, proxyArtifact);
-        const r = await verifyLinkedLibraries(chain, implCode, contractName, opts.artifactsDir!, opts.proxyBuildDirs?.[name] ?? opts.artifactsDir!);
+        const built = opts.proxyBuildDirs?.[name] ?? opts.artifactsDir!;
+        const r = await verifyLinkedLibraries(chain, implCode, contractName, built, built);
         return { ok: r.ok, detail: r.detail };
       });
     }
