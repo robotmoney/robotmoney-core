@@ -201,6 +201,12 @@ jobs:
         # as a PR, so it compares with the releases only. Issue 1853: the waiver is also written
         # to the job summary, where a reviewer sees it without opening the log
         # (scripts/ci/check-forge-workflow-summary.test.ts runs this branch).
+        # Deploy 4 v0.9.0 upgrade audit, regression test 1: every struct reachable from storage, also through an
+        # ERC-7201 namespace mapping, is pinned member by member (the `nested` section, read from the probe
+        # contracts of contracts/test/helpers/StorageLayoutProbe.sol) and may only gain members at its end. The
+        # layout must extend the Deploy 4 layout that is live on Base (--baseline-dir: contracts 0.8.0 at fa7c47182),
+        # which no label waives. A struct break passes only when scripts/ci/storage-layout-migrations.json declares
+        # it with both layout hashes and the migration function.
         env:
           LAYOUT_RESET: ${{ contains(github.event.pull_request.labels.*.name, 'storage-layout-reset') }}
         run: |
@@ -219,7 +225,15 @@ jobs:
             fi
           fi
           scripts/ci/check-core-storage-layout.sh --selftest
-          scripts/ci/check-core-storage-layout.sh "${base[@]}" --releases
+          scripts/ci/check-core-storage-layout.sh "${base[@]}" --releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0
+
+      - name: Core storage-layout gate, nested struct self-test (Deploy 4 v0.9.0 upgrade audit)
+        # Proves the struct rule on the committed snapshots and, with --live, through the gate itself: this tree
+        # passes against the v0.8.0 layout with the migrations file, fails without its entries (Request, Settlement,
+        # StepParams, each named with its member), a synthetic mid-struct insert fails and a synthetic append passes.
+        run: |
+          shellcheck scripts/ci/check-core-storage-layout.test.sh
+          scripts/ci/check-core-storage-layout.test.sh --live
 
       # Issue 1914 AC: the live layout of the nine proxied contracts extends, append-only, the layout committed at the Deploy 3 record tag. --releases skips rehearsal tags, so
       # this step names the tag. The output is captured to a file (no pipe whose exit status is lost) and asserted: the run must say it compared, never that it found nothing to keep.

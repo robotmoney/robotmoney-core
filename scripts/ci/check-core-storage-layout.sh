@@ -21,7 +21,17 @@
 #               through a pointer argument is part of the layout surface);
 #   namespaces  the ERC-7201 namespaces in the inheritance chain (`@custom:storage-location erc7201:<id>`), each with
 #               its struct members as declared in source. OpenZeppelin's own namespaces are pinned through the
-#               submodule commits below; GovernedUUPS's namespace is Robot Money's own.
+#               submodule commits below; GovernedUUPS's namespace is Robot Money's own;
+#   nested      every struct type reachable from the contract's storage, through sequential variables (scope
+#               `storage`) and through each ERC-7201 namespace (scope: the namespace id), with its size, whether it
+#               is an array element, and its members in order with type, slot and offset. solc reports a layout only
+#               for state variables, so a namespace struct is read from a probe contract that holds it as its only
+#               state variable (contracts/test/helpers/StorageLayoutProbe.sol, `LayoutProbe_<id>`): solc then lists
+#               every type reachable from it, through mappings, arrays and nested structs. A namespace with no
+#               probe, or a probe whose member names are not the namespace's, is a tooling error. Before this
+#               section the members of a struct behind a namespace mapping were never compared: release v0.9.0
+#               changed Request, Settlement and StepParams in the middle and the gate passed (Deploy 4 v0.9.0
+#               upgrade audit, regression test 1).
 #
 # A shared pins file records the commits of the two OpenZeppelin submodules: bumping either moves code that owns
 # proxy storage (ERC20, ERC4626, AccessControl, ReentrancyGuard, Initializable), so it fails until re-snapshotted.
@@ -31,12 +41,24 @@
 # append-only, the snapshot committed at each baseline: every storage row, every member of every stored struct and
 # of every ERC-7201 namespace at the same position with the same type, no linked library dropped. New rows and
 # members may only follow the old ones. A baseline that ships no GovernedUUPS proxy has no proxy layout to keep.
-#   --baseline <ref>  a git ref, e.g. the base commit of a pull request (CI: HEAD^1 of the PR merge commit)
-#   --releases        every production `release/*` tag (rehearsal tags excluded) that ships GovernedUUPS proxies
+#   --baseline <ref>      a git ref, e.g. the base commit of a pull request (CI: HEAD^1 of the PR merge commit)
+#   --releases            every production `release/*` tag (rehearsal tags excluded) that ships GovernedUUPS proxies
+#   --baseline-dir <dir>  a directory of committed snapshots, one <Contract>.json each, of a layout that is live on
+#                         chain (contracts/test/fixtures/storage-layout/baselines/v0.8.0: the Deploy 4 proxies at
+#                         fa7c47182, with the nested section the snapshots of that commit lack)
+#
+# Structs (the `nested` section). Against every baseline a struct may only gain members at its end, in the free bytes
+# of its last slot or in new slots. A reorder, removal, retype or mid-struct insert fails and names the struct and
+# the member. A struct that is an array element may not change size. A baseline older than the nested section is
+# compared through its `structs` section. A deliberate break that a migration repairs is declared in
+# scripts/ci/storage-layout-migrations.json: contract, struct, the layout hash of the baseline struct (`from`), the
+# layout hash of the live struct (`to`), and the migration function that rewrites the legacy entries. The gate accepts
+# a break only when an entry matches all of them (`scripts/ci/storage_layout_nested.py hashes <snapshot>` prints the
+# hashes). --require-migrations also requires the declared function in the contract's ABI.
 #
 # Usage (repo root, after `forge build`):
 #   scripts/ci/check-core-storage-layout.sh              compare every contract against its snapshot
-#   scripts/ci/check-core-storage-layout.sh [--baseline <ref>]... [--releases]
+#   scripts/ci/check-core-storage-layout.sh [--baseline <ref>]... [--releases] [--baseline-dir <dir>]... [--require-migrations]
 #                                                        the same, and extend every baseline append-only
 #   scripts/ci/check-core-storage-layout.sh --write      rewrite every snapshot (review the diff)
 #   scripts/ci/check-core-storage-layout.sh --selftest   prove the gate fails on mutated snapshots
@@ -49,6 +71,11 @@ SNAPSHOT_DIR="${SNAPSHOT_DIR:-$REPO_ROOT/contracts/test/fixtures/storage-layout}
 FORGE="${FORGE:-forge}"
 PINS="$SNAPSHOT_DIR/pins.json"
 RENAMES="${RENAMES:-$REPO_ROOT/scripts/ci/storage-layout-renames.json}"
+MIGRATIONS="${MIGRATIONS:-$REPO_ROOT/scripts/ci/storage-layout-migrations.json}"
+NESTED_PY="$REPO_ROOT/scripts/ci/storage_layout_nested.py"
+# The probe contracts that hold each ERC-7201 namespace struct as a state variable (`LayoutProbe_<id, dots as underscores>`).
+PROBE_SRC="${PROBE_SRC:-contracts/test/helpers/StorageLayoutProbe.sol}"
+REQUIRE_MIGRATIONS=0
 
 # contract:source — the ten proxied core contracts (docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md; HardAssetsVault, ADR-0018),
 # and the four proxies of the fund system (Deploy 4).
@@ -141,8 +168,40 @@ inheritance_sources() {
     | grep -E '^(contracts/|lib/openzeppelin-contracts-upgradeable/)' || true
 }
 
+# nested_live <raw-layout-file> <namespaces-json>: the `nested` section. Scope `storage` is every struct of the
+# contract's own layout. Each namespace is read from its probe contract, whose member names must be the namespace's.
+nested_live() {
+  local raw="$1" ns="$2" id probe cache want got
+  local -a parts=()
+  python3 "$NESTED_PY" nested "$raw" >"$WORK/nested.storage.json" || return 2
+  while IFS= read -r id; do
+    probe="LayoutProbe_${id//./_}"
+    cache="$WORK/probe.$id.raw.json"
+    if [[ ! -s "$cache" ]]; then
+      (cd "$REPO_ROOT" && "$FORGE" inspect "$PROBE_SRC:$probe" storageLayout --json) >"$cache" 2>"$WORK/probe.err" || {
+        rm -f "$cache"
+        echo "check-core-storage-layout: namespace $id has no layout probe: add contract $probe to $PROBE_SRC" >&2
+        tail -n 5 "$WORK/probe.err" | sed 's/^/  /' >&2
+        return 2
+      }
+    fi
+    want="$(jq -c --arg id "$id" '[.[$id][] | (capture("(?<l>[A-Za-z_$][A-Za-z0-9_$]*) *; *$")? | .l)]' <<<"$ns")"
+    got="$(python3 "$NESTED_PY" labels "$cache" | jq -c .)" || return 2
+    if [[ "$want" != "$got" ]]; then
+      echo "check-core-storage-layout: $probe in $PROBE_SRC does not hold the struct of namespace $id" >&2
+      echo "  namespace members: $want" >&2
+      echo "  probe members:     $got" >&2
+      return 2
+    fi
+    python3 "$NESTED_PY" nested "$cache" >"$WORK/nested.$id.json" || return 2
+    jq --arg id "$id" '{($id): .}' "$WORK/nested.$id.json" >"$WORK/nested.$id.scope.json"
+    parts+=("$WORK/nested.$id.scope.json")
+  done < <(jq -r 'keys[]' <<<"$ns")
+  jq -s '{storage: .[0]} + (.[1:] | add // {})' "$WORK/nested.storage.json" "${parts[@]}"
+}
+
 normalized_live() {
-  local name="$1" src="$2" raw artifact libs ns enums f
+  local name="$1" src="$2" raw artifact libs ns enums nested f
   local -a sources=()
   # The fully qualified name: the prototype tree holds a second contract of one of these names (Deploy 4).
   raw="$(cd "$REPO_ROOT" && "$FORGE" inspect "$src:$name" storageLayout --json)" \
@@ -154,8 +213,10 @@ normalized_live() {
   # shellcheck disable=SC2046
   ns="$(namespaces_of $(inheritance_sources "$name" "$src"))"
   enums="$(enums_of "${sources[@]}" <<<"$raw")" || return 2
-  jq -S --argjson libs "$libs" --argjson ns "$ns" --argjson enums "$enums" \
-    "$NORMALIZE + {libraries: \$libs, namespaces: \$ns, enums: \$enums}" <<<"$raw" \
+  printf '%s' "$raw" >"$WORK/raw.json"
+  nested_live "$WORK/raw.json" "$ns" >"$WORK/nested.json" || return 2
+  jq -S --argjson libs "$libs" --argjson ns "$ns" --argjson enums "$enums" --slurpfile nested "$WORK/nested.json" \
+    "$NORMALIZE + {libraries: \$libs, namespaces: \$ns, enums: \$enums, nested: \$nested[0]}" <<<"$raw" \
     || { echo "check-core-storage-layout: could not normalize $name" >&2; return 2; }
 }
 
@@ -202,7 +263,8 @@ compare() {
 # extends <label> <live-file> <baseline-file> <baseline-name>: 0 when the live layout extends the baseline
 # append-only, 1 when it moves, retypes or removes anything the baseline holds, 2 input error.
 extends() {
-  local label="$1" live="$2" base="$3" ref="$4" contract="${5:-}" bad
+  local label="$1" live="$2" base="$3" ref="$4" contract="${5:-}" bad nested nrc=0 entry
+  local -a abi=()
   [[ -s "$base" ]] || { echo "check-core-storage-layout: the snapshot of $label at $ref is empty" >&2; return 2; }
   # Reviewed label-only renames (storage-layout-renames.json: slot, offset and type pinned) are applied to the baseline rows.
   # Reviewed library source-path renames (libraryRenames, PR 2042) are applied to the baseline's library names only.
@@ -212,10 +274,24 @@ extends() {
     def ext($old; $new): ($old | length) <= ($new | length) and $new[:($old | length)] == $old;
     . as $l | ($b[0] | .storage = renamed(.storage // []) | .libraries = libsrenamed(.libraries // [])) as $o
     | (if ext($o.storage // []; $l.storage // []) then empty else "storage: a variable moved, was retyped or removed" end),
-      (($o.structs // {}) | to_entries[] | select(ext(.value; $l.structs[.key] // []) | not) | "struct \(.key): a member moved, was retyped or removed"),
       (($o.namespaces // {}) | to_entries[] | select(ext(.value; $l.namespaces[.key] // []) | not) | "namespace \(.key): a member moved, was retyped or removed"),
       ((($o.libraries // []) - ($l.libraries // []))[] | "library \(.) is no longer linked")' "$live")" \
     || { echo "check-core-storage-layout: cannot compare $label with $ref" >&2; return 2; }
+  # Structs: append-only member by member, or a break declared in the migrations file (storage_layout_nested.py).
+  if [[ "$REQUIRE_MIGRATIONS" == 1 ]]; then
+    for entry in "${CONTRACTS[@]}"; do
+      if [[ "${entry%%:*}" == "$contract" ]]; then abi=(--abi "$REPO_ROOT/out/$(basename "${entry#*:}")/$contract.json"); fi
+    done
+  fi
+  nested="$(python3 "$NESTED_PY" check --live "$live" --base "$base" --contract "${contract:-$label}" \
+    --migrations "$MIGRATIONS" --ref "$ref" "${abi[@]}" 2>&1 >"$WORK/declared.out")" || nrc=$?
+  if (( nrc > 1 )); then
+    echo "$nested" >&2
+    echo "check-core-storage-layout: cannot compare the structs of $label with $ref" >&2
+    return 2
+  fi
+  cat "$WORK/declared.out"
+  if [[ -n "$nested" ]]; then bad="${bad:+$bad$'\n'}$nested"; fi
   if [[ -z "$bad" ]]; then
     echo "check-core-storage-layout: $label extends the layout of $ref"
     return 0
@@ -257,6 +333,21 @@ baseline_check() {
   return "$rc"
 }
 
+# baseline_dir_check <dir> <live-dir>: every contract's live layout against the snapshot committed in <dir>.
+baseline_dir_check() {
+  local dir="$1" live="$2" rc=0 n=0 entry name
+  [[ -d "$dir" ]] || { echo "check-core-storage-layout: baseline directory $dir does not exist" >&2; return 2; }
+  for entry in "${CONTRACTS[@]}"; do
+    name="${entry%%:*}"
+    [[ -e "$dir/$name.json" ]] || continue
+    n=$((n + 1))
+    extends "$name storage layout" "$live/$name.json" "$dir/$name.json" "${dir#"$REPO_ROOT"/}" "$name" || rc=$?
+    [[ "$rc" == 2 ]] && return 2
+  done
+  (( n > 0 )) || { echo "check-core-storage-layout: baseline directory $dir holds no snapshot of a pinned contract: nothing was compared" >&2; return 2; }
+  return "$rc"
+}
+
 command -v jq >/dev/null || { echo "check-core-storage-layout: jq is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "check-core-storage-layout: python3 is required (the enum member scan)" >&2; exit 2; }
 
@@ -264,13 +355,18 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 BASELINES=()
-if [[ "${1:-}" == "--baseline" || "${1:-}" == "--releases" ]]; then
+BASELINE_DIRS=()
+if [[ "${1:-}" == "--baseline" || "${1:-}" == "--releases" || "${1:-}" == "--baseline-dir" || "${1:-}" == "--require-migrations" ]]; then
   while (( $# > 0 )); do
     case "$1" in
       --baseline) [[ -n "${2:-}" ]] || { echo "--baseline needs a git ref" >&2; exit 2; }; BASELINES+=("$2"); shift 2 ;;
       --releases) mapfile -t -O "${#BASELINES[@]}" BASELINES < <(released_proxy_tags)
                   (( ${#BASELINES[@]} > 0 )) || echo "check-core-storage-layout: no production release ships GovernedUUPS proxies yet"
                   shift ;;
+      --baseline-dir) [[ -n "${2:-}" ]] || { echo "--baseline-dir needs a directory" >&2; exit 2; }
+                  if [[ "$2" == /* ]]; then BASELINE_DIRS+=("$2"); else BASELINE_DIRS+=("$REPO_ROOT/$2"); fi
+                  shift 2 ;;
+      --require-migrations) REQUIRE_MIGRATIONS=1; shift ;;
       *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -292,6 +388,12 @@ case "${1:-}" in
     for ref in "${BASELINES[@]}"; do
       brc=0
       baseline_check "$ref" "$WORK" || brc=$?
+      [[ "$brc" == 2 ]] && exit 2
+      [[ "$brc" == 0 ]] || rc=1
+    done
+    for dir in "${BASELINE_DIRS[@]}"; do
+      brc=0
+      baseline_dir_check "$dir" "$WORK" || brc=$?
       [[ "$brc" == 2 ]] && exit 2
       [[ "$brc" == 0 ]] || rc=1
     done
@@ -453,7 +555,7 @@ case "${1:-}" in
     # Every committed snapshot must itself be in the normalized shape.
     for entry in "${CONTRACTS[@]}"; do
       n="${entry%%:*}"
-      if nonempty_layout "$n" "$SNAPSHOT_DIR/$n.json" && jq -e '(.structs | type) == "object" and (.libraries | type) == "array" and (.namespaces | length) > 0 and (.enums | type) == "object"' \
+      if nonempty_layout "$n" "$SNAPSHOT_DIR/$n.json" && jq -e '(.structs | type) == "object" and (.libraries | type) == "array" and (.namespaces | length) > 0 and (.enums | type) == "object" and (.nested.storage | type) == "object" and ((.namespaces | keys) - (.nested | keys) | length) == 0' \
         "$SNAPSHOT_DIR/$n.json" >/dev/null 2>&1; then
         echo "ok   committed snapshot $n.json is normalized"
       else
@@ -472,6 +574,6 @@ case "${1:-}" in
     fi
     echo "check-core-storage-layout selftest: all cases passed"
     ;;
-  -h|--help) sed -n '2,34p' "$0" ;;
+  -h|--help) sed -n '2,66p' "$0" ;;
   *) echo "unknown argument: $1" >&2; exit 2 ;;
 esac
