@@ -263,6 +263,7 @@ contracts/test/prototype/contract.FixVenue.mdx
 contracts/test/prototype/contract.FlowLibsHarness.mdx
 contracts/test/prototype/contract.FlowLibsPinTest.mdx
 contracts/test/prototype/contract.FlowLibsTest.mdx
+contracts/test/prototype/contract.FlowQueueFirstRequestTest.mdx
 contracts/test/prototype/contract.FlowQueueFixesTest.mdx
 contracts/test/prototype/contract.FlowQueueGapsTest.mdx
 contracts/test/prototype/contract.FlowQueueOldestFirstInvariant.mdx

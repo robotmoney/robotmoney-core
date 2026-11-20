@@ -1259,6 +1259,31 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
     }
 }
 
+/// @notice Regression (Twin run of v0.9.0-onevault-upgrade, 2026-11-20): the first request of a queue upgraded in place
+///         from v0.8 must settle. Such a queue never ran the v0.9.0 `initialize`, so its era counter reads 0.
+///         `ensureInitialized` used to raise `windDownEra` to 1 right after the request had recorded era 0, so no round
+///         saw the request (`checkSettle` = Window) and claims treated it as a shutdown-era request. The era now
+///         starts at 0 and only `onShutdown` raises it.
+contract FlowQueueFirstRequestTest is FlowQueueFixesBase {
+    /// @dev `FlowState.windDownEra`: slot 0x3c of the erc7201 namespace robotmoney.storage.FlowQueue.
+    bytes32 internal constant ERA_SLOT =
+        bytes32(uint256(0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000) + 0x3c);
+
+    function test_firstRequestAfterAnInPlaceUpgradeSettles() public {
+        _invest();
+        assertEq(queue.requestCount(), 0, "no request yet: the next one is the queue's first");
+        // The upgraded queue's state: the era counter was never written.
+        vm.store(address(queue), ERA_SLOT, bytes32(0));
+        uint256 id = openDepositRequest(alice, 1_000e6);
+        assertEq(uint256(vm.load(address(queue), ERA_SLOT)), 0, "a request does not move the era");
+        assertEq(queue.getRequest(id).era, 0, "the request is in the queue's era");
+        settleUntilFilled(id);
+        assertEq(
+            uint8(queue.requestStatus(id)), uint8(RequestStatus.Closed), "the first request filled"
+        );
+    }
+}
+
 /// @title FlowQueueOldestFirstInvariant
 /// @notice Step 3 finish plan §3.1 item 2: "the oldest fillable request always fills first", as invariants over
 ///         random sequences of requests (both sides, admissible and tight limits), cancels, feed moves inside

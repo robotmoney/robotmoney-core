@@ -5,7 +5,7 @@ description: "Linked library holding Step 3f's O(1) whole-match booking, running
 
 # FlowMatchLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/3dbb97a08d99eefdaa58748abc6d0f614b475645/contracts/lib/FlowMatchLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/30d56e3e3fa551fc97da4f6d7e277f769b2d1a20/contracts/lib/FlowMatchLib.sol)
 
 **Title:** FlowMatchLib
 
@@ -45,7 +45,15 @@ uint256 internal constant ACC_SCALE = 1e36;
 
 ### ensureInitialized
 
-Ensure Step 3f cycle/era counters are initialized (`>= 1`).
+Ensure the Step 3f match cycle counters are initialized (`>= 1`).
+
+<i>
+
+The wind-down era is NOT touched here: it starts at 0 and only `onShutdown` raises it. A queue upgraded in
+place from v0.8 never ran `initialize`, and its requests (old ones, and the first new one, which records its
+era before `registerCreated` calls this) carry era 0. Raising the era here orphaned them from every round.
+
+</i>
 
 ```solidity
 function ensureInitialized(FlowState storage s) public;

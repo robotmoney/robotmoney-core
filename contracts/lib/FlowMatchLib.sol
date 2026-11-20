@@ -45,9 +45,11 @@ library FlowMatchLib {
     //  Initialization & request registration
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Ensure Step 3f cycle/era counters are initialized (`>= 1`).
+    /// @notice Ensure the Step 3f match cycle counters are initialized (`>= 1`).
+    /// @dev The wind-down era is NOT touched here: it starts at 0 and only `onShutdown` raises it. A queue upgraded in
+    ///      place from v0.8 never ran `initialize`, and its requests (old ones, and the first new one, which records its
+    ///      era before `registerCreated` calls this) carry era 0. Raising the era here orphaned them from every round.
     function ensureInitialized(FlowState storage s) public {
-        if (s.windDownEra == 0) s.windDownEra = 1;
         if (s.depCycle == 0) {
             s.depCycle = 1;
             s.depCycleFactor[1] = MATCH_SCALE;

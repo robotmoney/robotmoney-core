@@ -419,6 +419,7 @@ export const sidebar = [
             { text: "FlowLibsHarness", link: "/contracts/test/prototype/contract.FlowLibsHarness" },
             { text: "FlowLibsPinTest", link: "/contracts/test/prototype/contract.FlowLibsPinTest" },
             { text: "FlowLibsTest", link: "/contracts/test/prototype/contract.FlowLibsTest" },
+            { text: "FlowQueueFirstRequestTest", link: "/contracts/test/prototype/contract.FlowQueueFirstRequestTest" },
             { text: "FlowQueueFixesTest", link: "/contracts/test/prototype/contract.FlowQueueFixesTest" },
             { text: "FlowQueueGapsTest", link: "/contracts/test/prototype/contract.FlowQueueGapsTest" },
             { text: "FlowQueueOldestFirstInvariant", link: "/contracts/test/prototype/contract.FlowQueueOldestFirstInvariant" },

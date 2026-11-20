@@ -1,0 +1,42 @@
+---
+title: "FlowQueueFirstRequestTest"
+description: "Regression (Twin run of v0.9.0-onevault-upgrade, 2026-11-20): the first request of a queue upgraded in place from v0.8 must settle. Such a queue never ran the v0.9.0 `initialize`, so its era counter reads 0. `ensureInitialized` used to raise `windDownEra` to 1 right after the request had recorded era 0, so no round saw the request (`checkSettle` = Window) and claims treated it as a shutdown-era request. The era now starts at 0 and only `onShutdown` raises it."
+---
+
+# FlowQueueFirstRequestTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/30d56e3e3fa551fc97da4f6d7e277f769b2d1a20/contracts/test/prototype/FlowQueueFixes.t.sol)
+
+**Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
+
+Regression (Twin run of v0.9.0-onevault-upgrade, 2026-11-20): the first request of a queue upgraded in place
+from v0.8 must settle. Such a queue never ran the v0.9.0 `initialize`, so its era counter reads 0.
+`ensureInitialized` used to raise `windDownEra` to 1 right after the request had recorded era 0, so no round
+saw the request (`checkSettle` = Window) and claims treated it as a shutdown-era request. The era now
+starts at 0 and only `onShutdown` raises it.
+
+## Constants
+
+### ERA_SLOT
+
+<i>
+
+`FlowState.windDownEra`: slot 0x3c of the erc7201 namespace robotmoney.storage.FlowQueue.
+
+</i>
+
+```solidity
+bytes32 internal constant ERA_SLOT =
+        bytes32(uint256(0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000) + 0x3c);
+```
+
+## Functions
+
+<a id="test_firstrequestafteraninplaceupgradesettles"></a>
+
+### test_firstRequestAfterAnInPlaceUpgradeSettles
+
+```solidity
+function test_firstRequestAfterAnInPlaceUpgradeSettles() public;
+```
+
