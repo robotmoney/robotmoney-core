@@ -38,6 +38,7 @@ import {FlowEpochs, FlowState, FlowStorage, WalkCursor} from "./lib/FlowStorage.
 import {FlowCheckLib} from "./lib/FlowCheckLib.sol";
 import {FlowClaimLib} from "./lib/FlowClaimLib.sol";
 import {FlowMatchLib} from "./lib/FlowMatchLib.sol";
+import {FlowMigrateLib} from "./lib/FlowMigrateLib.sol";
 import {FlowSettleLib} from "./lib/FlowSettleLib.sol";
 
 /// @title FlowQueue
@@ -101,6 +102,17 @@ contract FlowQueue is
             FlowLevers({basketCallBps: DEFAULT_BASKET_CALL_BPS, legPriceMode: LEG_PRICE_STRICTER});
         s.levers = l;
         emit FlowLeversSet(l);
+    }
+
+    /// @notice The one-time state migration of a queue upgraded in place from contracts 0.8.0 (`FlowMigrateLib`):
+    ///         rewrites the 0.8.0 requests and settlements into the 0.9.0 layout, assigns held deposit shares to their
+    ///         owners, writes the three new parameters and resets the walk. The upgrade timelock passes it as the data
+    ///         of `upgradeToAndCall`; nobody else can run it, and it runs once. Reverts while a 0.8.0 request is open.
+    function migrateV090(uint32 cancelBuffer_, uint32 maxPause_, uint16 matchBandBps_)
+        external
+        reinitializer(2)
+    {
+        FlowMigrateLib.migrateV090(_s(), cancelBuffer_, maxPause_, matchBandBps_);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

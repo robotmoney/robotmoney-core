@@ -5,7 +5,7 @@ description: "The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind
 
 # RobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/30d56e3e3fa551fc97da4f6d7e277f769b2d1a20/contracts/RobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d26015d044a6162bbd93106a89523fa140073356/contracts/RobotMoneyFund.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRobotMoneyFund](/contracts/interfaces/interface.IRobotMoneyFund)
 
@@ -103,6 +103,26 @@ function initialize(
 | p | `FundInitParams` |  |
 | upgradeTimelock | `address` |  |
 | mode | `GovernedUUPS.UpgradeMode` |  |
+
+<a id="migratev090-address"></a>
+
+### migrateV090
+
+The one-time state migration of a fund upgraded in place from contracts 0.8.0 (`FundMigrateLib`): the
+step 3f parameter defaults, a new exclusion ledger, and `rebalancer` (the `REBALANCER_ROLE` holder,
+already upgraded). The upgrade timelock passes it as the data of `upgradeToAndCall`; nobody else can
+run it, and it runs once: the library applies the `reinitializer(2)` gate (a modifier here would not
+fit under EIP-170).
+
+```solidity
+function migrateV090(address rebalancer_) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rebalancer_ | `address` |  |
 
 <a id="decimals"></a>
 

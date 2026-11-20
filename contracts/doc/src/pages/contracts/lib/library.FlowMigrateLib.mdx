@@ -1,0 +1,332 @@
+---
+title: "FlowMigrateLib"
+description: "The one-time state migration of a `FlowQueue` proxy upgraded in place from contracts 0.8.0 to 0.9.0. It is the body of `FlowQueue.migrateV090`, a `reinitializer(2)` the upgrade timelock passes as the data of `upgradeToAndCall`, so the new code never runs on unmigrated state. A queue deployed at 0.9.0 never needs it (`initialize` writes everything below)."
+---
+
+# FlowMigrateLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d26015d044a6162bbd93106a89523fa140073356/contracts/lib/FlowMigrateLib.sol)
+
+**Title:** FlowMigrateLib
+
+The one-time state migration of a `FlowQueue` proxy upgraded in place from contracts 0.8.0 to 0.9.0. It is
+the body of `FlowQueue.migrateV090`, a `reinitializer(2)` the upgrade timelock passes as the data of
+`upgradeToAndCall`, so the new code never runs on unmigrated state. A queue deployed at 0.9.0 never needs
+it (`initialize` writes everything below).
+
+What 0.9.0 changed under an existing proxy, and what this does about it:
+
+1. `Request` and `Settlement` changed in the middle of the struct (the top-level `FlowState` only grew at
+its end). Layouts, slot offsets from the mapping entry:
+
+| slot | 0.8.0 `Request`            | 0.9.0 `Request`                                                |
+| 0    | owner, kind, epoch        | owner, kind, epoch                                             |
+| 1    | amount                    | amount                                                         |
+| 2    | remaining                 | remaining                                                      |
+| 3    | limit (uint256)           | closed, exitFeeBps, minHold, maxRoll, createdAt, expiryEpoch   |
+| 4    | closed (bool)             | expiresAt, noticeRound, era, enrolled                          |
+| 5-9  | (none)                    | matchCycle, normBasis, entryCumScaled, entryUnmatchedFactor,   |
+|      |                           | nextMatchId                                                    |
+
+| slot | 0.8.0 `Settlement`                                   | 0.9.0 `Settlement`                  |
+| 0    | time, settler                                        | time, settler                       |
+| 1    | depositBoundPrice                                    | matchedShares                       |
+| 2    | redeemBoundPrice                                     | matchedUsdc                         |
+| 3    | usdcIn                                               | matchSharePrice                     |
+| 4    | sharesMinted                                         | usdcIn                              |
+| 5    | sharesBurned                                         | sharesMinted                        |
+| 6    | usdcOut                                              | sharesBurned                        |
+| 7    | frozenUntil (bytes 0-7), returnAllowed (byte 8),     | usdcOut                             |
+|      | holdEndsAt (bytes 9-16)                              |                                     |
+| 8    | (none)                                               | frozenUntil, freezeSetAt, holdEndsAt|
+
+Every request `1..requestCount` and settlement `1..settlementCount` is rewritten into the 0.9.0 layout.
+A member with no 0.8.0 meaning gets its neutral value (0; `era` stays 0, the era of an upgraded queue).
+This is not only for the views: the per-epoch id lists are shared, so a 0.9.0 request made in an epoch
+that holds 0.8.0 requests puts them in front of the round's enrollment and walk, which read `closed`,
+`enrolled`, `era` and `expiryEpoch` of each.
+2. 0.9.0 keeps deposit shares held for an owner in `ownerHeldShares`; 0.8.0 kept them in `queuedShares`.
+Without a backfill a 0.8.0 deposit claim cannot be delivered (the subtraction underflows) and
+`queuedSharesOf` leaves the shares out. The backfill adds every undelivered deposit share to its owner.
+3. `cancelBuffer`, `maxPause` and `matchBandBps` are new `FlowParams` members and read 0, which ends a
+pause at once and skips every match. They are written here, inside their bounds.
+4. `oldestEpoch` was an epoch number and is now an index into `activeEpochs`; the walk cursors point into
+0.8.0 lists. Both are reset.
+
+A 0.8.0 request that is still open has no place in the 0.9.0 match pools, so the migration refuses to run
+while any escrow is pending: cancel or settle it under 0.8.0 first.
+
+## Functions
+
+<a id="migratev090-flowstate-uint32-uint32-uint16"></a>
+
+### migrateV090
+
+Body of `FlowQueue.migrateV090` (see the library note). Runs once, in the proxy's storage.
+
+```solidity
+function migrateV090(
+        FlowState storage s,
+        uint32 cancelBuffer,
+        uint32 maxPause,
+        uint16 matchBandBps
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| cancelBuffer | `uint32` | `FlowParams.cancelBuffer` to write, in [MIN_CANCEL_BUFFER, MAX_CANCEL_BUFFER] and below<br/>`epochLength`. |
+| maxPause | `uint32` | `FlowParams.maxPause` to write, in [MIN_MAX_PAUSE, MAX_PAUSE_DURATION] and at least<br/>`TIMELOCK_DELAY_REFERENCE + epochLength`. |
+| matchBandBps | `uint16` | `FlowParams.matchBandBps` to write, in [1, `refBandBps`]. |
+
+<a id="_migraterequest-flowstate-uint256"></a>
+
+### _migrateRequest
+
+<i>
+
+Rewrite request `id` from the 0.8.0 layout. Slots 0 to 2 are the same in both.
+
+</i>
+
+```solidity
+function _migrateRequest(FlowState storage s, uint256 id) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| id | `uint256` |  |
+
+<a id="_migratesettlement-flowstate-uint256"></a>
+
+### _migrateSettlement
+
+<i>
+
+Rewrite settlement `id` from the 0.8.0 layout. Slot 0 is the same in both.
+
+</i>
+
+```solidity
+function _migrateSettlement(FlowState storage s, uint256 id) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| id | `uint256` |  |
+
+<a id="_load-uint256"></a>
+
+### _load
+
+```solidity
+function _load(uint256 slot) private view returns (uint256 word);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slot | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| word | `uint256` |  |
+
+<a id="_store-uint256-uint256"></a>
+
+### _store
+
+```solidity
+function _store(uint256 slot, uint256 word) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slot | `uint256` |  |
+| word | `uint256` |  |
+
+## Events
+
+### QueueMigratedV090
+
+The migration ran: counts of what it rewrote and the held deposit shares it assigned to their owners.
+
+```solidity
+event QueueMigratedV090(
+        uint256 requests, uint256 settlements, uint256 claims, uint256 heldShares
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requests | `uint256` |  |
+| settlements | `uint256` |  |
+| claims | `uint256` |  |
+| heldShares | `uint256` |  |
+
+### LegacyRequestMigrated
+
+Request `requestId` was rewritten; `limit` is the 0.8.0 price limit, which 0.9.0 no longer stores.
+
+```solidity
+event LegacyRequestMigrated(uint256 indexed requestId, uint256 limit);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| limit | `uint256` |  |
+
+### LegacySettlementMigrated
+
+Settlement `settlementId` was rewritten; the two bound prices are 0.8.0 members 0.9.0 no longer stores.
+
+```solidity
+event LegacySettlementMigrated(
+        uint256 indexed settlementId, uint256 depositBoundPrice, uint256 redeemBoundPrice
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| depositBoundPrice | `uint256` |  |
+| redeemBoundPrice | `uint256` |  |
+
+## Errors
+
+### LegacyEscrowOpen
+
+Deposit USDC or redemption shares of a 0.8.0 request are still in escrow.
+
+```solidity
+error LegacyEscrowOpen(uint256 pendingUsdc, uint256 escrowShares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pendingUsdc | `uint256` |  |
+| escrowShares | `uint256` |  |
+
+### QueueAlreadyActive
+
+The queue already holds 0.9.0 round state (`activeEpochs` is not empty).
+
+```solidity
+error QueueAlreadyActive(uint256 activeEpochs);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| activeEpochs | `uint256` |  |
+
+### WindDownEraStarted
+
+The queue already went through a wind-down under 0.9.0.
+
+```solidity
+error WindDownEraStarted(uint64 era);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| era | `uint64` |  |
+
+### LegacyRequestOpen
+
+Request `requestId` is not closed and still has escrow.
+
+```solidity
+error LegacyRequestOpen(uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+### NotLegacyRequest
+
+Request `requestId` does not have the 0.8.0 layout (it was made or already migrated under 0.9.0).
+
+```solidity
+error NotLegacyRequest(uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+### NotLegacySettlement
+
+Settlement `settlementId` does not have the 0.8.0 layout.
+
+```solidity
+error NotLegacySettlement(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### LegacyReturnAllowed
+
+Settlement `settlementId` is frozen with in-kind returns allowed, a 0.8.0 exit 0.9.0 does not have.
+Release the freeze under 0.8.0 first.
+
+```solidity
+error LegacyReturnAllowed(uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+### HeldSharesMismatch
+
+The undelivered deposit shares of all claims do not add up to `totalHeldShares`.
+
+```solidity
+error HeldSharesMismatch(uint256 claimsSum, uint256 totalHeldShares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimsSum | `uint256` |  |
+| totalHeldShares | `uint256` |  |
+

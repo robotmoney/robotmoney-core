@@ -22,6 +22,8 @@ import {FlowCheckLib} from "../lib/FlowCheckLib.sol";
 import {FlowMatchLib} from "../lib/FlowMatchLib.sol";
 import {FlowSettleLib} from "../lib/FlowSettleLib.sol";
 import {FlowClaimLib} from "../lib/FlowClaimLib.sol";
+import {FlowMigrateLib} from "../lib/FlowMigrateLib.sol";
+import {FundMigrateLib} from "../lib/FundMigrateLib.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployFundLibs
@@ -59,6 +61,8 @@ contract DeployFundLibs is ExpectedChainGuard {
         address flowMatchLib;
         address flowSettleLib;
         address flowClaimLib;
+        address flowMigrateLib;
+        address fundMigrateLib;
     }
 
     /// @notice Forge broadcast entrypoint.
@@ -94,11 +98,14 @@ contract DeployFundLibs is ExpectedChainGuard {
         d.flowMatchLib = address(FlowMatchLib);
         d.flowSettleLib = address(FlowSettleLib);
         d.flowClaimLib = address(FlowClaimLib);
+        // The one-time 0.8.0 to 0.9.0 state migrations (`FlowQueue.migrateV090`, `RobotMoneyFund.migrateV090`).
+        d.flowMigrateLib = address(FlowMigrateLib);
+        d.fundMigrateLib = address(FundMigrateLib);
         // The call proves TickMath is linked to working code, not only to an address (finding L3-D1).
         require(
             TickMath.getSqrtRatioAtTick(0) == SQRT_RATIO_AT_TICK_ZERO, "TickMath: tick 0 mismatch"
         );
-        address[16] memory all = [
+        address[18] memory all = [
             d.tickMath,
             d.twapTickMath,
             d.basketSwaps,
@@ -114,7 +121,9 @@ contract DeployFundLibs is ExpectedChainGuard {
             d.flowCheckLib,
             d.flowMatchLib,
             d.flowSettleLib,
-            d.flowClaimLib
+            d.flowClaimLib,
+            d.flowMigrateLib,
+            d.fundMigrateLib
         ];
         for (uint256 i = 0; i < all.length; i++) {
             require(all[i] != address(0), "fund-libs: zero linked library");
@@ -140,7 +149,9 @@ contract DeployFundLibs is ExpectedChainGuard {
         vm.serializeAddress(obj, "flow_check_lib", d.flowCheckLib);
         vm.serializeAddress(obj, "flow_match_lib", d.flowMatchLib);
         vm.serializeAddress(obj, "flow_settle_lib", d.flowSettleLib);
-        string memory json = vm.serializeAddress(obj, "flow_claim_lib", d.flowClaimLib);
+        vm.serializeAddress(obj, "flow_claim_lib", d.flowClaimLib);
+        vm.serializeAddress(obj, "flow_migrate_lib", d.flowMigrateLib);
+        string memory json = vm.serializeAddress(obj, "fund_migrate_lib", d.fundMigrateLib);
         vm.writeJson(json, outPath);
         console2.log("Wrote fund-libs deployment JSON to", outPath);
     }

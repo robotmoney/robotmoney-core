@@ -24,6 +24,8 @@ import {FlowCheckLib} from "../../lib/FlowCheckLib.sol";
 import {FlowMatchLib} from "../../lib/FlowMatchLib.sol";
 import {FlowSettleLib} from "../../lib/FlowSettleLib.sol";
 import {FlowClaimLib} from "../../lib/FlowClaimLib.sol";
+import {FlowMigrateLib} from "../../lib/FlowMigrateLib.sol";
+import {FundMigrateLib} from "../../lib/FundMigrateLib.sol";
 import {PlanMath} from "../../PlanMath.sol";
 
 /// @notice One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue; step 3f adds `FlowMatchLib` and
@@ -63,7 +65,7 @@ contract SizeGateTest is PrototypeHarness {
         assertLe(size, EIP3860_LIMIT, string.concat(label, ": over EIP-3860"));
     }
 
-    /// @notice G1 (§13): fund, rebalancer and queue implementation `code.length` <= 24,576 (EIP-170), plus all 16
+    /// @notice G1 (§13): fund, rebalancer and queue implementation `code.length` <= 24,576 (EIP-170), plus all 18
     ///         libraries from `DeployFundLibs` (`FlowMatchLib`, `FundDelistLib`, etc.) and EIP-3860 initcode limits.
     function test_G1_fundRebalancerAndQueueFitWithHeadroom() public fixtureCovered {
         uint256 fundSize = _impl(address(fund)).code.length;
@@ -91,7 +93,7 @@ contract SizeGateTest is PrototypeHarness {
         assertLe(ledgerSize, EIP170_LIMIT, "FundExclusionLedger over EIP-170");
         assertLe(governanceSize, EIP170_LIMIT, "RebalanceGovernance over EIP-170");
 
-        // All 16 libraries from DeployFundLibs.s.sol (deployed > 0 and <= EIP-170).
+        // All 18 libraries from DeployFundLibs.s.sol (deployed > 0 and <= EIP-170).
         _assertLinkedLib("TickMath                    ", address(TickMath));
         _assertLinkedLib("TwapTickMath                ", address(TwapTickMath));
         _assertLinkedLib("BasketSwaps                 ", address(BasketSwaps));
@@ -108,6 +110,8 @@ contract SizeGateTest is PrototypeHarness {
         _assertLinkedLib("FlowMatchLib                ", address(FlowMatchLib));
         _assertLinkedLib("FlowSettleLib               ", address(FlowSettleLib));
         _assertLinkedLib("FlowClaimLib                ", address(FlowClaimLib));
+        _assertLinkedLib("FlowMigrateLib              ", address(FlowMigrateLib));
+        _assertLinkedLib("FundMigrateLib              ", address(FundMigrateLib));
 
         // Internal-only libraries: inlined into callers; the stub is small/zero.
         console2.log("FundStorage (inlined stub)  ", type(FundStorage).runtimeCode.length);
@@ -115,7 +119,7 @@ contract SizeGateTest is PrototypeHarness {
         console2.log("Fund headroom under G1      ", fundSize <= G1_MAX ? G1_MAX - fundSize : 0);
         console2.log("Queue headroom under G1     ", queueSize <= G1_MAX ? G1_MAX - queueSize : 0);
 
-        // EIP-3860 initcode limits on all core contracts and all 16 libraries (full path disambiguates baseline/).
+        // EIP-3860 initcode limits on all core contracts and all 18 libraries (full path disambiguates baseline/).
         _assertInitCode(
             "RobotMoneyFund initcode     ", "contracts/RobotMoneyFund.sol:RobotMoneyFund"
         );
@@ -167,6 +171,12 @@ contract SizeGateTest is PrototypeHarness {
         );
         _assertInitCode(
             "FlowClaimLib initcode       ", "contracts/lib/FlowClaimLib.sol:FlowClaimLib"
+        );
+        _assertInitCode(
+            "FlowMigrateLib initcode     ", "contracts/lib/FlowMigrateLib.sol:FlowMigrateLib"
+        );
+        _assertInitCode(
+            "FundMigrateLib initcode     ", "contracts/lib/FundMigrateLib.sol:FundMigrateLib"
         );
 
         // Step 3f: all 5 prototype adapters (EIP-170 runtime <= 24,576 B, EIP-3860 initcode <= 49,152 B).

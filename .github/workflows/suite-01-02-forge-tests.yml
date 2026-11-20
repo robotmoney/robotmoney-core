@@ -520,7 +520,7 @@ jobs:
           python3 .github/scripts/run_coverage_memory_guard.py
           forge coverage --report lcov
           --skip "contracts/test/prototype/**" "contracts/{RobotMoneyFund,Rebalancer,RebalanceGovernance,FlowQueue,FlowTypes,FundTypes,FundExclusionLedger,KeeperAccount,PlanMath}.sol"
-          "contracts/lib/{FeedLib,FlowCheckLib,FlowClaimLib,FlowMatchLib,FlowSettleLib,FlowStorage,FundAdminLib,FundDelistLib,FundFlowsLib,FundPositionLib,FundStepLib,FundStorage,FundValuationLib,StepFeedLib,TwapSlicesLib}.sol"
+          "contracts/lib/{FeedLib,FlowCheckLib,FlowClaimLib,FlowMatchLib,FlowMigrateLib,FlowSettleLib,FlowStorage,FundAdminLib,FundDelistLib,FundFlowsLib,FundMigrateLib,FundPositionLib,FundStepLib,FundStorage,FundValuationLib,StepFeedLib,TwapSlicesLib}.sol"
           "contracts/adapters/{AaveV3RateAdapter,AerodromeExactOutSwapAdapter,CompoundV3RateAdapter,MorphoRateAdapter,UniswapV3ExactOutSwapAdapter}.sol"
           "contracts/interfaces/{IFlowAdapters,IFlowQueue,IRebalanceGovernance,IRebalancer,IRobotMoneyFund}.sol"
           contracts/script/DeployFund.s.sol contracts/script/DeployFundLibs.s.sol

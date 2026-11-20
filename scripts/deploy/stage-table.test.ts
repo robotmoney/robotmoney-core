@@ -105,6 +105,8 @@ describe("stage-table.json", () => {
       "BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows",
       // Deploy 4: the fund system's libraries, TickMath included (the fund system links no --libraries address)
       "TickMath", "FundPositionLib", "FundValuationLib", "FundAdminLib", "FundFlowsLib", "FundStepLib", "FundDelistLib", "StepFeedLib", "FlowCheckLib", "FlowMatchLib", "FlowSettleLib", "FlowClaimLib",
+      // v0.9.0: the one-time 0.8.0 to 0.9.0 state migrations (FlowQueue.migrateV090, RobotMoneyFund.migrateV090)
+      "FlowMigrateLib", "FundMigrateLib",
     ]);
     for (const l of c2.filter((x) => !DELETED_LIBRARIES.has(x.name))) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
     const queueStage = table.stages.find((s) => s.name === "queue");

@@ -37,6 +37,7 @@ import {FundFlowsLib} from "./lib/FundFlowsLib.sol";
 import {FundAdminLib} from "./lib/FundAdminLib.sol";
 import {FundPositionLib} from "./lib/FundPositionLib.sol";
 import {FundDelistLib} from "./lib/FundDelistLib.sol";
+import {FundMigrateLib} from "./lib/FundMigrateLib.sol";
 
 /// @title RobotMoneyFund
 /// @notice The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind `GovernedUUPS` (ADR-0014). It holds
@@ -113,6 +114,15 @@ contract RobotMoneyFund is
         _setRoleAdmin(FLOW_ROLE, FLOW_ROLE);
         _grantRole(ADMIN_ROLE, p.admin);
         _grantRole(EMERGENCY_ROLE, p.emergency);
+    }
+
+    /// @notice The one-time state migration of a fund upgraded in place from contracts 0.8.0 (`FundMigrateLib`): the
+    ///         step 3f parameter defaults, a new exclusion ledger, and `rebalancer` (the `REBALANCER_ROLE` holder,
+    ///         already upgraded). The upgrade timelock passes it as the data of `upgradeToAndCall`; nobody else can
+    ///         run it, and it runs once: the library applies the `reinitializer(2)` gate (a modifier here would not
+    ///         fit under EIP-170).
+    function migrateV090(address rebalancer_) external {
+        FundMigrateLib.migrateV090(_s(), rebalancer_);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

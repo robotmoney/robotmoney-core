@@ -5,7 +5,7 @@ description: "The entry point for timed, netted, forward-priced deposits and red
 
 # FlowQueue
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/30d56e3e3fa551fc97da4f6d7e277f769b2d1a20/contracts/FlowQueue.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d26015d044a6162bbd93106a89523fa140073356/contracts/FlowQueue.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IFlowQueue](/contracts/interfaces/interface.IFlowQueue)
 
@@ -61,6 +61,29 @@ function initialize(
 | p | `FlowQueueInit` |  |
 | upgradeTimelock_ | `address` |  |
 | upgradeMode_ | `UpgradeMode` |  |
+
+<a id="migratev090-uint32-uint32-uint16"></a>
+
+### migrateV090
+
+The one-time state migration of a queue upgraded in place from contracts 0.8.0 (`FlowMigrateLib`):
+rewrites the 0.8.0 requests and settlements into the 0.9.0 layout, assigns held deposit shares to their
+owners, writes the three new parameters and resets the walk. The upgrade timelock passes it as the data
+of `upgradeToAndCall`; nobody else can run it, and it runs once. Reverts while a 0.8.0 request is open.
+
+```solidity
+function migrateV090(uint32 cancelBuffer_, uint32 maxPause_, uint16 matchBandBps_)
+        external
+        reinitializer(2);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cancelBuffer_ | `uint32` |  |
+| maxPause_ | `uint32` |  |
+| matchBandBps_ | `uint16` |  |
 
 <a id="requestdeposit-uint256-address"></a>
 

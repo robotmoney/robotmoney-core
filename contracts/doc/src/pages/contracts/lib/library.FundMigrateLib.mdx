@@ -1,0 +1,126 @@
+---
+title: "FundMigrateLib"
+description: "The one-time state migration of a `RobotMoneyFund` proxy upgraded in place from contracts 0.8.0 to 0.9.0. It is the body of `RobotMoneyFund.migrateV090`, which the upgrade timelock passes as the data of `upgradeToAndCall`, and it applies the `reinitializer(2)` gate itself (see below). A fund deployed at 0.9.0 never needs it (`initialize` and `bindRebalanceRoles` write everything below)."
+---
+
+# FundMigrateLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d26015d044a6162bbd93106a89523fa140073356/contracts/lib/FundMigrateLib.sol)
+
+**Title:** FundMigrateLib
+
+The one-time state migration of a `RobotMoneyFund` proxy upgraded in place from contracts 0.8.0 to 0.9.0.
+It is the body of `RobotMoneyFund.migrateV090`, which the upgrade timelock passes as the data of
+`upgradeToAndCall`, and it applies the `reinitializer(2)` gate itself (see below). A fund deployed at 0.9.0 never needs it (`initialize` and `bindRebalanceRoles` write
+everything below).
+
+`FundState` only grew at its end, so nothing moves. What an upgraded fund lacks is what the 0.9.0
+`initialize` writes and a 0.8.0 one never did:
+
+1. The five step 3f parameters read 0: `maxBasketBps` 0 refuses every plan with a basket weight, the two
+delisting parameters 0 leave a delisting sale no band and no budget, and `minPoolDepthUsdc` and
+`feeMarginBps` 0 switch two pool guards off. They get the defaults of a fresh fund.
+2. The fund's exclusion ledger is a separate contract with 0.8.0 code, which reads the queue's shares of a
+holder without the 0.9.0 match indexes. It is replaced by a new `FundExclusionLedger` bound to this
+fund. That is only sound while the old one never opened a record and holds no recovery money, so the
+migration requires both.
+3. `fund.rebalancer` is new and 0, and `bindRebalanceRoles` (the only writer) already ran. It is set to
+the address that holds `REBALANCER_ROLE`, which must already run 0.9.0 code: the queue calls
+`lastBasketStepAt()` on it at the first settlement of every round.
+
+## Functions
+
+<a id="migratev090-fundstate-address"></a>
+
+### migrateV090
+
+Body of `RobotMoneyFund.migrateV090` (see the library note). Runs once, in the proxy's storage.
+
+```solidity
+function migrateV090(FundState storage s, address rebalancer) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| rebalancer | `address` | The Rebalancer proxy that holds `REBALANCER_ROLE`, already upgraded to 0.9.0. |
+
+## Events
+
+### ExclusionLedgerReplaced
+
+The fund's exclusion ledger was replaced.
+
+```solidity
+event ExclusionLedgerReplaced(address indexed oldLedger, address indexed newLedger);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| oldLedger | `address` |  |
+| newLedger | `address` |  |
+
+### RebalancerRecorded
+
+`fund.rebalancer` was written by the migration.
+
+```solidity
+event RebalancerRecorded(address indexed rebalancer);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rebalancer | `address` |  |
+
+## Errors
+
+### OldLedgerNotEmpty
+
+The exclusion ledger to replace has a record or holds recovery USDC.
+
+```solidity
+error OldLedgerNotEmpty(address ledger, uint256 exclusionCount, uint256 heldUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ledger | `address` |  |
+| exclusionCount | `uint256` |  |
+| heldUsdc | `uint256` |  |
+
+### NotTheRebalancer
+
+`rebalancer` does not hold the fund's `REBALANCER_ROLE`.
+
+```solidity
+error NotTheRebalancer(address rebalancer);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rebalancer | `address` |  |
+
+### RebalancerNotUpgraded
+
+`rebalancer` does not answer `lastBasketStepAt()`: it still runs 0.8.0 code. Upgrade it first.
+
+```solidity
+error RebalancerNotUpgraded(address rebalancer);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rebalancer | `address` |  |
+

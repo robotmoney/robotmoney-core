@@ -85,6 +85,8 @@ CEREMONY_CONTRACTS=(
   "FlowMatchLib"
   "FlowSettleLib"
   "FlowClaimLib"
+  "FlowMigrateLib"
+  "FundMigrateLib"
 )
 
 fail() {

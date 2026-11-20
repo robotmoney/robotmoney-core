@@ -474,10 +474,12 @@
         "FlowCheckLib",
         "FlowClaimLib",
         "FlowMatchLib",
+        "FlowMigrateLib",
         "FlowSettleLib",
         "FundAdminLib",
         "FundDelistLib",
         "FundFlowsLib",
+        "FundMigrateLib",
         "FundPositionLib",
         "FundStepLib",
         "FundValuationLib",
@@ -554,6 +556,7 @@
         "FundAdminLib",
         "FundDelistLib",
         "FundFlowsLib",
+        "FundMigrateLib",
         "FundPositionLib",
         "FundStepLib",
         "FundValuationLib",
@@ -696,6 +699,7 @@
         "FlowCheckLib",
         "FlowClaimLib",
         "FlowMatchLib",
+        "FlowMigrateLib",
         "FlowSettleLib",
         "FundValuationLib",
         "GovernedUpgrade",
@@ -1027,6 +1031,16 @@
       "name": "FlowClaimLib",
       "artifact": "FlowClaimLib",
       "path": "contracts/lib/FlowClaimLib.sol"
+    },
+    {
+      "name": "FlowMigrateLib",
+      "artifact": "FlowMigrateLib",
+      "path": "contracts/lib/FlowMigrateLib.sol"
+    },
+    {
+      "name": "FundMigrateLib",
+      "artifact": "FundMigrateLib",
+      "path": "contracts/lib/FundMigrateLib.sol"
     }
   ],
   "artifacts": {

@@ -1,0 +1,825 @@
+---
+title: "UpgradeMigrationTest"
+description: "The in-place upgrade of a contracts 0.8.0 deployment to 0.9.0 (`FlowQueue.migrateV090`, `RobotMoneyFund.migrateV090`, `Rebalancer.migrateV090`)."
+---
+
+# UpgradeMigrationTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d26015d044a6162bbd93106a89523fa140073356/contracts/test/prototype/UpgradeMigration.t.sol)
+
+**Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
+
+**Title:** UpgradeMigrationTest
+
+The in-place upgrade of a contracts 0.8.0 deployment to 0.9.0 (`FlowQueue.migrateV090`,
+`RobotMoneyFund.migrateV090`, `Rebalancer.migrateV090`).
+
+Trunk holds no 0.8.0 code, so the 0.8.0 state is built on the harness's fresh 0.9.0 deployment by writing the
+0.8.0 storage layout with `vm.store`, the shape Deploy 4 had at its upgrade: closed requests, three unclaimed
+deposit claims of one owner, a delivered claim, a paid redemption claim, a USDC credit, one dust share, an
+epoch number in `oldestEpoch`, the three new queue parameters and the five new fund parameters at 0,
+`fund.rebalancer` at 0, and the Rebalancer's step parameters in the six-member layout. Each migration then
+runs the way the release runs it: `upgradeToAndCall(newImplementation, migrateV090(...))` from the upgrade
+timelock.
+
+Slot math. Both state structs sit at their ERC-7201 base (`FlowStorage.SLOT`, `FundStorage.SLOT`); a member
+`m` of the struct is at `base + m`, a mapping entry at `keccak256(abi.encode(key, base + m))`, an array's
+element `i` at `keccak256(slotOfLength) + i`. Member numbers (solc storage layout of `FlowState` and
+`FundState`):
+
+FlowState: 7 `params` slot 3 (usdcPegBandBps, maxLendRateGrowthBps, then cancelBuffer at byte 4, maxPause at
+byte 8, matchBandBps at byte 12), 9 `requests`, 10 `requestCount`, 12 `oldestEpoch`, 13 `claims`,
+14 `claimCount`, 15 `claimsOf`, 17 `settlements`, 18 `settlementCount`, 19 `usdcCredit`, 21 `queuedShares`,
+27 `totalPendingUsdc`, 29 `totalHeldShares`, 31 `totalCreditUsdc`, 33 `epochOpen`, 36 `requestClaims`,
+38 `dustShares`, 39 and 40 `sideIds` (deposit, redeem), 41 and 42 `sideOpen`, 43 to 46 `cursors`, 65 `depCycle`, 68 `depCycleFactor`, 75 `redCycle`, 77 `redCycles`.
+FundState: 35 `minPoolDepthUsdc`, 36 `feeMarginBps, delistBandBps, delistBudgetBps, maxBasketBps` (two bytes
+each from byte 0), 54 `rebalancer`.
+Rebalancer (plain storage): slot 1 `_stepParams`.
+FundExclusionLedger (plain storage): slot 0 `exclusionCount`, slot 3 `heldUsdc`.
+
+0.8.0 struct layouts written here (from the 0.8.0 sources, commit fa7c47182):
+- `Request`: slot 0 owner (20 bytes), kind (byte 20), epoch (bytes 21 to 28); 1 amount; 2 remaining;
+3 limit; 4 closed.
+- `Settlement`: slot 0 time (8 bytes), settler; 1 depositBoundPrice; 2 redeemBoundPrice; 3 usdcIn;
+4 sharesMinted; 5 sharesBurned; 6 usdcOut; 7 frozenUntil (bytes 0 to 7), returnAllowed (byte 8),
+holdEndsAt (bytes 9 to 16).
+- `Claim` (unchanged in 0.9.0): slot 0 requestId; 1 owner, kind (byte 20), settlementId (bytes 21 to 28);
+2 unlockAt; 3 shares; 4 usdc; 5 claimed; 6 sharesClaimed.
+- `StepParams`: stepInterval (bytes 0 to 3), keeperGrace (4 to 7), maxOverrun (8 to 11), maxStepCostBps
+(12 to 13), toleranceBps (14 to 15), minStepUsdc (16 to 31).
+
+Every write is read back through a getter before the migration runs (`_assertLegacyShape`), so a wrong slot
+fails the test instead of passing on an untouched 0.9.0 state.
+
+## Constants
+
+### FLOW
+
+```solidity
+uint256 internal constant FLOW =
+        0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
+```
+
+### FUND
+
+```solidity
+uint256 internal constant FUND =
+        0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00;
+```
+
+### S
+
+<i>
+
+One 0.8.0 deposit claim's shares (Deploy 4: 998591985300725976373313 each).
+
+</i>
+
+```solidity
+uint256 internal constant S = 998_591_985_300_725_976_373_313;
+```
+
+### CLAIM_USDC
+
+```solidity
+uint256 internal constant CLAIM_USDC = 1_000e6;
+```
+
+### REDEEMED_SHARES
+
+```solidity
+uint256 internal constant REDEEMED_SHARES = 500_000e18;
+```
+
+### REDEEMED_USDC
+
+```solidity
+uint256 internal constant REDEEMED_USDC = 499e6;
+```
+
+### CREDIT_USDC
+
+```solidity
+uint256 internal constant CREDIT_USDC = 1_390;
+```
+
+### LIMIT
+
+<i>
+
+A 0.8.0 price limit whose low byte is 0: read as a 0.9.0 request it says `closed = false`.
+
+</i>
+
+```solidity
+uint256 internal constant LIMIT = 1_050_000_000_000_000_000;
+```
+
+### DEP_BOUND
+
+```solidity
+uint256 internal constant DEP_BOUND = 1_010_000_000_000_000_000;
+```
+
+### RED_BOUND
+
+```solidity
+uint256 internal constant RED_BOUND = 990_000_000_000_000_000;
+```
+
+### LEGACY_KEEPER_GRACE
+
+```solidity
+uint32 internal constant LEGACY_KEEPER_GRACE = 21_600;
+```
+
+### NEW_CANCEL_BUFFER
+
+```solidity
+uint32 internal constant NEW_CANCEL_BUFFER = 900;
+```
+
+### NEW_MAX_PAUSE
+
+```solidity
+uint32 internal constant NEW_MAX_PAUSE = 259_200;
+```
+
+### NEW_MATCH_BAND_BPS
+
+```solidity
+uint16 internal constant NEW_MATCH_BAND_BPS = 10;
+```
+
+## State Variables
+
+### legacyEpochsAgo
+
+<i>
+
+How many epochs before the current one the 0.8.0 requests were made.
+
+</i>
+
+```solidity
+uint64 internal legacyEpochsAgo = 20;
+```
+
+### legacyEpoch
+
+```solidity
+uint64 internal legacyEpoch;
+```
+
+### t1
+
+```solidity
+uint64 internal t1;
+```
+
+### t2
+
+```solidity
+uint64 internal t2;
+```
+
+### t3
+
+```solidity
+uint64 internal t3;
+```
+
+### stepParamsBefore
+
+```solidity
+StepParams internal stepParamsBefore;
+```
+
+### oldLedger
+
+```solidity
+address internal oldLedger;
+```
+
+## Functions
+
+<a id="_flow-uint256"></a>
+
+### _flow
+
+```solidity
+function _flow(uint256 member) internal pure returns (bytes32);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| member | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes32` |  |
+
+<a id="_entry-uint256-uint256"></a>
+
+### _entry
+
+```solidity
+function _entry(uint256 key, uint256 member) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `uint256` |  |
+| member | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_entry-address-uint256"></a>
+
+### _entry
+
+```solidity
+function _entry(address key, uint256 member) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| key | `address` |  |
+| member | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_q-uint256-uint256"></a>
+
+### _q
+
+```solidity
+function _q(uint256 slot, uint256 value) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slot | `uint256` |  |
+| value | `uint256` |  |
+
+<a id="_qload-uint256"></a>
+
+### _qLoad
+
+```solidity
+function _qLoad(uint256 slot) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| slot | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_writearray-uint256-uint256"></a>
+
+### _writeArray
+
+```solidity
+function _writeArray(uint256 lengthSlot, uint256[] memory ids) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lengthSlot | `uint256` |  |
+| ids | `uint256[]` |  |
+
+<a id="_legacyrequest-uint256-address-requestkind-uint256-uint256-uint256-bool"></a>
+
+### _legacyRequest
+
+```solidity
+function _legacyRequest(
+        uint256 id,
+        address owner,
+        RequestKind kind,
+        uint256 amount,
+        uint256 remaining,
+        uint256 limit,
+        bool closed
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| owner | `address` |  |
+| kind | `RequestKind` |  |
+| amount | `uint256` |  |
+| remaining | `uint256` |  |
+| limit | `uint256` |  |
+| closed | `bool` |  |
+
+<a id="_legacysettlement-uint256-uint64-uint256-6-uint64-bool-uint64"></a>
+
+### _legacySettlement
+
+```solidity
+function _legacySettlement(
+        uint256 id,
+        uint64 time,
+        uint256[6] memory amounts,
+        uint64 frozenUntil,
+        bool returnAllowed,
+        uint64 holdEndsAt
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| time | `uint64` |  |
+| amounts | `uint256[6]` |  |
+| frozenUntil | `uint64` |  |
+| returnAllowed | `bool` |  |
+| holdEndsAt | `uint64` |  |
+
+<a id="_legacyclaim-uint256-uint256-requestkind-uint64-uint64-uint256-4"></a>
+
+### _legacyClaim
+
+```solidity
+function _legacyClaim(
+        uint256 id,
+        uint256 requestId,
+        RequestKind kind,
+        uint64 settlementId,
+        uint64 unlockAt,
+        uint256[4] memory amounts
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| requestId | `uint256` |  |
+| kind | `RequestKind` |  |
+| settlementId | `uint64` |  |
+| unlockAt | `uint64` |  |
+| amounts | `uint256[4]` |  |
+
+<a id="_buildlegacyqueue"></a>
+
+### _buildLegacyQueue
+
+<i>
+
+The queue as 0.8.0 left it (see the contract note). The shares and the USDC the books name are really
+there: `deal` gives the queue `3 × S + 1` shares and raises the supply by as much (0.003 % of the seed's
+shares, which the fund holds locked, E14; no holder has shares to move before a first deposit).
+
+</i>
+
+```solidity
+function _buildLegacyQueue() internal;
+```
+
+<a id="_buildlegacyfund"></a>
+
+### _buildLegacyFund
+
+```solidity
+function _buildLegacyFund() internal;
+```
+
+<a id="_buildlegacyrebalancer"></a>
+
+### _buildLegacyRebalancer
+
+```solidity
+function _buildLegacyRebalancer() internal;
+```
+
+<a id="_legacystepword-stepparams"></a>
+
+### _legacyStepWord
+
+```solidity
+function _legacyStepWord(StepParams memory p) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `StepParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_buildlegacy"></a>
+
+### _buildLegacy
+
+<i>
+
+An invested fund, then the 0.8.0 state on all three proxies.
+
+</i>
+
+```solidity
+function _buildLegacy() internal;
+```
+
+<a id="_assertlegacyshape"></a>
+
+### _assertLegacyShape
+
+<i>
+
+Every write above, read through the 0.9.0 getters: the right slots were hit, and the state shows the
+hazards the migration is for.
+
+</i>
+
+```solidity
+function _assertLegacyShape() internal view;
+```
+
+<a id="_queuedata"></a>
+
+### _queueData
+
+```solidity
+function _queueData() internal pure returns (bytes memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_funddata"></a>
+
+### _fundData
+
+```solidity
+function _fundData() internal view returns (bytes memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_upgraderebalancer"></a>
+
+### _upgradeRebalancer
+
+```solidity
+function _upgradeRebalancer() internal;
+```
+
+<a id="_upgradefund"></a>
+
+### _upgradeFund
+
+```solidity
+function _upgradeFund() internal;
+```
+
+<a id="_upgradequeue"></a>
+
+### _upgradeQueue
+
+```solidity
+function _upgradeQueue() internal;
+```
+
+<a id="_upgradeall"></a>
+
+### _upgradeAll
+
+<i>
+
+The release's order: Rebalancer, fund, queue.
+
+</i>
+
+```solidity
+function _upgradeAll() internal;
+```
+
+<a id="_expectqueuerefuses-bytes"></a>
+
+### _expectQueueRefuses
+
+```solidity
+function _expectQueueRefuses(bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| err | `bytes` |  |
+
+<a id="_expectfundrefuses-address-bytes"></a>
+
+### _expectFundRefuses
+
+```solidity
+function _expectFundRefuses(address rebalancer_, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| rebalancer_ | `address` |  |
+| err | `bytes` |  |
+
+<a id="test_withoutthemigrationalegacydepositclaimpanics"></a>
+
+### test_withoutTheMigrationALegacyDepositClaimPanics
+
+Audit hazard 1: on 0.9.0 code with no migration a 0.8.0 deposit claim cannot be delivered. The owner's
+held balance is 0 in the mapping 0.9.0 reads, so the subtraction panics (0x11).
+
+```solidity
+function test_withoutTheMigrationALegacyDepositClaimPanics() public fixtureCovered;
+```
+
+<a id="test_queue_legacyclaimsdeliverinfull"></a>
+
+### test_queue_legacyClaimsDeliverInFull
+
+The queue after its migration: held shares are the owner's, the 0.8.0 claims deliver in full, the
+credit and the dust leave, and the books balance at every step.
+
+```solidity
+function test_queue_legacyClaimsDeliverInFull() public fixtureCovered;
+```
+
+<a id="test_queue_legacyrequestsandsettlementsreadsane"></a>
+
+### test_queue_legacyRequestsAndSettlementsReadSane
+
+`getRequest`, `requestStatus` and `getSettlement` of the 0.8.0 entries after the migration: the members
+both versions have keep their values, the new ones are neutral, `era` is 0.
+
+```solidity
+function test_queue_legacyRequestsAndSettlementsReadSane() public fixtureCovered;
+```
+
+<a id="test_queue_paramsandwalkareset"></a>
+
+### test_queue_paramsAndWalkAreSet
+
+The three queue parameters, the walk reset, and the queue's `reinitializer(2)` version.
+
+```solidity
+function test_queue_paramsAndWalkAreSet() public fixtureCovered;
+```
+
+<a id="test_fund_paramsledgerandrebalancerareset"></a>
+
+### test_fund_paramsLedgerAndRebalancerAreSet
+
+The fund after its migration: the five parameters, a new ledger bound to the fund, `rebalancer`.
+
+```solidity
+function test_fund_paramsLedgerAndRebalancerAreSet() public fixtureCovered;
+```
+
+<a id="test_rebalancer_stepparamsreadcorrectly"></a>
+
+### test_rebalancer_stepParamsReadCorrectly
+
+The Rebalancer after its migration: the five members read what the six-member slot held, `keeperGrace`
+is gone, and the bytes above `minStepUsdc` are clear.
+
+```solidity
+function test_rebalancer_stepParamsReadCorrectly() public fixtureCovered;
+```
+
+<a id="test_rebalancer_deploy4values"></a>
+
+### test_rebalancer_deploy4Values
+
+Deploy 4's own numbers: `(1800, 21600, 604800, 50, 50, 1000000)` becomes
+`(1800, 604800, 50, 50, 1000000)`.
+
+```solidity
+function test_rebalancer_deploy4Values() public fixtureCovered;
+```
+
+<a id="test_anewrequestsettlesafterthemigrations"></a>
+
+### test_aNewRequestSettlesAfterTheMigrations
+
+The whole system works after the three migrations: a new request (the queue's seventh) settles in a
+new settlement (the fourth), which asks the migrated Rebalancer for its last basket step, and delivers.
+
+```solidity
+function test_aNewRequestSettlesAfterTheMigrations() public fixtureCovered;
+```
+
+<a id="test_anewrequestintheepochoflegacyrequestssettles"></a>
+
+### test_aNewRequestInTheEpochOfLegacyRequestsSettles
+
+A 0.9.0 request made in the epoch of the 0.8.0 requests shares their id lists, so the round's
+enrollment and walk pass over them. Migrated, they read closed and are left alone; the new request
+fills.
+
+```solidity
+function test_aNewRequestInTheEpochOfLegacyRequestsSettles() public fixtureCovered;
+```
+
+<a id="test_queue_afrozenlegacysettlementstaysfrozen"></a>
+
+### test_queue_aFrozenLegacySettlementStaysFrozen
+
+A 0.8.0 settlement that is frozen at the upgrade keeps its freeze: its claim waits for the freeze to
+end, the others deliver (audit hazard 11).
+
+```solidity
+function test_queue_aFrozenLegacySettlementStaysFrozen() public fixtureCovered;
+```
+
+<a id="test_queue_refusesanopenlegacyrequest"></a>
+
+### test_queue_refusesAnOpenLegacyRequest
+
+An open 0.8.0 request refuses the queue's migration: by the books, and by the request itself.
+
+```solidity
+function test_queue_refusesAnOpenLegacyRequest() public fixtureCovered;
+```
+
+<a id="test_queue_refusesaheldsharesmismatch"></a>
+
+### test_queue_refusesAHeldSharesMismatch
+
+The held shares of the claims must add up to the books.
+
+```solidity
+function test_queue_refusesAHeldSharesMismatch() public fixtureCovered;
+```
+
+<a id="test_queue_refusesstatethatisnotlegacy"></a>
+
+### test_queue_refusesStateThatIsNotLegacy
+
+A request or settlement that is not in the 0.8.0 layout refuses the migration, and so does 0.9.0 round
+state: the migration never rewrites what 0.9.0 wrote.
+
+```solidity
+function test_queue_refusesStateThatIsNotLegacy() public fixtureCovered;
+```
+
+<a id="test_queue_refusesalivereturnallowedfreeze"></a>
+
+### test_queue_refusesALiveReturnAllowedFreeze
+
+A 0.8.0 freeze with in-kind returns allowed is still running: 0.9.0 has no such exit.
+
+```solidity
+function test_queue_refusesALiveReturnAllowedFreeze() public fixtureCovered;
+```
+
+<a id="test_queue_refusesparamsoutofbounds"></a>
+
+### test_queue_refusesParamsOutOfBounds
+
+Each new queue parameter is held to the bound `setFlowParams` holds it to.
+
+```solidity
+function test_queue_refusesParamsOutOfBounds() public fixtureCovered;
+```
+
+<a id="test_fund_refusesanonemptyoldledger"></a>
+
+### test_fund_refusesANonEmptyOldLedger
+
+The old ledger must be empty: no record, no recovery money.
+
+```solidity
+function test_fund_refusesANonEmptyOldLedger() public fixtureCovered;
+```
+
+<a id="test_fund_refusesarebalancerthatisnotupgradedornottheholder"></a>
+
+### test_fund_refusesARebalancerThatIsNotUpgradedOrNotTheHolder
+
+The fund's migration refuses a Rebalancer still on 0.8.0 code (no `lastBasketStepAt()`), and any
+address that is not the `REBALANCER_ROLE` holder.
+
+```solidity
+function test_fund_refusesARebalancerThatIsNotUpgradedOrNotTheHolder() public fixtureCovered;
+```
+
+<a id="test_rebalancer_refusesaslotthatisnotlegacy"></a>
+
+### test_rebalancer_refusesASlotThatIsNotLegacy
+
+A step-parameter slot that does not decode to values inside the hard bounds refuses the Rebalancer's
+migration. A slot already in the 0.9.0 layout is such a slot.
+
+```solidity
+function test_rebalancer_refusesASlotThatIsNotLegacy() public fixtureCovered;
+```
+
+<a id="test_onlytheupgradetimelockmigrates"></a>
+
+### test_onlyTheUpgradeTimelockMigrates
+
+Only the upgrade timelock runs a migration: a proxy upgraded with no data stays closed to everyone
+else, the role admins included.
+
+```solidity
+function test_onlyTheUpgradeTimelockMigrates() public fixtureCovered;
+```
+
+<a id="test_asecondmigrationreverts"></a>
+
+### test_aSecondMigrationReverts
+
+Each migration runs once: a second call reverts `InvalidInitialization`, directly and inside another
+upgrade, and the implementations themselves are locked.
+
+```solidity
+function test_aSecondMigrationReverts() public fixtureCovered;
+```
+
+<a id="test_afreshdeploymentisunaffected"></a>
+
+### test_aFreshDeploymentIsUnaffected
+
+A deployment through `initialize` needs no migration and is not changed by the entry points being
+there: every value a migration writes is already set, the flows run, and a queue with 0.9.0 requests
+refuses the migration even from the timelock.
+
+```solidity
+function test_aFreshDeploymentIsUnaffected() public fixtureCovered;
+```
+
+<a id="_initializedversion-address"></a>
+
+### _initializedVersion
+
+<i>
+
+OpenZeppelin `Initializable` version of a proxy (erc7201:openzeppelin.storage.Initializable, low 8 bytes).
+
+</i>
+
+```solidity
+function _initializedVersion(address proxy) internal view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+

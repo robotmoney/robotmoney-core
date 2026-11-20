@@ -11,7 +11,7 @@ import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
-import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
+import {GovernedUUPS, GovernedUpgrade} from "./lib/GovernedUUPS.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -178,6 +178,47 @@ contract Rebalancer is
         _setStepParams(params);
         _stepDepthBps = DEFAULT_STEP_DEPTH_BPS;
         emit StepDepthBpsSet(DEFAULT_STEP_DEPTH_BPS);
+    }
+
+    /// @notice The one-time state migration of a Rebalancer upgraded in place from contracts 0.8.0. 0.9.0 dropped
+    ///         `keeperGrace` from the middle of `StepParams`, so every later member moved down inside the one slot:
+    ///
+    ///         | bytes of the slot | 0.8.0          | 0.9.0          |
+    ///         | 0-3               | stepInterval   | stepInterval   |
+    ///         | 4-7               | keeperGrace    | maxOverrun     |
+    ///         | 8-11              | maxOverrun     | maxStepCostBps (8-9), toleranceBps (10-11) |
+    ///         | 12-13             | maxStepCostBps | minStepUsdc (12-27) |
+    ///         | 14-15             | toleranceBps   |                |
+    ///         | 16-31             | minStepUsdc    | (28-31 unused) |
+    ///
+    ///         This reads the slot as 0.8.0 wrote it and stores the same values in the 0.9.0 layout. Nothing else in
+    ///         the Rebalancer's storage moved (`_lastBasketStepAt` and `_lastDelistStepAt` are appended). The upgrade
+    ///         timelock passes it as the data of `upgradeToAndCall`; nobody else can run it, and it runs once. It
+    ///         calls nothing, so it can run before the fund is upgraded. A slot that does not decode to values inside
+    ///         the hard bounds (one already in the 0.9.0 layout does not, for any usual `minStepUsdc`) reverts.
+    function migrateV090() external reinitializer(2) {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert GovernedUpgrade.NotUpgradeTimelock(msg.sender);
+        }
+        uint256 legacy;
+        assembly {
+            legacy := sload(_stepParams.slot)
+        }
+        StepParams memory p = StepParams({
+            stepInterval: uint32(legacy),
+            maxOverrun: uint32(legacy >> 64),
+            maxStepCostBps: uint16(legacy >> 96),
+            toleranceBps: uint16(legacy >> 112),
+            minStepUsdc: uint128(legacy >> 128)
+        });
+        if (
+            p.stepInterval < MIN_STEP_INTERVAL || p.stepInterval > MAX_STEP_INTERVAL
+                || p.maxOverrun > MAX_OVERRUN || p.maxStepCostBps == 0
+                || p.maxStepCostBps > MAX_STEP_COST_BPS || p.toleranceBps == 0
+                || p.toleranceBps > MAX_TOLERANCE_BPS
+        ) revert StepParamOutOfBounds();
+        _stepParams = p;
+        emit StepParamsSet(p);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

@@ -5,7 +5,7 @@ description: "Step selection for the one vault (§5). It holds no funds, grants 
 
 # Rebalancer
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/30d56e3e3fa551fc97da4f6d7e277f769b2d1a20/contracts/Rebalancer.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d26015d044a6162bbd93106a89523fa140073356/contracts/Rebalancer.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalancer](/contracts/interfaces/interface.IRebalancer)
 
@@ -182,6 +182,31 @@ function initialize(
 | params | `StepParams` | Initial global step parameters, bounded as in `setStepParams` (§5.6). |
 | upgradeTimelock_ | `address` | The only upgrade and freeze authority. |
 | upgradeMode_ | `UpgradeMode` | Release mode; `Undeclared` reverts. |
+
+<a id="migratev090"></a>
+
+### migrateV090
+
+The one-time state migration of a Rebalancer upgraded in place from contracts 0.8.0. 0.9.0 dropped
+`keeperGrace` from the middle of `StepParams`, so every later member moved down inside the one slot:
+
+| bytes of the slot | 0.8.0          | 0.9.0          |
+| 0-3               | stepInterval   | stepInterval   |
+| 4-7               | keeperGrace    | maxOverrun     |
+| 8-11              | maxOverrun     | maxStepCostBps (8-9), toleranceBps (10-11) |
+| 12-13             | maxStepCostBps | minStepUsdc (12-27) |
+| 14-15             | toleranceBps   |                |
+| 16-31             | minStepUsdc    | (28-31 unused) |
+
+This reads the slot as 0.8.0 wrote it and stores the same values in the 0.9.0 layout. Nothing else in
+the Rebalancer's storage moved (`_lastBasketStepAt` and `_lastDelistStepAt` are appended). The upgrade
+timelock passes it as the data of `upgradeToAndCall`; nobody else can run it, and it runs once. It
+calls nothing, so it can run before the fund is upgraded. A slot that does not decode to values inside
+the hard bounds (one already in the 0.9.0 layout does not, for any usual `minStepUsdc`) reverts.
+
+```solidity
+function migrateV090() external reinitializer(2);
+```
 
 <a id="step"></a>
 

@@ -66,6 +66,7 @@ contracts/lib/abstract.GovernedUUPS.mdx
 contracts/lib/interface.IAdapterImplementation.mdx
 contracts/lib/interface.IBasketSwapsVault.mdx
 contracts/lib/interface.IDustPricedVault.mdx
+contracts/lib/interface.IExclusionLedgerBooks.mdx
 contracts/lib/interface.IExclusionLedgerView.mdx
 contracts/lib/interface.IFlowQueueSides.mdx
 contracts/lib/interface.IFundLendingIdentity.mdx
@@ -78,6 +79,7 @@ contracts/lib/library.FlowCheckLib.mdx
 contracts/lib/library.FlowClaimLib.mdx
 contracts/lib/library.FlowEpochs.mdx
 contracts/lib/library.FlowMatchLib.mdx
+contracts/lib/library.FlowMigrateLib.mdx
 contracts/lib/library.FlowSettleLib.mdx
 contracts/lib/library.FlowStorage.mdx
 contracts/lib/library.ForeignTokenQuarantine.mdx
@@ -85,6 +87,7 @@ contracts/lib/library.FundAdapterGuard.mdx
 contracts/lib/library.FundAdminLib.mdx
 contracts/lib/library.FundDelistLib.mdx
 contracts/lib/library.FundFlowsLib.mdx
+contracts/lib/library.FundMigrateLib.mdx
 contracts/lib/library.FundPositionLib.mdx
 contracts/lib/library.FundStepLib.mdx
 contracts/lib/library.FundStorage.mdx
@@ -282,6 +285,7 @@ contracts/test/prototype/contract.Invariants.mdx
 contracts/test/prototype/contract.KeeperAccountDeployTest.mdx
 contracts/test/prototype/contract.KeeperAccountFlowTest.mdx
 contracts/test/prototype/contract.KeeperAccountUnitTest.mdx
+contracts/test/prototype/contract.LegacyRebalancerStub.mdx
 contracts/test/prototype/contract.LocalAToken.mdx
 contracts/test/prototype/contract.LocalAavePool.mdx
 contracts/test/prototype/contract.LocalMintableErc20.mdx
@@ -302,6 +306,7 @@ contracts/test/prototype/contract.Step3eNoQueueTest.mdx
 contracts/test/prototype/contract.Step3eTest.mdx
 contracts/test/prototype/contract.TargetVectorTest.mdx
 contracts/test/prototype/contract.ThinStretchPool.mdx
+contracts/test/prototype/contract.UpgradeMigrationTest.mdx
 contracts/test/prototype/interface.IAavePool.mdx
 contracts/test/prototype/interface.IAeroCLFactoryRead.mdx
 contracts/test/prototype/interface.IAeroCLPoolRead.mdx
