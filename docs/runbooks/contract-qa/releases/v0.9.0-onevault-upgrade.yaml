@@ -84,11 +84,11 @@ decisions:
     decidedOn: "2026-11-13"
     ref: "releases/v0.8.0-onevault.yaml D4-11"
   - id: "D4-12"
-    question: "Go to broadcast the in-place upgrade of Deploy 4 on Base 8453 to v0.9.0-onevault: run this file on the rehearsal target from the rc tag release/v0.9.0-rc.N-rehearsal at the commit whose Twin run passed"
+    question: "Go to broadcast the in-place upgrade of Deploy 4 on Base 8453 to v0.9.0-onevault: run this file on the rehearsal target from the rc tag release/v0.9.0-rc.N-rehearsal"
     status: "decided"
-    answer: "Owner, 2026-11-17: execute the in-place Deploy 4 upgrade, subject to the runbook prerequisites."
-    decidedOn: "2026-11-17"
-    ref: "Owner instruction in deployment session, 2026-11-17"
+    answer: "Owner, 2026-11-20: go on 8453 now with this file as it stands (three upgrades with their migrations, the exclusion ledger replaced, the matured Deploy 4 deposits claimed and redeemed), without waiting for a full Twin pass (decision D4-20). Supersedes the go of 2026-11-17, which covered the smaller change."
+    decidedOn: "2026-11-20"
+    ref: "Owner instruction in deployment session, 2026-11-20"
   - id: "D4-13"
     question: "On 8453 deploy-implementation gates its --upgrade-build as an rc build (tag release/vA.B.C-rc.N[-rehearsal] on origin/releases-A.B.x). Which branch/tag satisfy the gate for this v0.9.0-onevault upgrade build?"
     status: "decided"
@@ -131,6 +131,12 @@ decisions:
     answer: "Owner, 2026-11-20: v0.9.0 installs on Deploy 4 with one-time migrations on the queue, fund and Rebalancer, the Rebalancer upgraded in place and the exclusion ledger replaced; full scope."
     decidedOn: "2026-11-20"
     ref: "Owner instruction in the deployment session, 2026-11-20 (steps P1.84, P1.85, P2.87, P2.88; publish-contracts/src/fund-migrations.ts)"
+  - id: "D4-20"
+    question: "Must a full Twin run pass at the tagged commit before the 8453 run of this file?"
+    status: "decided"
+    answer: "Owner, 2026-11-20: no. Deploy 4 on 8453 is itself the rehearsal deployment (about 4 USDC of the team's own deposits, TVL cap 1,000 USDC), and P1.85 simulates the real migrations against its real state before anything is scheduled. The Twin runs of 2026-11-20 found the upgrade bugs this file's migrations fix; the last one was stopped at the owner's instruction."
+    decidedOn: "2026-11-20"
+    ref: "Owner instruction in deployment session, 2026-11-20"
 recovery: |
   Before P1.80 nothing is sent: fix on the branch and run again. Before P2.87 only implementations are deployed: a P1.85 simulation that reverts
   is fixed on the branch, and the reruns reuse the deployed implementations that still match the build. After that every step reruns safely:
