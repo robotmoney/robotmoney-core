@@ -270,7 +270,6 @@ library BasketAssetConfigGuard {
     ///         `feeRecipient`. No oracle read and no swap. The caller has already burned `shares`.
     function payInKind(
         AssetInfo[] storage assets,
-        mapping(address => uint256) storage feeRemainders,
         address receiver,
         uint256 shares,
         uint256 supplyBefore
@@ -284,25 +283,16 @@ library BasketAssetConfigGuard {
         // Same entry gas floor as `BasketVault.redeem` (REDEEM_BASE_GAS 300_000 + 400_000 per listed asset).
         uint256 floor = 300_000 + len * 400_000;
         if (gasleft() < floor) revert InsufficientGas(gasleft(), floor);
-        _payLeg(
-            feeRemainders, IERC20(usdc), receiver, shares, supplyBefore, exitFeeBps, feeRecipient
-        );
+        _payLeg(IERC20(usdc), receiver, shares, supplyBefore, exitFeeBps, feeRecipient);
         for (uint256 i = 0; i < len; i++) {
             if (!assets[i].active) continue;
             _payLeg(
-                feeRemainders,
-                IERC20(assets[i].token),
-                receiver,
-                shares,
-                supplyBefore,
-                exitFeeBps,
-                feeRecipient
+                IERC20(assets[i].token), receiver, shares, supplyBefore, exitFeeBps, feeRecipient
             );
         }
     }
 
     function _payLeg(
-        mapping(address => uint256) storage feeRemainders,
         IERC20 token,
         address receiver,
         uint256 shares,
@@ -313,9 +303,6 @@ library BasketAssetConfigGuard {
         uint256 amount = token.balanceOf(address(this)).mulDiv(shares, supplyBefore);
         if (amount == 0) return;
         uint256 fee = amount.mulDiv(exitFeeBps, 10_000);
-        uint256 remainder = mulmod(amount, exitFeeBps, 10_000) + feeRemainders[address(token)];
-        fee += remainder / 10_000;
-        feeRemainders[address(token)] = remainder % 10_000;
         if (fee > 0) token.safeTransfer(feeRecipient, fee);
         token.safeTransfer(receiver, amount - fee);
     }

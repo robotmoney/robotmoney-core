@@ -26,14 +26,17 @@ import {IStrategyAdapter} from "../../interfaces/IStrategyAdapter.sol";
 import {IObservablePool} from "../../interfaces/IObservablePool.sol";
 import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {IRobotMoneyFund, IRobotMoneyFundFull} from "./src/interfaces/IRobotMoneyFund.sol";
-import {AaveV3RateAdapter} from "./src/adapters/AaveV3RateAdapter.sol";
-import {CompoundV3RateAdapter} from "./src/adapters/CompoundV3RateAdapter.sol";
-import {MorphoRateAdapter} from "./src/adapters/MorphoRateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "./src/adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
-import {FlowParams} from "./src/FlowTypes.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {IRobotMoneyFund, IRobotMoneyFundFull} from "../../interfaces/IRobotMoneyFund.sol";
+import {AaveV3RateAdapter} from "../../adapters/AaveV3RateAdapter.sol";
+import {CompoundV3RateAdapter} from "../../adapters/CompoundV3RateAdapter.sol";
+import {MorphoRateAdapter} from "../../adapters/MorphoRateAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
+import {MechAaveAdapter} from "./mocks/MechAaveAdapter.sol";
+import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
+import {FlowParams} from "../../FlowTypes.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -53,7 +56,7 @@ import {
     DEFAULT_IN_KIND_PERIOD,
     MAX_FEED_AGE,
     Roles
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 
 /// @notice A Chainlink aggregator whose answer the test sets, etched at a real feed address.
 contract FxMockAggregator {
@@ -168,6 +171,20 @@ contract FundExtrasTest is BaseFixture {
         return queued[account];
     }
 
+    function currentMatchIndexes() external pure returns (uint256[2] memory, uint256[2] memory) {
+        return ([uint256(0), 0], [uint256(0), 0]);
+    }
+
+    function queuedSharesOfAt(address account, uint256[2] calldata, uint256[2] calldata)
+        external
+        view
+        returns (uint256)
+    {
+        return queued[account];
+    }
+
+    function onShutdown() external {}
+
     function flowParams() external view returns (FlowParams memory) {
         return params;
     }
@@ -200,7 +217,10 @@ contract FundExtrasTest is BaseFixture {
             legBandBps: 100,
             sequencerGrace: 1 hours,
             usdcPegBandBps: 50,
-            maxLendRateGrowthBps: 10
+            maxLendRateGrowthBps: 10,
+            cancelBuffer: 15 minutes,
+            maxPause: 72 hours,
+            matchBandBps: 20
         });
         _etchFeeds();
         fund = _deployFund();
@@ -536,6 +556,10 @@ contract FundExtrasTest is BaseFixture {
         uint256 supply0 = fund.totalSupply();
         uint256 shares = fund.balanceOf(alice);
         vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(shares, alice, alice);
+        fund.shutdown();
+        vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
         _assertPerShareNotLower(idle0, held0, supply0, "inside allowance");
         uint256 lendingWant;
@@ -562,6 +586,7 @@ contract FundExtrasTest is BaseFixture {
         uint256 supply0 = fund.totalSupply();
         uint256 shares = fund.balanceOf(alice);
         uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
+        fund.shutdown();
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
         _assertPerShareNotLower(idle0, held0, supply0, "beyond allowance");
@@ -598,6 +623,7 @@ contract FundExtrasTest is BaseFixture {
         (, uint256[] memory held0) = fund.heldBalances();
         uint256 supply0 = fund.totalSupply();
         uint256 half = fund.balanceOf(alice) / 2;
+        fund.shutdown();
         vm.prank(alice);
         fund.redeemInKind(half, alice, alice);
         (,,, uint256 used) = fund.inKindAllowance();
@@ -626,8 +652,10 @@ contract FundExtrasTest is BaseFixture {
         // Next period: USDC again.
         vm.warp(block.timestamp + DEFAULT_IN_KIND_PERIOD);
         _refreshFeeds();
+        fund.restore(TVL_CAP);
         _giveShares(bob, supply0 / 100);
         uint256 b = fund.balanceOf(bob);
+        fund.shutdown();
         vm.prank(bob);
         fund.redeemInKind(b, bob, bob);
         (,,, uint256 used3) = fund.inKindAllowance();
@@ -638,14 +666,18 @@ contract FundExtrasTest is BaseFixture {
     //  RB-21: a claim is a share of the position
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Alice exits in kind with no allowance, so she holds a claim on every lending position.
+    /// @dev Alice exits in kind during wind-down with no allowance, so she holds a claim on every lending position,
+    ///      then restores the fund so downstream tests run on a live fund.
     function _aliceClaims() internal {
         _seedAndInvest();
         _setAllowance(0, 0);
         _giveShares(alice, fund.totalSupply() / 10);
         uint256 shares = fund.balanceOf(alice);
+        fund.shutdown();
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
+        fund.restore(TVL_CAP);
+        if (fund.planStatus() == PlanStatus.Paused) fund.resumePlan();
         _setAllowance(DEFAULT_IN_KIND_BPS, DEFAULT_IN_KIND_FLOOR_USDC);
     }
 
@@ -676,7 +708,9 @@ contract FundExtrasTest is BaseFixture {
         assertLe(v2, v0[IDX_AAVE] + 2, "a step never raises a claim beyond rounding");
     }
 
-    /// @notice A rebalance step OUT of a venue burns only holders' units: the claim's value is unchanged.
+    /// @notice Step 3f (RB-37, RB-21): while open claims exist on a lending venue, stepping OUT of that venue reverts
+    ///         `LendingHasClaims`; settling one claimant keeps remaining claims intact, and once every claim is
+    ///         settled, stepping out burns holders' units cleanly.
     function test_RB21_stepOutOfVenueKeepsClaimValue() public fixtureCovered {
         _aliceClaims();
         // A new plan moves 10 % of NAV out of Aave into Moonwell; after its end, step Aave -> idle.
@@ -690,18 +724,43 @@ contract FundExtrasTest is BaseFixture {
         fund.setTargetAndOpenPlan(_ids(), bps, PlanParams(1 days, 500), bytes32(0));
         vm.warp(block.timestamp + 1 days + 1);
         _refreshFeeds();
-        // Measured after the warp: a day of venue interest is the claim's to keep (test_RB21_claimGains...).
-        (, uint256 v0) = fund.positionClaimOf(IDX_AAVE, alice);
-        (uint256 u0, uint256 c0) = _units(IDX_AAVE);
+
+        (, uint256 c0) = _units(IDX_AAVE);
+        assertGt(c0, 0, "open lending claims exist");
         (uint256 nav,,) = fund.portfolioValues();
         uint256 n = nav / 20;
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, c0)
+        );
+        fund.executeStep(StepOrder(IDX_AAVE, IDLE_INDEX, n, n - 1, 0, n.mulDiv(100, BPS)));
+
+        // Settle alice's claim; feeRecipient's separate claim keeps its full value and still guards step-out.
+        (, uint256 feeValBefore) = fund.positionClaimOf(IDX_AAVE, feeRecipient);
+        fund.settleClaim(IDX_AAVE, alice);
+        (, uint256 feeValAfter) = fund.positionClaimOf(IDX_AAVE, feeRecipient);
+        assertGe(feeValAfter, feeValBefore, "settling one claim never lowers another");
+        assertLe(
+            feeValAfter,
+            feeValBefore + 2,
+            "settling one claim never inflates another beyond rounding"
+        );
+        (, uint256 cMid) = _units(IDX_AAVE);
+        assertGt(cMid, 0, "feeRecipient claim still open");
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingHasClaims.selector, IDX_AAVE, cMid)
+        );
+        fund.executeStep(StepOrder(IDX_AAVE, IDLE_INDEX, n, n - 1, 0, n.mulDiv(100, BPS)));
+
+        // Once all claims are settled, stepping out burns holders' units normally.
+        fund.settleClaim(IDX_AAVE, feeRecipient);
+        (uint256 u0, uint256 cCleared) = _units(IDX_AAVE);
+        assertEq(cCleared, 0, "all claims settled");
+        (nav,,) = fund.portfolioValues();
+        n = nav / 20;
         fund.executeStep(StepOrder(IDX_AAVE, IDLE_INDEX, n, n - 1, 0, n.mulDiv(100, BPS)));
         (uint256 u1, uint256 c1) = _units(IDX_AAVE);
-        assertLt(u1, u0, "the step burned units");
-        assertEq(c1, c0, "only holders' units");
-        (, uint256 v1) = fund.positionClaimOf(IDX_AAVE, alice);
-        assertGe(v1, v0, "a step out never lowers a claim");
-        assertLe(v1, v0 + 2, "a step out never raises a claim beyond rounding");
+        assertLt(u1, u0, "the step burned holders' units");
+        assertEq(c1, 0, "no claims remain");
     }
 
     /// @notice The claim gains with the venue pro rata with the holders (interest accrual over 30 days).
@@ -833,6 +892,7 @@ contract FundExtrasTest is BaseFixture {
         fund.transfer(bob, n / 2);
         (idle0, held0) = fund.heldBalances();
         supply0 = fund.totalSupply();
+        fund.shutdown();
         vm.prank(bob);
         fund.redeemInKind(n / 2, bob, bob);
         _assertPerShareNotLower(idle0, held0, supply0, "redeemInKind");
@@ -850,6 +910,7 @@ contract FundExtrasTest is BaseFixture {
         (uint256 u0, uint256 c0) = _units(IDX_MOONWELL);
         uint256 shares = fund.balanceOf(alice);
         uint256 supply0 = fund.totalSupply();
+        fund.shutdown();
         vm.mockCallRevert(
             address(moonwell), abi.encodeCall(IStrategyAdapter.totalAssets, ()), "venue down"
         );
@@ -874,6 +935,7 @@ contract FundExtrasTest is BaseFixture {
         _seedAndInvest();
         _giveShares(alice, fund.totalSupply() / 100);
         uint256 shares = fund.balanceOf(alice);
+        fund.shutdown();
         vm.prank(alice);
         vm.expectRevert(IFundEvents.ZeroAddress.selector);
         fund.redeemInKind(shares, address(0), alice);
@@ -886,6 +948,7 @@ contract FundExtrasTest is BaseFixture {
         _setAllowance(0, 0);
         _giveShares(alice, fund.totalSupply() / 100);
         uint256 shares = fund.balanceOf(alice);
+        fund.shutdown();
         vm.prank(alice);
         fund.redeemInKind(shares, bob, alice);
         (uint256 aliceUnits,) = fund.positionClaimOf(IDX_AAVE, alice);
@@ -894,7 +957,9 @@ contract FundExtrasTest is BaseFixture {
         assertEq(bobUnits, 0, "not to the receiver");
 
         // The queue's escrow path: this contract is the bound queue and holds the shares for bob.
+        fund.restore(TVL_CAP);
         _mintInKind(shares);
+        fund.shutdown();
         fund.redeemInKind(shares, bob, address(this));
         (bobUnits,) = fund.positionClaimOf(IDX_AAVE, bob);
         (uint256 queueUnits,) = fund.positionClaimOf(IDX_AAVE, address(this));
@@ -1025,6 +1090,25 @@ contract FundExtrasTest is BaseFixture {
             abi.encodeWithSelector(IRobotMoneyFund.PoolHistoryTooShort.selector, 0, uint32(1 hours))
         );
         f.addAsset(c);
+    }
+
+    /// @notice E44: a lending adapter that cannot answer `availableLiquidity()` is refused at admission, whether the
+    ///         call reverts or returns nothing. One that answers is admitted.
+    function test_E44_lendingWithoutLiquidityViewIsRefused() public fixtureCovered {
+        (IRobotMoneyFundFull f, address rate,) = _freshFundWithAdapters();
+        bytes memory call = abi.encodeCall(ILendingRateAdapter.availableLiquidity, ());
+        vm.mockCallRevert(rate, call, "NO VIEW");
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingLiquidityUnavailable.selector, rate)
+        );
+        f.addAsset(_lending(rate));
+        vm.mockCall(rate, call, hex"");
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.LendingLiquidityUnavailable.selector, rate)
+        );
+        f.addAsset(_lending(rate));
+        vm.clearMockedCalls();
+        f.addAsset(_lending(rate));
     }
 
     function test_RB17_lendingWithoutVenueRateIsRefused() public fixtureCovered {
@@ -1255,5 +1339,276 @@ contract FundExtrasTest is BaseFixture {
             assertLe(p.costSpent, p.costBudget, "RB-4: never past the budget");
             if (p.status != PlanStatus.Open) break;
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    //  Step 3f: delisting sales, permissionless claim settlement, and short-paying adapter guards
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice Step 3f (E53, A42, E54): `delistAsset` enters `inSale`, zeros persistent target, reserves any
+    ///         delisting claim tokens recorded during `sellForFlow`, executes bounded `executeDelistStep` swaps,
+    ///         deactivates once drained, and lets anyone settle the owner's delist claim via `settleClaim`.
+    function test_step3f_delistSaleLifecycleAndClaimSettlement() public fixtureCovered {
+        _seedAndInvest();
+        uint256 burnShares = fund.totalSupply() / 10;
+        _mintInKind(burnShares);
+        uint256 supplyBefore = fund.totalSupply();
+        (, uint256[] memory heldBefore) = fund.heldBalances();
+
+        fund.delistAsset(IDX_WETH);
+        assertTrue(fund.isAssetInSale(IDX_WETH), "E53: WETH marked in sale");
+        assertTrue(fund.hasAssetInSale(), "E53: fund reports active sale");
+        assertEq(fund.targetBps()[IDX_WETH], 0, "delisting zeros target");
+        assertGt(fund.saleFallbackPrice(IDX_WETH), 0, "fallback price snapshotted");
+
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.AssetInSale.selector, IDX_WETH));
+        fund.delistAsset(IDX_WETH);
+
+        (uint256[] memory buyLimits, uint256 maxUsdc) = _buyLimits(1e18);
+        vm.expectRevert(IRobotMoneyFund.DepositsArePaused.selector);
+        fund.mintInKind(1e18, maxUsdc, buyLimits);
+
+        // `sellForFlow` records a delisting claim on WETH without swapping WETH or diluting stayers,
+        // and leaves claimed tokens out of `heldBalances` and NAV (`assetValue`).
+        fund.sellForFlow(burnShares, _sellFloors(burnShares));
+        (, uint256[] memory heldAfter) = fund.heldBalances();
+        uint256 contractWeth = IERC20(WETH).balanceOf(address(fund));
+        assertLt(heldAfter[IDX_WETH], contractWeth, "E53: heldBalances excludes claimed tokens");
+        uint256 wethNavAfter = fund.assetValue(IDX_WETH);
+        uint256 heldOnlyTwap = fund.assetUsdcValue(IDX_WETH, heldAfter[IDX_WETH]);
+        uint256 claimedOnlyTwap = fund.assetUsdcValue(IDX_WETH, contractWeth - heldAfter[IDX_WETH]);
+        assertGt(claimedOnlyTwap, 100e6, "E53: substantial claim chunk excluded");
+        // In-sale `assetValue` marks `heldBalance` at the live feed while `assetUsdcValue` uses TWAP (~2 wei gap).
+        assertApproxEqAbs(wethNavAfter, heldOnlyTwap, 100, "E53: assetValue prices only held WETH");
+        assertLt(
+            wethNavAfter + claimedOnlyTwap / 2,
+            fund.assetUsdcValue(IDX_WETH, contractWeth),
+            "E53: NAV never counts claimed tokens"
+        );
+        assertGe(
+            heldAfter[IDX_WETH] * supplyBefore,
+            heldBefore[IDX_WETH] * fund.totalSupply(),
+            "E53: WETH held per share preserved while inSale"
+        );
+
+        // Band check: a swap returning 1 wei USDC reverts `DelistBandExceeded`.
+        vm.mockCall(
+            address(swapAdapter),
+            abi.encodeWithSelector(swapAdapter.swap.selector),
+            abi.encode(uint256(1))
+        );
+        vm.expectPartialRevert(IRobotMoneyFund.DelistBandExceeded.selector);
+        fund.executeDelistStep(IDX_WETH, 5_000e6);
+        vm.clearMockedCalls();
+
+        // Budget check: a swap inside `delistBandBps` (300 bps) whose loss exceeds `delistBudgetBps` (50 bps) reverts `DelistBudgetExceeded`.
+        uint256 wethUsd = fund.assetUsdcValue(IDX_WETH, contractWeth);
+        fund.setDelistBudgetBps(50);
+        FxMockAggregator(FEED_ETH)
+            .set(8, ethPrice8 * 1_015 / 1_000, block.timestamp, block.timestamp);
+        vm.expectPartialRevert(IRobotMoneyFund.DelistBudgetExceeded.selector);
+        fund.executeDelistStep(IDX_WETH, wethUsd * 2);
+        fund.setDelistBudgetBps(300);
+        _refreshFeeds();
+
+        // Execute bounded chunks until WETH + delist-claim inventory are sold and auto-deactivated.
+        uint256 idleBefore = fund.idleUsdc();
+        uint256 stepCap = wethUsd / 2 + 100e6;
+        uint256 totalGot;
+        for (uint256 k; k < 6 && fund.isAssetInSale(IDX_WETH); ++k) {
+            (bool did, uint256 sold, uint256 got) = fund.executeDelistStep(IDX_WETH, stepCap);
+            assertTrue(did, "delist step executed");
+            assertGt(sold, 0, "sold WETH");
+            assertGt(got, 0, "received USDC");
+            totalGot += got;
+        }
+        assertFalse(fund.isAssetInSale(IDX_WETH), "sale closed once empty");
+        assertFalse(fund.assetConfig(IDX_WETH).active, "E53: delisted asset deactivated");
+
+        uint256 ownerBefore = IERC20(USDC).balanceOf(address(this));
+        uint256 feeBefore = IERC20(USDC).balanceOf(feeRecipient);
+        vm.prank(alice);
+        uint256 netUsdc = fund.settleClaim(IDX_WETH, address(this));
+        uint256 feePaid = IERC20(USDC).balanceOf(feeRecipient) - feeBefore;
+        assertGt(netUsdc, 0, "E54: delist claim settled in USDC");
+        assertEq(
+            IERC20(USDC).balanceOf(address(this)) - ownerBefore, netUsdc, "owner received netUsdc"
+        );
+        assertGt(feePaid, 0, "linked fee paid");
+        assertApproxEqAbs(
+            fund.idleUsdc() - idleBefore,
+            totalGot.mulDiv(heldAfter[IDX_WETH], contractWeth),
+            10,
+            "E53: fund idle receives pro-rata non-claimed proceeds"
+        );
+        assertApproxEqAbs(
+            netUsdc + feePaid,
+            totalGot - (fund.idleUsdc() - idleBefore),
+            10,
+            "E53: claim holders split the remainder of delist proceeds"
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.NoClaimToSettle.selector, IDX_WETH, address(this)
+            )
+        );
+        fund.settleClaim(IDX_WETH, address(this));
+    }
+
+    /// @notice Step 3f (E54, A45, RB-35): permissionless `settleClaim` settles partial liquidity without reverting
+    ///         when `availableLiquidity()` is tight, pays pot recovery from later holder flows, and closes out cleanly
+    ///         once venue liquidity returns.
+    function test_step3f_settleClaimLendingAndShortPayRecovery() public fixtureCovered {
+        _aliceClaims();
+        (uint256 units0, uint256 val0) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertGt(units0, 0, "alice has an Aave claim");
+
+        // Tight liquidity: partial settle pays ~500 USDC without reverting and keeps the remaining units intact.
+        vm.mockCall(
+            address(aave),
+            abi.encodeWithSelector(aave.availableLiquidity.selector),
+            abi.encode(uint256(500e6))
+        );
+        uint256 aliceBefore = IERC20(USDC).balanceOf(alice);
+        vm.prank(bob);
+        uint256 part1 = fund.settleClaim(IDX_AAVE, alice);
+        vm.clearMockedCalls();
+        assertGt(part1, 0, "A45: partial liquidity paid without reverting");
+        assertEq(IERC20(USDC).balanceOf(alice) - aliceBefore, part1, "partial USDC sent to alice");
+        (uint256 unitsMid, uint256 valMid) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertLt(unitsMid, units0, "settled portion burned");
+        assertGt(valMid, 0, "remaining claim preserved");
+
+        // Trigger a flow withdrawal that credits alice's pot (RB-35).
+        uint256 flowShares = fund.totalSupply() / 20;
+        _mintInKind(flowShares);
+        fund.sellForFlow(flowShares, _sellFloors(flowShares));
+
+        // Restored liquidity settles the remainder (venue withdrawal + accrued pot) and clears the claim.
+        vm.prank(bob);
+        uint256 part2 = fund.settleClaim(IDX_AAVE, alice);
+        assertGt(part2, 0, "E54: remaining claim + pot settled");
+        assertApproxEqAbs(part1 + part2, val0, 50e6, "total settled near claim value");
+        (uint256 unitsEnd,) = fund.positionClaimOf(IDX_AAVE, alice);
+        assertEq(unitsEnd, 0, "claim cleared");
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.NoClaimToSettle.selector, IDX_AAVE, alice)
+        );
+        fund.settleClaim(IDX_AAVE, alice);
+    }
+
+    /// @notice Step 3f (RB-34, A34): fund-level custody/balance-delta & check-10 guards defeat short-paying lending
+    ///         and under-delivering swap adapters (`MechAaveAdapter` / `MechSwapAdapter`).
+    function test_step3f_shortPayingAdaptersEnforcedByFund() public fixtureCovered {
+        (IRobotMoneyFundFull mechFund, MechAaveAdapter mechAave, MechSwapAdapter mechSwap) =
+            _setupMechFund();
+
+        uint256 testShares = mechFund.totalSupply() / 10;
+        (uint256[] memory lims, uint256 maxU) = _mechBuyLimits(mechFund, testShares);
+        fundUsdc(address(this), maxU * 2);
+        IERC20(USDC).approve(address(mechFund), maxU * 2);
+        mechFund.mintInKind(testShares, maxU, lims);
+
+        // (1) MechSwapAdapter UNDER_DELIVER: reports true spent, keeps 5% WETH -> rejected by check 10.
+        mechSwap.setMode(mechSwap.UNDER_DELIVER(), 500);
+        vm.expectPartialRevert(IRobotMoneyFund.ProportionViolated.selector);
+        mechFund.mintInKind(testShares, maxU, lims);
+        mechSwap.setMode(mechSwap.HONEST(), 0);
+
+        // (2) MechAaveAdapter SHORT_PAY + shortfall checks.
+        _assertMechAaveShortPay(mechFund, mechAave, testShares / 2);
+    }
+
+    function _setupMechFund()
+        internal
+        returns (IRobotMoneyFundFull mechFund, MechAaveAdapter mechAave, MechSwapAdapter mechSwap)
+    {
+        mechFund = _deployFund();
+        mechAave = new MechAaveAdapter(AAVE_POOL, USDC, AAVE_A_USDC, address(mechFund));
+        mechSwap = new MechSwapAdapter(ROUTER);
+        mechFund.setAdapterCodeHashAllowed(address(mechAave).codehash, true);
+        mechFund.setAdapterCodeHashAllowed(address(mechSwap).codehash, true);
+        mechFund.addAsset(_lending(address(mechAave)));
+        mechFund.addAsset(
+            AssetConfig({
+                kind: AssetKind.Basket,
+                active: true,
+                capBps: 0,
+                adapter: address(mechSwap),
+                token: WETH,
+                pool: WETH_POOL,
+                poolFee: POOL_FEE,
+                twapWindow: TWAP_WINDOW,
+                venue: Venue.V3,
+                feed: FEED_ETH,
+                maxFeedAge: ETH_MAX_AGE
+            })
+        );
+        RobotMoneyFund(address(mechFund)).bindRebalanceRoles(address(this), address(this));
+        mechFund.bindFlowRole(address(this));
+
+        fundUsdc(address(this), SEED_USDC);
+        IERC20(USDC).approve(address(mechFund), SEED_USDC);
+        mechFund.seed(SEED_USDC);
+        address[] memory ids = new address[](2);
+        ids[0] = address(mechAave);
+        ids[1] = WETH;
+        uint256[] memory bps = new uint256[](2);
+        bps[0] = 5_000;
+        bps[1] = 5_000;
+        mechFund.setTargetAndOpenPlan(ids, bps, PlanParams(1 days, 500), bytes32(0));
+        vm.warp(block.timestamp + 1 days + 1);
+        _refreshFeeds();
+        for (uint256 i; i < 2; ++i) {
+            (uint256 nav,,) = mechFund.portfolioValues();
+            uint256 notional = nav.mulDiv(4_500, BPS);
+            uint256 minOut = i == 1 ? mechFund.assetTokenValue(1, notional).mulDiv(98, 100) : 0;
+            mechFund.executeStep(
+                StepOrder(IDLE_INDEX, i, notional, 0, minOut, notional.mulDiv(100, BPS))
+            );
+        }
+    }
+
+    function _mechBuyLimits(IRobotMoneyFundFull mechFund, uint256 sharesOut)
+        internal
+        view
+        returns (uint256[] memory lims, uint256 maxUsdc)
+    {
+        (uint256 idleM, uint256[] memory heldM) = mechFund.heldBalances();
+        uint256 supM = mechFund.totalSupply();
+        lims = new uint256[](2);
+        uint256 wantWeth = heldM[1].mulDiv(sharesOut, supM, Math.Rounding.Ceil);
+        lims[1] = mechFund.assetUsdcValue(1, wantWeth).mulDiv(BPS + LEG_BAND_BPS, BPS) + 1;
+        maxUsdc = idleM.mulDiv(sharesOut, supM, Math.Rounding.Ceil)
+            + heldM[0].mulDiv(sharesOut, supM, Math.Rounding.Ceil) + LENDING_ROUNDING_UNITS
+            + lims[1];
+    }
+
+    function _assertMechAaveShortPay(
+        IRobotMoneyFundFull mechFund,
+        MechAaveAdapter mechAave,
+        uint256 sellShares
+    ) internal {
+        mechAave.setMode(mechAave.SHORT_PAY(), 500);
+        mechAave.setShortfallBps(500);
+        mechAave.setShortPayAmount(10e6);
+        uint256 idleBefore = IERC20(USDC).balanceOf(address(mechFund));
+        uint256 supBefore = mechFund.totalSupply();
+        uint256 paid = mechFund.sellForFlow(sellShares, new uint256[](2));
+        uint256 idleAfter = IERC20(USDC).balanceOf(address(mechFund));
+        assertGt(paid, 0, "short-paying sell still settles honest net proceeds");
+        assertLe(
+            idleBefore - idleAfter,
+            idleBefore.mulDiv(sellShares, supBefore) + 2,
+            "A34: short-pay never drains stayers' idle USDC"
+        );
+
+        mechFund.setInKindAllowance(0, 0, DEFAULT_IN_KIND_PERIOD);
+        mechFund.shutdown();
+        mechFund.redeemInKind(mechFund.balanceOf(address(this)) / 2, address(this), address(this));
+        vm.expectPartialRevert(IRobotMoneyFund.DeferredShortfall.selector);
+        mechFund.claimPosition(0, address(this));
     }
 }

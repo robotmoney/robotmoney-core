@@ -7,9 +7,9 @@
 pragma solidity ^0.8.24;
 
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {IFundEvents, AssetConfig, PlanParams, PlanStatus, BPS} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
+import {IFundEvents, AssetConfig, PlanParams, PlanStatus, BPS} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {IRebalanceGovernance} from "../../interfaces/IRebalanceGovernance.sol";
 
 /// @notice RB-9: a target vector names every active asset exactly once and sums to 10 000. Each refused vector
 ///         reverts with its own error through all three doors (`applyReceipt`, `setTarget`, `previewPlan`). A
@@ -248,6 +248,28 @@ contract TargetVectorTest is PrototypeHarness {
         assertEq(t.length, n + 1, "target grew with the asset list");
         assertEq(t[IDX_CBBTC], 0, "old inactive entry target 0");
         assertEq(t[relisted], v[IDX_CBBTC], "new entry carries the cbBTC weight");
+    }
+
+    /// @dev E57 (Rule 7): `maxBasketBps` defaults to `10 000`; raising above `10 000` reverts `InvalidParam`;
+    ///      once capped at `5 000`, any target vector whose basket sum exceeds `5 000` reverts
+    ///      `BasketCapExceeded` through all three doors (`applyReceipt`, `setTarget`, `previewPlan`).
+    function test_e57_basketCapExceeded_revertsThroughAllDoors() public fixtureCovered {
+        assertEq(fund.maxBasketBps(), BPS, "E57: default maxBasketBps is 10 000");
+
+        _timelockExpectRevert(
+            address(fund),
+            abi.encodeCall(fund.setMaxBasketBps, (BPS + 1)),
+            abi.encodeWithSelector(IFundEvents.InvalidParam.selector)
+        );
+
+        timelockExecute(address(fund), abi.encodeCall(fund.setMaxBasketBps, (5_000)));
+        assertEq(fund.maxBasketBps(), 5_000, "E57: maxBasketBps updated");
+
+        // basketSum = 6 000 > 5 000 refused through every door; _valid() (3 500 <= 5 000) still applies.
+        (address[] memory ids, uint256[] memory w) = assetArrays(bucketVec(4_000, 6_000));
+        _expectRefused(
+            ids, w, abi.encodeWithSelector(IFundEvents.BasketCapExceeded.selector, 6_000, 5_000)
+        );
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════

@@ -27,9 +27,9 @@ import {
     StepParams,
     BPS,
     IDLE_INDEX
-} from "./src/FundTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {IRebalancer} from "./src/interfaces/IRebalancer.sol";
+} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {IRebalancer} from "../../interfaces/IRebalancer.sol";
 
 /// @dev A token the fund does not hold as an asset, for the positive sweep case.
 contract ForeignToken is ERC20 {
@@ -408,14 +408,16 @@ contract AdversarialTest is PrototypeHarness {
         if (ran == 0) assertTrue(_assertStepWithinCap(keeper), "an honest-timed step runs");
         uint256 t0 = fund.lastStepAt();
 
-        // A stranger is locked out until keeperGrace after the last step.
-        uint256 openAt = rebalancer.permissionlessAt();
-        assertEq(openAt, t0 + KEEPER_GRACE, "grace counts from the last step");
-        vm.warp(block.timestamp + 1);
-        vm.prank(stranger);
-        vm.expectRevert(
-            abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, openAt)
+        // Step 3f retired permissionless stepping (`permissionlessAt() == type(uint256).max`):
+        // only KEEPER_ROLE can trigger `rebalancer.step()`, regardless of elapsed time.
+        assertEq(
+            rebalancer.permissionlessAt(),
+            type(uint256).max,
+            "permissionless stepping retired: keeper only"
         );
+        vm.warp(block.timestamp + KEEPER_GRACE + 1);
+        vm.prank(stranger);
+        vm.expectRevert(_unauthorized(stranger, Roles.KEEPER_ROLE));
         rebalancer.step();
 
         // Worst timing 2: one second before the cooldown edge skips, exactly at the edge runs within the cap.
@@ -425,36 +427,29 @@ contract AdversarialTest is PrototypeHarness {
         assertFalse(did, "before the edge: no trade");
         assertEq(uint8(why), uint8(SkipReason.Cooldown), "cooldown");
         vm.warp(t0 + interval);
+        refreshFeeds();
+        alignFeedsToPools();
         if (_assertStepWithinCap(keeper)) ++ran;
 
-        // After keeperGrace with no step, anyone may step.
-        openAt = rebalancer.permissionlessAt();
-        vm.warp(openAt - 1);
-        vm.prank(stranger);
-        vm.expectRevert(
-            abi.encodeWithSelector(IRebalancer.NotKeeperBeforeGrace.selector, stranger, openAt)
-        );
-        rebalancer.step();
-        vm.warp(openAt);
-        if (_assertStepWithinCap(stranger)) ++ran;
         assertGt(ran, 0, "at least one worst-timed step executed (the cap path is exercised)");
     }
 
-    /// @dev The one input a permissionless caller controls is the gas limit (RB-2). A stranger after
-    ///      `keeperGrace` who sends too little gas for the step gets `StepGasStarved`: no fake `StepFailed`, no
-    ///      backoff, no trade. With enough gas the stranger's step is exactly the order `previewStep` showed (the
-    ///      keeper's), and a real step uses well under `STEP_GAS_FLOOR`.
+    /// @dev Gas starvation (RB-2): only KEEPER_ROLE may call `step()` in Step 3f, and calling with too little
+    ///      gas for the step reverts `StepGasStarved` without recording fake `StepFailed` backoff or touching
+    ///      the fund. With enough gas the keeper's step matches `previewStep` and uses well under `STEP_GAS_FLOOR`.
     function test_keeperAbuse_gasStarvationCannotForceBackoff() public fixtureCovered {
         _wethOnlyPlan(COST_BUDGET_BPS);
-        uint256 openAt = rebalancer.permissionlessAt();
-        if (block.timestamp < openAt) vm.warp(openAt);
+        assertEq(rebalancer.permissionlessAt(), type(uint256).max, "keeper-only stepping");
+        vm.prank(stranger);
+        vm.expectRevert(_unauthorized(stranger, Roles.KEEPER_ROLE));
+        rebalancer.step();
         uint256 floor = rebalancer.STEP_GAS_FLOOR();
         uint256 idle = fund.idleUsdc();
 
-        // Enough gas to pass the decision, not enough for the floor (and so for every nested frame of the step).
+        // Enough gas to pass `onlyRole(KEEPER_ROLE)` and decision, not enough for `STEP_GAS_FLOOR`.
         uint256[2] memory limits = [floor, floor * 3 / 4];
         for (uint256 k; k < limits.length; ++k) {
-            vm.prank(stranger);
+            vm.prank(keeper);
             vm.expectRevert(IRebalancer.StepGasStarved.selector);
             rebalancer.step{gas: limits[k]}();
             assertEq(rebalancer.assetBackoffUntil(IDX_WETH), 0, "starved: no backoff");
@@ -465,9 +460,9 @@ contract AdversarialTest is PrototypeHarness {
         (SkipReason r, uint256 s, uint256 b, uint256 n) = rebalancer.previewStep();
         assertEq(uint8(r), uint8(SkipReason.None), "a step is ready");
         uint256 g0 = gasleft();
-        (bool did,, StepLog memory l) = _stepAs(stranger);
+        (bool did,, StepLog memory l) = _stepAs(keeper);
         uint256 used = g0 - gasleft();
-        assertTrue(did, "with enough gas the stranger's step runs");
+        assertTrue(did, "with enough gas the keeper's step runs");
         assertEq(l.sell, s, "same sell leg as the preview");
         assertEq(l.buy, b, "same buy leg as the preview");
         assertEq(l.notional, n, "same notional as the preview");
@@ -633,6 +628,11 @@ contract AdversarialTest is PrototypeHarness {
         uint256 shares = fund.balanceOf(alice) / 10;
         uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
         uint256 frozenValueBefore = fund.assetValue(IDX_CBBTC);
+        // Step 3f (E29): direct redeemInKind is closed while the fund is live, and opens in wind-down.
+        vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(shares, alice, alice);
+        timelockExecute(address(fund), abi.encodeCall(fund.shutdown, ()));
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
         assertGt(IERC20(USDC).balanceOf(alice), usdcBefore, "in-kind USDC leg paid");
@@ -695,16 +695,21 @@ contract AdversarialTest is PrototypeHarness {
     ///      forfeited, and is paid once Aave pays again.
     function test_lendingStall_redeemInKindDefersOnlyThatVenue() public fixtureCovered {
         _holdEverything();
-        uint256 aaveHeld = fund.assetValue(IDX_AAVE);
-        assertGt(aaveHeld, 0, "fund holds Aave");
+        assertGt(fund.assetValue(IDX_AAVE), 0, "fund holds Aave");
+        uint256 supply = fund.totalSupply();
+        uint256 shares = fund.balanceOf(alice) / 5;
+        uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
+        // Step 3f (E29): direct redeemInKind is closed while live, and opens on wind-down.
+        vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(shares, alice, alice);
+        timelockExecute(address(fund), abi.encodeCall(fund.shutdown, ()));
         vm.mockCallRevert(
             address(aaveAdapter),
             abi.encodeWithSelector(IStrategyAdapter.withdraw.selector),
             bytes("PAUSED")
         );
-        uint256 supply = fund.totalSupply();
-        uint256 shares = fund.balanceOf(alice) / 5;
-        uint256 usdcBefore = IERC20(USDC).balanceOf(alice);
+        uint256 aaveHeld = fund.assetValue(IDX_AAVE);
         uint256 navBefore = _nav();
         vm.prank(alice);
         fund.redeemInKind(shares, alice, alice);
@@ -794,11 +799,7 @@ contract AdversarialTest is PrototypeHarness {
         );
         vm.warp(block.timestamp + KEEPER_GRACE + 1);
         vm.prank(stranger);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IRebalancer.NotKeeperBeforeGrace.selector, stranger, type(uint256).max
-            )
-        );
+        vm.expectRevert(_unauthorized(stranger, Roles.KEEPER_ROLE));
         rebalancer.step();
         assertEq(IERC20(WETH).balanceOf(address(fund)), wethBal, "no trade while halted");
         assertEq(fund.idleUsdc(), idle, "idle unchanged while halted");

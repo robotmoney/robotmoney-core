@@ -7,11 +7,11 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {AssetConfig, AssetKind, FeedStatus, PlanStatus, Roles, BPS} from "./src/FundTypes.sol";
-import {FlowParams} from "./src/FlowTypes.sol";
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
+import {AssetConfig, AssetKind, FeedStatus, PlanStatus, Roles, BPS} from "../../FundTypes.sol";
+import {FlowParams} from "../../FlowTypes.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
 
 /// @notice One-vault experiment (plan Step 2.1, step 3d wiring): proves `PrototypeHarness` deploys the full prototype
 ///         on the Base fixture and that its helpers work. Not a behaviour suite.

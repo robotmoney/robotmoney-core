@@ -9,10 +9,11 @@ import { assertOwnerExceptions } from "../src/plan.ts";
 import { UNPAUSE_ROWS } from "../src/govern.ts";
 import { checkVaultRetirements, checkVaultRetirementsOnChain } from "../src/evidence-check.ts";
 import { buildRetireCalls } from "../src/retire-vault.ts";
-import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems, checkGovernedUpgradesOnChain } from "../src/evidence-check.ts";
+import { releaseCalldata, checkVaultRedeploys, checkVaultRedeploysOnChain, checkVotedWeightsClears, checkVotedWeightsClearsOnChain, governedUpgradeProblems, checkGovernedUpgradesOnChain, BEFORE_PIN_NOTE } from "../src/evidence-check.ts";
 import { buildRedeployCalls } from "../src/redeploy-vault.ts";
 import { pinnedMigrationData } from "../src/upgrade-rows.ts";
 import { upgradeCalldata } from "../src/upgrade-lifecycle.ts";
+import { decodeFundMigration, fundMigrationData } from "../src/fund-migrations.ts";
 import { clearCalldata } from "../src/clear-voted-weights.ts";
 import { VAULT_RULES } from "../src/vault-rules.ts";
 import { keccak256 } from "viem";
@@ -875,7 +876,7 @@ describe("proxy_upgrades typed migration (issue 1910)", () => {
   const chainOf = (up: any, scheduledData: string, calls = 1): ChainReader => {
     const logs = Array.from({ length: calls }, (_, k) => log("CallScheduled", 6000, 172800n, up.proxy, scheduledData, BigInt(k)));
     return { getChainId: async () => 8453, getTransactionCount: async () => 0, getBlock: async () => ({ timestamp: 1n }), readContract: async () => undefined,
-      getTransactionReceipt: async ({ hash }: { hash: string }) => { if (hash !== up.schedule_tx) throw new Error("not found"); return { status: "success", blockNumber: 1n, logs }; } } as unknown as ChainReader;
+      getTransactionReceipt: async ({ hash }: { hash: string }) => { if (hash === up.execute_tx) return { status: "success", blockNumber: 2n, logs: [log("CallExecuted", 6000, 0n, up.proxy, scheduledData)] }; if (hash !== up.schedule_tx) throw new Error("not found"); return { status: "success", blockNumber: 1n, logs }; } } as unknown as ChainReader;
   };
   test("the scheduled data is read back from the chain and must equal upgradeToAndCall(impl, typed migration data)", async () => {
     const up = upgrade();
@@ -894,5 +895,75 @@ describe("proxy_upgrades typed migration (issue 1910)", () => {
     // another implementation, a batch of two
     expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, upgradeCalldata(a(99), pinnedMigrationData("receipt-submitter-roles", RELEASER))))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
     expect((await checkGovernedUpgradesOnChain(evOf(up), chainOf(up, want, 2))).join("\n")).toContain("2 CallScheduled events");
+  });
+  test("a recorded execution must have a successful matching timelock execution", async () => {
+    const up = upgrade();
+    const want = upgradeCalldata(up.to_implementation, pinnedMigrationData("receipt-submitter-roles", RELEASER));
+    const chain = chainOf(up, want);
+    const read = chain.getTransactionReceipt.bind(chain);
+    chain.getTransactionReceipt = async (args: any) => args.hash === up.execute_tx ? { status: "success", blockNumber: 2n, logs: [] } as any : read(args);
+    expect((await checkGovernedUpgradesOnChain(evOf(up), chain)).join("\n")).toContain("execute tx does not contain exactly one matching CallExecuted event");
+  });
+
+  // issue 2044: on the Twin (918453) no transaction at or before the fork pin is read; on 8453 every entry is read
+  test("Twin: a pre-pin entry is not read and is noted; a post-pin entry is read; on 8453 both are read", async () => {
+    const want = (u: any) => upgradeCalldata(u.to_implementation, pinnedMigrationData("receipt-submitter-roles", RELEASER));
+    const pre = upgrade(), post = { ...upgrade(), operation_id: h(7000), schedule_tx: h(7001), execute_tx: h(7002), schedule_block_timestamp: T0 + 10 * D, execute_block_timestamp: T0 + 11 * D };
+    const PIN_TS = T0 + 5 * D;
+    const both = (chainId: number, pin?: bigint) => {
+      const a1 = chainOf(pre, want(pre)), a2 = chainOf({ ...post }, want(post));
+      const read: string[] = [];
+      const c = { ...a1, getChainId: async () => chainId, getBlock: async () => ({ timestamp: BigInt(PIN_TS) }), ...(pin !== undefined ? { forkPin: async () => pin } : {}),
+        getTransactionReceipt: async (x: { hash: Hex }) => {
+          read.push(x.hash);
+          const r = [pre.schedule_tx, pre.execute_tx].includes(x.hash) ? await a1.getTransactionReceipt(x) : await a2.getTransactionReceipt(x);
+          // the post entry's operation id is its own
+          return { ...r, logs: r.logs.map((l: any) => x.hash === post.schedule_tx || x.hash === post.execute_tx ? { ...l, topics: [l.topics[0], h(7000), ...l.topics.slice(2)] } : l) };
+        } } as unknown as ChainReader;
+      return { c, read };
+    };
+    const ev = { timelock: { address: a(9) }, governance: { address: RELEASER }, proxy_upgrades: [pre, post] };
+    const twin = both(918453, 100n), notes: string[] = [];
+    expect(await checkGovernedUpgradesOnChain(ev, twin.c, notes)).toEqual([]);
+    expect(twin.read).toEqual([post.schedule_tx, post.execute_tx]);
+    expect(notes.join("\n")).toContain(BEFORE_PIN_NOTE);
+    const base = both(8453);
+    expect(await checkGovernedUpgradesOnChain(ev, base.c)).toEqual([]);
+    expect(base.read).toEqual([pre.schedule_tx, pre.execute_tx, post.schedule_tx, post.execute_tx]);
+    // a Twin node that names no fork pin reads nothing and fails
+    const nopin = both(918453);
+    expect((await checkGovernedUpgradesOnChain(ev, nopin.c)).join("\n")).toContain("not an anvil fork");
+    expect(nopin.read).toEqual([]);
+  });
+});
+
+// v0.9.0 (contracts 588a68598): a fund-system proxy_upgrades entry may carry its proxy's own migrateV090 (fund_migration); arbitrary data never passes
+describe("proxy_upgrades fund_migration (v0.9.0)", () => {
+  const D = 172800;
+  const PROXIES = ["fund", "queue", "rebalancer", "fund-governance", "fund-receipt"];
+  const up = (proxy_name: string, data: Hex) => ({
+    step: "upgrade-proxy", proxy_name, proxy: a(70), from_implementation: a(71), from_code_hash: h(72), to_implementation: a(73), to_code_hash: h(74), build: "/core",
+    timelock: a(9), manifest_fields: { x_implementation: a(73) }, ...(data === "0x" ? {} : { fund_migration: decodeFundMigration(proxy_name, data).record }),
+    operation_id: id32(6000), schedule_tx: h(6001), schedule_status: 1, schedule_block_timestamp: T0, execute_tx: h(6002), execute_status: 1, execute_block_timestamp: T0 + D,
+  });
+  const evOf = (u: any) => ({ timelock: { address: a(9) }, proxy_upgrades: [u] });
+  const chainOf = (u: any, scheduled: string): ChainReader => ({ getChainId: async () => 8453, getTransactionCount: async () => 0, getBlock: async () => ({ timestamp: 1n }), readContract: async () => undefined,
+    getTransactionReceipt: async ({ hash }: { hash: string }) => hash === u.execute_tx ? { status: "success", blockNumber: 2n, logs: [log("CallExecuted", 6000, 0n, u.proxy, scheduled)] } : { status: "success", blockNumber: 1n, logs: [log("CallScheduled", 6000, 172800n, u.proxy, scheduled)] } } as unknown as ChainReader);
+  const qData = fundMigrationData("queue", [900, 259200, 10]);
+
+  test("an entry with its proxy's migration passes offline and against the scheduled call", async () => {
+    const u = up("queue", qData);
+    expect(governedUpgradeProblems(evOf(u), D, PROXIES)).toEqual([]);
+    expect(await checkGovernedUpgradesOnChain(evOf(u), chainOf(u, upgradeCalldata(u.to_implementation, qData)))).toEqual([]);
+    const r = up("rebalancer", fundMigrationData("rebalancer", []));
+    expect(governedUpgradeProblems(evOf(r), D, PROXIES)).toEqual([]);
+  });
+  test("refused: the migration on another proxy, edited args, data the chain did not schedule", async () => {
+    const wrong = { ...up("queue", qData), proxy_name: "fund" };
+    expect(governedUpgradeProblems(evOf(wrong), D, PROXIES).join("\n")).toContain("selector");
+    const edited = up("queue", qData); (edited.fund_migration as any).args = ["1", "2", "3"];
+    expect(governedUpgradeProblems(evOf(edited), D, PROXIES).join("\n")).toContain("are not the decoded data");
+    const u = up("queue", qData);
+    expect((await checkGovernedUpgradesOnChain(evOf(u), chainOf(u, upgradeCalldata(u.to_implementation)))).join("\n")).toContain("CallScheduled calldata is not upgradeToAndCall");
   });
 });

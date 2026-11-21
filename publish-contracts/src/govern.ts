@@ -39,7 +39,7 @@
 // Issue 1831: REFUSED with USAGE (nothing read past the role, nothing sent) once RouterGovernance holds the receipt contract's ADMIN_ROLE, which every deploy since issue 1698
 // grants. A release alone would burn the receipt (applyReceipt then reverts ReceiptAlreadyReleased), so the message points at apply-receipt.
 //   apply-receipt                the rebalance (issue 1696, issue 1698): ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps) for the
-// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded and advances RouterGovernance's applied receipt watermark
+// receipt's vector (--receipt-id, --payload FILE). Before anything is sent it checks: the receipt is recorded, it was recorded after RouterGovernance.lastAppliedRecordedAt
 // (issue 1831: applyReceipt is monotonic, so an older receipt can never replace a newer vector; an execute that finds a newer receipt applied meanwhile refuses GOVERN), its stored digest equals the receipt digest (keccak256 of the domain line + the canonical bytes, receipt-digest.ts) of the payload bytes, the
 // vector sums to 10000 bps and lists exactly the registry's router-eligible vaults in registry order, and the receipt is not released. After the real delay the Safe executes
 // the call and the tool reads isReleased and the router weights back. No vote. Never part of stage 13: on 8453 only `--row apply-receipt` names it (own 172800 s delay).
@@ -85,9 +85,9 @@ import { scopeTable } from "./stage-table.ts";
 import { randomBytes } from "node:crypto";
 import { join, resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, parseAbiItem, toBytes, toHex, type Address, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionData, getAddress, keccak256, parseAbi, parseAbiItem, toBytes, toHex, type Address, type Hex } from "viem";
 import { receiptPayloadDigest } from "./receipt-digest.ts";
-import { APPLY_ROW, GOVERNANCE_LAST_APPLIED_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, planApply, staleReceiptReason } from "./apply-receipt.ts";
+import { APPLY_ROW, GOVERNANCE_LAST_APPLIED_ABI, REGISTRY_ELIGIBLE_ABI, RECEIPT_RECORD_ABI, ROUTER_WEIGHTS_ABI, applyReadBackProblems, applyRecordKey, buildApplyCall, notNewerMessage, planApply } from "./apply-receipt.ts";
 import { CLEAR_ROW, buildClearCall, clearReadBackProblems } from "./clear-voted-weights.ts";
 import {
   REDEPLOY_ROW, REGISTRY_REDEPLOY_ABI, ROUTER_REDEPLOY_ABI, VAULT_REDEPLOY_ABI, STATUS_NAME, buildRedeployCalls, createdVaultProblems, planRedeployVectors, redeployBeforeProblems,
@@ -1793,38 +1793,17 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       }
     }
     const rd = reader(handle);
-    const receiptOrder = async () => {
-      const lastAppliedRecordedAt = await rd<bigint>(governance, GOVERNANCE_LAST_APPLIED_ABI, "lastAppliedRecordedAt");
-      let lastAppliedReceiptSequence: bigint;
-      try {
-        lastAppliedReceiptSequence = await rd<bigint>(governance, GOVERNANCE_LAST_APPLIED_ABI, "lastAppliedReceiptSequence");
-      } catch (error) {
-        // Legacy RouterGovernance implementations do not contain the selector.
-        // Only an empty response or bare revert admits the timestamp fallback.
-        const legacy = error instanceof BaseError && error.walk(cause =>
-          cause instanceof ContractFunctionZeroDataError
-          || (cause instanceof ContractFunctionRevertedError && (cause.raw === "0x" || cause.raw === undefined) && !cause.reason),
-        );
-        if (!legacy) throw error;
-        return { lastAppliedRecordedAt };
-      }
-      // A governor exposing a sequence watermark requires a compatible
-      // receipt register, even before the first sequence is applied.
-      const receiptSequence = await rd<bigint>(receipt, RECEIPT_RECORD_ABI, "receiptSequence", [receiptId]);
-      if (receiptSequence === 0n) throw new PublishError("GOVERN", `recorded receipt ${receiptId} has no issuance sequence`);
-      return { lastAppliedRecordedAt, lastAppliedReceiptSequence, receiptSequence };
-    };
-
     if (!rowComplete(state[name])) {
       const recorded = await rd<boolean>(receipt, RECEIPT_ABI, "isRecorded", [receiptId]);
       const released = recorded ? await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId]) : false;
       const rec = recorded ? await rd<{ payloadDigest: Hex; recordedAt: bigint }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId]) : undefined;
       const stored = rec?.payloadDigest;
-      const order = recorded ? await receiptOrder() : {};
+      // Issue 1831: applyReceipt is monotonic in recordedAt. A receipt not recorded after the last applied one is refused here, before the Safe schedules it.
+      const lastApplied = recorded ? await rd<bigint>(governance, GOVERNANCE_LAST_APPLIED_ABI, "lastAppliedRecordedAt") : undefined;
       const listed = await rd<Address[]>(a.registry, REGISTRY_ELIGIBLE_ABI, "listVaults");
       const eligible: Address[] = [];
       for (const v of listed) if (await rd<boolean>(a.registry, REGISTRY_ELIGIBLE_ABI, "isRouterEligible", [v])) eligible.push(v);
-      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, recordedAt: rec?.recordedAt, ...order, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
+      const vec = planApply({ receiptId, payload, recorded, released, storedDigest: stored, recordedAt: rec?.recordedAt, lastAppliedRecordedAt: lastApplied, eligible, vaultOf: a.vaults, inFlight: state[name]?.scheduled !== undefined });
       const call = buildApplyCall(governance, receiptId, receiptPayloadDigest(payload), vec);
       const p = { timelock: a.timelock, calls: [{ target: call.target, data: call.data }], salt: salt(name), form: "single" as const };
       const id = await api.operationId(handle, p);
@@ -1848,8 +1827,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
           if (await rd<boolean>(receipt, RECEIPT_ABI, "isReleased", [receiptId])) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: receipt ${receiptId} was released after operation ${id} was scheduled. Nothing was sent. Cancel the operation through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
           // Issue 1831: a newer receipt was applied after this one was scheduled, so applyReceipt would revert ReceiptNotNewerThanApplied.
           const at = (await rd<{ recordedAt: bigint }>(receipt, RECEIPT_RECORD_ABI, "getReceiptById", [receiptId])).recordedAt;
-          const stale = staleReceiptReason({ receiptId, recordedAt: at, ...await receiptOrder() });
-          if (stale) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: ${stale} Cancel operation ${id} through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
+          const last = await rd<bigint>(governance, GOVERNANCE_LAST_APPLIED_ABI, "lastAppliedRecordedAt");
+          if (at <= last) throw new PublishError("GOVERN", `govern row ${name} will NOT execute: ${notNewerMessage(receiptId, at, last)} Cancel operation ${id} through the Safe on the timelock.`, { row: APPLY_ROW, receipt_id: receiptId, operation_id: id });
           return api.executeOnTimelock(handle, { ...p, description: `${APPLY_ROW} execute` });
         },
       }, APPLY_ROW);

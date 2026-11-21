@@ -12,7 +12,7 @@ import { COUNTS, SHA, tmp, writeCounts } from "./fixtures.ts";
 import { REPO_ROOT } from "./repo-root.ts";
 
 const TABLE = loadStageTable(REPO_ROOT);
-const FUND_COUNTS: Record<string, number> = { safe: 1, "fund-libs": 14, "fund-receipt": 2, fund: 18, rebalancer: 7, "fund-governance": 2, queue: 2, "fund-wiring": 3, "fund-timelock": 15 };
+const FUND_COUNTS: Record<string, number> = { safe: 1, "fund-libs": 16, "fund-receipt": 2, fund: 18, rebalancer: 7, "fund-governance": 2, queue: 2, "fund-wiring": 3, "fund-timelock": 15 };
 const fundSum = Object.values(FUND_COUNTS).reduce((a, b) => a + b, 0);
 const vaultsSum = Object.values(COUNTS).reduce((a, b) => a + b, 0);
 const FUND_KEYS = systemCountKeys(TABLE, "fund");

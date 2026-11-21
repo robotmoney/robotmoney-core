@@ -462,8 +462,9 @@ jobs:
 
       - name: Cross-system feature flag consistency
         # Verifies that flag IDs in config/feature-flags.json match the
-        # constants in contracts/FeatureFlags.sol, clients/dapp/src/feature-flags.ts,
-        # and services/explorer-indexer/src/feature_flags.rs.
+        # constants in services/explorer-indexer/src/feature_flags.rs (and
+        # clients/dapp/src/feature-flags.ts when present). contracts/FeatureFlags.sol
+        # was deleted with the multi-vault system (PR 2042).
         # Implements: issue #389
         run: python3 .github/scripts/check_feature_flag_consistency.py
 
@@ -508,7 +509,9 @@ jobs:
       # have. The unit test plants each drift first. Runs on every PR, so a CLI change cannot strand the runbook.
       - name: Contract QA runbook is valid (self-test, then the check)
         run: |
-          bun test scripts/runbook/validate-contract-qa.test.ts scripts/runbook/run-record.test.ts scripts/runbook/run.test.ts scripts/runbook/receipt-payload.test.ts scripts/runbook/qa-assert.test.ts scripts/runbook/upgrade-submodules.test.ts --timeout 60000
+          # The runbook tests import viem through publish-contracts, so its locked dependencies come first.
+          bun install --frozen-lockfile --cwd publish-contracts
+          bun test scripts/runbook/validate-contract-qa.test.ts scripts/runbook/run-record.test.ts scripts/runbook/run.test.ts scripts/runbook/receipt-payload.test.ts scripts/runbook/qa-assert.test.ts scripts/runbook/upgrade-submodules.test.ts scripts/runbook/code-matches-build.test.ts scripts/runbook/adapter-swap.test.ts scripts/runbook/flow-params.test.ts scripts/runbook/fund-state.test.ts scripts/runbook/fund-receipt-payload.test.ts scripts/runbook/queue-flow.test.ts scripts/runbook/simulate-upgrades.test.ts --timeout 60000
           bun scripts/runbook/validate-contract-qa.ts
           # Issue 1916: the committed Twin stage sheet satisfies the sheet check P0.17 runs, so a sheet that drifts from the validator fails here, not in a QA run.
           bun scripts/runbook/validate-contract-qa.ts --check-sheet deployments/twin-918453/stage-sheet.env --target twin --owner-signers 0

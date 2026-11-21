@@ -92,7 +92,14 @@ abstract contract BaseFixture is Test {
     /// @dev Put on every prototype test. Runs the coverage check after the test body in replay.
     modifier fixtureCovered() {
         _;
-        if (fixtureCheck) this.checkFixtureCoverageNow();
+        if (fixtureCheck) {
+            // The decode of the whole test's state diff is the fixture's own bookkeeping, not code under test. A long
+            // test (step 3f's heavy matches and floods) spent more than forge's 2^30 gas limit on it, so it runs
+            // unmetered, as `coverageCheckpoint` does mid-test.
+            vm.pauseGasMetering();
+            this.checkFixtureCoverageNow();
+            vm.resumeGasMetering();
+        }
         if (fixtureStrict) emit log_named_string("fixture-strict", "final");
     }
 
@@ -102,7 +109,12 @@ abstract contract BaseFixture is Test {
     ///      reason ends with `[fixture-strict: checked]`, which the recorder reads (forge keeps no logs of a skipped
     ///      test, only its reason).
     function _skipCovered(string memory reason) internal {
-        if (fixtureCheck) this.checkFixtureCoverageNow();
+        if (fixtureCheck) {
+            // Unmetered, as at the end of a passing test (see `fixtureCovered`).
+            vm.pauseGasMetering();
+            this.checkFixtureCoverageNow();
+            vm.resumeGasMetering();
+        }
         if (fixtureStrict) {
             reason =
                 bytes(reason).length == 0 ? SKIP_CHECKED : string.concat(reason, " ", SKIP_CHECKED);
@@ -118,7 +130,13 @@ abstract contract BaseFixture is Test {
     ///      call's own memory and is freed on return: forge's EVM memory limit then bounds one phase, not the
     ///      whole test.
     function _fixtureCheckpoint() internal {
-        if (fixtureCheck) this.checkFixtureCoverageNow();
+        if (!fixtureCheck) return;
+        // The self-call bumps this contract's nonce. The test contract creates every harness and test contract, so a
+        // bumped nonce moves their addresses, and a record run (no check, no bump) would then read state at other
+        // addresses than the replay reads. Restore the nonce so both runs create the same addresses.
+        uint64 nonce = vm.getNonce(address(this));
+        this.checkFixtureCoverageNow();
+        vm.setNonceUnsafe(address(this), nonce);
     }
 
     /// @dev Self-call target of `fixtureCovered` and `_fixtureCheckpoint`. Not a test.

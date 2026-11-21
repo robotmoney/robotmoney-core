@@ -4,7 +4,7 @@ title: "FundExtrasTest"
 
 # FundExtrasTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/FundExtras.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/FundExtras.t.sol)
 
 **Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
 
@@ -333,6 +333,54 @@ function queuedSharesOf(address account) external view returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="currentmatchindexes"></a>
+
+### currentMatchIndexes
+
+```solidity
+function currentMatchIndexes() external pure returns (uint256[2] memory, uint256[2] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256[2]` |  |
+| &lt;none&gt; | `uint256[2]` |  |
+
+<a id="queuedsharesofat-address-uint256-2-uint256-2"></a>
+
+### queuedSharesOfAt
+
+```solidity
+function queuedSharesOfAt(address account, uint256[2] calldata, uint256[2] calldata)
+        external
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| _ | `uint256[2]` |  |
+| _ | `uint256[2]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="onshutdown"></a>
+
+### onShutdown
+
+```solidity
+function onShutdown() external;
+```
 
 <a id="flowparams"></a>
 
@@ -837,7 +885,8 @@ function test_E20_allowanceIsProRataAndPerPeriod() public fixtureCovered;
 
 <i>
 
-Alice exits in kind with no allowance, so she holds a claim on every lending position.
+Alice exits in kind during wind-down with no allowance, so she holds a claim on every lending position,
+then restores the fund so downstream tests run on a live fund.
 
 </i>
 
@@ -859,7 +908,9 @@ function test_RB21_depositOrStepIntoVenueKeepsClaimValue() public fixtureCovered
 
 ### test_RB21_stepOutOfVenueKeepsClaimValue
 
-A rebalance step OUT of a venue burns only holders' units: the claim's value is unchanged.
+Step 3f (RB-37, RB-21): while open claims exist on a lending venue, stepping OUT of that venue reverts
+`LendingHasClaims`; settling one claimant keeps remaining claims intact, and once every claim is
+settled, stepping out burns holders' units cleanly.
 
 ```solidity
 function test_RB21_stepOutOfVenueKeepsClaimValue() public fixtureCovered;
@@ -1019,6 +1070,17 @@ function test_RB17_basketWithoutAFeedIsRefused() public fixtureCovered;
 function test_RB17_basketWithoutPoolHistoryIsRefused() public fixtureCovered;
 ```
 
+<a id="test_e44_lendingwithoutliquidityviewisrefused"></a>
+
+### test_E44_lendingWithoutLiquidityViewIsRefused
+
+E44: a lending adapter that cannot answer `availableLiquidity()` is refused at admission, whether the
+call reverts or returns nothing. One that answers is admitted.
+
+```solidity
+function test_E44_lendingWithoutLiquidityViewIsRefused() public fixtureCovered;
+```
+
 <a id="test_rb17_lendingwithoutvenuerateisrefused"></a>
 
 ### test_RB17_lendingWithoutVenueRateIsRefused
@@ -1164,4 +1226,102 @@ refused. Before the fix the step booked its cost and only then halted, past the 
 ```solidity
 function test_BF5_noStepOvershootsThePlanBudget() public fixtureCovered;
 ```
+
+<a id="test_step3f_delistsalelifecycleandclaimsettlement"></a>
+
+### test_step3f_delistSaleLifecycleAndClaimSettlement
+
+Step 3f (E53, A42, E54): `delistAsset` enters `inSale`, zeros persistent target, reserves any
+delisting claim tokens recorded during `sellForFlow`, executes bounded `executeDelistStep` swaps,
+deactivates once drained, and lets anyone settle the owner's delist claim via `settleClaim`.
+
+```solidity
+function test_step3f_delistSaleLifecycleAndClaimSettlement() public fixtureCovered;
+```
+
+<a id="test_step3f_settleclaimlendingandshortpayrecovery"></a>
+
+### test_step3f_settleClaimLendingAndShortPayRecovery
+
+Step 3f (E54, A45, RB-35): permissionless `settleClaim` settles partial liquidity without reverting
+when `availableLiquidity()` is tight, pays pot recovery from later holder flows, and closes out cleanly
+once venue liquidity returns.
+
+```solidity
+function test_step3f_settleClaimLendingAndShortPayRecovery() public fixtureCovered;
+```
+
+<a id="test_step3f_shortpayingadaptersenforcedbyfund"></a>
+
+### test_step3f_shortPayingAdaptersEnforcedByFund
+
+Step 3f (RB-34, A34): fund-level custody/balance-delta & check-10 guards defeat short-paying lending
+and under-delivering swap adapters (`MechAaveAdapter` / `MechSwapAdapter`).
+
+```solidity
+function test_step3f_shortPayingAdaptersEnforcedByFund() public fixtureCovered;
+```
+
+<a id="_setupmechfund"></a>
+
+### _setupMechFund
+
+```solidity
+function _setupMechFund()
+        internal
+        returns (IRobotMoneyFundFull mechFund, MechAaveAdapter mechAave, MechSwapAdapter mechSwap);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mechFund | `IRobotMoneyFundFull` |  |
+| mechAave | `MechAaveAdapter` |  |
+| mechSwap | `MechSwapAdapter` |  |
+
+<a id="_mechbuylimits-irobotmoneyfundfull-uint256"></a>
+
+### _mechBuyLimits
+
+```solidity
+function _mechBuyLimits(IRobotMoneyFundFull mechFund, uint256 sharesOut)
+        internal
+        view
+        returns (uint256[] memory lims, uint256 maxUsdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mechFund | `IRobotMoneyFundFull` |  |
+| sharesOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| lims | `uint256[]` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="_assertmechaaveshortpay-irobotmoneyfundfull-mechaaveadapter-uint256"></a>
+
+### _assertMechAaveShortPay
+
+```solidity
+function _assertMechAaveShortPay(
+        IRobotMoneyFundFull mechFund,
+        MechAaveAdapter mechAave,
+        uint256 sellShares
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mechFund | `IRobotMoneyFundFull` |  |
+| mechAave | `MechAaveAdapter` |  |
+| sellShares | `uint256` |  |
 

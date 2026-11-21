@@ -35,11 +35,12 @@ function plant(label: string, tweak: (name: string, art: any) => void = () => {}
 const run = (a: string, b: string) => Bun.spawnSync(["bun", SCRIPT, "--a-out", a, "--b-out", b, "--table", REAL_TABLE], { stdout: "pipe", stderr: "pipe" });
 
 describe("contract build reproducibility check (issue 1926)", () => {
-  test("the targets are every library, CREATE2 library and proxy implementation of the stage table", () => {
+  test("the targets are every library, CREATE2 library and proxy implementation of the fund stages", () => {
     const names = targets.map((t) => t.name);
+    const fund = table.stages.filter((s) => s.system === "fund");
     expect(names).toContain("TickMath");
-    for (const l of table.create2Libraries ?? []) expect(names).toContain(l.artifact);
-    for (const s of table.stages) for (const p of s.proxies ?? []) expect(names).toContain(p.contract);
+    for (const l of fund.flatMap((s) => s.create2Libraries ?? [])) expect(names).toContain(l);
+    for (const s of fund) for (const p of s.proxies ?? []) expect(names).toContain(p.contract);
     expect(targets.find((t) => t.name === "TickMath")!.dir).toBe("link");
     expect(targets.filter((t) => t.kind === "implementation").length).toBeGreaterThan(0);
   });

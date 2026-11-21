@@ -24,6 +24,12 @@ function scriptSource(path: string): string {
   return own + extra + upgrade + fund + handover + receipt + read(`${base}ExpectedChainGuard.sol`);
 }
 
+// The 0.9.0 fund system replaced the vaults and gateway contracts: their stage scripts, contracts and libraries were deleted.
+// Their rows stay in the table (the driver still parses them), so the checks that read a stage's Solidity cover the stages whose script remains.
+const DELETED_STAGES = new Set(["vault", "registry", "router", "governance", "proto", "rwa", "hard", "timelock", "gateway"]);
+const DELETED_LIBRARIES = new Set(["BasketViews", "GatewayWindows"]);
+const DELETED_ARTIFACTS = new Set(["gateway", "router", "registry", "governance"]);
+
 const EXPECTED = ["libs", "vault", "registry", "router", "receipt", "governance", "proto", "rwa", "hard", "timelock", "gateway", "gateway-handover", "fund-libs", "fund-receipt", "fund", "rebalancer", "fund-governance", "queue", "fund-wiring", "fund-timelock"]; // issue 1892: the vaults system, then the gateway system. ADR-0017: no agent and no recorder stage. ADR-0018: the hard stage (rmHARD)
 
 describe("stage-table.json", () => {
@@ -36,13 +42,14 @@ describe("stage-table.json", () => {
     const listed = new Set(table.stages.map((s) => s.script.split(":")[0].split("/").pop()));
     // the single-vault redeploy (issue 1796), a verb of its own with a `redeploys` row. ADR-0017: rmAGENT is retired, so the rmAGENT vault script and the V4 price recorder script stay
     // in the repo as parked code that no stage reads (the live v0.5.0 deployment was made with them)
-    const skip = new Set(["RedeployProtocolAssetVault.s.sol", "DeployAgentTokenVault.s.sol", "DeployUniswapV4PriceRecorder.s.sol"]);
+    // E56: DeployKeeperAccount runs before the sheet is final (its CREATE2 address is the sheet's KEEPER_ADDRESS), so it is a pre-sheet step and no stage.
+    const skip = new Set(["RedeployProtocolAssetVault.s.sol", "DeployAgentTokenVault.s.sol", "DeployUniswapV4PriceRecorder.s.sol", "DeployKeeperAccount.s.sol"]);
     const missing = readdirSync(join(ROOT, "contracts/script"))
       .filter((f) => f.endsWith(".s.sol") && !skip.has(f) && !listed.has(f));
     expect(missing).toEqual([]);
   });
 
-  for (const s of table.stages) {
+  for (const s of table.stages.filter((x) => !DELETED_STAGES.has(x.name))) {
     describe(`stage ${s.name}`, () => {
       const [file, contract] = s.script.split(":");
       test("script file and contract exist", () => {
@@ -85,18 +92,6 @@ describe("stage-table.json", () => {
     });
   }
 
-  test("vault rows point at a stage with the same vault key, and the vault contract exists", () => {
-    expect(table.vaults.map((v) => v.key)).toEqual(["USDC", "PROTO", "RWA", "HARD"]);
-    for (const v of table.vaults) {
-      const st = table.stages.find((s) => s.name === v.stage)!;
-      expect(st.vault).toBe(v.key);
-      expect(st.manifest).toBe(v.manifest);
-      expect(existsSync(join(ROOT, "contracts", v.artifact === "RobotMoneyVault" ? "RobotMoneyVault.sol" : `vaults/${v.artifact}.sol`))).toBe(true);
-    }
-    expect(table.vaults.find((v) => v.key === "RWA")!.artifact).toBe("RwaBasketVault");
-    expect(table.vaults.find((v) => v.key === "HARD")!.artifact).toBe("HardAssetsVault");
-  });
-
   test("library rows name a real library source and the stage manifest key", () => {
     for (const l of table.libraries) {
       expect(read(l.path!)).toMatch(new RegExp(`library ${l.artifact}\\b`));
@@ -109,9 +104,13 @@ describe("stage-table.json", () => {
     expect(c2.map((l) => l.artifact)).toEqual([
       "BasketAssetConfigGuard", "TwapTickMath", "BasketViews", "BasketSwaps", "GovernedUpgrade", "RobotMoneyVaultOps", "GatewayWindows",
       // Deploy 4: the fund system's libraries, TickMath included (the fund system links no --libraries address)
-      "TickMath", "FundPositionLib", "FundValuationLib", "FundAdminLib", "FundFlowsLib", "FundStepLib", "StepFeedLib", "FlowCheckLib", "FlowSettleLib", "FlowClaimLib",
+      "TickMath", "FundPositionLib", "FundValuationLib", "FundAdminLib", "FundFlowsLib", "FundStepLib", "FundDelistLib", "StepFeedLib", "FlowCheckLib", "FlowMatchLib", "FlowSettleLib", "FlowClaimLib",
+      // v0.9.0: the one-time 0.8.0 to 0.9.0 state migrations (FlowQueue.migrateV090, RobotMoneyFund.migrateV090)
+      "FlowMigrateLib", "FundMigrateLib",
     ]);
-    for (const l of c2) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
+    for (const l of c2.filter((x) => !DELETED_LIBRARIES.has(x.name))) expect(read(l.path)).toMatch(new RegExp(`library ${l.artifact}\\b`));
+    const queueStage = table.stages.find((s) => s.name === "queue");
+    expect(queueStage?.optionalEnv).toEqual(["EXPECTED_CHAIN_ID", "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS"]);
     // The sources of the proxied contracts each stage deploys. A library is linked when one of them imports from its file
     // (GovernedUpgrade is linked through the GovernedUUPS base, declared in the same file).
     const sources: Record<string, string[]> = {
@@ -126,7 +125,7 @@ describe("stage-table.json", () => {
       hard: ["contracts/vaults/BasketVault.sol"],
     };
     const fileOf = (n: string) => c2.find((l) => l.name === n)!.path.split("/").pop()!;
-    for (const s of (table.stages as any[]).filter((x) => x.system !== "fund")) { // the fund stages: the transitive check below
+    for (const s of (table.stages as any[]).filter((x) => x.system !== "fund" && !DELETED_STAGES.has(x.name))) { // the fund stages: the transitive check below
       const listed: string[] = s.create2Libraries ?? [];
       for (const n of listed) expect(c2.map((l) => l.name)).toContain(n);
       const src = (sources[s.name] ?? []).map(read).join("\n");
@@ -160,7 +159,7 @@ describe("stage-table.json", () => {
       }
       return seen;
     };
-    const P = "contracts/test/prototype/src/";
+    const P = "contracts/";
     const sources: Record<string, string[]> = {
       "fund-libs": ["contracts/script/DeployFundLibs.s.sol"],
       "fund-receipt": ["contracts/ConsensusRecommendationReceipt.sol"], // DeployFundReceipt.s.sol deploys it
@@ -184,7 +183,7 @@ describe("stage-table.json", () => {
         e.isDirectory() ? (["test", "script", "lib"].includes(e.name) && dir === "contracts" ? [] : all(`${dir}/${e.name}`)) : e.name.endsWith(".sol") ? [read(`${dir}/${e.name}`)] : [],
       );
     const src = all("contracts").join("\n");
-    for (const [k, name] of Object.entries(table.artifacts)) {
+    for (const [k, name] of Object.entries(table.artifacts).filter(([k]) => !DELETED_ARTIFACTS.has(k))) {
       expect([k, new RegExp(`contract ${name}\\b`).test(src)]).toEqual([k, true]);
     }
     expect(Object.keys(table.artifacts).sort()).toEqual(["gateway", "governance", "receipt", "registry", "router", "timelock"]);
@@ -216,14 +215,6 @@ describe("stage-table.json", () => {
       expect(rows[0]!.manifest).toBe(table.vaults.find((v) => v.key === "PROTO")!.manifest);
     });
     for (const r of rows) {
-      const [file, contract] = r.script.split(":");
-      test(`${r.vault}: script and contract exist and every env name is read by it`, () => {
-        expect(existsSync(join(ROOT, file))).toBe(true);
-        expect(read(file)).toMatch(new RegExp(`contract ${contract}\\b`));
-        const src = scriptSource(file) + read("contracts/script/DeployProtocolAssetVault.s.sol") + read("contracts/script/BasketVaultDeployBase.sol");
-        for (const name of [...r.requiredEnv, ...r.optionalEnv]) expect(src).toContain(`"${name}"`);
-        expect(r.requiredEnv).toContain("DEPLOYMENT_OUT");
-      });
       test(`${r.vault}: the redeploy reads the same sheet inputs as the vault's launch stage, plus the timelock and the emergency key`, () => {
         const stage = table.stages.find((s) => s.vault === r.vault)!;
         // Issue 1808: the redeploy names the live timelock (TIMELOCK_ADDRESS) as the proxy's upgrade authority, so it reads no
@@ -232,10 +223,6 @@ describe("stage-table.json", () => {
         expect([...r.requiredEnv].sort()).toEqual([...launch, "TIMELOCK_ADDRESS", "EMERGENCY_ADDRESS"].sort());
         expect(r.libraries).toEqual(stage.libraries);
         expect(r.create2Libraries).toEqual(stage.create2Libraries);
-      });
-      test(`${r.vault}: the redeploy script never registers the vault and never touches router eligibility`, () => {
-        const src = read(file);
-        expect(src).not.toMatch(/registerVault|migrateEligibility|setRouterEligible/);
       });
     }
   });
@@ -283,36 +270,6 @@ describe("stage-table.json", () => {
         else expect(env.filter((n) => n.startsWith("SEED_"))).toEqual([]);
       }
     });
-    test("eligibility: the router-stage vault is the one the router stage makes eligible, every other vault stage reads ROUTER_DEFAULT_BPS", () => {
-      const router = read("contracts/script/DeployPortfolioRouter.s.sol");
-      expect(router).toContain("setRouterEligible(vault_, true)");
-      for (const v of rules) {
-        const env = table.stages.find((s) => s.name === v.stage)!.requiredEnv;
-        if (v.eligibilitySource === "router-stage") expect([v.key, env.includes("ROUTER_DEFAULT_BPS")]).toEqual([v.key, false]);
-        else expect([v.key, env.includes("ROUTER_DEFAULT_BPS")]).toEqual([v.key, true]);
-      }
-      expect(rules.filter((v) => v.eligibilitySource === "router-stage").map((v) => v.key)).toEqual(["USDC"]);
-    });
-    test("emergencyLevers is every EMERGENCY_ROLE function of the vault contract, so a lever cannot be added unnamed", () => {
-      const src = (artifact: string) => read(artifact === "RobotMoneyVault" ? "contracts/RobotMoneyVault.sol" : "contracts/vaults/BasketVault.sol");
-      for (const v of rules) {
-        const levers = [...src(v.artifact).matchAll(/function (\w+)\([^)]*\)[^{;]*onlyRole\(EMERGENCY_ROLE\)/g)].map((m) => m[1]);
-        expect([v.key, [...levers].sort()]).toEqual([v.key, [...v.emergencyLevers].sort()]);
-      }
-    });
-    test("registry name: one source for all four vaults, each vault script's VAULT_NAME constant, and no stage reads a VAULT_NAME env (issue 1705 C9)", () => {
-      expect(new Set(rules.map((v) => v.registryNameSource))).toEqual(new Set(["script-constant"]));
-      // each vault script holds its name as a constant: VAULT_NAME = "<name>", or for rmUSDC VAULT_NAME = RMUSDC_VAULT_NAME, a file-level constant of the same script
-      const nameOf = (src: string) => /string public constant VAULT_NAME = "([^"]+)";/.exec(src)?.[1] ?? (/string public constant VAULT_NAME = RMUSDC_VAULT_NAME;/.test(src) ? /string constant RMUSDC_VAULT_NAME = "([^"]+)";/.exec(src)?.[1] : undefined);
-      const names = rules.map((v) => nameOf(read(table.stages.find((s) => s.name === v.stage)!.script.split(":")[0]!)));
-      expect(names).toEqual(["Robot Money USDC", "Robot Money Protocol", "Robot Money RWA", "Robot Money Hard Assets"]);
-      for (const s of table.stages) expect([s.name, s.requiredEnv.includes("VAULT_NAME")]).toEqual([s.name, false]);
-      // the registry stage registers rmUSDC under DeployVault's constant, not an env read
-      const reg = read("contracts/script/DeployVaultRegistry.s.sol");
-      expect(reg).toMatch(/import \{RMUSDC_VAULT_NAME\} from "\.\/DeployVault\.s\.sol";/);
-      expect(reg).toContain("vaultName = RMUSDC_VAULT_NAME");
-      expect(reg).not.toContain('"VAULT_NAME"');
-    });
   });
 
   // Issue 1809 (upgradeability stage 2): the proxy rows and the upgrade authority agree with the scripts, the layout gate and the CREATE2 prediction.
@@ -331,25 +288,24 @@ describe("stage-table.json", () => {
       expect(cli.stages.find((s) => s.name === fundAuthority)!.proxies).toBeUndefined();
       expect(cli.stages.find((s) => s.name === u.stage)!.proxies).toBeUndefined();
     });
-    test("the nine proxied core contracts are the contracts the storage-layout gate snapshots, besides the parked AgentTokenVault whose layout stays pinned (ADR-0017)", () => {
+    test("the fund system's proxied contracts are the contracts the storage-layout gate snapshots (the vaults and gateway contracts were deleted, PR 2042)", () => {
       const gate = read("scripts/ci/check-core-storage-layout.sh");
       const gated = [...gate.matchAll(/^\s*"(\w+):contracts\/[\w/]+\.sol"$/gm)].map((m) => m[1]!).sort();
-      // Deploy 4: the fund system's receipt register is the vaults system's contract, so one snapshot pins both
-      const listed = [...new Set(proxyStages.flatMap((s) => s.proxies!.map((p) => p.contract)))].sort();
-      // rmAGENT is retired and no stage deploys it, but the live v0.5.0 deployment runs AgentTokenVault behind a governed proxy. A governed upgrade of it must keep its layout, so the gate keeps snapshotting it.
+      const fundStages = proxyStages.filter((s) => s.system === "fund");
+      const listed = [...new Set(fundStages.flatMap((s) => s.proxies!.map((p) => p.contract)))].sort();
       // Deploy 4: RebalancerV2 (helpers/FundUpgradeV2.sol) is the rebalancer's test-only second implementation. No stage deploys it (it is not in `listed`), only
       // deploy-implementation --system fund --contract RebalancerV2 does, and the gate pins its layout so that verb's append-only check reads its real layout.
       expect(listed).not.toContain("RebalancerV2");
-      expect([...listed, "AgentTokenVault", "RebalancerV2"].sort()).toEqual(gated);
-      expect(listed).toHaveLength(13); // nine of the vaults and gateway systems, four of the fund system (Deploy 4)
-      for (const s of proxyStages) for (const p of s.proxies!) {
+      expect([...listed, "RebalancerV2"].sort()).toEqual(gated);
+      expect(listed).toHaveLength(5); // the fund's receipt register, fund, rebalancer, governance and queue
+      for (const s of fundStages) for (const p of s.proxies!) {
         expect(existsSync(join(ROOT, p.layout)), p.layout).toBe(true);
         expect(p.layout).toBe(`contracts/test/fixtures/storage-layout/${p.contract}.json`);
       }
       expect(existsSync(join(ROOT, u.layoutPins))).toBe(true);
     });
     test("each proxy stage's script writes the proxy and implementation manifest fields the table names, and the mode and authority", () => {
-      for (const s of proxyStages) {
+      for (const s of proxyStages.filter((x) => !DELETED_STAGES.has(x.name))) {
         const src = scriptSource(s.script.split(":")[0]!);
         for (const p of s.proxies!) {
           for (const f of [p.field, p.implementationField, "upgrade_timelock", "upgrade_mode"]) expect(src, `${s.name} ${f}`).toMatch(new RegExp(`"${f}"|'"${f}"|"${f}":|,"${f}":"|"${f}":"`));
@@ -366,7 +322,6 @@ describe("stage-table.json", () => {
       expect(u.factory.toLowerCase()).toBe("0x4e59b44847b379578588920ca78fbf26c0b4956c");
       expect(u.modes.sort()).toEqual(["frozen", "upgradeable"]);
       for (const m of u.modes) expect(auth).toContain(`keccak256("${m}")`);
-      expect(read(cli.stages.find((s) => s.name === u.stage)!.script.split(":")[0]!)).toContain(u.contract);
     });
     test("one implementation and one initializing proxy per proxied contract: the stated transactions per proxy", () => {
       expect(u.transactionsPerProxy).toBe(2);
@@ -390,15 +345,7 @@ describe("stage-table.json", () => {
     test("Deploy 4: no fund-system stage reads a vaults or gateway manifest, and no vaults stage names the fund system", () => {
       const other = ["VAULT_ADDRESS", "VAULT_ADDRESSES", "REGISTRY_ADDRESS", "ROUTER_ADDRESS", "GOVERNANCE_ADDRESS", "CONSENSUS_RECEIPT_ADDRESS", "TIMELOCK_ADDRESS", "GATEWAY_ADDRESS"];
       for (const s of t.stages.filter((x) => x.system === "fund")) for (const n of other) expect(s.requiredEnv, `${s.name} ${n}`).not.toContain(n);
-      for (const s of t.stages.filter((x) => x.system === "vaults")) expect(scriptSource(s.script.split(":")[0]!), s.name).not.toMatch(/test\/prototype|FUND_ADDRESS|QUEUE_ADDRESS|REBALANCER_ADDRESS/);
-    });
-    test("SYS-1: no vaults-system stage script names the gateway system's contracts or imports its sources", () => {
-      for (const s of t.stages.filter((x) => x.system === "vaults")) {
-        const src = scriptSource(s.script.split(":")[0]!);
-        // no vaults stage reads the gateway: the list of exceptions is empty (issue 1892)
-        expect(src, s.name).not.toMatch(/RobotMoneyGateway|GATEWAY_ADDRESS|GatewayWindows|gateway\/RobotMoneyGateway/);
-        expect(s.requiredEnv, s.name).not.toContain("GATEWAY_ADDRESS");
-      }
+      for (const s of t.stages.filter((x) => x.system === "vaults" && !DELETED_STAGES.has(x.name))) expect(scriptSource(s.script.split(":")[0]!), s.name).not.toMatch(/test\/prototype|FUND_ADDRESS|QUEUE_ADDRESS|REBALANCER_ADDRESS/);
     });
     test("the gateway stage names its own explicit upgrade timelock and reads neither the Safe nor the vaults timelock delay; the handover reads the gateway and its explicit admin", () => {
       const gw = t.stages.find((s) => s.name === "gateway")!;

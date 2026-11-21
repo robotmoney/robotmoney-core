@@ -215,7 +215,8 @@ There is no voting by token holders or anyone else. The Safe multisig, through t
   deployed `TimelockController` with no new contracts.
 - All shortlist changes are observable on-chain before execution, satisfying
   the transparent-performance requirement (`docs/prd.md` §2).
-- The veto path is cheap (single Safe signer can cancel) and accessible
+- The veto path needs the Safe's threshold (at least 2 signatures) to
+  cancel, per the amendment of 2026-10-05 above, and is accessible
   (any observer can raise a challenge).
 - Resolves gap-report Appendix C blocking item. AgentTokenVault (rmAGENT)
   may proceed to router-eligibility once the TWAP oracle, rebalancing model,

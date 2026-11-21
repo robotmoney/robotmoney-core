@@ -6,9 +6,15 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 
-import {FlowQueue} from "../test/prototype/src/FlowQueue.sol";
-import {FlowParams, FlowQueueInit} from "../test/prototype/src/FlowTypes.sol";
-import {Roles} from "../test/prototype/src/FundTypes.sol";
+import {FlowQueue} from "../FlowQueue.sol";
+import {
+    FlowParams,
+    FlowQueueInit,
+    DEFAULT_CANCEL_BUFFER,
+    DEFAULT_MAX_PAUSE,
+    DEFAULT_MATCH_BAND_BPS
+} from "../FlowTypes.sol";
+import {Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployFlowQueue
@@ -19,7 +25,8 @@ import {FundSystemBase} from "./FundSystemBase.sol";
 ///         predicted fund-system timelock as its only upgrade authority. The wiring stage binds the fund's FLOW_ROLE to it.
 ///
 ///         Required env vars (no defaults): ADMIN_ADDRESS, FUND_ADDRESS, EMERGENCY_ADDRESS, KEEPER_ADDRESS, the eighteen
-///         FLOW_* names below, SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
+///         required FLOW_* names below, SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
+///         Optional env vars (default to DEFAULT_CANCEL_BUFFER / DEFAULT_MAX_PAUSE): FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE.
 contract DeployFlowQueue is FundSystemBase {
     /// @notice Manifest file name the stage driver gives DEPLOYMENT_OUT (scripts/deploy/stage-table.json).
     string public constant MANIFEST_FILE = "queue.json";
@@ -98,6 +105,24 @@ contract DeployFlowQueue is FundSystemBase {
         f.usdcPegBandBps = uint16(_envUintMax("FLOW_USDC_PEG_BAND_BPS", type(uint16).max));
         f.maxLendRateGrowthBps =
             uint16(_envUintMax("FLOW_MAX_LEND_RATE_GROWTH_BPS", type(uint16).max));
+        f.cancelBuffer = uint32(
+            _envUintMaxOrDefault("FLOW_CANCEL_BUFFER", DEFAULT_CANCEL_BUFFER, type(uint32).max)
+        );
+        f.maxPause =
+            uint32(_envUintMaxOrDefault("FLOW_MAX_PAUSE", DEFAULT_MAX_PAUSE, type(uint32).max));
+        f.matchBandBps = uint16(
+            _envUintMaxOrDefault("FLOW_MATCH_BAND_BPS", DEFAULT_MATCH_BAND_BPS, type(uint16).max)
+        );
+    }
+
+    function _envUintMaxOrDefault(string memory key, uint256 fallbackVal, uint256 max)
+        internal
+        view
+        returns (uint256 v)
+    {
+        v = vm.envExists(key) ? _envUintRequired(key) : fallbackVal;
+        if (v == 0) v = fallbackVal;
+        require(v <= max, string.concat(key, " is out of range"));
     }
 
     function _writeDeploymentJson(Deployed memory d, FlowQueueInit memory p) internal {

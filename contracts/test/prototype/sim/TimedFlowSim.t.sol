@@ -22,9 +22,10 @@ import {
     PlanStatus,
     SkipReason,
     StepParams
-} from "../src/FundTypes.sol";
-import {FlowParams} from "../src/FlowTypes.sol";
-import {PlanMath} from "../src/PlanMath.sol";
+} from "../../../FundTypes.sol";
+import {FlowParams, RequestKind, RequestStatus} from "../../../FlowTypes.sol";
+import {MockAggregator} from "../mocks/MockAggregator.sol";
+import {PlanMath} from "../../../PlanMath.sol";
 
 /// @notice One-vault experiment, steps 3d and 3e: the rebalance simulation with timed, quantity-based flows
 ///         (eng plan §4.4, `PROTO_SIM_FLOWS=timed`). Each test is one (scenario, fund size, seed) of the step 3 sim,
@@ -158,6 +159,8 @@ contract TimedFlowSimTest is TimedSimBase {
     uint256 internal pinBlock;
     uint256 internal pinTimestamp;
     uint256 internal depNonce;
+    /// @dev Keeper slots on which the step was held back by the ordering rule (`_holdSteps`).
+    uint256 internal stepsHeld;
     uint256 internal planIndex;
     string internal planLabel;
     string internal runName;
@@ -249,7 +252,7 @@ contract TimedFlowSimTest is TimedSimBase {
     //  Driver
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    function _run(uint256 scn, uint256 fundM, uint256 k) internal {
+    function _run(uint256 scn, uint256 fundM, uint256 k) internal virtual {
         if (!vm.envOr("PROTO_SIM", false)) {
             _skipCovered("");
             return;
@@ -503,9 +506,26 @@ contract TimedFlowSimTest is TimedSimBase {
         ++acc.slots;
     }
 
+    /// @dev The one ordering rule (E42, RB-30): the round's first `settle` call reverts `StepInWindow` if a step that
+    ///      traded a basket pool is younger than `settleWindow`. So the keeper sends no step from an epoch's close to
+    ///      its round's end, and none while that first call is still being retried, if a request of a closed epoch is
+    ///      still open (a round has work). Before the close a step is harmless: the round's call comes `settleWindow` after it.
+    ///      The first scored 3f run had no such rule in the sim keeper and failed 6,455 of 6,752 calls on it.
+    function _holdSteps() internal view returns (bool) {
+        FlowParams memory p = queue.flowParams();
+        uint256 now_ = vm.getBlockTimestamp();
+        uint256 close = (lastSchedK + 1) * p.epochLength;
+        bool zone = (now_ > close && now_ < close + p.settleWindow) || retryDue;
+        return zone && _pendingClosedEpoch();
+    }
+
     // ─── Keeper step (as RebalanceSim `_keeper`, booking against the TWAP and the feed) ───────────────
 
     function _keeper() internal {
+        if (_holdSteps()) {
+            ++stepsHeld;
+            return;
+        }
         Snap memory pre = _snapKeeper();
         _attribute(pre);
         uint160[2] memory spot = [_mkSpotSqrt(0), _mkSpotSqrt(1)];
@@ -826,9 +846,6 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(o, "endSleeveBps", _arr4(acc.endSleeve));
         vm.serializeUint(o, "startBps", _arr16(p.startBps));
         vm.serializeUint(o, "endBps", _arr16(p.endBps));
-        vm.serializeUint(
-            o, "permissionlessAtOpen", uint256(p.startTime) + rebalancer.stepParams().keeperGrace
-        );
     }
 
     function _jsonCost(string memory o, Plan memory p) internal {
@@ -996,6 +1013,8 @@ contract TimedFlowSimTest is TimedSimBase {
             _jsonSettles(),
             ',"requests":',
             _jsonReqs(),
+            ',"depositStops":',
+            vm.toString(depositStops),
             "}}"
         );
         string memory dir = string.concat(
@@ -1042,6 +1061,8 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(m, "feedRoundsDeviation", _arr2(feedRoundsDeviation));
         vm.serializeUint(m, "feedRoundsHeartbeat", _arr2(feedRoundsHeartbeat));
         vm.serializeString(m, "flows", "timed");
+        vm.serializeUint(m, "stepsHeldForRound", stepsHeld);
+        vm.serializeBool(m, "step3f", true);
         vm.serializeString(m, "assets", "aave,moonwell,weth,cbbtc,comet");
         vm.serializeString(
             m,
@@ -1051,7 +1072,7 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeString(
             m,
             "model",
-            "keeper settles at each window end (k*epochLength+settleWindow) when checkSettle != Window, retries a reverted or one-sided call every slot, then steps; noise t+600, walk+arb t+1200 (wETH/cbBTC as step 3, 24/7 unlimited arb), feed rounds on deviation (ETH 15 bps, cbBTC 30 bps) right after the walk and on a 1200 s heartbeat, USDC feed 1.0 (24 h), sequencer up; flow request t+1500 (p=1/12, 0.10-0.50% NAV) with limit = quote x (1 +/- slack); genesis: seed invested by a 1-day plan, then fund-seed deposited through the queue in 245k chunks, one per cap period, market still"
+            "keeper settles at each window end (k*epochLength+settleWindow) when checkSettle != Window, retries a reverted or one-sided call every slot, then steps; noise t+600, walk+arb t+1200 (wETH/cbBTC as step 3, 24/7 unlimited arb), feed rounds on deviation (ETH 15 bps, cbBTC 30 bps) right after the walk and on a 1200 s heartbeat, USDC feed 1.0 (24 h), sequencer up; flow request t+1500 (p=1/12, 0.10-0.50% NAV), no limit (step 3f: forward-priced, netted); a matched fill is read through the queue's views after each settle and costed at the match price; genesis: seed invested by a 1-day plan, then fund-seed deposited through the queue in 245k chunks, one per cap period, market still"
         );
         vm.serializeUint(m, "userLimitSlackBps", userSlackBps);
         vm.serializeString(m, "tag", runTag);
@@ -1065,7 +1086,6 @@ contract TimedFlowSimTest is TimedSimBase {
         PlanParams memory pp = governance.defaultPlanParams();
         vm.serializeString(k, "set", runName);
         vm.serializeUint(k, "stepInterval", rebalancer.effectiveStepInterval());
-        vm.serializeUint(k, "keeperGrace", sp.keeperGrace);
         vm.serializeUint(k, "maxOverrun", sp.maxOverrun);
         vm.serializeUint(k, "maxStepCostBps", sp.maxStepCostBps);
         vm.serializeUint(k, "toleranceBps", sp.toleranceBps);
@@ -1080,6 +1100,10 @@ contract TimedFlowSimTest is TimedSimBase {
         }
         vm.serializeUint(k, "maxStepUsdc", cap);
         vm.serializeUint(k, "maxStepSlippageBps", slip);
+        vm.serializeUint(k, "minPoolDepthUsdc", fund.minPoolDepthUsdc());
+        vm.serializeUint(k, "feeMarginBps", fund.feeMarginBps());
+        vm.serializeUint(k, "delistBandBps", fund.delistBandBps());
+        vm.serializeUint(k, "delistBudgetBps", fund.delistBudgetBps());
         return vm.serializeString(k, "flowParams", _flowParamsJson());
     }
 
@@ -1103,7 +1127,10 @@ contract TimedFlowSimTest is TimedSimBase {
         vm.serializeUint(k, "legBandBps", p.legBandBps);
         vm.serializeUint(k, "sequencerGrace", p.sequencerGrace);
         vm.serializeUint(k, "usdcPegBandBps", p.usdcPegBandBps);
-        return vm.serializeUint(k, "maxLendRateGrowthBps", p.maxLendRateGrowthBps);
+        vm.serializeUint(k, "maxLendRateGrowthBps", p.maxLendRateGrowthBps);
+        vm.serializeUint(k, "cancelBuffer", queue.cancelBuffer());
+        vm.serializeUint(k, "maxPause", queue.maxPause());
+        return vm.serializeUint(k, "matchBandBps", p.matchBandBps);
     }
 
     /// @dev Every keeper attempt, as columns. Basket columns end in 0 (wETH) and 1 (cbBTC).
@@ -1177,8 +1204,8 @@ contract TimedFlowSimTest is TimedSimBase {
     function _jsonSettles() internal returns (string memory) {
         string memory k = "settlements";
         uint256 n = settles.length;
-        uint256[][8] memory u;
-        for (uint256 c; c < 8; ++c) {
+        uint256[][10] memory u;
+        for (uint256 c; c < 10; ++c) {
             u[c] = new uint256[](n);
         }
         for (uint256 i; i < n; ++i) {
@@ -1191,7 +1218,11 @@ contract TimedFlowSimTest is TimedSimBase {
             u[5][i] = x.redFairFeed;
             u[6][i] = x.redFairRef;
             u[7][i] = x.navFeed;
+            u[8][i] = x.matchedUsdc;
+            u[9][i] = x.matchedShares;
         }
+        vm.serializeUint(k, "matchedUsdc", u[8]);
+        vm.serializeUint(k, "matchedShares", u[9]);
         vm.serializeUint(k, "at", u[0]);
         vm.serializeUint(k, "depUsdc", u[1]);
         vm.serializeUint(k, "depFairFeed", u[2]);
@@ -1219,7 +1250,7 @@ contract TimedFlowSimTest is TimedSimBase {
             u[2][i] = r.epoch;
             u[3][i] = r.amount;
             u[4][i] = r.valueUsdc;
-            u[5][i] = r.filled;
+            u[5][i] = r.filled + r.matched;
             u[6][i] = r.basis;
             u[7][i] = r.firstFillAt;
             u[8][i] = r.doneAt;
@@ -1248,4 +1279,513 @@ contract TimedFlowSimTest is TimedSimBase {
 
 interface ISimPoolL {
     function liquidity() external view returns (uint128);
+}
+
+/// @notice Step 3f, work package 11 (eng plan §8.4, E48): the scenarios the timed sim did not measure. Each test is
+///         one fault on the live fund at 1M USDC, seed 0, the SEQ market, with the sim's own background flows and the
+///         keeper's schedule. No rebalance plan runs: the fault is the thing measured.
+///
+///         A fault window opens at t0, right after genesis and one quiet slot. At t0 two probe requests are made:
+///         a depositor (0.20 % of NAV) and a genesis holder's redemption (0.20 % of supply). The run goes on in
+///         30-minute slots until both probes are done and the fault is over, or the horizon (10 days) ends.
+///
+///         Reported per scenario (stdout and `out/prototype/<run>-timed-e48/e48-<name>-s<k>.json`):
+///         - the probes' waits: request to settlement (redemption: USDC claimable then; deposit: shares usable,
+///           which is settlement plus the hold, plus a freeze if one applies), in hours;
+///         - the longest wait over every request the sim made (done or still open, open ones counted to the end);
+///         - what each holder can do, tried at the middle of the fault and at its end: cancel the deposit, withdraw it
+///           as expired, give notice on the redemption, exit in kind, deliver the shares, withdraw credit. Each try
+///           runs inside a snapshot and is reverted, so it changes nothing.
+///
+///         Opt-in like the rest of the timed sim: PROTO_SIM=1 and PROTO_SIM_FLOWS=timed. Nothing here sends a
+///         transaction to make a check pass. A fault is a feed answer, a keeper that stops, the emergency key's own
+///         pause or freeze, or the venue's own answer (mocked, as in A14 and A30).
+contract TimedFlowFaultSimTest is TimedFlowSimTest {
+    using Math for uint256;
+
+    uint8 internal constant F_NONE = 0;
+    uint8 internal constant F_SEQ = 1;
+    uint8 internal constant F_DEPEG = 2;
+    uint8 internal constant F_DEPEG_STUCK = 3;
+    uint8 internal constant F_KEEPER = 4;
+    uint8 internal constant F_PAUSE = 5;
+    uint8 internal constant F_FREEZE = 6;
+    uint8 internal constant F_VENUE = 7;
+    uint8 internal constant F_LEND = 8;
+
+    uint256 internal constant SLOT_S = 1800;
+    uint256 internal constant HORIZON_S = 10 days;
+    uint256 internal constant PROBE_BPS = 20;
+    uint256 internal constant N_ACTIONS = 6;
+    uint256 internal constant DEPEG_PX8 = 97_000_000;
+    uint256 internal constant DEPEG_STUCK_PX8 = 95_000_000;
+    uint256 internal constant LEND_SPIKE_BPS = 12_000;
+
+    address internal pDep;
+    address internal pRed;
+    uint256 internal pDepId;
+    uint256 internal pRedId;
+    uint256 internal fT0;
+    uint256 internal fEnd;
+    uint256 internal depClosedAt;
+    uint256 internal depUsableAt;
+    uint256 internal redClosedAt;
+    uint256 internal freezeUntil;
+    bool internal freezeDone;
+    uint256 internal midActions;
+    uint256 internal endActions;
+    bool internal midDone;
+    bool internal endDone;
+
+    /// @dev The inherited scored-sim tests are not this contract's job.
+    function _run(uint256, uint256, uint256) internal override {
+        _skipCovered("E48 contract: the scored sim runs in TimedFlowSimTest");
+    }
+
+    function test_e48_none_s0() public fixtureCovered {
+        _fault(F_NONE, 0);
+    }
+
+    function test_e48_sequencerOutage_s0() public fixtureCovered {
+        _fault(F_SEQ, 0);
+    }
+
+    function test_e48_usdcDepeg_s0() public fixtureCovered {
+        _fault(F_DEPEG, 0);
+    }
+
+    function test_e48_usdcDepegStuck_s0() public fixtureCovered {
+        _fault(F_DEPEG_STUCK, 0);
+    }
+
+    function test_e48_keeperStopped_s0() public fixtureCovered {
+        _fault(F_KEEPER, 0);
+    }
+
+    function test_e48_pause_s0() public fixtureCovered {
+        _fault(F_PAUSE, 0);
+    }
+
+    function test_e48_freeze_s0() public fixtureCovered {
+        _fault(F_FREEZE, 0);
+    }
+
+    function test_e48_venueFullyBorrowed_s0() public fixtureCovered {
+        _fault(F_VENUE, 0);
+    }
+
+    function test_e48_lendRateSpike_s0() public fixtureCovered {
+        _fault(F_LEND, 0);
+    }
+
+    /// @notice SAFE-09 calibration: 14 days of the SEQ market with the sim's own flows and no fault, under the
+    ///         `maxLendRateGrowthBps` the run is given (`PROTO_SIM_FLOW_MAX_LEND_RATE_GROWTH_BPS` and a
+    ///         `PROTO_SIM_TAG`). It counts the rounds check 5 stopped for deposits and the match, the fastest venue
+    ///         rate growth any call saw, and the longest request waits. Run once per candidate value.
+    function test_e48_lendRateCalibration_s0() public fixtureCovered {
+        if (!vm.envOr("PROTO_SIM", false)) {
+            _skipCovered("");
+            return;
+        }
+        if (keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync")))) != keccak256("timed")) {
+            _skipCovered("");
+            return;
+        }
+        _selectParams();
+        _initSim(SCN_SEQ, 1_000_000e6, 0);
+        this.simGenesis();
+        coverageCheckpoint();
+        _schedInit();
+        marketStartAt = vm.getBlockTimestamp();
+        lastPost = _snap();
+        uint256 t0 = vm.getBlockTimestamp();
+        for (uint256 s; s < 14 days / SLOT_S; ++s) {
+            vm.resetGasMetering();
+            this.simSlot(false);
+            coverageCheckpoint();
+        }
+        FaultStats memory st = _stats();
+        uint256 maxGrowth;
+        for (uint256 i; i < attempts.length; ++i) {
+            if (attempts[i].lendGrowthCentiBpsPerDay > maxGrowth) {
+                maxGrowth = attempts[i].lendGrowthCentiBpsPerDay;
+            }
+        }
+        string memory o = "safe09";
+        vm.serializeUint(o, "maxLendRateGrowthBps", queue.flowParams().maxLendRateGrowthBps);
+        vm.serializeUint(o, "days", (vm.getBlockTimestamp() - t0) / 1 days);
+        vm.serializeUint(o, "settlements", settles.length);
+        vm.serializeUint(o, "attempts", attempts.length);
+        vm.serializeUint(o, "roundsStoppedByLendRate", lendStops);
+        vm.serializeUint(o, "roundsStoppedAny", depositStops);
+        vm.serializeUint(o, "maxObservedGrowthCentiBpsPerDay", maxGrowth);
+        vm.serializeUint(o, "maxRedeemWaitS", st.maxRed);
+        vm.serializeUint(o, "maxDepositWaitS", st.maxDep);
+        vm.serializeUint(o, "depositsExpired", st.expiredDep);
+        string memory json = vm.serializeUint(o, "requests", reqs.length);
+        string memory dir = string.concat(
+            "out/prototype/",
+            runName,
+            "-timed-e48",
+            bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
+        );
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/e48-lendRateCalibration-s0.json"), json);
+        emit log_named_uint("SAFE-09 maxLendRateGrowthBps", queue.flowParams().maxLendRateGrowthBps);
+        emit log_named_uint("SAFE-09 rounds stopped by check 5", lendStops);
+        emit log_named_uint("SAFE-09 settlements", settles.length);
+        emit log_named_uint("SAFE-09 max observed growth (centi-bps/day)", maxGrowth);
+    }
+
+    // ─── The run ────────────────────────────────────────────────────────────────────────────────────────
+
+    function _faultName(uint8 f) internal pure returns (string memory) {
+        if (f == F_NONE) return "none";
+        if (f == F_SEQ) return "sequencerOutage";
+        if (f == F_DEPEG) return "usdcDepeg";
+        if (f == F_DEPEG_STUCK) return "usdcDepegStuck";
+        if (f == F_KEEPER) return "keeperStopped";
+        if (f == F_PAUSE) return "pause";
+        if (f == F_FREEZE) return "freeze";
+        if (f == F_VENUE) return "venueFullyBorrowed";
+        return "lendRateSpike";
+    }
+
+    /// @dev How long the fault is on (seconds). Pause and freeze end by themselves (`maxPause`, `maxFreeze`).
+    function _faultSpan(uint8 f) internal view returns (uint256) {
+        if (f == F_NONE) return 0;
+        if (f == F_SEQ) return 6 hours;
+        if (f == F_DEPEG) return 12 hours;
+        if (f == F_DEPEG_STUCK) return 72 hours;
+        if (f == F_KEEPER) return 36 hours;
+        if (f == F_PAUSE) return queue.flowParams().maxPause;
+        if (f == F_FREEZE) return 0;
+        if (f == F_VENUE) return 24 hours;
+        return 12 hours;
+    }
+
+    function _fault(uint8 f, uint256 k) internal {
+        if (!vm.envOr("PROTO_SIM", false)) {
+            _skipCovered("");
+            return;
+        }
+        if (keccak256(bytes(vm.envOr("PROTO_SIM_FLOWS", string("sync")))) != keccak256("timed")) {
+            _skipCovered("");
+            return;
+        }
+        _selectParams();
+        _initSim(SCN_SEQ, 1_000_000e6, k);
+        this.simGenesis();
+        coverageCheckpoint();
+        _schedInit();
+        marketStartAt = vm.getBlockTimestamp();
+        lastPost = _snap();
+        vm.resetGasMetering();
+        this.simSlot(false);
+
+        this.faultOpen(f);
+        uint256 t0 = fT0;
+        uint256 horizon = t0 + HORIZON_S;
+        for (uint256 s; s < HORIZON_S / SLOT_S; ++s) {
+            vm.resetGasMetering();
+            this.faultSlot(f);
+            coverageCheckpoint();
+            if (_faultDone(f)) break;
+            if (vm.getBlockTimestamp() >= horizon) break;
+        }
+        this.faultClose(f);
+    }
+
+    /// @notice Self-call: start the fault and place the two probes.
+    function faultOpen(uint8 f) external {
+        require(msg.sender == address(this), "self only");
+        pDep = makeAddr("e48-probe-depositor");
+        pRed = genesisDepositors[0];
+        (uint256 nav,,) = fund.portfolioValues();
+        bool ok;
+        (ok, pDepId,) = _reqDeposit(pDep, nav.mulDiv(PROBE_BPS, BPS), userSlackBps);
+        require(ok, "e48: probe deposit refused");
+        uint256 shares = fund.totalSupply().mulDiv(PROBE_BPS, BPS);
+        uint256 bal = fund.balanceOf(pRed);
+        if (shares > bal) shares = bal / 2;
+        (ok, pRedId,) = _reqRedeem(pRed, shares, userSlackBps);
+        require(ok, "e48: probe redemption refused");
+        fT0 = vm.getBlockTimestamp();
+        uint256 span = _faultSpan(f);
+        fEnd = span == 0 ? 0 : fT0 + span;
+        _faultSet(f, true);
+    }
+
+    function _faultSet(uint8 f, bool on) internal {
+        uint256 now_ = vm.getBlockTimestamp();
+        if (f == F_SEQ) {
+            seqAnswer = on ? int256(1) : int256(0);
+            seqStartedAt = now_;
+        } else if (f == F_DEPEG || f == F_DEPEG_STUCK) {
+            usdcFaultPx8 = on ? (f == F_DEPEG ? DEPEG_PX8 : DEPEG_STUCK_PX8) : 0;
+            if (!on) {
+                MockAggregator(FEED_USDC).setRound(8, 1e8, now_, now_);
+                usdcFeedAt = now_;
+            }
+        } else if (f == F_KEEPER) {
+            keeperStopped = on;
+            if (!on) retryDue = true;
+        } else if (f == F_PAUSE) {
+            if (on) {
+                vm.prank(emergency);
+                queue.pauseQueue();
+            }
+        } else if (f == F_VENUE) {
+            if (on) {
+                vm.mockCallRevert(
+                    AAVE_POOL,
+                    abi.encodeWithSignature("withdraw(address,uint256,address)"),
+                    bytes("32")
+                );
+                vm.mockCall(
+                    address(aaveAdapter),
+                    abi.encodeWithSignature("availableLiquidity()"),
+                    abi.encode(uint256(0))
+                );
+            } else {
+                vm.clearMockedCalls();
+            }
+        } else if (f == F_LEND) {
+            if (on) {
+                uint256 r = aaveAdapter.ratePerUnit();
+                vm.mockCall(
+                    address(aaveAdapter),
+                    abi.encodeWithSignature("ratePerUnit()"),
+                    abi.encode(r.mulDiv(LEND_SPIKE_BPS, BPS))
+                );
+            } else {
+                vm.clearMockedCalls();
+            }
+        }
+    }
+
+    /// @notice Self-call: one 30-minute slot (the sim's own, no plan), then the fault's own events and the probes.
+    function faultSlot(uint8 f) external {
+        require(msg.sender == address(this), "self only");
+        this.simSlot(false);
+        uint256 now_ = vm.getBlockTimestamp();
+        // The fault's end, once.
+        if (fEnd != 0 && now_ >= fEnd && !endDone) {
+            if (f != F_PAUSE) _faultSet(f, false);
+            endActions = _tryActions();
+            endDone = true;
+        } else if (fEnd != 0 && !midDone && now_ >= fT0 + (fEnd - fT0) / 2) {
+            midActions = _tryActions();
+            midDone = true;
+        }
+        _track(f);
+    }
+
+    /// @dev Probe bookkeeping after each slot. The freeze fault waits for the probe deposit to settle, goes to the
+    ///      last second of its hold (the longest wait, A16) and has the emergency key freeze that settlement.
+    function _track(uint8 f) internal {
+        uint256 now_ = vm.getBlockTimestamp();
+        if (depClosedAt == 0 && queue.requestStatus(pDepId) == RequestStatus.Closed) {
+            depClosedAt = now_;
+            if (f == F_FREEZE && !freezeDone) {
+                // A matched fill is read through the queue's index and has no claim until touched (E52): the
+                // settlement is the latest one and the unlock is its time plus the hold.
+                uint256 sid = queue.settlementCount();
+                uint256 unlockAt = queue.getSettlement(sid).time + queue.flowParams().minHold;
+                _until(unlockAt - 1);
+                _feedTick();
+                vm.prank(emergency);
+                queue.freezeSettlement(sid);
+                freezeUntil = queue.getSettlement(sid).frozenUntil;
+                freezeDone = true;
+                fEnd = freezeUntil;
+                midActions = _tryActions();
+                midDone = true;
+            }
+        }
+        if (redClosedAt == 0 && queue.requestStatus(pRedId) == RequestStatus.Closed) {
+            redClosedAt = now_;
+        }
+        if (depClosedAt != 0 && depUsableAt == 0 && queue.maxMint(pDep) != 0) depUsableAt = now_;
+    }
+
+    function _faultDone(uint8 f) internal view returns (bool) {
+        if (f != F_NONE && f != F_FREEZE && !endDone) return false;
+        if (f == F_FREEZE && (!freezeDone || vm.getBlockTimestamp() < freezeUntil)) return false;
+        return redClosedAt != 0 && depUsableAt != 0;
+    }
+
+    struct FaultStats {
+        uint256 maxRed;
+        uint256 maxDep;
+        uint256 openRed;
+        uint256 openDep;
+        uint256 expiredDep;
+        uint256 nRed;
+        uint256 nDep;
+        uint256 ok;
+        uint256 noop;
+        uint256 blocked;
+        uint256 other;
+        uint256 firstBlocked;
+    }
+
+    /// @notice Self-call: finish and report.
+    function faultClose(uint8 f) external {
+        require(msg.sender == address(this), "self only");
+        if (!endDone) {
+            _faultSet(f, false);
+            endActions = _tryActions();
+        }
+        FaultStats memory st = _stats();
+        _writeFault(f, st);
+        emit log_named_string("E48 fault", _faultName(f));
+        emit log_named_uint("E48 attempts blocked", st.blocked);
+        emit log_named_uint("E48 first blocked check", st.firstBlocked);
+        emit log_named_uint(
+            "E48 probe redeem wait (s, 0 = unfilled)", redClosedAt == 0 ? 0 : redClosedAt - fT0
+        );
+        emit log_named_uint(
+            "E48 probe deposit usable wait (s, 0 = not usable)",
+            depUsableAt == 0 ? 0 : depUsableAt - fT0
+        );
+        emit log_named_uint("E48 max redeem wait over all requests (s)", st.maxRed);
+        emit log_named_uint("E48 max deposit wait over all requests (s)", st.maxDep);
+        emit log_named_uint("E48 deposits expired unfilled", st.expiredDep);
+        emit log_named_uint(
+            "E48 probe deposit status at end (1 pending, 2 expired, 3 closed)",
+            uint8(queue.requestStatus(pDepId))
+        );
+        emit log_named_uint("E48 actions mid (bits)", midActions);
+        emit log_named_uint("E48 actions end (bits)", endActions);
+    }
+
+    /// @dev Waits over every request the sim made: done ones to their settlement (a deposit to its unlock), open ones
+    ///      to the end of the run (so an open request's wait is a floor). Attempts by outcome.
+    function _stats() internal view returns (FaultStats memory st) {
+        uint256 now_ = vm.getBlockTimestamp();
+        for (uint256 i; i < reqs.length; ++i) {
+            ReqRec storage r = reqs[i];
+            bool open = r.doneAt == 0;
+            bool expired = open && r.isDeposit && queue.requestStatus(r.id) == RequestStatus.Expired;
+            if (expired) {
+                ++st.expiredDep;
+                open = false;
+            }
+            uint256 end = expired
+                ? queue.getRequest(r.id).expiresAt
+                : (open ? now_ : (r.isDeposit ? r.unlockAt : r.doneAt));
+            uint256 w = end > r.at ? end - r.at : 0;
+            if (r.isDeposit) {
+                ++st.nDep;
+                if (open) ++st.openDep;
+                if (w > st.maxDep) st.maxDep = w;
+            } else {
+                ++st.nRed;
+                if (open) ++st.openRed;
+                if (w > st.maxRed) st.maxRed = w;
+            }
+        }
+        for (uint256 i; i < attempts.length; ++i) {
+            uint16 oc = attempts[i].outcome;
+            if (oc == OUT_OK) {
+                ++st.ok;
+            } else if (oc == OUT_NOOP) {
+                ++st.noop;
+            } else if (oc >= OUT_BLOCKED_BASE && oc < 200) {
+                ++st.blocked;
+                if (st.firstBlocked == 0) st.firstBlocked = oc - OUT_BLOCKED_BASE;
+            } else {
+                ++st.other;
+            }
+        }
+    }
+
+    function _writeFault(uint8 f, FaultStats memory st) internal {
+        string memory o = "e48";
+        vm.serializeString(o, "fault", _faultName(f));
+        vm.serializeUint(o, "seed", seedK);
+        vm.serializeUint(o, "faultSeconds", fEnd > fT0 ? fEnd - fT0 : 0);
+        vm.serializeUint(o, "endedAtSeconds", vm.getBlockTimestamp() - fT0);
+        vm.serializeUint(o, "attemptsOk", st.ok);
+        vm.serializeUint(o, "attemptsNoop", st.noop);
+        vm.serializeUint(o, "attemptsBlocked", st.blocked);
+        vm.serializeUint(o, "attemptsOther", st.other);
+        vm.serializeUint(o, "firstBlockedCheck", st.firstBlocked);
+        vm.serializeUint(o, "probeRedeemWaitS", redClosedAt == 0 ? 0 : redClosedAt - fT0);
+        vm.serializeBool(o, "probeRedeemDone", redClosedAt != 0);
+        vm.serializeUint(o, "probeDepositSettledWaitS", depClosedAt == 0 ? 0 : depClosedAt - fT0);
+        vm.serializeUint(o, "probeDepositUsableWaitS", depUsableAt == 0 ? 0 : depUsableAt - fT0);
+        vm.serializeBool(o, "probeDepositDone", depUsableAt != 0);
+        vm.serializeUint(o, "redeemRequests", st.nRed);
+        vm.serializeUint(o, "depositRequests", st.nDep);
+        vm.serializeUint(o, "maxRedeemWaitS", st.maxRed);
+        vm.serializeUint(o, "maxDepositWaitS", st.maxDep);
+        vm.serializeUint(o, "redeemsOpenAtEnd", st.openRed);
+        vm.serializeUint(o, "depositsOpenAtEnd", st.openDep);
+        vm.serializeUint(o, "depositsExpired", st.expiredDep);
+        vm.serializeUint(o, "probeDepositStatusAtEnd", uint8(queue.requestStatus(pDepId)));
+        vm.serializeUint(o, "actionsMidBits", midActions);
+        vm.serializeUint(o, "actionsEndBits", endActions);
+        string memory json = vm.serializeString(
+            o,
+            "actionOrder",
+            "cancelDeposit,withdrawExpired,giveNotice,redeemInKind,mintShares,withdrawCredit"
+        );
+        string memory dir = string.concat(
+            "out/prototype/",
+            runName,
+            "-timed-e48",
+            bytes(runTag).length == 0 ? "" : string.concat("-", runTag)
+        );
+        vm.createDir(dir, true);
+        vm.writeFile(
+            string.concat(dir, "/e48-", _faultName(f), "-s", vm.toString(seedK), ".json"), json
+        );
+    }
+
+    // ─── What a holder can do ───────────────────────────────────────────────────────────────────────────
+
+    /// @dev Bit i is set if action i succeeds now. Each try is reverted, so the run is not changed.
+    function _tryActions() internal returns (uint256 bits) {
+        for (uint256 i; i < N_ACTIONS; ++i) {
+            uint256 snap = vm.snapshotState();
+            bool ok = _try(i);
+            vm.revertToState(snap);
+            if (ok) bits |= 1 << i;
+        }
+    }
+
+    function _try(uint256 i) internal returns (bool ok) {
+        if (i == 0) {
+            vm.prank(pDep);
+            (ok,) = address(queue).call(abi.encodeCall(queue.cancel, (pDepId)));
+        } else if (i == 1) {
+            vm.prank(pDep);
+            (ok,) = address(queue).call(abi.encodeCall(queue.withdrawExpired, (pDepId)));
+        } else if (i == 2) {
+            vm.prank(pRed);
+            (ok,) = address(queue).call(abi.encodeCall(queue.giveRedemptionNotice, (pRedId)));
+        } else if (i == 3) {
+            uint256 w = fund.balanceOf(genesisDepositors[1]);
+            vm.prank(genesisDepositors[1]);
+            (ok,) = address(fund)
+                .call(
+                    abi.encodeWithSignature(
+                        "redeemInKind(uint256,address,address)",
+                        w / 2,
+                        genesisDepositors[1],
+                        genesisDepositors[1]
+                    )
+                );
+        } else if (i == 4) {
+            uint256 m = queue.maxMint(pDep);
+            if (m == 0) return false;
+            vm.prank(pDep);
+            (ok,) = address(queue).call(abi.encodeCall(queue.mint, (m, pDep)));
+        } else {
+            vm.prank(pRed);
+            (ok,) = address(queue).call(abi.encodeCall(queue.withdrawCredit, ()));
+        }
+    }
 }

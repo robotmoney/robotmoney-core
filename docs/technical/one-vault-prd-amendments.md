@@ -1,6 +1,6 @@
 # One-vault experiment: staged PRD amendments
 
-Status: draft, 2026-11-11. Not applied. `docs/prd.md` describes the live
+Status: draft, 2026-11-11, extended 2026-11-13 (§5). Not applied. `docs/prd.md` describes the live
 three-vault product and stays as it is while the experiment runs
 (`one-vault-rebalancer-proposal.md`, status line). This file lists what the
 PRD would have to say if the one-vault design goes to production. It exists
@@ -64,6 +64,8 @@ was changed.
 
 ## 4. What must be settled before any of this is applied
 
+- Whether step 3f is built (§5). If it is, §5 replaces amendments 1 to 4.
+
 - The experiment's conclusion (proposal §10, step 5). None of this applies if
   the rejection of ADR-0010 is validated.
 - D2: whether a stable-only vault stays beside the fund.
@@ -74,3 +76,57 @@ was changed.
   system).
 - The Hard Assets vault on `dev`, which this branch predates. Its asset has
   not been assessed against the listing rule.
+
+## 5. Changes if step 3f is built (owner, 2026-11-13)
+
+The owner reviewed the flows on 2026-11-13 and found that several promises
+to users were what made the design unsafe (proposal §18). Step 3f removes
+the per-request price limit, the worst-case quote and the in-kind exit
+from a running fund, and matches deposits against redemptions (proposal §5.11, D16 to
+D19). It is decided and not built. If it is built, amendments 1 to 4 above
+change as follows. Amendments 5 to 11 stand.
+
+| # | Text of §1 that no longer holds | What step 3f does | Why it is still reasonable | Proposed text |
+| --- | --- | --- | --- | --- |
+| 1 | "A holder of delivered shares can leave in a single transaction by taking a pro-rata slice of the fund's assets (in-kind exit)." | There is no exit from a running fund except a settled redemption. A redemption is a request. It can be cancelled until its epoch closes. An unfilled redemption stays in the queue. After `maxRoll` epochs its owner can give notice and get the unfilled shares back when the round then open or forming ends. The in-kind exit opens only when the fund is shut down to be wound down. | An in-kind exit from a running fund let one user choose between the price and the assets at another user's cost. The owner decided that customers can wait. | "A redemption to USDC is a request. It can be cancelled until the end of the period in which it was made. It settles from the next settlement after its window. A rate limit can spread a large request over several settlements. After a fixed number of periods (48 hours at the defaults) the owner of an unfilled redemption can ask for the unfilled shares back, and gets them at the end of the settlement round then under way, also if that round settles nothing. The product states the cancel cutoff and the earliest settlement time before the holder approves. The fund does not offer a withdrawal of a chosen USDC amount, and it does not offer an exit in kind while it runs. If the fund is wound down, every holder can take a pro-rata slice of its assets." |
+| 2 | "The in-kind exit of delivered shares is never blocked, by anyone. … A delayed request can always be cancelled, or converted to an in-kind exit." | A USDC redemption is the only exit from a running fund. The safety checks, a rate limit or a pause can delay it. A pause ends by itself. The in-kind exit opens only in a wind-down, and only the Safe multisig starts a wind-down, through the timelock. | This amendment turns a guarantee into a dependence on the multisig, and the PRD must say so plainly. The owner decided it (proposal D18, D24): an exit in kind from a running fund gave one user an option at another's cost, and winding a fund down is a decision for the multisig. The promise becomes "the multisig winds down a fund that cannot settle, and a wound-down fund pays every holder in kind". | "New deposits can be halted for incident response. A USDC redemption can be delayed by the protocol's safety checks, by a rate limit or by a pause, and a pause ends by itself. New deposits can be stopped for as long as an incident lasts. While the fund runs there is no other exit. If the fund cannot settle, the Safe multisig winds it down, through the timelock. In a wind-down every holder can take a pro-rata slice of the fund's assets, and only the Safe can end it. Shares from a deposit are held for at least one hour before they are delivered. An emergency freeze of held shares ends by itself, after 7 days by default and never after more than 14." |
+| 3 | "Deposits and redemptions must provide a quote before user approval: the worst price the protocol's limits allow … Each request carries the user's own price limit, and never fills outside it." | A request names a quantity and no price. It is priced at its settlement, which is later than the request. The product shows the fee, the cancel cutoff, the earliest settlement time, the end of the hold, and the last known value as an indication. | This is how a regulated fund takes an order: at the next price, which nobody knows yet. It is what stops trading on a stale price. The protocol's own limits bound every settlement. | "Deposits and redemptions must show their terms before user approval: the fee, the time until which the request can be cancelled, the earliest settlement time, the end of the hold, and the last known share value marked as an indication. The price is set at settlement and is the same for every request of that settlement." The success measure becomes "percentage of attempted operations that show their terms before user approval". |
+| 4 | "… with the depositor as the request's owner and a price limit inside the depositor's policy." | An agent's request carries no price limit. | The agent still cannot receive shares, redirect funds, cancel or redeem. The depositor's policy keeps its amount limits and expiry. | "… An agent's only on-chain action is a deposit request into the fund's queue, with the depositor as the request's owner. Shares are delivered to the owner, and anyone may trigger that delivery. An agent cannot cancel or redeem." |
+
+Passages in §1.1 follow the same replacements.
+
+One row of §2 changes too. "§9, lines 387-388: surfaces must expose fees,
+net amounts, limits and refusal reasons" was kept by the quote views. Under
+step 3f the surfaces expose fees, limits, times and refusal reasons, and a
+net amount only after settlement. That needs an amendment of its own:
+"Surfaces must expose fees, limits, settlement times and refusal reasons
+before approval, and net amounts once a request has settled."
+
+Still to settle before this section applies: the result of step 3f
+(proposal §13). The owner confirmed on 2026-11-14 that a wind-down
+requires the timelock (proposal D24).
+
+The review of 2026-11-13 (proposal §19) also found PRD passages that step
+3f breaks and that no amendment covers yet:
+
+| PRD lines | What it says | What step 3f does |
+| --- | --- | --- |
+| §5, lines 303-309 | A retired vault keeps "standard ERC-4626 redemption at any time". | A redemption is a timed request, or an in-kind exit in a wind-down. |
+| §12, about line 736 (INV-2) | Every asset is "always redeemable by holders". | Redeemable by a timed request, and in kind once the fund is wound down. |
+| §6 and §9, lines 318-320 and 391-393 | An owner can revoke an agent's policy, or let it expire, and that stops the agent. | A deposit request the agent already made is locked until it fills or expires. |
+| §9, line 390 | Surfaces "itemize fees and slippage". | There is no slippage estimate before a settlement. Fees are itemized. |
+
+Line numbers were rechecked against `docs/prd.md` on 2026-11-14 (design review 0.8.0, ARCH-07, FLOW-08).
+
+### 5.1 Proposed text for the four passages in the table above
+
+Design review 0.8.0 (ARCH-07, FLOW-08) found that these four passages have no
+amendment. The text below is proposed, for the owner's review. It applies only
+if step 3f is built.
+
+| PRD lines | Proposed text |
+| --- | --- |
+| §5, lines 303-309 (retired vaults) | "A retired vault stays withdraw-only, and its holders can redeem it at any time, as before. Holders of the one-vault fund redeem by timed request, and in kind only in a wind-down. A holder who moves from a retired vault into the fund accepts those terms, and the product states them before the move." |
+| §12, lines 736-737 (INV-2) | "Every asset is redeemable by its holder, or absorbed into the product's value. In the fund a redemption is a timed request that settles. After a wind-down it is in kind. No role can keep a holder from redeeming for good." |
+| §6 and §9, lines 318-320 and 391-393 (agent policy) | "Revoking an agent's policy stops its new requests at once. A request it already made stays locked until it fills, expires, or is cancelled in its open epoch. The depositor may cancel it on the same terms as any depositor." |
+| §9, line 390 (fees and slippage) | "Surfaces show before approval the fee, the bands that bound the price, the cancel cutoff and the earliest settlement time. Once a request has settled they show the executed amounts, with the fee and the slippage itemized." |

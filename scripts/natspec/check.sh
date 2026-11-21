@@ -13,7 +13,7 @@
 #
 # LOCAL USAGE:
 #   bash scripts/natspec/check.sh
-#   bash scripts/natspec/check.sh contracts/gateway/RobotMoneyGateway.sol
+#   bash scripts/natspec/check.sh contracts/adapters/AaveV3Adapter.sol
 #
 # CI USAGE (see .github/workflows/natspec-coverage.yml):
 #   bash scripts/natspec/check.sh
@@ -31,17 +31,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # IN-SCOPE FILE SET — single source of truth
 # ---------------------------------------------------------------------------
 NATSPEC_SCOPE=(
-  "contracts/gateway/RobotMoneyGateway.sol"
-  "contracts/gateway/AccessRoles.sol"
-  "contracts/gateway/interfaces/IGateway.sol"
-  "contracts/RobotMoneyVault.sol"
   "contracts/interfaces/IStrategyAdapter.sol"
   "contracts/adapters/AaveV3Adapter.sol"
   "contracts/adapters/CompoundV3Adapter.sol"
   "contracts/adapters/MorphoAdapter.sol"
   "contracts/script/DeployLibs.s.sol"
-  "contracts/script/DeployVault.s.sol"
-  "contracts/script/DeployGateway.s.sol"
 )
 
 # ---------------------------------------------------------------------------

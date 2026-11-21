@@ -129,7 +129,6 @@ const timed = timedFiles > 0;
 // §5.9.5 FlowParams). A timed "default" run with no tag must read exactly these back.
 const DEFAULT_PARAMS_TIMED: Record<string, unknown> = {
   stepInterval: 1800,
-  keeperGrace: 21600,
   maxOverrun: 604800,
   maxStepCostBps: 50,
   toleranceBps: 50,
@@ -146,10 +145,68 @@ const DEFAULT_PARAMS_TIMED: Record<string, unknown> = {
     sequencerGrace: 3600, usdcPegBandBps: 50, maxLendRateGrowthBps: 10,
   },
 };
-const canonDeep = (o: unknown): string =>
-  o !== null && typeof o === "object" && !Array.isArray(o)
-    ? `{${Object.keys(o as object).sort().map((k) => `${JSON.stringify(k)}:${canonDeep((o as any)[k])}`).join(",")}}`
-    : JSON.stringify(o);
+const DEFAULT_STEP3F_FLOW_PARAMS: Record<string, unknown> = {
+  cancelBuffer: 900,
+  maxPause: 259200,
+  matchBandBps: 10,
+};
+const DEFAULT_STEP3F_FUND_PARAMS: Record<string, unknown> = {
+  minPoolDepthUsdc: 2000000000000,
+  feeMarginBps: 20,
+  delistBandBps: 300,
+  delistBudgetBps: 300,
+};
+
+const canonDeep = (o: unknown): string => {
+  if (o === undefined) return "undefined";
+  if (Array.isArray(o)) return `[${o.map(canonDeep).join(",")}]`;
+  if (o !== null && typeof o === "object") {
+    const rec = o as Record<string, unknown>;
+    return `{${Object.keys(rec)
+      .filter((k) => rec[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonDeep(rec[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(o);
+};
+
+const hasFiniteNum = (x: unknown): x is number | string =>
+  x !== undefined && x !== null && (typeof x === "number" || (typeof x === "string" && x.trim() !== "")) && Number.isFinite(Number(x));
+
+function expectedDefaultParams(
+  isTimed: boolean,
+  observedParams: Record<string, unknown>,
+  runList: Record<string, any>[],
+): Record<string, unknown> {
+  if (!isTimed) return DEFAULT_PARAMS;
+  const fp = (observedParams.flowParams ?? {}) as Record<string, unknown>;
+  const hasStep3fMeta = runList.some((r) => r.meta?.step3f === true);
+  const hasStep3fFlowKeys = Object.keys(DEFAULT_STEP3F_FLOW_PARAMS).some((k) => k in fp);
+  const hasStep3fFundKeys = Object.keys(DEFAULT_STEP3F_FUND_PARAMS).some((k) => k in observedParams);
+  const base: Record<string, unknown> = {
+    ...DEFAULT_PARAMS_TIMED,
+    flowParams:
+      hasStep3fMeta || hasStep3fFlowKeys
+        ? { ...(DEFAULT_PARAMS_TIMED.flowParams as Record<string, unknown>), ...DEFAULT_STEP3F_FLOW_PARAMS }
+        : DEFAULT_PARAMS_TIMED.flowParams,
+  };
+  // StepParams.keeperGrace is retired in step 3f. A run of the step 3d or 3e code still reads it back, at 6 h.
+  if ("keeperGrace" in observedParams) base.keeperGrace = 21600;
+  if (observedParams.step3f !== undefined && typeof observedParams.step3f === "object" && observedParams.step3f !== null) {
+    const s3f = observedParams.step3f as Record<string, unknown>;
+    const expectedS3f: Record<string, unknown> = { ...DEFAULT_STEP3F_FUND_PARAMS };
+    for (const k of Object.keys(DEFAULT_STEP3F_FLOW_PARAMS)) {
+      if (k in s3f) expectedS3f[k] = DEFAULT_STEP3F_FLOW_PARAMS[k];
+    }
+    base.step3f = expectedS3f;
+  } else if (hasStep3fMeta || hasStep3fFundKeys) {
+    for (const [k, v] of Object.entries(DEFAULT_STEP3F_FUND_PARAMS)) {
+      if (hasStep3fMeta || k in observedParams) base[k] = v;
+    }
+  }
+  return base;
+}
 
 // ─── Provenance checks ───────────────────────────────────────────────────────────────────────────────
 const problems: string[] = [];
@@ -159,7 +216,6 @@ for (const r of runs) {
   if (!(r.file in MANIFEST)) problems.push(`unexpected ${r.file}`);
   else if ((r.plans ?? []).length !== MANIFEST[r.file]) problems.push(`${r.file}: ${r.plans?.length} plans, expected ${MANIFEST[r.file]}`);
 }
-const canon = (o: unknown) => JSON.stringify(o, Object.keys(o as object).sort());
 const pins = new Set(runs.map((r) => r.meta?.pinBlock));
 if (pins.size !== 1) problems.push(`mixed pin blocks: ${[...pins].join(",")}`);
 const recs = new Set(runs.map((r) => r.meta?.recording));
@@ -169,7 +225,7 @@ if (runNames.size !== 1) problems.push(`mixed parameter sets: ${[...runNames].jo
 const paramSets = new Set(
   runs.map((r) => {
     const { set: _s, ...p } = r.meta?.params ?? {};
-    return canon(p);
+    return canonDeep(p);
   }),
 );
 if (paramSets.size !== 1) problems.push(`files disagree on params (${paramSets.size} distinct sets)`);
@@ -177,9 +233,9 @@ const params = (() => {
   const { set: _s, ...p } = runs[0].meta?.params ?? {};
   return p as Record<string, unknown>;
 })();
-const paramDiff = timed
-  ? Object.keys(DEFAULT_PARAMS_TIMED).filter((k) => canonDeep(params[k]) !== canonDeep(DEFAULT_PARAMS_TIMED[k]))
-  : Object.keys(DEFAULT_PARAMS).filter((k) => JSON.stringify(params[k]) !== JSON.stringify(DEFAULT_PARAMS[k]));
+const expectedDefaults = expectedDefaultParams(timed, params, runs);
+const paramKeys = [...new Set([...Object.keys(expectedDefaults), ...Object.keys(params)])].sort();
+const paramDiff = paramKeys.filter((k) => canonDeep(params[k]) !== canonDeep(expectedDefaults[k]));
 if ((runLabel === "default" || runLabel === "tuned") && !runNames.has(runLabel)) {
   problems.push(`dir ${runLabel} holds files of run ${[...runNames].join(",")}`);
 }
@@ -193,24 +249,49 @@ if (timed) {
 if (runNames.has("default") && paramDiff.length && !(timed && timedTag !== "")) {
   problems.push(`default run params differ from §5.6 starts: ${paramDiff.join(",")}`);
 }
-if (problems.length && !allowPartial) {
-  console.error(`REFUSING TO SCORE ${dir}:\n  ${problems.join("\n  ")}\n(--allow-partial scores it as PARTIAL)`);
-  process.exit(2);
-}
-const partial = problems.length > 0;
 
 // ─── Rows ────────────────────────────────────────────────────────────────────────────────────────────
+const REQUIRED_COST_FIELDS = [
+  "execCost",
+  "flowLoss",
+  "unexplainedDrop",
+  "execCostRef",
+  "flowLossRef",
+  "turnoverUsdc",
+  "tradedNotional",
+  "costSpent",
+] as const;
 type Row = Record<string, any>;
 const rows: Row[] = [];
 for (const r of runs) {
-  for (const p of r.plans as Row[]) {
-    const turnover = num(p.turnoverUsdc);
-    const traded = num(p.tradedNotional);
+  for (const p of (r.plans ?? []) as Row[]) {
+    const fundM = num(p.fundUsdc) / 1e12;
+    const seed = num(p.seedK);
+    const id = `${p.scenario}-${fundM}M-s${seed}/${p.receipt}`;
+    for (const field of REQUIRED_COST_FIELDS) {
+      if (!hasFiniteNum(p[field])) problems.push(`${r.file} (${id}): missing or non-finite ${field}`);
+    }
+    const turnover = hasFiniteNum(p.turnoverUsdc) ? num(p.turnoverUsdc) : NaN;
+    const traded = hasFiniteNum(p.tradedNotional) ? num(p.tradedNotional) : NaN;
     const converged = p.outcome === "Converged";
-    const arrival = num(p.execCost) + num(p.flowLoss) + num(p.unexplainedDrop);
-    const ref = num(p.execCostRef ?? NaN) + num(p.flowLossRef ?? NaN) + num(p.unexplainedDrop);
+    const arrival =
+      hasFiniteNum(p.execCost) && hasFiniteNum(p.flowLoss) && hasFiniteNum(p.unexplainedDrop)
+        ? num(p.execCost) + num(p.flowLoss) + num(p.unexplainedDrop)
+        : NaN;
+    const ref =
+      hasFiniteNum(p.execCostRef) && hasFiniteNum(p.flowLossRef) && hasFiniteNum(p.unexplainedDrop)
+        ? num(p.execCostRef) + num(p.flowLossRef) + num(p.unexplainedDrop)
+        : NaN;
     const denom = converged ? turnover : Math.min(turnover, traded);
-    const bps = (x: number) => (denom > 0 ? (x * 1e4) / denom : NaN);
+    const zeroTurnoverExcluded = Number.isFinite(turnover) && Number.isFinite(traded) && turnover === 0 && traded === 0;
+    if (!zeroTurnoverExcluded && !(Number.isFinite(denom) && denom > 0)) {
+      problems.push(`${r.file} (${id}): invalid denominator ${denom} (turnover=${turnover}, traded=${traded}, outcome=${p.outcome})`);
+    }
+    const bps = (x: number) => (denom > 0 && Number.isFinite(denom) && Number.isFinite(x) ? (x * 1e4) / denom : NaN);
+    const arrivalBps = bps(arrival);
+    const refBps = bps(ref);
+    const costBps = Math.max(arrivalBps, refBps);
+    const costBpsTraded = traded > 0 && Number.isFinite(traded) ? (Math.max(arrival, ref) * 1e4) / traded : NaN;
     const masked = num(p.maskedCalls ?? 0);
     // Timed: a skip for a reason step 3 did not have (step 3e's FeedCheck) is a blocked attempt too.
     const blockedNew = timed ? num(p.skipOther ?? 0) : 0;
@@ -221,13 +302,14 @@ for (const r of runs) {
     const row: Row = {
       file: r.file,
       scenario: p.scenario,
-      fundM: num(p.fundUsdc) / 1e12,
-      seed: num(p.seedK),
+      fundM,
+      seed,
       plan: p.receipt,
-      id: `${p.scenario}-${num(p.fundUsdc) / 1e12}M-s${num(p.seedK)}/${p.receipt}`,
+      id,
       scored: SCORED.has(p.scenario),
       outcome: p.outcome,
       denominator: converged ? "turnover" : "min(turnover,traded)",
+      zeroTurnoverExcluded,
       convergedInWindow: p.convergedInWindow === true,
       liquidOff: p.liquidAssetOffTolerance === true,
       offAssets: p.offToleranceAssets,
@@ -237,15 +319,15 @@ for (const r of runs) {
       flowAssistUsdc: converged ? (turnover - traded) / 1e6 : NaN,
       arrivalUsdc: arrival / 1e6,
       refUsdc: ref / 1e6,
-      arrivalBps: bps(arrival),
-      refBps: bps(ref),
-      costBps: Math.max(bps(arrival), Number.isFinite(bps(ref)) ? bps(ref) : -Infinity),
-      costBpsTraded: traded > 0 ? (Math.max(arrival, Number.isFinite(ref) ? ref : -Infinity) * 1e4) / traded : NaN,
-      costSpentBps: bps(num(p.costSpent)),
+      arrivalBps,
+      refBps,
+      costBps,
+      costBpsTraded,
+      costSpentBps: bps(hasFiniteNum(p.costSpent) ? num(p.costSpent) : NaN),
       basisBps: bps(num(p.basisCost)),
-      flowLossUsdc: num(p.flowLoss) / 1e6,
-      flowLossRefUsdc: num(p.flowLossRef ?? NaN) / 1e6,
-      unexplainedUsdc: num(p.unexplainedDrop) / 1e6,
+      flowLossUsdc: (hasFiniteNum(p.flowLoss) ? num(p.flowLoss) : NaN) / 1e6,
+      flowLossRefUsdc: (hasFiniteNum(p.flowLossRef) ? num(p.flowLossRef) : NaN) / 1e6,
+      unexplainedUsdc: (hasFiniteNum(p.unexplainedDrop) ? num(p.unexplainedDrop) : NaN) / 1e6,
       budgetUsedPct: num(p.costBudget) > 0 ? (100 * num(p.costSpent)) / num(p.costBudget) : NaN,
       timeToConvergeH: num(p.timeToConvergeSec) / 3600,
       overrunH: num(p.overrunSec) / 3600,
@@ -287,6 +369,26 @@ for (const r of runs) {
   }
 }
 
+const excludedZeroTurnoverPlans = rows.filter((r) => r.zeroTurnoverExcluded).map((r) => r.id as string);
+const EXPECTED_SCORED_PLANS = Object.entries(MANIFEST)
+  .filter(([file]) => !file.startsWith("sim-EXT-PROBE-"))
+  .reduce((s, [, count]) => s + count, 0);
+const scoredCheck = rows.filter((r) => r.scored);
+if (scoredCheck.length !== EXPECTED_SCORED_PLANS) {
+  problems.push(`scored plans count ${scoredCheck.length} !== expected ${EXPECTED_SCORED_PLANS}`);
+}
+for (const r of rows) {
+  if (r.zeroTurnoverExcluded) continue;
+  for (const key of ["costBps", "arrivalBps", "refBps", "costSpentBps"] as const) {
+    if (!Number.isFinite(r[key])) problems.push(`${r.file} (${r.id}): non-finite ${key}`);
+  }
+}
+if (problems.length && !allowPartial) {
+  console.error(`REFUSING TO SCORE ${dir}:\n  ${problems.join("\n  ")}\n(--allow-partial scores it as PARTIAL)`);
+  process.exit(2);
+}
+const partial = problems.length > 0;
+
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
   if (s.length === 0) return NaN;
@@ -296,7 +398,12 @@ const median = (xs: number[]) => {
 const max = (xs: number[]) => (xs.length ? Math.max(...xs) : NaN);
 const f = (x: number, d = 2) => (Number.isFinite(x) ? x.toFixed(d) : "n/a");
 const g4of = (set: Row[], key: string) => {
-  const xs = set.map((r) => r[key]).filter(Number.isFinite);
+  const eligible = set.filter((r) => !r.zeroTurnoverExcluded && !(key === "costBpsTraded" && r.tradedUsdc === 0));
+  const raw = eligible.map((r) => r[key] as number);
+  const xs = raw.filter(Number.isFinite);
+  if (!partial && xs.length !== eligible.length) {
+    throw new Error(`g4of(${key}): expected ${eligible.length} finite plans, got ${xs.length}`);
+  }
   const med = median(xs);
   const mx = max(xs);
   return { median: med, max: mx, n: xs.length, pass: xs.length > 0 && med <= G4_MEDIAN && mx <= G4_MAX };
@@ -308,7 +415,7 @@ function gates(set: Row[]) {
   const g4Ref = g4of(set, "refBps");
   const g4Traded = g4of(set, "costBpsTraded");
   const g4Spent = g4of(set, "costSpentBps");
-  const worst = [...set].sort((a, b) => b.costBps - a.costBps)[0];
+  const worst = [...set].filter((r) => !r.zeroTurnoverExcluded && Number.isFinite(r.costBps)).sort((a, b) => b.costBps - a.costBps)[0];
 
   const executed = set.reduce((a, r) => a + r.executed, 0);
   const blocked = set.reduce((a, r) => a + r.blocked, 0);
@@ -365,6 +472,9 @@ const result = {
   generatedFrom: files,
   partial,
   provenance: { problems, pinBlocks: [...pins], recording: [...recs], run: [...runNames], params, diffFromDefaults: paramDiff },
+  excludedZeroTurnoverRule: "only plans with turnoverUsdc === 0 && tradedNotional === 0 are excluded from G4; all other non-positive or non-finite values refuse scoring",
+  excludedZeroTurnoverCount: excludedZeroTurnoverPlans.length,
+  excludedZeroTurnoverPlans,
   definitions: {
     costBps: "max(arrival, reference) cost * 1e4 / (turnover if Converged else min(turnover, traded))",
     arrival: "sum execCost (pre-step spot) + flowLoss + unexplainedDrop",
@@ -439,6 +549,14 @@ function timedReport(set: Row[]) {
   let flowVolume = 0;
   let twoSided = 0;
   let settlementsN = 0;
+  let matchedUsdc = 0;
+  let hasMatchedUsdc = false;
+  let matchedShares = 0;
+  let hasMatchedShares = false;
+  let depositStops = 0;
+  let hasDepositStops = false;
+  let maxBlockedWaitH = -Infinity;
+  let hasMaxBlockedWaitH = false;
   for (const r of set) {
     const a = r.timed?.attempts ?? {};
     const out = col(a, "outcome");
@@ -506,6 +624,48 @@ function timedReport(set: Row[]) {
     const rR = col(s, "redFairRef");
     const nav = col(s, "navFeed");
     settlementsN += dU.length;
+    if (Array.isArray(s.matchedUsdc)) {
+      hasMatchedUsdc = true;
+      for (const v of col(s, "matchedUsdc")) matchedUsdc += v / 1e6;
+    } else if (hasFiniteNum(r.timed?.matchedUsdc)) {
+      hasMatchedUsdc = true;
+      matchedUsdc += num(r.timed.matchedUsdc) / 1e6;
+    } else if (hasFiniteNum(r.meta?.matchedUsdc)) {
+      hasMatchedUsdc = true;
+      matchedUsdc += num(r.meta.matchedUsdc) / 1e6;
+    }
+    if (Array.isArray(s.matchedShares)) {
+      hasMatchedShares = true;
+      for (const v of col(s, "matchedShares")) matchedShares += v;
+    } else if (hasFiniteNum(r.timed?.matchedShares)) {
+      hasMatchedShares = true;
+      matchedShares += num(r.timed.matchedShares);
+    } else if (hasFiniteNum(r.meta?.matchedShares)) {
+      hasMatchedShares = true;
+      matchedShares += num(r.meta.matchedShares);
+    }
+    if (hasFiniteNum(r.timed?.depositStops)) {
+      hasDepositStops = true;
+      depositStops += num(r.timed.depositStops);
+    } else if (Array.isArray(r.timed?.depositStops)) {
+      hasDepositStops = true;
+      depositStops += r.timed.depositStops.length;
+    } else if (hasFiniteNum(r.meta?.depositStops)) {
+      hasDepositStops = true;
+      depositStops += num(r.meta.depositStops);
+    }
+    if (hasFiniteNum(r.timed?.maxBlockedWaitH)) {
+      hasMaxBlockedWaitH = true;
+      maxBlockedWaitH = Math.max(maxBlockedWaitH, num(r.timed.maxBlockedWaitH));
+    } else if (hasFiniteNum(r.meta?.maxBlockedWaitH)) {
+      hasMaxBlockedWaitH = true;
+      maxBlockedWaitH = Math.max(maxBlockedWaitH, num(r.meta.maxBlockedWaitH));
+    } else if (Array.isArray(r.timed?.blockedWaitsH) && r.timed.blockedWaitsH.length > 0) {
+      hasMaxBlockedWaitH = true;
+      for (const w of col(r.timed, "blockedWaitsH")) {
+        if (Number.isFinite(w)) maxBlockedWaitH = Math.max(maxBlockedWaitH, w);
+      }
+    }
     for (let i = 0; i < dU.length; i++) {
       flowVolume += dU[i] + rF[i];
       if (nav[i] > 0) {
@@ -526,6 +686,15 @@ function timedReport(set: Row[]) {
   const costMax = max(cost);
   const g9Pass =
     first > 0 && firstCallShare >= G9_FIRST_CALL && waitP95 <= G9_WAIT_H && costMed <= G9_COST_MEDIAN && costMax <= G9_COST_MAX;
+  const step3f =
+    hasMatchedUsdc || hasMatchedShares || hasDepositStops || hasMaxBlockedWaitH
+      ? {
+          ...(hasMatchedUsdc ? { matchedUsdc } : {}),
+          ...(hasMatchedShares ? { matchedShares } : {}),
+          ...(hasDepositStops ? { depositStops } : {}),
+          ...(hasMaxBlockedWaitH && maxBlockedWaitH > -Infinity ? { maxBlockedWaitH } : {}),
+        }
+      : undefined;
   return {
     files: set.length,
     g9: {
@@ -550,6 +719,7 @@ function timedReport(set: Row[]) {
       flowVolumeUsdc: flowVolume / 1e6,
       savedBpsOfFlowAtFeed: flowVolume > 0 ? (netSaved * 1e4) / flowVolume : NaN,
     },
+    ...(step3f ? { step3f } : {}),
   };
 }
 
@@ -581,7 +751,7 @@ if (timed) {
       minRequestUsdc: { value: (fp.minRequestUsdc ?? NaN) / 1e6, observed: "normalRange.requestUsdc (low tail)" },
       maxRoll: { value: fp.maxRoll, observed: "requests.expired" },
       epochLength_settleWindow_minHold: { value: [fp.epochLength, fp.settleWindow, fp.minHold], observed: "g9.redeemWaitH, depositWaitH" },
-      notMeasured: "sequencerGrace, usdcPegBandBps, maxFeedAge, keeperGrace, maxFreeze, poolShareBps, minSeedUsdc: the sim models no outage, depeg, absent keeper or freeze",
+      notMeasured: "sequencerGrace, usdcPegBandBps, maxFeedAge, maxFreeze, maxPause, poolShareBps, minSeedUsdc: this scored run has no outage, depeg, stopped keeper, pause or freeze. TimedFlowFaultSimTest (E48) runs them and writes out/prototype/<run>-timed-e48/e48-*.json",
     },
   };
 }
@@ -642,6 +812,7 @@ function report(name: string, g: ReturnType<typeof gates>) {
 }
 if (partial) console.log(`PARTIAL RUN, NOT A VERDICT: ${problems.join("; ")}\n`);
 console.log(`run ${[...runNames].join(",")} | pin ${[...pins].join(",")} | recording ${[...recs].join(",")} | params ${paramDiff.length ? "differ from §5.6 starts: " + paramDiff.map((k) => `${k}=${JSON.stringify(params[k])}`).join(" ") : "= §5.6 starts"}\n`);
+console.log(`excludedZeroTurnoverPlans (${excludedZeroTurnoverPlans.length}): ${excludedZeroTurnoverPlans.length ? excludedZeroTurnoverPlans.join(", ") : "none"}\n`);
 report("SCORED SET (SEQ 1M+5M, EXT 1M, JUMP-DOWN, JUMP-UP)", result.scored);
 if (result.probe) {
   const p = result.probe;
@@ -674,6 +845,15 @@ if (timed) {
     console.log(`  ${name.padEnd(8)} attempts ${part.attempts.n} ${JSON.stringify(part.attempts.byOutcome)}; settlements ${part.attempts.settlements}; requests ${part.requests.n} (expired ${part.requests.expired}, part-filled at end ${part.requests.partlyFilledAtEnd})`);
     console.log(`           deposit wait median ${f(part.depositWaitH.median)} h p95 ${f(part.depositWaitH.p95)} h; redemption wait median ${f(part.g9.redeemWaitH.median)} h p95 ${f(part.g9.redeemWaitH.p95)} h; cost median ${f(part.g9.flowCostBps.median)} max ${f(part.g9.flowCostBps.max)} bps (vs reference ${f(part.g9.flowCostRefBps.median)} / ${f(part.g9.flowCostRefBps.max)})`);
     console.log(`           netting would have saved ${f(part.netting.savedUsdcAtFeed)} USDC at the feed (${f(part.netting.savedBpsOfFlowAtFeed)} bps of ${f(part.netting.flowVolumeUsdc, 0)} USDC of flow; ${part.netting.twoSidedSettlements} of ${part.netting.settlements} settlements two-sided)`);
+    if (part.step3f) {
+      const s3 = part.step3f as { matchedUsdc?: number; matchedShares?: number; depositStops?: number; maxBlockedWaitH?: number };
+      const bits: string[] = [];
+      if (s3.matchedUsdc !== undefined) bits.push(`matchedUsdc ${f(s3.matchedUsdc)}`);
+      if (s3.matchedShares !== undefined) bits.push(`matchedShares ${s3.matchedShares}`);
+      if (s3.depositStops !== undefined) bits.push(`depositStops ${s3.depositStops}`);
+      if (s3.maxBlockedWaitH !== undefined) bits.push(`maxBlockedWaitH ${f(s3.maxBlockedWaitH)} h`);
+      if (bits.length) console.log(`           step 3f: ${bits.join(", ")}`);
+    }
   }
   console.log("  normal range (no-jump set; p50 / p95 / p99 / max, or min / p01 / p05 for slicesInBand) beside each value:");
   const nr = t.noJump.normalRange;

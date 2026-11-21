@@ -105,7 +105,7 @@ export const USAGE = `publish contracts
                      On 8453 a wait of 48 hours exits 15 (GOVERN_PENDING) once, with the ready time and the command to run again.
                      On demand, outside the ordered rows: --row apply-receipt --receipt-id 0x<bytes32> --payload FILE applies one recorded consensus receipt (issue 1696, issue 1698):
                      ONE timelock call, RouterGovernance.applyReceipt(receiptId, payloadDigest, vaults, bps), which releases the receipt and sets the router's active vector together.
-                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, advances the last applied receipt sequence (or the legacy lastAppliedRecordedAt watermark, issue 1831),
+                     Refused with USAGE (nothing sent) unless the receipt is recorded and unreleased, was recorded after the last applied receipt (lastAppliedRecordedAt, issue 1831),
                      the payload's receipt digest (domain line + bytes) equals the stored digest, and the vector sums to 10000 bps and lists the registry's router-eligible vaults in
                      registry order. Not part of stage 13. After the delay the same command executes it and reads isReleased and the router weights back.
                      --row release-receipt --receipt-id 0x<bytes32> is refused with USAGE once RouterGovernance holds the receipt's RECEIPT_RELEASER_ROLE (the narrow release role, issue 1888;
@@ -180,10 +180,13 @@ export const USAGE = `publish contracts
   --measure          rehearsal only: measure per-stage counts and write the frozen file for this SHA
   --logs-rpc URL     prove-control --resume and the verify stage: a separate RPC for eth_getLogs (the scan for a landed proof, the verifier's role and
                      creation scans). Every other read stays on --rpc.
-  --logs-window N    prove-control --resume and the verify stage: blocks per eth_getLogs call (default 2000); prove-control halves it on a range-limit error,
-                     verify shrinks it to the limit the RPC names. Verify reads each block range once for all its log checks (issue 1977).
+  --logs-window N    prove-control --resume and the verify stage (every system, the fund's role scans too): blocks per eth_getLogs call (default 2000); prove-control
+                     halves it on a range-limit error, verify shrinks it to the limit the RPC names or halves it (HTTP 413, "range too large") down to 50 blocks, then
+                     fails RPC_REFUSED. Verify reads each block range once for all its log checks (issue 1977). On the Twin (918453) the fund verifier reads no log
+                     before the fork pin: its role checks prove holders now and grants after the pin (issue 2044).
   --check-sources    verify: also check explorer source verification (Blockscout, Sourcify); publishing, not a gate, so off by default
-  --logs-tries N     prove-control --resume: tries of one throttled eth_getLogs call (HTTP 429), with exponential backoff (default 6)
+  --logs-tries N     prove-control --resume and the verify stage: tries of one throttled eth_getLogs call (HTTP 429, JSON-RPC -32011 or -32005), with
+                     exponential backoff (default 6 for prove-control, 7 for verify)
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
                      prompt) or a device bound to its owner, ledger:PATH@0xOWNER / trezor:PATH@0xOWNER. Hardware is optional, never required. A run on 8453 that reaches prove-control with fewer

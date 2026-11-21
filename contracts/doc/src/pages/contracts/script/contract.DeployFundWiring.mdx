@@ -5,7 +5,7 @@ description: "The `fund-wiring` stage (Deploy 4), while the deployer still holds
 
 # DeployFundWiring
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFundWiring.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/script/DeployFundWiring.s.sol)
 
 **Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
 
@@ -69,6 +69,27 @@ function _check(Wired memory w) internal view;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | w | `Wired` |  |
+
+<a id="_checkkeeperaccount-address"></a>
+
+### _checkKeeperAccount
+
+<i>
+
+E56: a keeper with code is the smart account. Its `owners()` and `botKeys()` must answer and the account must
+have an owner, so the deploy tool can record them. A keeper without code is an EOA, recorded as such.
+
+</i>
+
+```solidity
+function _checkKeeperAccount(address keeper) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| keeper | `address` |  |
 
 <a id="_writedeploymentjson-wired"></a>
 

@@ -5,7 +5,7 @@ description: "One stateful invariant suite for the one-vault prototype (plan Ste
 
 # Invariants
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Invariants.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/Invariants.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -150,12 +150,6 @@ uint8 private constant ACT_SETTLE = 1;
 uint8 private constant ACT_PAY = 2;
 ```
 
-### ACT_EXIT
-
-```solidity
-uint8 private constant ACT_EXIT = 3;
-```
-
 ### H_REQUEST_DEPOSIT
 
 ```solidity
@@ -204,10 +198,10 @@ uint256 private constant H_CLAIM = 6;
 uint256 private constant H_CANCEL = 7;
 ```
 
-### H_EXIT_IN_KIND
+### H_GIVE_NOTICE
 
 ```solidity
-uint256 private constant H_EXIT_IN_KIND = 8;
+uint256 private constant H_GIVE_NOTICE = 8;
 ```
 
 ### H_WITHDRAW_EXPIRED
@@ -228,16 +222,16 @@ uint256 private constant H_WITHDRAW_CREDIT = 10;
 uint256 private constant H_FREEZE = 11;
 ```
 
-### H_RELEASE_OR_RETURN
+### H_RELEASE
 
 ```solidity
-uint256 private constant H_RELEASE_OR_RETURN = 12;
+uint256 private constant H_RELEASE = 12;
 ```
 
-### H_TAKE_RETURN
+### H_PAUSE
 
 ```solidity
-uint256 private constant H_TAKE_RETURN = 13;
+uint256 private constant H_PAUSE = 13;
 ```
 
 ### H_REDEEM_IN_KIND
@@ -246,34 +240,40 @@ uint256 private constant H_TAKE_RETURN = 13;
 uint256 private constant H_REDEEM_IN_KIND = 14;
 ```
 
+### H_SHUTDOWN
+
+```solidity
+uint256 private constant H_SHUTDOWN = 15;
+```
+
 ### H_APPLY
 
 ```solidity
-uint256 private constant H_APPLY = 15;
+uint256 private constant H_APPLY = 16;
 ```
 
 ### H_STEP
 
 ```solidity
-uint256 private constant H_STEP = 16;
+uint256 private constant H_STEP = 17;
 ```
 
 ### H_MOVE_PRICE
 
 ```solidity
-uint256 private constant H_MOVE_PRICE = 17;
+uint256 private constant H_MOVE_PRICE = 18;
 ```
 
 ### H_UNAUTHORIZED
 
 ```solidity
-uint256 private constant H_UNAUTHORIZED = 18;
+uint256 private constant H_UNAUTHORIZED = 19;
 ```
 
 ### N_HANDLERS
 
 ```solidity
-uint256 private constant N_HANDLERS = 19;
+uint256 private constant N_HANDLERS = 20;
 ```
 
 ## State Variables
@@ -300,6 +300,12 @@ address internal receiptImpl;
 
 ```solidity
 uint256 public ghostInKindReverts;
+```
+
+### ghostInKindClosedRefusals
+
+```solidity
+uint256 public ghostInKindClosedRefusals;
 ```
 
 ### ghostRequestRedeemReverts
@@ -435,12 +441,6 @@ uint256 public ghostRb12;
 uint256 public ghostRb13;
 ```
 
-### ghostRb14
-
-```solidity
-uint256 public ghostRb14;
-```
-
 ### ghostRb15
 
 ```solidity
@@ -463,6 +463,66 @@ uint256 public ghostRb18;
 
 ```solidity
 uint256 public ghostRb20;
+```
+
+### ghostRb23
+
+```solidity
+uint256 public ghostRb23;
+```
+
+### ghostRb24
+
+```solidity
+uint256 public ghostRb24;
+```
+
+### ghostRb25
+
+```solidity
+uint256 public ghostRb25;
+```
+
+### ghostRb26
+
+```solidity
+uint256 public ghostRb26;
+```
+
+### ghostRb27
+
+```solidity
+uint256 public ghostRb27;
+```
+
+### ghostRb28
+
+```solidity
+uint256 public ghostRb28;
+```
+
+### ghostRb30
+
+```solidity
+uint256 public ghostRb30;
+```
+
+### ghostRb32
+
+```solidity
+uint256 public ghostRb32;
+```
+
+### ghostRb35
+
+```solidity
+uint256 public ghostRb35;
+```
+
+### ghostRb36
+
+```solidity
+uint256 public ghostRb36;
 ```
 
 ### ghostLastViolation
@@ -543,6 +603,36 @@ uint256 public ghostQueueSharesBurned;
 uint256 public ghostWalletSharesBurned;
 ```
 
+### ghostSettleFundToQueueUsdc
+
+```solidity
+uint256 public ghostSettleFundToQueueUsdc;
+```
+
+### ghostSettleQueueToFundUsdc
+
+```solidity
+uint256 public ghostSettleQueueToFundUsdc;
+```
+
+### ghostSettleFeeUsdc
+
+```solidity
+uint256 public ghostSettleFeeUsdc;
+```
+
+### ghostLastFreezeAt
+
+```solidity
+uint64 public ghostLastFreezeAt;
+```
+
+### ghostQueuePauseCooldownUntil
+
+```solidity
+uint64 public ghostQueuePauseCooldownUntil;
+```
+
 ### ghostFreezeAt
 
 ```solidity
@@ -573,6 +663,12 @@ uint256 public callsSettle;
 uint256 public settlementsMade;
 ```
 
+### callsWholeMatch
+
+```solidity
+uint256 public callsWholeMatch;
+```
+
 ### callsDeliver
 
 ```solidity
@@ -591,10 +687,10 @@ uint256 public callsClaim;
 uint256 public callsCancel;
 ```
 
-### callsExitInKind
+### callsNotice
 
 ```solidity
-uint256 public callsExitInKind;
+uint256 public callsNotice;
 ```
 
 ### callsExpired
@@ -621,16 +717,28 @@ uint256 public callsFreeze;
 uint256 public callsRelease;
 ```
 
-### callsTakeReturn
+### callsPause
 
 ```solidity
-uint256 public callsTakeReturn;
+uint256 public callsPause;
 ```
 
 ### callsRedeemInKind
 
 ```solidity
 uint256 public callsRedeemInKind;
+```
+
+### callsShutdown
+
+```solidity
+uint256 public callsShutdown;
+```
+
+### callsRestore
+
+```solidity
+uint256 public callsRestore;
 ```
 
 ### callsApply
@@ -856,11 +964,10 @@ modifier action(address holder, bool market, uint8 kind);
 
 ### act_requestDeposit
 
-A holder asks to deposit 100 to 20,000 USDC. `mode` picks its limit: any price, the quote plus
-50 bps (E21), or a limit below every bound (it never fills: RB-14 skips it).
+A holder asks to deposit 100 to 20,000 USDC (Step 3f: limit-free forward pricing).
 
 ```solidity
-function act_requestDeposit(uint256 who, uint256 amt, uint8 mode) public;
+function act_requestDeposit(uint256 who, uint256 amt, uint8) public;
 ```
 
 **Parameters**
@@ -869,16 +976,14 @@ function act_requestDeposit(uint256 who, uint256 amt, uint8 mode) public;
 | ---- | ---- | ----------- |
 | who | `uint256` |  |
 | amt | `uint256` |  |
-| mode | `uint8` |  |
+| _ | `uint8` |  |
 
-<a id="_requestdeposit-address-uint256-uint256"></a>
+<a id="_requestdeposit-address-uint256"></a>
 
 ### _requestDeposit
 
 ```solidity
-function _requestDeposit(address h, uint256 amt, uint256 limit)
-        private
-        action(address(0), false, ACT_OTHER);
+function _requestDeposit(address h, uint256 amt) private action(address(0), false, ACT_OTHER);
 ```
 
 **Parameters**
@@ -887,16 +992,15 @@ function _requestDeposit(address h, uint256 amt, uint256 limit)
 | ---- | ---- | ----------- |
 | h | `address` |  |
 | amt | `uint256` |  |
-| limit | `uint256` |  |
 
 <a id="act_requestredeem-uint256-uint256-bool"></a>
 
 ### act_requestRedeem
 
-A holder asks to redeem a slice of its wallet shares, at any price or at the quote less 50 bps.
+A holder asks to redeem a slice of its wallet shares (limit-free).
 
 ```solidity
-function act_requestRedeem(uint256 who, uint256 frac, bool quoted) public;
+function act_requestRedeem(uint256 who, uint256 frac, bool) public;
 ```
 
 **Parameters**
@@ -905,14 +1009,14 @@ function act_requestRedeem(uint256 who, uint256 frac, bool quoted) public;
 | ---- | ---- | ----------- |
 | who | `uint256` |  |
 | frac | `uint256` |  |
-| quoted | `bool` |  |
+| _ | `bool` |  |
 
-<a id="_requestredeem-address-uint256-uint256"></a>
+<a id="_requestredeem-address-uint256"></a>
 
 ### _requestRedeem
 
 ```solidity
-function _requestRedeem(address h, uint256 shares, uint256 limit)
+function _requestRedeem(address h, uint256 shares)
         private
         action(address(0), false, ACT_OTHER);
 ```
@@ -923,15 +1027,12 @@ function _requestRedeem(address h, uint256 shares, uint256 limit)
 | ---- | ---- | ----------- |
 | h | `address` |  |
 | shares | `uint256` |  |
-| limit | `uint256` |  |
 
 <a id="act_settle-uint256-uint256-uint256-bool"></a>
 
 ### act_settle
 
-`settle` by the keeper or a stranger, with bounded inputs (RB-20: they may only limit the work).
-With `wait`, time first passes to the end of the oldest open request's window (and the keeper grace
-for a stranger), as a keeper that waits for the window would.
+`settle` by the keeper or stranger, with bounded inputs (RB-20: keeper-only, inputs only bound work).
 
 ```solidity
 function act_settle(uint256 callerSeed, uint256 maxReq, uint256 maxUsdc, bool wait) public;
@@ -1060,27 +1161,28 @@ function _handlerName(uint256 h) private pure returns (string memory);
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `string` |  |
 
-<a id="_counterfactualbounds"></a>
+<a id="_counterfactualmatch"></a>
 
-### _counterfactualBounds
+### _counterfactualMatch
 
 <i>
 
-RB-20: what the keeper with no limits would settle from this exact state, then undone. Memory and the
-stack survive `revertToState`; this contract's storage does not.
+RB-20 / RB-24: counterfactual keeper settle with unbounded inputs from this exact state.
 
 </i>
 
 ```solidity
-function _counterfactualBounds() private returns (uint256 dep, uint256 red);
+function _counterfactualMatch()
+        private
+        returns (uint256 matchSharePrice, uint256 matchedShares);
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| dep | `uint256` |  |
-| red | `uint256` |  |
+| matchSharePrice | `uint256` |  |
+| matchedShares | `uint256` |  |
 
 <a id="_checksettlement-uint256"></a>
 
@@ -1088,7 +1190,7 @@ function _counterfactualBounds() private returns (uint256 dep, uint256 red);
 
 <i>
 
-After a settlement that traded: RB-13, RB-14, RB-16 caps, RB-20, RB-11 unlock times.
+After a settlement that traded: RB-13, RB-16, RB-20, RB-24, RB-29, RB-11 unlock times.
 
 </i>
 
@@ -1106,8 +1208,8 @@ function _checkSettlement(uint256 sid) private;
 
 ### act_deliver
 
-Anyone triggers delivery of a holder's unlocked shares (E8). RB-11: only unlocked claims of unfrozen
-settlements, only to the owner. With `wait`, time first passes to the holder's earliest locked unlock.
+Anyone triggers delivery of a holder's unlocked shares (E8). RB-11: unlocked claims of unfrozen
+settlements (or any claim during wind-down, RB-27), only to the owner.
 
 ```solidity
 function act_deliver(uint256 who, bool wait) public;
@@ -1170,8 +1272,8 @@ function _claim(address h, uint256 n) private action(h, false, ACT_PAY);
 
 ### act_cancel
 
-The owner cancels one of its pending requests (RB-12: exactly the unfilled part, as credit; RB-15:
-also while paused).
+The owner cancels a pending request before cutoff (RB-25); after cutoff reverts RequestLocked
+unless a deposit stop or shutdown applies.
 
 ```solidity
 function act_cancel(uint256 who, uint256 k) public;
@@ -1199,14 +1301,14 @@ function _cancel(address h, uint256 id) private action(h, false, ACT_OTHER);
 | h | `address` |  |
 | id | `uint256` |  |
 
-<a id="act_exitinkind-uint256-uint256"></a>
+<a id="act_giveredemptionnotice-uint256-uint256"></a>
 
-### act_exitInKind
+### act_giveRedemptionNotice
 
-The owner takes a pending redemption out in kind at once (RB-15: also while paused).
+After `maxRoll`, a holder gives redemption notice on an open redemption (E40, RB-25).
 
 ```solidity
-function act_exitInKind(uint256 who, uint256 k) public;
+function act_giveRedemptionNotice(uint256 who, uint256 k) public;
 ```
 
 **Parameters**
@@ -1216,12 +1318,12 @@ function act_exitInKind(uint256 who, uint256 k) public;
 | who | `uint256` |  |
 | k | `uint256` |  |
 
-<a id="_exitinkind-address-uint256"></a>
+<a id="_givenotice-address-uint256"></a>
 
-### _exitInKind
+### _giveNotice
 
 ```solidity
-function _exitInKind(address h, uint256 id) private action(h, false, ACT_EXIT);
+function _giveNotice(address h, uint256 id) private action(h, false, ACT_OTHER);
 ```
 
 **Parameters**
@@ -1235,8 +1337,7 @@ function _exitInKind(address h, uint256 id) private action(h, false, ACT_EXIT);
 
 ### act_withdrawExpired
 
-The owner withdraws an expired request's escrow (E18, RB-12: exactly the unfilled escrow). With
-`wait`, time first passes until the holder's oldest open request expires.
+The owner withdraws an expired deposit's escrow (E18, E40, RB-12).
 
 ```solidity
 function act_withdrawExpired(uint256 who, uint256 k, bool wait) public;
@@ -1269,7 +1370,7 @@ function _withdrawExpired(address h, uint256 id) private action(h, false, ACT_PA
 
 ### act_withdrawCredit
 
-The owner pulls its credits (E22).
+The owner pulls its credits (and auto-finalizes ended notices / releases wind-down).
 
 ```solidity
 function act_withdrawCredit(uint256 who) public;
@@ -1301,7 +1402,8 @@ function _withdrawCredit(address h, uint256 u, uint256 s) private action(h, fals
 
 ### act_freeze
 
-The emergency key freezes a settlement whose deposit shares are in their hold (E17).
+Emergency freezes a settlement inside its hold (`matchedShares + sharesMinted > 0`), once per
+`maxFreeze`, blocked during wind-down (RB-18, E49).
 
 ```solidity
 function act_freeze(uint256 k) public;
@@ -1327,14 +1429,14 @@ function _freeze(uint256 id) private action(address(0), false, ACT_OTHER);
 | ---- | ---- | ----------- |
 | id | `uint256` |  |
 
-<a id="act_releaseorreturn-uint256-bool"></a>
+<a id="act_release-uint256"></a>
 
-### act_releaseOrReturn
+### act_release
 
-ADMIN (the timelock) releases a frozen settlement or lets its depositors take it back in kind.
+ADMIN (the timelock) releases a frozen settlement (Step 3f: returns removed).
 
 ```solidity
-function act_releaseOrReturn(uint256 k, bool release) public;
+function act_release(uint256 k) public;
 ```
 
 **Parameters**
@@ -1342,16 +1444,13 @@ function act_releaseOrReturn(uint256 k, bool release) public;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | k | `uint256` |  |
-| release | `bool` |  |
 
-<a id="_releaseorreturn-uint256-bool"></a>
+<a id="_release-uint256"></a>
 
-### _releaseOrReturn
+### _release
 
 ```solidity
-function _releaseOrReturn(uint256 id, bool release)
-        private
-        action(address(0), false, ACT_OTHER);
+function _release(uint256 id) private action(address(0), false, ACT_OTHER);
 ```
 
 **Parameters**
@@ -1359,63 +1458,31 @@ function _releaseOrReturn(uint256 id, bool release)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | id | `uint256` |  |
-| release | `bool` |  |
 
-<a id="act_takereturn-uint256"></a>
-
-### act_takeReturn
-
-A depositor takes its slice of a returned settlement back in kind; a stranger's attempt must fail
-(RB-18).
-
-```solidity
-function act_takeReturn(uint256 who) public;
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| who | `uint256` |  |
-
-<a id="_takereturn-address-uint256-uint256"></a>
-
-### _takeReturn
-
-```solidity
-function _takeReturn(address h, uint256 claimId, uint256 x) private action(h, false, ACT_EXIT);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| h | `address` |  |
-| claimId | `uint256` |  |
-| x | `uint256` |  |
-
-<a id="act_pause-bool"></a>
+<a id="act_pause-uint8-bool"></a>
 
 ### act_pause
 
-EMERGENCY pauses the queue, or ADMIN unpauses it. Exits stay open (RB-15, checked in their actions).
+RB-32: self-expiring pauses (`pauseQueue`, `pauseDeposits`, `pauseRebalance`) and ADMIN unpauses.
+Queue & rebalance pauses enforce `maxPause` cooldowns; deposits pause can be renewed immediately.
 
 ```solidity
-function act_pause(bool on) public action(address(0), false, ACT_OTHER);
+function act_pause(uint8 kind, bool on) public action(address(0), false, ACT_OTHER);
 ```
 
 **Parameters**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
+| kind | `uint8` |  |
 | on | `bool` |  |
 
 <a id="act_redeeminkind-uint256-uint256"></a>
 
 ### act_redeemInKind
 
-RB-6 / E9: `redeemInKind` of a holder's own wallet shares never reverts, whatever the plan or the
-market, and keeps every held amount per share (RB-13).
+RB-26 / RB-27: `redeemInKind` refuses while running (`InKindClosed`), succeeds in wind-down and
+preserves per-share holdings (RB-13).
 
 ```solidity
 function act_redeemInKind(uint256 who, uint256 frac) public;
@@ -1442,6 +1509,22 @@ function _redeemInKind(address h, uint256 shares) private action(h, false, ACT_O
 | ---- | ---- | ----------- |
 | h | `address` |  |
 | shares | `uint256` |  |
+
+<a id="act_shutdownrestore-bool"></a>
+
+### act_shutdownRestore
+
+RB-27: Safe timelock toggles wind-down (`shutdown` / `restore`); emergency & non-admin revert.
+
+```solidity
+function act_shutdownRestore(bool shut) public action(address(0), false, ACT_OTHER);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shut | `bool` |  |
 
 <a id="act_apply-uint256-uint256"></a>
 
@@ -1861,14 +1944,24 @@ exit never reverted for a pending request, paused or not.
 function invariant_RB12_RB15_blockedAndExits() public fixtureCovered;
 ```
 
-<a id="invariant_rb13_rb14_rb16_settlements"></a>
+<a id="invariant_rb13_rb16_settlements"></a>
 
-### invariant_RB13_RB14_RB16_settlements
+### invariant_RB13_RB16_settlements
 
-RB-13, RB-14, RB-16 over every settlement and exit of the run.
+RB-13, RB-16 over every settlement and exit of the run (RB-14 retired in Step 3f).
 
 ```solidity
-function invariant_RB13_RB14_RB16_settlements() public fixtureCovered;
+function invariant_RB13_RB16_settlements() public fixtureCovered;
+```
+
+<a id="invariant_rb23_to_rb36_step3f"></a>
+
+### invariant_RB23_to_RB36_step3f
+
+Step 3f invariants RB-23 to RB-37 checked continuously across fuzz runs.
+
+```solidity
+function invariant_RB23_to_RB36_step3f() public fixtureCovered;
 ```
 
 <a id="invariant_rb17_admission"></a>
@@ -1930,10 +2023,9 @@ function invariant_RB22_ledgerCountsQueuedShares() public view;
 
 ### invariant_conservation
 
-Conservation (eng plan §4.3, §6, the three accounting systems): the queue's books equal independent
-sums over requests, claims and credits; its balances equal setUp's plus every flow booked in, less
-every flow booked out, plus what settlements paid it, less what they took; the fund's supply equals
-setUp's plus minted, less burned by settlements and by in-kind exits.
+Conservation (eng plan §4.3, §6, RB-36): the queue's books match exact token balances and
+independent bounds; queue USDC/shares and fund supply match setUp plus every flow booked
+in/out and settlement transfer to the unit.
 
 ```solidity
 function invariant_conservation() public view;
@@ -1951,25 +2043,19 @@ did something.
 function afterInvariant() public fixtureCovered;
 ```
 
-<a id="_waitforoldestwindow-bool"></a>
+<a id="_waitforoldestwindow"></a>
 
 ### _waitForOldestWindow
 
 <i>
 
-Warp to the end of the oldest open request's settle window (plus the keeper grace for a stranger).
+Warp to the end of the oldest open pending request's settle window.
 
 </i>
 
 ```solidity
-function _waitForOldestWindow(bool grace) private;
+function _waitForOldestWindow() private;
 ```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| grace | `bool` |  |
 
 <a id="_waitforunlock-address"></a>
 
@@ -1997,7 +2083,7 @@ function _waitForUnlock(address h) private;
 
 <i>
 
-Warp until `h`'s oldest open request has expired (`currentEpoch > epoch + maxRoll`).
+Warp until `h`'s oldest open deposit has expired (`currentEpoch > epoch + maxRoll`).
 
 </i>
 
@@ -2017,7 +2103,7 @@ function _waitForExpiry(address h) private;
 
 <i>
 
-Count a step 3d violation under its RB number and keep the latest reason for the report.
+Count a violation under its RB number and keep the latest reason for the report.
 
 </i>
 
@@ -2046,8 +2132,7 @@ function _logLastViolation() private;
 
 <i>
 
-A request of `h` that still holds escrow: the `k`-th in id order (wrapping), of the redemption kind
-only when `redeemOnly`, and expired only when `expiredOnly` (else pending or expired).
+A live request of `h`: the `k`-th in id order, of Redemption when `redeemOnly`, and Expired Deposit when `expiredOnly`.
 
 </i>
 
@@ -2080,7 +2165,7 @@ function _pickOpen(address h, uint256 k, bool redeemOnly, bool expiredOnly)
 
 <i>
 
-Escrow of open requests and undelivered or untaken claims, summed from the queue's own records.
+Live pending escrows and materialized claims, summed from the queue's own records.
 
 </i>
 
@@ -2088,17 +2173,22 @@ Escrow of open requests and undelivered or untaken claims, summed from the queue
 function _independentBooks()
         private
         view
-        returns (uint256 pendingUsdc, uint256 escrowShares, uint256 heldShares, uint256 owedUsdc);
+        returns (
+            uint256 pendingDepUsdc,
+            uint256 pendingRedShares,
+            uint256 matHeldShares,
+            uint256 matOwedUsdc
+        );
 ```
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| pendingUsdc | `uint256` |  |
-| escrowShares | `uint256` |  |
-| heldShares | `uint256` |  |
-| owedUsdc | `uint256` |  |
+| pendingDepUsdc | `uint256` |  |
+| pendingRedShares | `uint256` |  |
+| matHeldShares | `uint256` |  |
+| matOwedUsdc | `uint256` |  |
 
 <a id="_independentcredits"></a>
 
@@ -2115,18 +2205,18 @@ function _independentCredits() private view returns (uint256 usdc, uint256 share
 | usdc | `uint256` |  |
 | shares | `uint256` |  |
 
-<a id="_independentqueued-address"></a>
+<a id="_independentmaterializedqueued-address"></a>
 
-### _independentQueued
+### _independentMaterializedQueued
 
 <i>
 
-`h`'s escrowed redemption shares, undelivered deposit shares and share credit.
+`h`'s live pending redemption escrow + materialized undelivered claims + share credit.
 
 </i>
 
 ```solidity
-function _independentQueued(address h) private view returns (uint256 q);
+function _independentMaterializedQueued(address h) private view returns (uint256 q);
 ```
 
 **Parameters**
@@ -2320,12 +2410,7 @@ function _pathValue(Plan memory p, uint256 index, uint256 t, uint256 nav)
 
 <i>
 
-INV-1 / RB-3 and RB-10 over one action's logs. A Transfer out of a system address must land on a venue
-(or the fund), on the action's holder, the fee recipient, or address(0) (a venue receipt-token burn).
-The fund may pay the queue (a sale's proceeds, a purchase's refund). Out of the queue (RB-10): in a
-settlement only to the fund (the purchase) or burned (the sale); in a payout only to the owner; in an
-in-kind exit only burned; in any other action nothing. During a fund action, a pool pays only the fund.
-Approvals by the fund are remembered for the allowance check.
+INV-1 / RB-3 and RB-10 over one action's logs. Tracks exact settlement USDC flows into and out of the queue.
 
 </i>
 
@@ -2339,7 +2424,7 @@ function _scanLogs(VmSafe.Log[] memory logs) private;
 | ---- | ---- | ----------- |
 | logs | `VmSafe.Log[]` |  |
 
-<a id="_checkqueuetransfer-address"></a>
+<a id="_checkqueuetransfer-address-address"></a>
 
 ### _checkQueueTransfer
 
@@ -2350,7 +2435,7 @@ RB-10: the one rule for a transfer out of the queue in the action in flight.
 </i>
 
 ```solidity
-function _checkQueueTransfer(address to) private;
+function _checkQueueTransfer(address to, address token) private;
 ```
 
 **Parameters**
@@ -2358,6 +2443,7 @@ function _checkQueueTransfer(address to) private;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | to | `address` |  |
+| token | `address` |  |
 
 <a id="_leak-address-address"></a>
 
@@ -2474,8 +2560,8 @@ struct SettlePre {
         uint256 qShares;
         uint256 claims;
         uint256 navFeed;
-        uint256 cfDeposit;
-        uint256 cfRedeem;
+        uint256 cfPrice;
+        uint256 cfMatched;
     }
 ```
 
@@ -2488,8 +2574,8 @@ struct SettlePre {
 | qShares | `uint256` |  |
 | claims | `uint256` |  |
 | navFeed | `uint256` |  |
-| cfDeposit | `uint256` |  |
-| cfRedeem | `uint256` |  |
+| cfPrice | `uint256` |  |
+| cfMatched | `uint256` |  |
 
 ### Pre
 

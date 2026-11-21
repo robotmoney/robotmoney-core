@@ -17,9 +17,9 @@ import {
     IDLE_INDEX,
     DEFAULT_STEP_DEPTH_BPS,
     MAX_STEP_DEPTH_BPS
-} from "./src/FundTypes.sol";
-import {FlowLevers, DEFAULT_BASKET_CALL_BPS, LEG_PRICE_STRICTER} from "./src/FlowTypes.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
+} from "../../FundTypes.sol";
+import {FlowLevers, DEFAULT_BASKET_CALL_BPS, LEG_PRICE_STRICTER} from "../../FlowTypes.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
 
 /// @title OwnerDefaultsTest
 /// @notice The owner's decided defaults of 2026-11-12 are what a freshly deployed fund runs with, not an opt-in:

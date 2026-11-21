@@ -1,0 +1,2702 @@
+{
+ "description": "One-vault experiment: what scripts/prototype/record-base-fixture.ts has proven about each test file under each recorder run, keyed by its sources and environment. See the recorder's header.",
+ "pin": 55462550,
+ "lineage": [
+  "412a8cbc19d1df4ad4b3de608c5336a61dcc6b13ba234d10bbae183c6889abbd",
+  "5890e03c48900c2d55471f3b4f56bf9985821208d67b7f34fa5b68b177e85524",
+  "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696",
+  "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c"
+ ],
+ "units": {
+  "contracts/test/prototype/Adapters.t.sol@prototype": {
+   "key": "c4f964160c1299e601802d82128abf3eee2448e05bd2b606d712350d451cbfbf",
+   "file": "contracts/test/prototype/Adapters.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "AdaptersTest.test_aerodromeExactOut_aLimitUnderTheCostRevertsAndMovesNothing": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_aerodromeExactOut_deliversExactlyAmountOut_returnsTheRest_resetsTheAllowance": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_aerodromeExactOut_inheritedTwapPriceReadsThePool": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_aerodromeExactOut_refusesWhatItCannotRoute": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_e43_feeClassification_uniFixedAndAeroMutable": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_step3f_a34_queueVenueLiquidityStopsDepositsWithoutBlockingRedemptions": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_step3f_rb34_a34_mechAaveShortPayClaimAndExclusionRecovery": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdaptersTest.test_step3f_rb34_mechSwapUnderDeliverRejectedByFund": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/Adversarial.t.sol@prototype": {
+   "key": "a070ca00b3e64c73c1905082705f866fbf50ad6acef059484fdf3d257de71ff1",
+   "file": "contracts/test/prototype/Adversarial.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "AdversarialTest.test_authority_governanceOpens_rebalancerExecutes_sweepRefusesHeld": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_bigTrade_isSplitIntoCappedSteps": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_depositMidPlan_routesAlongPathNotPastIt": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_depositRedeemAroundStep_sharePriceMovesAtMostStepCost": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_emergencyPowers_hotKeyPausesOnly_timelockShutsDownAndUnwinds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_frontRunReceipt_thinAssetBoughtInCappedSlicesBehindPath": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_keeperAbuse_gasStarvationCannotForceBackoff": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_keeperAbuse_timingOnly_withinCostCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_lendingStall_redeemInKindDefersOnlyThatVenue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_runawayCost_haltsUntilAdminExtends": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_sandwich_spotInsideGuard_twapFloorRevertsSwap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_sandwich_spotPastGuard_skipsWithMarketReason": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_stepParamBounds_refuseIntervalBelowWindowAndBoundsAtFee": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_twapPushShorterThanWindow_cannotExtractBeyondCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_venueFreeze_redeemInKindStaysOpen": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_venueFreeze_stallsOnlyThatAsset": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/Attacks.t.sol@prototype": {
+   "key": "4d646f2dc40a1f2a087835f99d4811812dd9a0a8f3951f5af43cd2a014ff07af",
+   "file": "contracts/test/prototype/Attacks.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "AttacksBaselineTest.test_A1_baseline_makinaReplay_oneTransaction": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksBaselineTest.test_A3_baseline_deflateDepositExit_profitsWithoutArbitrage": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksBaselineTest.test_A4_baseline_giftToLendingAdapter_isAGiftToHolders": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksBaselineTest.test_A5_baseline_roundTrip_oneBlockAndConsecutiveBlocks": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksBaselineTest.test_A6_baseline_twapLagAfterRealMove_profits": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A10_slowRampInsideBand_noArbitrage": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "4d646f2dc40a1f2a087835f99d4811812dd9a0a8f3951f5af43cd2a014ff07af"
+    },
+    "AttacksTimedTest.test_A10_slowRampPastBand_blocks": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A11_holdGriefing_pooledAccount_eachFillUnlocksOnItsOwnDate": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A12_batchLargerThanPoolDepth_failsWhole_settlesInParts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A14_venueAtSupplyCap_depositsWait_redemptionsSettle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A14_venueFullyBorrowed_redemptionsWait_depositsSettle_inKindOpen": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A14_venueImpaired_exitersAndStayersShareTheLoss": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A15_giftToAFreshlySeededFund_movesTheMixAtMostGiftOverMinSeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A15_giftsToAdapterAndFund_areGiftsToHolders": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A16_emergencyFreezesEverySettlement_waitBoundedNoValueMoves": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A17_usdcDepeg_blocksSettlement_exitsStayOpen": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A18_liquidityPulledBeforeSettlement_limitFailsNothingSettles": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A19_exclusionLedger_freshAddressGetsNothing_burnedRedeemerKeepsClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A1_makinaReplay_oneTransaction_cbbtcPool": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A1_makinaReplay_oneTransaction_wethPool": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A21_laggingTwap_informedJoinsFavoredSideInsideGuard": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A21_smallLag_matchBooksInsideBand_attackerNetNotPositive": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A23_selfMatch_paysFeeGainsNothing_respectsCapAndHold": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A24_cutoff_cancelAfterCloseReverts_lastBlockRequestLocksOneBlockLater": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A25_pushedNetSideFailsWhileMatchSettles": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A26_stuckFund_blockedMaxRollEpochs_reportsCostAndWindDown": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A27_heldPoolTwap_measuresMatchLeanAndHoldCost": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A28_runWithMatch_manyRedeemersFewDepositors_proRataFillsAndWait": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A2_pushHeldInsideBand_redeemerSellsIntoIt_noArbitrage": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A2_pushHeldPastBand_blocksAndNothingTrades": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A30_venueFullyBorrowedOrImpairedWithBothSides_noMatchAndClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A31_planInProgress_stepsAtWindowEdges_reportsBlockedAndMatchLean": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A32_compromisedEmergencyKey_pauseEndsSelf_cannotShutdownOrUnwind": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A33_timelockParamChangeWhileLocked_keepsFeeHoldExpiry": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A34_shortPayingAdapter_rejectedInRecoveryPositionClaimAndVenueTest": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A35_poolFeeAtOrAboveLegBand_refusedAtAdmissionAndFunding": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A36_roundCutInTwo_pauseOutageMove5Pct_noMatchAtOldPrice": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A37_looks_lateRedemptionNoticeAndDepositCancelBeforeUnpause_cannotAvoidPrice": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A38_windDownNotice_redeemersCannotMatchAgainstLockedDepositsBeforeShutdown": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A39_moreLockedThanCap_conservationAndCapBounds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A3_deflateDepositExit_mintReadsNoPrice": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A40_exclusionAfterMatch_bothClaimWithoutTouching_recoveryToDepositor_andRepeat": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A41_scheduledAdapterRevoke_redeemersCannotExitAtFaceValue_pauseDepositsRenewable": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A42_delistingSale_interleavedWithRedemptions_noDoubleClaim_navExcludesClaimed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A43_stepInsideWindowBlocksFirstSettle_pausedQueueAllowsSteps": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A44_askTenTimesMoreThanWanted_reportMatchShareVsLockedSurplusCost": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A45_lendingClaimAndStep_stepSkipsClaimVenue_strangerSettlesClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A4_lendingRate_giftDoesNotMoveRate_realJumpBlocks": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A5_roundTrip_oneBlockAndConsecutiveBlocks_impossible": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A6_twapLagAfterRealMove_noGainOnTheTimedFund": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A7_sandwich_byTheCallerAfterKeeperGrace": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A7_sandwich_byTheCallerAtWindowEnd_viaANeverFillableRequest": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A7_sandwich_ofTheKeeperByAThirdParty": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A8_block_cursorGriefing_cannotStarveTheOldestRequest": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A8_block_giftAboveLimitMargins_skipsTightRequests": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A8_block_holdPastBandForADay_noArbitrageLowerBound": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A8_block_perSwapLimit_aroundEachKeeperCall": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A8_block_quorumDispersion_shortPushEveryHour": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_A9_run_oldestFirstUnderCap_inKindThenClaims": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L00": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L01": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L02": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L03": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L04": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L05": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L06": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L07": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L08": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L09": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L10": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L11": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L12": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L13": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L14": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L15": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L16": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L17": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L18": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L19": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A10_ramp_L20": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L00": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L01": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L02": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L03": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L04": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L05": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L06": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L07": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L08": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L09": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L10": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L11": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L12": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L13": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L14": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L15": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L16": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L17": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L18": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L19": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_caller_L20": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L00": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L01": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L02": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L03": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L04": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L05": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L06": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L07": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L08": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L09": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L10": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L11": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L12": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L13": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L14": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L15": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L16": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L17": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L18": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L19": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A7_thirdParty_L20": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L00": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L01": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L02": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L03": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L04": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L05": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L06": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L07": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L08": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L09": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L10": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L11": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L12": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L13": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L14": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L15": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L16": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L17": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L18": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L19": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttacksTimedTest.test_lever_A8way3_L20": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/BaseFixtureProbe.t.sol@prototype": {
+   "key": "e5610e9e362d8b930dcb5175ecd006af9f910779fbe032d980526970dd1ebbcf",
+   "file": "contracts/test/prototype/BaseFixtureProbe.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "BaseFixtureProbeTest.test_aave_supplyWithdraw": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "BaseFixtureProbeTest.test_cbbtc_roundTrip_10k": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "BaseFixtureProbeTest.test_comet_supplyWithdraw": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "BaseFixtureProbeTest.test_despxa_roundTrip_1k": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "BaseFixtureProbeTest.test_feeds_realChainlinkAtThePin": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "BaseFixtureProbeTest.test_moonwell_depositRedeem": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "BaseFixtureProbeTest.test_weth_roundTrip_10k": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/Custody.t.sol@prototype": {
+   "key": "f2d38a53c47c29972f3a666362f0d1579de568fa3fdf715c5fc73405d0f07c11",
+   "file": "contracts/test/prototype/Custody.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "CustodyTest.test_INV2_donationAccruesProRata": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "CustodyTest.test_INV2_firstDepositorInflationDoesNotPay": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "CustodyTest.test_INV3_feeAndQuarantineOnlyViaTimelock": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "CustodyTest.test_INV3_flowParamsOnlyViaTimelock": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/EndToEnd.t.sol@prototype": {
+   "key": "331d0e7336b68e75b73d73b001e3819b0e279ec3cef95469772daac46bb0bc50",
+   "file": "contracts/test/prototype/EndToEnd.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "EndToEndTest.test_endToEnd_planLifecycle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "EndToEndTest.test_happyPath_seedDepositSettleHoldDeliverRedeemSettleClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "EndToEndTest.test_seam_queueExitsGoThroughTheFund": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "EndToEndTest.test_step3f_queueOriginatedDelistClaimsMultiUser": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "EndToEndTest.test_step3f_queueOriginatedLendingClaimsRebalancerSkipAndSettleClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/FlowLibs.t.sol@prototype": {
+   "key": "a3df3dabee8719f143b32779d0715a66c4d5b9dc9b71c88abee11af22d11e5ad",
+   "file": "contracts/test/prototype/FlowLibs.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "FlowLibsPinTest.test_pin_sliceMedian_realPools": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_bandTicks_isTheLargestTickInsideTheBand": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_median_evenCount_isLowerMedian": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_median_failuresReturnNotOk": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_median_flat": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_median_ignoresAShortPush_andCountsIt": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_median_oddDelta_roundsTowardNegativeInfinity": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_answerThatScalesToZero_isNonPositive": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_failures_neverRevert": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_nonPositive": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_ok_atFeedAddress": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_roundIncomplete": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_scalesDecimalsTo8": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_read_staleBoundary": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_sequencer_down": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_sequencer_failures": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_sequencer_insideGrace": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_sequencer_upPastGrace": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_usdcPeg_bandEdges": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowLibsTest.test_usdcPeg_staleFeed": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowRateAdaptersPinTest.test_pin_ratePerUnit_aaveV3": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowRateAdaptersPinTest.test_pin_ratePerUnit_compoundV3": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowRateAdaptersPinTest.test_pin_ratePerUnit_moonwellMorpho": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/FlowQueue.t.sol@prototype": {
+   "key": "c6fe4cd78c279eb67695dc98fbada70a117a6edbf3c685021f9f10f745136147",
+   "file": "contracts/test/prototype/FlowQueue.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "FlowQueueRandomSeedFuzzTest.testFuzz_RB13_unfixedSeed_depositThenRedeemKeepsEveryAmountPerShare": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueRandomSeedFuzzTest.test_RB13_unfixedSeedCorners_largestAndSmallestFlows": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueRealFeedsTest.test_check2_realEthFeedGoesStaleWithNoNewRound": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueRealFeedsTest.test_checks2And4_realChainlinkFeedsAtThePin": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueSeedTest.test_E14_seedOnceAtZeroSupplyAtOrAboveTheMinimum_andItsSharesNeverMove": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.testFuzz_RB13_everySettlementKeepsEveryAmountPerShare": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E11_requestSizes": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E18_anExpiredRequestCannotFillAndOnlyItsOwnerWithdrawsIt": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E19_navViewsRevertOnAnUnhealthyFeed_lastGoodNav_checkSettle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E20_aBacklogOfThreeEpochsSettlesUnderOnePeriodsCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E20_aSeededFundTakesADepositUpToTheFloor": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E21_aQuoteIsNeverBetterThanASettlementInTheSameBlock": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E22_anOwnerThatCannotReceiveUsdcBlocksNobodyElse": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E23_inKindExitSurvivesARevertingVenueRead_andRefusesAZeroReceiver": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E2_theQueuesFourPreviewsRevert": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_E8_aRequestFilledInTwoSettlementsHasTwoClaims": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB10_nothingLeavesTheQueueBeforeTheWindowEnds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB10_theExceptionsPayOnlyThatUser": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB11_depositSharesStayForMinHoldAndGoOnlyToTheOwner": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB12_aBlockedSettlementTradesNothingAndNoRoleSettlesPastIt": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB12_cancelAndExpiryReturnExactlyTheUnfilledEscrow": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB13_aFlowRoleCallerThatSkipsItsChecksCannotBreakTheProportion": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB13_aSettlementKeepsEveryAmountPerShare": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB13_aWrongPurchaseAmountRevertsInsideTheFund": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB15_aNetSideFailurePreservesTheMatchAndLeavesTheRoundOpen": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB15_aRevertedSettleLeavesEveryBalanceAndFlag": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB15_cancelAndExitInKindWorkWhilePaused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB17_aBasketAssetWithoutAFeedIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB17_aBasketAssetWithoutPoolHistoryIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB17_aLendingVenueWithoutItsRateIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB17_aTargetOverThePoolShareLimitIsRefused_andSameBlockLiquidityDoesNotHelp": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB18_aFreezeEndsByItselfMaxFreezeAfterTheFreezeCall": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB18_frozenSharesCannotBeDelivered": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB18_releaseGoesOnlyToTheDepositors": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB18_returnInKindOnlyByTheDepositor": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB20_aFloodOfSkippedRequestsDoesNotHoldBackTheOnesBehind": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB20_aSmallCallIsContinuedByTheNext": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB20_theGasACallerSendsCannotChooseASide": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB20_twoSettlersWithDifferentInputsFillTheSameRequestsAtTheSameBoundPrices": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB21_aDepositOrAStepIntoTheVenueKeepsTheClaimsShare": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB21_aPositionClaimGainsAndLosesWithTheVenueProRata": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB22_anAddressFilledAfterARecordOpenedGetsNothing": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB22_matchThenRevokeThenClaim_andSecondMatchAfterExclusionEnds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB22_queuedSharesCountForTheirOwnerWhenARecordOpens": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB23_sameRoundRequestsMatchProportionallyAtSamePrice": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB24_matchLeavesHeldAndSupplyIdentical_oneBlockPushAndMidRoundStop": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB25_cancelCutoffNoticeAndStopUnlockExpiry": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB26_redeemInKindGatedUntilWindDownForAllHolders": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB27_shutdownOnlyTimelockEvenWhenStaleAndSilent_untilRestore": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB28_depositStopsBlockMatchAndNetDepositAndAllowCancel": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB29_matchedFillsConsumePeriodCaps": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB30_stepInWindowAndPauseIndependence_andNonKeeperStepReverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB31_paramChangesDoNotAffectLockedRequestAndRedemptionDoesNotExpire": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB32_selfExpiringPausesAndCooldownRules": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_RB36_asymmetricDoubleCapVsCapMatchesConserveSharesAndUsdcToTheUnit": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_caps_aDepositOverItsCapFillsToTheCapAndTheRestWaits": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_caps_aDepositOverTheTvlCapFillsToTheTvlCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_caps_aRedemptionOverItsCapFillsToTheCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check11_aDepositAtEveryLegLimitStaysInsideTheBound": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check11_aRealizedPriceOutsideTheBound_forcedWithAMockVenue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check1_aNonKeeperBeforeKeeperGrace": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check1_aPausedQueue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check1_aShutDownFund_redemptionsSettleAlone": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check1_anExcludedLendingAsset_redemptionsSettleAlone": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check1_pausedDeposits_redemptionsSettleAlone": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check2_aDownSequencer": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check2_aNonPositiveFeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check2_aStaleFeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check2_usdcOffItsPeg": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check3_fewerThanQuorumSlicesInTheBand": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check4_aTwapOffItsFeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check5_aVenueRateOverTheBound_aGiftOrAStepDoesNot": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check6_aSharePriceMoveOverTheBreaker_andTheLargerAllowanceAfterEpochs": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check8_aSaleUnderItsLimit_depositsStillSettle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check8_aVenueThatCannotPay_depositsStillSettle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check9_aPurchaseOverItsLimit_redemptionsStillSettle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_check9_aVenueAtItsSupplyCap_redemptionsStillSettle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_reentrancy_aHostileCallbackDuringMintInKindOrTheSaleCannotReenter": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_reentrancy_aHostileVenueDuringAClaimCannotReenter": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_rounding_manyMinimumSizeRequestsNeverFavourTheFlow": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_rounding_venueRoundingOfTwoUnitsNeverFailsTheProportionCheck": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueTest.test_setFlowParams_refusesAWindowAndGraceThatOutlastExpiry": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/FlowQueueFixes.t.sol@prototype": {
+   "key": "f1acec108c39fd46cbba283d9ee9361daac104bd7a1a5871943580ecbcdff859",
+   "file": "contracts/test/prototype/FlowQueueFixes.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "FlowQueueFixesTest.testFuzz_fix7_aSweepNeverTakesBookedEscrow": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix1_aNonKeeperSettlesOnlyEpochsPastTheirOwnGrace": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix2_aCallWithNoRoomPassesNothing": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix2_aFloodOfOneSideDoesNotHoldBackTheOther": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix2_aStrangerCannotMoveTheKeepersPass": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix2_spentCapsPassNothing_theNextPeriodStartsAtTheOldestWaiting": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix3_aLargerMaxRollDoesNotOrphanARevivedRequest": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix3_longerEpochsAfterASettlement": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix3_longerEpochsWithAPendingRequest": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix3_shorterEpochsNothingPending_control": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix3_shorterEpochsWithAPendingRequest": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix4_aBatchOf24FillsPerSideFitsItsBudget_control": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix4_aVenueThatBurnsItsGasOnSupplyFailsTheDepositSideAlone": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix4_aVenueThatBurnsItsGasOnWithdrawFailsTheRedemptionSideAlone": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix4_theGasACallerSendsStillCannotChooseASide": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix5_aRateReadThatFailsAfterTheTradeStillLeavesAReference": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix5_aSecondSettleInTheSameBlockPassesCheck5_control": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix6_aNewFreezeStartsWithReturnsDisallowed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix6_releaseClearsTheReturn": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix7_aSweepSendsOnlyWhatLiesAboveTheBooks": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix8_theQueueSourceCallsNothingAStub": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "f1acec108c39fd46cbba283d9ee9361daac104bd7a1a5871943580ecbcdff859"
+    },
+    "FlowQueueFixesTest.test_fix9_aRestoreDoesNotTripTheBreaker_control": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix9_anExclusionDoesNotHoldRedemptionsAtTheBreaker": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueFixesTest.test_fix9_theBreakerStillCatchesAMarketMoveAfterAnExclusion": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueOldestFirstInvariant.invariant_oldestFillableFillsFirst": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "f1acec108c39fd46cbba283d9ee9361daac104bd7a1a5871943580ecbcdff859"
+    },
+    "FlowQueueOldestFirstInvariant.test_script_oldestFillableFillsFirst": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/FlowQueueGaps.t.sol@prototype": {
+   "key": "312391bfcd1dc47cfe5b6bbd53b11d6e45a6020feeb0e4b4f703cf1312f10d7e",
+   "file": "contracts/test/prototype/FlowQueueGaps.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "FlowQueueGapsTest.test_E28_matchedVolumeIsNotCountedAgainstTheTvlCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_E40_expiresAtStopsADepositsParticipationAtTheSecond": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_E51_theReferenceDelayBoundsHaveExactEdges": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_E52_queuedSharesOfAtReadsAtTheGivenIndexes": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_field10_slicesMustDivideTheSettleWindow": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_liveness_eachFieldFollowsItsOwnCause": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_matchBand_boundsAreExact": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FlowQueueGapsTest.test_matchBand_skipsTheMatchWhenTwapLagsTheFeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/FundCore.t.sol@prototype": {
+   "key": "4c2c5a424eb2cb0a32ef11d94d0df9dcc0ee8d05fcb69f6eb26627f10203867e",
+   "file": "contracts/test/prototype/FundCore.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "FundCoreTest.test_flowFunctions_onlyFlowRoleAndLegLength": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_fundEntryPoints_revertAndNameTheQueue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_heldBalances_matchesTheHoldings": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_ledger_isTheFundCopyAndCountsQueuedShares": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_mintInKind_buysTheSliceOnRealPoolsAndMints": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_mintInKind_failedLegLimitRevertsAndChangesNothing": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_mintInKind_overMaxUsdcReverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_mintInKind_refusesWhileDepositsPaused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_redeemInKind_keepsEveryAmountPerShare": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_seedShares_neverMove": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_seed_mintsAtTheShareScaleToTheFundOnce": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_seed_refusesBelowMinimumAndNonAdmin": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_sellForFlow_sellsTheSliceOnRealPoolsAndPays": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_step3f_emergencyUnwindAssetAndCooldownFreePauseDeposits": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_step3f_emergencyUnwindAsset_floorsAtFeedLessDelistBand": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_step3f_rule6_requiresFixedFeeAndFeeMargin": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_step3f_rules4And7_poolDepthFloorAndMaxBasketCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundCoreTest.test_step3f_setFlowParams_rechecksRule6": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/FundExtras.t.sol@prototype": {
+   "key": "4c12172bcb757af018e02c6e8c5d47cc78bf301b0e49edbe8cb5760cb22d08b3",
+   "file": "contracts/test/prototype/FundExtras.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "FundExtrasTest.test_BF1_aCountedVenueCannotBeRemovedUnread_control": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_BF1_anExcludedVenueWhoseReadFailsCanBeRemoved": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_BF1_anExcludedVenueWithDustCanBeRemoved": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_BF3_anAdapterWithOpenClaimsCannotBeListedAgain": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_BF4_aHigherTvlCapIsCheckedAgainstThePoolShare": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_BF5_noStepOvershootsThePlanBudget": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E19_lastGoodNavIsNowWhileHealthy": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E19_sequencerDownAndUsdcOffPegRevert": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E19_staleFeedRevertsNavViewsAndKeepsLastGoodNav": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E20_allowanceIsProRataAndPerPeriod": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E20_beyondAllowanceLendingBecomesPositionClaims": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E20_defaultsAndSetterBounds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E20_inKindInsideAllowancePaysUsdcNoClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E23_claimsKeyedToTheOwner": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E23_inKindExitSurvivesARevertingVenueRead": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E23_zeroReceiverRejected": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E44_lendingWithoutLiquidityViewIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E9_claimPositionPaysTodayValueAndBurnsUnits": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E9_claimPositionShortFillKeepsTheClaim": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E9_emergencyUnwindLeavesClaimsInTheVenue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_E9_unitsFollowEverySupplyAndWithdrawal": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB13_flowsKeepTheProportionWhileClaimsExist": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB17_basketWithoutAFeedIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB17_basketWithoutPoolHistoryIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB17_lendingWithoutVenueRateIsRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB17_liquidityAddedNowDoesNotRaiseTheLimit": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB17_poolShareRuleRefusesATargetOverTheLimit": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB21_claimGainsWithTheVenueProRata": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB21_claimLosesWithTheVenueProRata": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB21_depositOrStepIntoVenueKeepsClaimValue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_RB21_stepOutOfVenueKeepsClaimValue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_fixtureMiss_cometRateAtThePin": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_step3f_delistSaleLifecycleAndClaimSettlement": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_step3f_settleClaimLendingAndShortPayRecovery": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "FundExtrasTest.test_step3f_shortPayingAdaptersEnforcedByFund": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/HarnessSmoke.t.sol@prototype": {
+   "key": "a9b586c29e4de4ab6c4ed3153a793af9d6a0cf09091e3b172abb678a9977deb8",
+   "file": "contracts/test/prototype/HarnessSmoke.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "HarnessSmokeTest.test_compoundListedWhenTheFixtureCoversIt": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "HarnessSmokeTest.test_deployAndDeposit": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "HarnessSmokeTest.test_feedHelpers": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "HarnessSmokeTest.test_receiptPlanDepositStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/Invariants.t.sol@prototype": {
+   "key": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def",
+   "file": "contracts/test/prototype/Invariants.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "Invariants.invariant_RB10_RB11_queueExits": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB12_RB15_blockedAndExits": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB13_RB16_settlements": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB17_admission": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB18_freezeBounded": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB20_inputsOnlyLimitWork": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB21_positionClaims": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB22_ledgerCountsQueuedShares": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_RB23_to_RB36_step3f": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_conservation": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_mustNotRevert": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_noLeak": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_receiptInert": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_solvencyAndHygiene": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_stepBounds": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.invariant_targetVector": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    },
+    "Invariants.test_handlers_coverEveryPathThenInvariantsHold": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "7b58e3145482b0b6f0cf4b6f260efc18ecf82ad89e2c940ae4f43b1166b05def"
+    }
+   }
+  },
+  "contracts/test/prototype/KeeperAccount.t.sol@prototype": {
+   "key": "7457e29a9b4fbf78aa0d9d8e22f4594f0214aded6156ca5576e1d0de3305c8b5",
+   "file": "contracts/test/prototype/KeeperAccount.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "KeeperAccountFlowTest.test_E56_aBotKeySettlesThroughTheAccountAndTheOwnerRotatesItWithoutTheTimelock": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/KeeperAccountDeploy.t.sol@prototype": {
+   "key": "58666f39267c5444ae409117980df00b2da12a863367e9ecb01d03720c2d7e0d",
+   "file": "contracts/test/prototype/KeeperAccountDeploy.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "KeeperAccountDeployTest.test_E56_theScriptDeploysAtThePredictedAddressRecordsItAndRefusesAnotherKeeper": {
+     "proof": "independent",
+     "fixture": "412a8cbc19d1df4ad4b3de608c5336a61dcc6b13ba234d10bbae183c6889abbd"
+    }
+   }
+  },
+  "contracts/test/prototype/KeeperAccountUnit.t.sol@prototype": {
+   "key": "b193d8e6359110bfe8c866c0bca063c45c10f9c0e77a8946a546d84d75a5df41",
+   "file": "contracts/test/prototype/KeeperAccountUnit.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "KeeperAccountUnitTest.test_aRevertIsPassedUpWithItsData": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_constructorRefusesBadSets": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_executeNeedsABotKeyOrAnOwner": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_executeNeverCallsTheAccountItself": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_lastOwnerStays": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_onlyOwnersRotate": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_ownersRotateBotKeysWithoutAnyTimelock": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "KeeperAccountUnitTest.test_viewsMatchWhatTheVerifierReads": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/OwnerDefaults.t.sol@prototype": {
+   "key": "37b35180daad63636cf19a59300edeaf3877645c36b4eb9ed4ad9c1a1968133b",
+   "file": "contracts/test/prototype/OwnerDefaults.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "OwnerDefaultsTest.test_defaults_assetStepCapIsTheSmallerOfMaxStepAndDepth": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "OwnerDefaultsTest.test_defaults_everyStepStaysInsideTheDepthCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "OwnerDefaultsTest.test_defaults_queueStartsWithTheFiveBpsCallCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "OwnerDefaultsTest.test_defaults_rebalancerStartsWithTheFiveBpsDepthCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "OwnerDefaultsTest.test_defaults_refBandIs90": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "OwnerDefaultsTest.test_defaults_stepDepthSetterBounds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/RebalancerGaps.t.sol@prototype": {
+   "key": "b097494dce24901cae282cb3e6f3d2b5d1cec7c22dc21c23fa030b13f6153d83",
+   "file": "contracts/test/prototype/RebalancerGaps.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "RebalancerGapsTest.test_E42_lastBasketStepAtOnlyMovesForABasketPoolStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalancerGapsTest.test_SAFE05_dustSkipsBeforeEndAndTheLastDustTakesOneStepAfter": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalancerGapsTest.test_SAFE06_aFavourableStepBooksZeroAndNeverOffsetsAnEarlierLoss": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalancerGapsTest.test_budgetIsFixedInUsdcAtThePlansStart": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalancerGapsTest.test_haltedRule_exhaustedAtZeroAndBelowOneStepHaltAndAFullStepStaysOpen": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/ReviewFixes.t.sol@prototype": {
+   "key": "3491f42633582b0e36b61a27d85d1712eb39a387cc2337f5dd0acb0123db482d",
+   "file": "contracts/test/prototype/ReviewFixes.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "ReviewFixesDepthTest.test_RF2_thinningHeldThroughASliceStillLowersTheDepth": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesDepthTest.test_RF2_twoSecondsOfThinLiquidityDoNotZeroTheDepth": {
+     "proof": "independent",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesQueueTest.test_QF1_anExcludedVenueWithAFailingRateDoesNotHoldRedemptions": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesQueueTest.test_QF2_aSmallCallDoesNotTakeTheWholeBlocksRoom": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesQueueTest.test_QF3_aRevokeThenReallowBetweenSettlementsDoesNotTripTheBreaker": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesQueueTest.test_QF4_anAllowedReturnEndsWithTheFreeze": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesQueueTest.test_QF5_aCallCapBelowTheMinimumFillIsVisible": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesRebalancerTest.test_RF1_aDepthCappedAssetIsMaskedAndTheRestOfThePlanTrades": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesRebalancerTest.test_RF1_onlyDepthCappedAssetsLeftSkipsDepthCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesRebalancerTest.test_RF4_anUnsetDepthSlotReadsAsTheDefault": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "ReviewFixesRebalancerTest.test_RF5_aConvergedPlanIsNotLabelledExpiredAtTheOverrunEdge": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/SizeGate.t.sol@prototype": {
+   "key": "9464d3758e9bf72703c723b0734f666c9430815e31485b3bed5fe799b82d23a6",
+   "file": "contracts/test/prototype/SizeGate.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "SizeGateTest.test_G1_fundRebalancerAndQueueFitWithHeadroom": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/Step3e.t.sol@prototype": {
+   "key": "0526aaf1ad1b78b7d5b92ae1a11dfbed073a421db7b48f72d948027effe87590",
+   "file": "contracts/test/prototype/Step3e.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "Step3eNoQueueTest.test_RB19_feedCheck_noQueueBound_failsClosed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_backoff_onlyOnTheKeepersOwnFailedCall": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_costBookedAtTheFeeds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_costCapAppliesAtTheFeeds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_limit_purchase_fromTheLowerOfTwapAndFeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_limit_saleBelowTheFeedRefused_whereTheTwapFloorWouldPass": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_limit_sale_fromTheHigherOfTwapAndFeed": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_3e_stepGas_underTheFloor": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_keeperSandwichAfterATwapDrag_purchase": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_keeperSandwichOfAStep_purchase": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_keeperSandwichOfAStep_purchase_fundOf1M": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_keeperSandwichOfAStep_sale": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_noiseHalt_alternatingLagAtTheFeedThresholds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_noiseHalt_keeperTimesAdverseLag_40bps": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_A20_noiseHalt_keeperTimesAdverseLag_atTheFeedThresholds": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_balanceCheck_refusesAStepThatMovesAThirdAsset": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_everyExecutedStep_changesOnlyItsLegsAndIdle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_basketFeedStale_noStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_otherBasketFeedNonPositive_noStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_sequencerDown_noStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_sequencerInGrace_noStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_twapInsideRefBand_steps": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_twapOutsideRefBand_noStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedCheck_usdcOffPeg_noStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_feedChecks_quietMarket_stepTrades": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "Step3eTest.test_RB19_supplyCannotChangeInsideAStep_reentryRefused": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/TargetVector.t.sol@prototype": {
+   "key": "813ef4d30ba234014836e1744ec4b3ce9b26826aa8e6335e1c568587f403f891",
+   "file": "contracts/test/prototype/TargetVector.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "TargetVectorTest.test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_applyReceipt_wrongDigest_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_deactivate_targetedAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_e57_basketCapExceeded_revertsThroughAllDoors": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_anyOrder_setsExactPerAssetTargets": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_badSum_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_capBreach_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_duplicateAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_inactiveAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_lengthMismatch_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_unknownAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_unlistedActiveAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/Adversarial.t.sol@prototype": {
+   "key": "48bdd919b90527e1aac2abb04a4e6d7a7e857d694bcc6b61ba61b3fb893a5d86",
+   "file": "contracts/test/prototype/baseline/Adversarial.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "AdversarialTest.test_authority_governanceOpens_rebalancerExecutes_sweepRefusesHeld": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_bigTrade_isSplitIntoCappedSteps": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_depositMidPlan_routesAlongPathNotPastIt": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_depositRedeemAroundStep_sharePriceMovesAtMostStepCost": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_frontRunReceipt_thinAssetBoughtInCappedSlicesBehindPath": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_keeperAbuse_gasStarvationCannotForceBackoff": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_keeperAbuse_timingOnly_withinCostCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_lendingStall_redeemInKindDefersOnlyThatVenue": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_runawayCost_haltsUntilAdminExtends": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_sandwich_spotInsideGuard_twapFloorRevertsSwap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_sandwich_spotPastGuard_skipsWithMarketReason": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_stepParamBounds_refuseIntervalBelowWindowAndBoundsAtFee": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_twapPushShorterThanWindow_cannotExtractBeyondCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_venueFreeze_redeemInKindStaysOpen": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AdversarialTest.test_venueFreeze_stallsOnlyThatAsset": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/AuctionExecutor.t.sol@prototype": {
+   "key": "9f0cf13fd9dd6400a7820e25f1b6a1b105271d50264db1be1532c1dfb018d262",
+   "file": "contracts/test/prototype/baseline/AuctionExecutor.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "AuctionExecutorTest.test_fillAtDespxaFloor_hitsTheStepCostCap": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_fillAtOpen_paysTwapPlusPremium_toTheFund": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_fillerCannotReenter": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_marketDeviation_afterOpen_fillReverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_openAndFill_lifecycle": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_outsideAFill_swapsPassThroughToThePool": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_owed_decaysLinearly_toTheTwapFloor": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_sellLeg_owedUsdc_atTwapPlusPremium": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AuctionExecutorTest.test_underpay_revertsTheWholeFill_withoutBackoff": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/Custody.t.sol@prototype": {
+   "key": "a60c94157a59d643477e22413cb04285432812b231d288cea2d96cddc5f630bf",
+   "file": "contracts/test/prototype/baseline/Custody.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "CustodyTest.test_INV2_donationAccruesProRata": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "CustodyTest.test_INV2_firstDepositorInflationDoesNotPay": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "CustodyTest.test_INV3_feeAndQuarantineOnlyViaTimelock": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/EndToEnd.t.sol@prototype": {
+   "key": "d497a832413bde773f38a59f7339790ed02d6c507c0e49dde28000caf5deed3d",
+   "file": "contracts/test/prototype/baseline/EndToEnd.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "EndToEndTest.test_endToEnd": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/HarnessSmoke.t.sol@prototype": {
+   "key": "df7a66a3b8aa98b9f71683743d4606dca0ea6ca02871d7b7120574733201c5e4",
+   "file": "contracts/test/prototype/baseline/HarnessSmoke.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "HarnessSmokeTest.test_deployAndDeposit": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "HarnessSmokeTest.test_receiptPlanDepositStep": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/Invariants.t.sol@prototype": {
+   "key": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a",
+   "file": "contracts/test/prototype/baseline/Invariants.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "Invariants.invariant_mustNotRevert": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a"
+    },
+    "Invariants.invariant_noLeak": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a"
+    },
+    "Invariants.invariant_receiptInert": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a"
+    },
+    "Invariants.invariant_solvencyAndHygiene": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a"
+    },
+    "Invariants.invariant_stepBounds": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a"
+    },
+    "Invariants.invariant_targetVector": {
+     "proof": "recorded",
+     "fixture": "93eb1beab8fc25defd367ea47b850135f66cb35f920e31c01b1ca6c81431d56c",
+     "recordedKey": "b84228fdb485e3ad711183d62e6f2c7232981f0f5a2f4fa04e8d2ac9ef464a3a"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/SizeGate.t.sol@prototype": {
+   "key": "bf154591f4a29c7f19aa6bd48a7eb8f9489a9d4bc970823c2b1533b6ee9dc875",
+   "file": "contracts/test/prototype/baseline/SizeGate.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "SizeGateTest.test_G1_fundAndRebalancerFitWithHeadroom": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/baseline/TargetVector.t.sol@prototype": {
+   "key": "e4d9da7d1ac7249236cb65e78ae59c79c2a8e3e95f685b907002f86dac78deda",
+   "file": "contracts/test/prototype/baseline/TargetVector.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "TargetVectorTest.test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_applyReceipt_wrongDigest_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_deactivate_targetedAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_anyOrder_setsExactPerAssetTargets": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_badSum_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_capBreach_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_duplicateAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_inactiveAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_lengthMismatch_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_unknownAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TargetVectorTest.test_rb9_unlistedActiveAsset_reverts": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/sim/AttackSim.t.sol@prototype": {
+   "key": "9774b5e013571256eafae9ac6a23a020b62e7eb6c769fb22553ad0f07508b1fb",
+   "file": "contracts/test/prototype/sim/AttackSim.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "AttackSimBaselineTest.test_A10_sim_baseline_slowRampAgainstArbitrage": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimBaselineTest.test_A2_sim_baseline_twapPushHeldAgainstArbitrage": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimBaselineTest.test_A6_sim_baseline_twapLagWithHedge": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimBaselineTest.test_A9_sim_baseline_run": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimTimedTest.test_A10_sim_timed_slowRampAgainstArbitrage": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimTimedTest.test_A2_sim_timed_twapPushHeldAgainstArbitrage": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimTimedTest.test_A6_sim_timed_twapLagWithHedge": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "AttackSimTimedTest.test_A9_sim_timed_run": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_EXT_1M_s0": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_EXT_1M_s1": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_EXT_1M_s2": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_EXT_PROBE_5M_s0": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_JUMP_DOWN_1M_s0": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_JUMP_DOWN_1M_s1": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_JUMP_DOWN_1M_s2": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_JUMP_UP_1M_s0": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_JUMP_UP_1M_s1": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_JUMP_UP_1M_s2": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_SEQ_1M_s0": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_SEQ_1M_s1": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_SEQ_1M_s2": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_SEQ_5M_s0": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_SEQ_5M_s1": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimLeversTest.test_timed_SEQ_5M_s2": {
+     "proof": "skipped",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/sim/RebalanceSim.t.sol@prototype": {
+   "key": "ca2357988b598dbe79333da126175977590f57a90050652b72f214c86ebbe572",
+   "file": "contracts/test/prototype/sim/RebalanceSim.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "RebalanceSimTest.test_sim_EXT_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_EXT_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_EXT_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_EXT_PROBE_5M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_JUMP_DOWN_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_JUMP_DOWN_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_JUMP_DOWN_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_JUMP_UP_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_JUMP_UP_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_JUMP_UP_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_SEQ_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_SEQ_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_SEQ_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_SEQ_5M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_SEQ_5M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "RebalanceSimTest.test_sim_SEQ_5M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  },
+  "contracts/test/prototype/sim/TimedFlowSim.t.sol@prototype": {
+   "key": "178ddc3eb39305d3be7d66bae2f07533f6e3b7084957059baf55c200703dd716",
+   "file": "contracts/test/prototype/sim/TimedFlowSim.t.sol",
+   "run": "prototype",
+   "env": {},
+   "tests": {
+    "TimedFlowFaultSimTest.test_e48_freeze_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_keeperStopped_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_lendRateCalibration_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_lendRateSpike_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_none_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_pause_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_sequencerOutage_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_usdcDepegStuck_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_usdcDepeg_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_e48_venueFullyBorrowed_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_EXT_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_EXT_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_EXT_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_EXT_PROBE_5M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_JUMP_DOWN_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_JUMP_DOWN_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_JUMP_DOWN_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_JUMP_UP_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_JUMP_UP_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_JUMP_UP_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_SEQ_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_SEQ_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_SEQ_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_SEQ_5M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_SEQ_5M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowFaultSimTest.test_timed_SEQ_5M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_EXT_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_EXT_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_EXT_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_EXT_PROBE_5M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_JUMP_DOWN_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_JUMP_DOWN_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_JUMP_DOWN_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_JUMP_UP_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_JUMP_UP_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_JUMP_UP_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_SEQ_1M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_SEQ_1M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_SEQ_1M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_SEQ_5M_s0": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_SEQ_5M_s1": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    },
+    "TimedFlowSimTest.test_timed_SEQ_5M_s2": {
+     "proof": "strict",
+     "fixture": "1d07e35ac71bc87065ed4b230ab74013feb11e255d05d79d860d460783ea3696"
+    }
+   }
+  }
+ }
+}

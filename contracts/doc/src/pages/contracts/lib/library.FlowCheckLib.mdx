@@ -1,0 +1,559 @@
+---
+title: "FlowCheckLib"
+description: "Pre-trade oracle, TWAP, venue liquidity, and breaker checks (Steps 1–7) plus forward-priced terms quotes (`quoteDeposit` / `quoteRedeem`). Linked (`public`) to keep `FlowQueue` under G1."
+---
+
+# FlowCheckLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowCheckLib.sol)
+
+**Title:** FlowCheckLib
+
+Pre-trade oracle, TWAP, venue liquidity, and breaker checks (Steps 1–7) plus forward-priced terms
+quotes (`quoteDeposit` / `quoteRedeem`). Linked (`public`) to keep `FlowQueue` under G1.
+
+## Constants
+
+### LEND_RATE_GAS
+
+```solidity
+uint256 internal constant LEND_RATE_GAS = 300_000;
+```
+
+## Functions
+
+<a id="pretrade-flowstate-address-bool"></a>
+
+### preTrade
+
+Run checks 1 to 7 for a settlement called by `caller` now (`isKeeper == KEEPER_ROLE`).
+
+```solidity
+function preTrade(
+        FlowState storage s,
+        address,
+        /*caller*/
+        bool isKeeper
+    )
+        public
+        view
+        returns (SettleCheck check, uint256 index, uint256 detail, SettleContext memory c);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| _ | `address` |  |
+| isKeeper | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+| c | `SettleContext` |  |
+
+<a id="_timewindowopen-flowstate-flowparams"></a>
+
+### _timeWindowOpen
+
+```solidity
+function _timeWindowOpen(FlowState storage s, FlowParams memory p)
+        private
+        view
+        returns (bool ok, uint64 cur, uint64 roundEpoch);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| cur | `uint64` |  |
+| roundEpoch | `uint64` |  |
+
+<a id="_hasroundwork-flowstate-uint64-uint64"></a>
+
+### _hasRoundWork
+
+```solidity
+function _hasRoundWork(FlowState storage s, uint64 roundEpoch, uint64 cur)
+        private
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| roundEpoch | `uint64` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_sharepricebreakerok-flowstate-settlecontext-uint64-flowparams"></a>
+
+### _sharePriceBreakerOk
+
+```solidity
+function _sharePriceBreakerOk(
+        FlowState storage s,
+        SettleContext memory m,
+        uint64 cur,
+        FlowParams memory p
+    ) private view returns (bool ok, uint256 moveBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| m | `SettleContext` |  |
+| cur | `uint64` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| moveBps | `uint256` |  |
+
+<a id="_breakervalues-flowstate-settlecontext"></a>
+
+### _breakerValues
+
+```solidity
+function _breakerValues(FlowState storage s, SettleContext memory m)
+        private
+        view
+        returns (uint256 curPx, uint256 ref);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| m | `SettleContext` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| curPx | `uint256` |  |
+| ref | `uint256` |  |
+
+<a id="_cycledvenues-flowstate-settlecontext"></a>
+
+### _cycledVenues
+
+```solidity
+function _cycledVenues(FlowState storage s, SettleContext memory m)
+        private
+        view
+        returns (uint256 mask);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| m | `SettleContext` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mask | `uint256` |  |
+
+<a id="excludedmask-flowstate"></a>
+
+### excludedMask
+
+Bit `i` set when asset `i` has an open exclusion record now (E13).
+
+```solidity
+function excludedMask(FlowState storage s) public view returns (uint256 mask);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| mask | `uint256` |  |
+
+<a id="market-flowstate"></a>
+
+### market
+
+Checks 2–4, 5 (non-reverting capture into `lendRateOk`), and 7 (snapshot, `navFeed`, `navTwap`, `S`).
+
+```solidity
+function market(FlowState storage s)
+        public
+        view
+        returns (SettleCheck check, uint256 index, uint256 detail, SettleContext memory c);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| check | `SettleCheck` |  |
+| index | `uint256` |  |
+| detail | `uint256` |  |
+| c | `SettleContext` |  |
+
+<a id="_basketprice-assetconfig-int24-uint256-feeds-flowparams"></a>
+
+### _basketPrice
+
+```solidity
+function _basketPrice(
+        AssetConfig memory a,
+        int24 tick,
+        uint256 px8,
+        Feeds memory f,
+        FlowParams memory p
+    ) private view returns (bool ok, uint256 devBps, AssetPrice memory ap);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `AssetConfig` |  |
+| tick | `int24` |  |
+| px8 | `uint256` |  |
+| f | `Feeds` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| devBps | `uint256` |  |
+| ap | `AssetPrice` |  |
+
+<a id="_lendrates-flowstate-assetconfig-flowparams"></a>
+
+### _lendRates
+
+```solidity
+function _lendRates(FlowState storage s, AssetConfig[] memory cfg, FlowParams memory p)
+        private
+        view
+        returns (bool ok, uint256 index, uint256 growthBps, uint256[] memory rates);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| cfg | `AssetConfig[]` |  |
+| p | `FlowParams` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| index | `uint256` |  |
+| growthBps | `uint256` |  |
+| rates | `uint256[]` |  |
+
+<a id="lendrate-address"></a>
+
+### lendRate
+
+```solidity
+function lendRate(address adapter) public view returns (bool ok, uint256 rate);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| rate | `uint256` |  |
+
+<a id="venueliquidity-address"></a>
+
+### venueLiquidity
+
+Available underlying liquidity from a lending adapter (`E36`, `E44`, gas-capped staticcall).
+
+```solidity
+function venueLiquidity(address adapter) public view returns (bool ok, uint256 avail);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapter | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| avail | `uint256` |  |
+
+<a id="checkvenuesliquidity-flowstate-settlecontext-uint256"></a>
+
+### checkVenuesLiquidity
+
+Test whether every non-excluded Lending venue can pay its pro-rata slice of `redPoolShares` (`E36`, `E44`).
+
+```solidity
+function checkVenuesLiquidity(
+        FlowState storage s,
+        SettleContext memory c,
+        uint256 redPoolShares
+    ) public view returns (bool ok, uint256 failIndex);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| redPoolShares | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+| failIndex | `uint256` |  |
+
+<a id="depositsopen-flowstate"></a>
+
+### depositsOpen
+
+Whether state deposit stops are inactive right now.
+
+```solidity
+function depositsOpen(FlowState storage s) public view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="settleableat-flowstate-uint64"></a>
+
+### settleableAt
+
+```solidity
+function settleableAt(FlowState storage s, uint64 epoch) internal view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| epoch | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="quotedeposit-flowstate-uint256"></a>
+
+### quoteDeposit
+
+```solidity
+function quoteDeposit(FlowState storage s, uint256) public view returns (Quote memory q);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| q | `Quote` |  |
+
+<a id="quoteredeem-flowstate-uint256"></a>
+
+### quoteRedeem
+
+```solidity
+function quoteRedeem(FlowState storage s, uint256) public view returns (Quote memory q);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| q | `Quote` |  |
+
+<a id="_terms-flowstate-bool"></a>
+
+### _terms
+
+```solidity
+function _terms(FlowState storage s, bool isDeposit) private view returns (Quote memory q);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| isDeposit | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| q | `Quote` |  |
+
+<a id="checkflowparams-flowstate-flowparams"></a>
+
+### checkFlowParams
+
+The hard bounds of FlowTypes (E51) plus the basket fixed-fee rule (E43), run by `setFlowParams`
+before `FlowSettleLib.applyParams` writes the params. Lives in the linked library so the queue
+itself stays under EIP-170 (proposal §6.1).
+
+```solidity
+function checkFlowParams(FlowState storage s, FlowParams memory p) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| p | `FlowParams` |  |
+
+<a id="_hasactivebasket-irobotmoneyfundfull"></a>
+
+### _hasActiveBasket
+
+```solidity
+function _hasActiveBasket(IRobotMoneyFundFull f) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_requirefundedpoolsfixedfee-irobotmoneyfundfull"></a>
+
+### _requireFundedPoolsFixedFee
+
+<i>
+
+Rule 6 (E43, plan section 3.3 item 4): every basket asset the plan funds must sit on a fixed-fee pool.
+An unfunded asset (target 0) is exempt, as it is at plan open.
+
+</i>
+
+```solidity
+function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| f | `IRobotMoneyFundFull` |  |
+
+## Structs
+
+### Feeds
+
+```solidity
+struct Feeds {
+        uint256 usdc8;
+        uint256 usdcUnit;
+        address usdc;
+        uint8 legPriceMode;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc8 | `uint256` |  |
+| usdcUnit | `uint256` |  |
+| usdc | `address` |  |
+| legPriceMode | `uint8` |  |
+

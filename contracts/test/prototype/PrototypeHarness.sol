@@ -17,15 +17,15 @@ import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
 import {TwapTickMath} from "../../lib/TwapTickMath.sol";
 import {ConsensusRecommendationReceipt} from "../../ConsensusRecommendationReceipt.sol";
 
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {Rebalancer} from "./src/Rebalancer.sol";
-import {RebalanceGovernance} from "./src/RebalanceGovernance.sol";
-import {FlowQueue} from "./src/FlowQueue.sol";
-import {AaveV3RateAdapter} from "./src/adapters/AaveV3RateAdapter.sol";
-import {CompoundV3RateAdapter} from "./src/adapters/CompoundV3RateAdapter.sol";
-import {MorphoRateAdapter} from "./src/adapters/MorphoRateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "./src/adapters/UniswapV3ExactOutSwapAdapter.sol";
-import {IRobotMoneyFundFull} from "./src/interfaces/IRobotMoneyFund.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {Rebalancer} from "../../Rebalancer.sol";
+import {RebalanceGovernance} from "../../RebalanceGovernance.sol";
+import {FlowQueue} from "../../FlowQueue.sol";
+import {AaveV3RateAdapter} from "../../adapters/AaveV3RateAdapter.sol";
+import {CompoundV3RateAdapter} from "../../adapters/CompoundV3RateAdapter.sol";
+import {MorphoRateAdapter} from "../../adapters/MorphoRateAdapter.sol";
+import {UniswapV3ExactOutSwapAdapter} from "../../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {IRobotMoneyFundFull} from "../../interfaces/IRobotMoneyFund.sol";
 import {
     AssetConfig,
     AssetKind,
@@ -38,16 +38,19 @@ import {
     Venue,
     Roles,
     BPS
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 import {
     Claim,
+    DEFAULT_CANCEL_BUFFER,
+    DEFAULT_MAX_PAUSE,
+    DEFAULT_MATCH_BAND_BPS,
     FlowParams,
     FlowQueueInit,
     Request,
     RequestKind,
     SettleCheck
-} from "./src/FlowTypes.sol";
-import {PlanMath} from "./src/PlanMath.sol";
+} from "../../FlowTypes.sol";
+import {PlanMath} from "../../PlanMath.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 
 interface IHarnessSwapRouter02 {
@@ -250,6 +253,7 @@ abstract contract PrototypeHarness is BaseFixture {
         _deployAdapters();
         _placeFeeds();
         _addAssets();
+        coverageCheckpoint();
         _deployRebalancer();
         _deployGovernance();
         _deployQueue();
@@ -257,6 +261,7 @@ abstract contract PrototypeHarness is BaseFixture {
         _seed();
         _beforeHandover();
         _handOverToTimelock();
+        coverageCheckpoint();
     }
 
     /// @dev Runs while this contract is still every deployer admin, right before the timelock handover. No-op by
@@ -428,7 +433,6 @@ abstract contract PrototypeHarness is BaseFixture {
         uint32 interval = uint32(Math.max(30 minutes, fund.maxTwapWindow()));
         StepParams memory sp = StepParams({
             stepInterval: interval,
-            keeperGrace: KEEPER_GRACE,
             maxOverrun: MAX_OVERRUN,
             maxStepCostBps: MAX_STEP_COST_BPS,
             toleranceBps: TOLERANCE_BPS,
@@ -536,7 +540,10 @@ abstract contract PrototypeHarness is BaseFixture {
             legBandBps: 100,
             sequencerGrace: 1 hours,
             usdcPegBandBps: 50,
-            maxLendRateGrowthBps: 10
+            maxLendRateGrowthBps: 10,
+            cancelBuffer: DEFAULT_CANCEL_BUFFER,
+            maxPause: DEFAULT_MAX_PAUSE,
+            matchBandBps: DEFAULT_MATCH_BAND_BPS
         });
     }
 
@@ -654,29 +661,46 @@ abstract contract PrototypeHarness is BaseFixture {
     //  Helpers: timed flows (§5.9.2, E8, E10)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice Fund `user` with `usdc` and open a deposit request for it with the limit `maxUsdcPerShare`
-    ///         (PRICE_SCALE units). The user approves the queue and is the caller and the owner.
-    function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare)
-        internal
-        returns (uint256 id)
-    {
+    /// @notice Fund `user` with `usdc` and open a forward-priced deposit request (limit-free in Step 3f).
+    ///         The user approves the queue and is the caller and the owner.
+    function openDepositRequest(address user, uint256 usdc) internal returns (uint256 id) {
         fundUsdc(user, usdc);
         vm.startPrank(user);
         IERC20(USDC).approve(address(queue), usdc);
-        id = queue.requestDeposit(usdc, maxUsdcPerShare, user);
+        id = queue.requestDeposit(usdc, user);
         vm.stopPrank();
     }
 
-    /// @notice `user` approves the queue for `shares` and opens a redemption request with the limit
-    ///         `minUsdcPerShare` (PRICE_SCALE units, after the exit fee).
-    function openRedeemRequest(address user, uint256 shares, uint256 minUsdcPerShare)
+    /// @notice Compatibility overload for pre-Step 3f callers passing a retired price limit.
+    function openDepositRequest(
+        address user,
+        uint256 usdc,
+        uint256 /*retiredLimit*/
+    )
         internal
         returns (uint256 id)
     {
+        return openDepositRequest(user, usdc);
+    }
+
+    /// @notice `user` approves the queue for `shares` and opens a forward-priced redemption request (limit-free in Step 3f).
+    function openRedeemRequest(address user, uint256 shares) internal returns (uint256 id) {
         vm.startPrank(user);
         IERC20(address(fund)).approve(address(queue), shares);
-        id = queue.requestRedeem(shares, minUsdcPerShare, user);
+        id = queue.requestRedeem(shares, user);
         vm.stopPrank();
+    }
+
+    /// @notice Compatibility overload for pre-Step 3f callers passing a retired price limit.
+    function openRedeemRequest(
+        address user,
+        uint256 shares,
+        uint256 /*retiredLimit*/
+    )
+        internal
+        returns (uint256 id)
+    {
+        return openRedeemRequest(user, shares);
     }
 
     /// @notice Warp to the end of request `id`'s settlement window (no-op if that time has passed).
@@ -714,7 +738,9 @@ abstract contract PrototypeHarness is BaseFixture {
                 ++settled;
                 idle = 0;
             }
+            if ((k + 1) % 4 == 0) coverageCheckpoint();
         }
+        coverageCheckpoint();
     }
 
     /// @notice The whole deposit path for `user`: request `usdc` with no price limit, wait for the window, settle
@@ -722,7 +748,7 @@ abstract contract PrototypeHarness is BaseFixture {
     ///         deliver every unlocked share to the user. Refreshes the feeds at the end so the fund's views read.
     ///         Returns the shares the user received.
     function deposit(address user, uint256 usdc) internal returns (uint256 shares) {
-        uint256 id = openDepositRequest(user, usdc, type(uint256).max);
+        uint256 id = openDepositRequest(user, usdc);
         settleUntilFilled(id);
         shares = deliverAfterHold(user);
     }
@@ -768,7 +794,7 @@ abstract contract PrototypeHarness is BaseFixture {
     ///         settle (period after period under the cap), and take the settled USDC to the user. Returns the USDC
     ///         paid. The feeds are fresh at return (`settleAll` refreshed them in this block).
     function redeem(address user, uint256 shares) internal returns (uint256 usdc) {
-        uint256 id = openRedeemRequest(user, shares, 0);
+        uint256 id = openRedeemRequest(user, shares);
         settleUntilFilled(id);
         uint256 claimable = queue.maxRedeem(user);
         if (claimable == 0) return 0;

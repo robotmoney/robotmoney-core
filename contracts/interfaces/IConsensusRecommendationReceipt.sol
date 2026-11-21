@@ -112,9 +112,6 @@ interface IConsensusRecommendationReceipt {
     /// @notice Retrieve a receipt by its id. Reverts with `ReceiptNotFound`.
     function getReceiptById(bytes32 receiptId) external view returns (Receipt memory);
 
-    /// @notice The 1-based issuance index, or zero if the receipt does not exist.
-    function receiptSequence(bytes32 receiptId) external view returns (uint256);
-
     /// @notice Whether `receiptId` has been recorded.
     function isRecorded(bytes32 receiptId) external view returns (bool);
 

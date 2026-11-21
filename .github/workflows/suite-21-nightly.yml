@@ -78,7 +78,6 @@ jobs:
             suite-07-rmpc-integration.yml
             suite-08-explorer-indexer.yml
             suite-09-dapp-quality.yml
-            suite-10-dapp-e2e.yml
             suite-11a-opencode-smoke.yml
             suite-11b-opencode-headless.yml
             suite-12-openclaw.yml
@@ -89,7 +88,6 @@ jobs:
             suite-18-secrets-scan.yml
             suite-18-security-gates.yml
             suite-18-upstream-monitoring.yml
-            suite-19-erc4626-demo-tvl-matrix.yml
             suite-20-watchdog.yml
             suite-23-skill-url-monitor-selftest.yml
             suite-22-formal-verification.yml

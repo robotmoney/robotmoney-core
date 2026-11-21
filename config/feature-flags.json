@@ -11,7 +11,7 @@
     {
       "id": 1,
       "name": "PORTFOLIO_ROUTER_ENABLED",
-      "description": "Gates the router deposit path in the dapp (RouterDepositSection) and RouterGovernance panel. When false the governance tab is hidden regardless of VITE_ROUTER_ADDRESS being set in a client that reads the flag. This setting does not disable the public PortfolioRouter entry points.",
+      "description": "Gates the router deposit path in the dapp (RouterDepositSection) and RouterGovernance panel. When false the governance tab is hidden regardless of VITE_ROUTER_ADDRESS being set.",
       "systems": ["dapp", "contracts"]
     },
     {

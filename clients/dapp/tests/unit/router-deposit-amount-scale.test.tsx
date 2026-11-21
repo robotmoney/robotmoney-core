@@ -35,10 +35,10 @@ function respondRouter(fake: ReturnType<typeof makeFakeChain>) {
         result: [[VAULT], [10000n]],
       });
     }
-    if (data.startsWith(toFunctionSelector("previewDepositFor(address,uint256)"))) {
+    if (data.startsWith(toFunctionSelector("previewDeposit(uint256)"))) {
       return encodeFunctionResult({
         abi: routerAbi,
-        functionName: "previewDepositFor",
+        functionName: "previewDeposit",
         result: [
           {
             vault: VAULT,

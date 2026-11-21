@@ -1,0 +1,872 @@
+---
+title: "FlowSettleLib"
+description: "Keeper-only round settlement (E34, E35): StepInWindow gate + notice cleanup + enrollment + round-stop venue test + O(1) Whole Match `M` + FIFO net-side execution (`sellForFlowGross` / `mintInKind`)."
+---
+
+# FlowSettleLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowSettleLib.sol)
+
+**Title:** FlowSettleLib
+
+Keeper-only round settlement (E34, E35): StepInWindow gate + notice cleanup + enrollment +
+round-stop venue test + O(1) Whole Match `M` + FIFO net-side execution (`sellForFlowGross` / `mintInKind`).
+
+## Constants
+
+### MAX_LOOK_PER_CALL
+
+```solidity
+uint256 internal constant MAX_LOOK_PER_CALL = 256;
+```
+
+### SIDE_GAS_BASE
+
+```solidity
+uint256 internal constant SIDE_GAS_BASE = 2_000_000;
+```
+
+### SIDE_GAS_PER_ASSET
+
+```solidity
+uint256 internal constant SIDE_GAS_PER_ASSET = 600_000;
+```
+
+### SIDE_GAS_PER_FILL
+
+```solidity
+uint256 internal constant SIDE_GAS_PER_FILL = 450_000;
+```
+
+### SIDE_CALL_MARGIN
+
+```solidity
+uint256 internal constant SIDE_CALL_MARGIN = 10_000;
+```
+
+### MAX_REASON_BYTES
+
+```solidity
+uint256 internal constant MAX_REASON_BYTES = 1_024;
+```
+
+### BOUND_SLACK_UNITS
+
+```solidity
+uint256 private constant BOUND_SLACK_UNITS = 2;
+```
+
+## Functions
+
+<a id="settle-flowstate-uint256-uint256-bool"></a>
+
+### settle
+
+Run one keeper settlement call inside round `c.roundEpoch`.
+
+```solidity
+function settle(FlowState storage s, uint256 maxRequests, uint256 maxUsdc, bool isKeeper)
+        public
+        returns (uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| maxRequests | `uint256` |  |
+| maxUsdc | `uint256` |  |
+| isKeeper | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+<a id="_finishsettle-flowstate-settlecontext-walk-uint256-bool-bool"></a>
+
+### _finishSettle
+
+```solidity
+function _finishSettle(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        uint256 matchSettlementId,
+        bool redOk,
+        bool depOk
+    ) private returns (uint256 settlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| matchSettlementId | `uint256` |  |
+| redOk | `bool` |  |
+| depOk | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+
+<a id="_prepareroundifneeded-flowstate-settlecontext-uint64"></a>
+
+### _prepareRoundIfNeeded
+
+<i>
+
+On the first `settle` call of `c.roundEpoch`: enforce `StepInWindow` (E42), clean up ended
+redemption notices, evict expired deposits, enroll locked requests, test lending venues (E36),
+and book the whole match `M` O(1) (E24, E35).
+
+</i>
+
+```solidity
+function _prepareRoundIfNeeded(FlowState storage s, SettleContext memory c, uint64 cur)
+        private
+        returns (uint256 matchSettlementId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| matchSettlementId | `uint256` |  |
+
+<a id="_rooms-flowstate-settlecontext-walk-uint256"></a>
+
+### _rooms
+
+```solidity
+function _rooms(FlowState storage s, SettleContext memory c, Walk memory w, uint256 maxUsdc)
+        private
+        view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| maxUsdc | `uint256` |  |
+
+<a id="_basketcallroom-flowstate-settlecontext-walk-uint256-uint32"></a>
+
+### _basketCallRoom
+
+```solidity
+function _basketCallRoom(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        uint256 callBps,
+        uint32 window
+    ) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| callBps | `uint256` |  |
+| window | `uint32` |  |
+
+<a id="_walkstart-flowstate-uint64-uint8"></a>
+
+### _walkStart
+
+```solidity
+function _walkStart(FlowState storage s, uint64 lastEpoch, uint8 k)
+        private
+        view
+        returns (uint256 idx, uint256 i);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| lastEpoch | `uint64` |  |
+| k | `uint8` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idx | `uint256` |  |
+| i | `uint256` |  |
+
+<a id="_walkside-flowstate-settlecontext-walk-requestkind"></a>
+
+### _walkSide
+
+```solidity
+function _walkSide(FlowState storage s, SettleContext memory c, Walk memory w, RequestKind kind)
+        private
+        returns (SidePos memory pos);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pos | `SidePos` |  |
+
+<a id="_roomleft-walk-requestkind"></a>
+
+### _roomLeft
+
+```solidity
+function _roomLeft(Walk memory w, RequestKind kind) private pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_movecursor-flowstate-requestkind-sidepos-bool"></a>
+
+### _moveCursor
+
+```solidity
+function _moveCursor(FlowState storage s, RequestKind kind, SidePos memory pos, bool sideOk)
+        private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| kind | `RequestKind` |  |
+| pos | `SidePos` |  |
+| sideOk | `bool` |  |
+
+<a id="_rememberoldest-flowstate-uint64"></a>
+
+### _rememberOldest
+
+```solidity
+function _rememberOldest(FlowState storage s, uint64 lastEpoch) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| lastEpoch | `uint64` |  |
+
+<a id="_consider-flowstate-settlecontext-walk-requestkind-uint256"></a>
+
+### _consider
+
+```solidity
+function _consider(
+        FlowState storage s,
+        SettleContext memory c,
+        Walk memory w,
+        RequestKind kind,
+        uint256 id
+    ) private view returns (Outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Outcome` |  |
+
+<a id="_considerdeposit-walk-uint256-uint256"></a>
+
+### _considerDeposit
+
+```solidity
+function _considerDeposit(Walk memory w, uint256 id, uint256 remaining)
+        private
+        pure
+        returns (Outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| w | `Walk` |  |
+| id | `uint256` |  |
+| remaining | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Outcome` |  |
+
+<a id="_considerredeem-settlecontext-walk-uint256-uint256"></a>
+
+### _considerRedeem
+
+```solidity
+function _considerRedeem(SettleContext memory c, Walk memory w, uint256 id, uint256 remaining)
+        private
+        pure
+        returns (Outcome);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| id | `uint256` |  |
+| remaining | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Outcome` |  |
+
+<a id="_partial-uint256-uint256-uint256"></a>
+
+### _partial
+
+```solidity
+function _partial(uint256 remaining, uint256 room, uint256 minFill)
+        private
+        pure
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| remaining | `uint256` |  |
+| room | `uint256` |  |
+| minFill | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="sidegas-uint256-uint256"></a>
+
+### sideGas
+
+```solidity
+function sideGas(uint256 assets, uint256 fills) internal pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+| fills | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_runside-settlecontext-walk-requestkind"></a>
+
+### _runSide
+
+```solidity
+function _runSide(SettleContext memory c, Walk memory w, RequestKind kind)
+        private
+        returns (bool ok);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `SettleContext` |  |
+| w | `Walk` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ok | `bool` |  |
+
+<a id="_recordreferences-flowstate-settlecontext"></a>
+
+### _recordReferences
+
+```solidity
+function _recordReferences(FlowState storage s, SettleContext memory c) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `SettleContext` |  |
+
+<a id="applyparams-flowstate-flowparams"></a>
+
+### applyParams
+
+```solidity
+function applyParams(FlowState storage s, FlowParams memory p) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| p | `FlowParams` |  |
+
+<a id="_rebaseepochs-flowstate"></a>
+
+### _rebaseEpochs
+
+```solidity
+function _rebaseEpochs(FlowState storage s) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+<a id="redeemside-flowstate-uint256-fill-settlecontext"></a>
+
+### redeemSide
+
+```solidity
+function redeemSide(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        SettleContext memory c
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+
+<a id="_recordredeems-flowstate-irobotmoneyfundfull-uint256-fill-uint256-uint256"></a>
+
+### _recordRedeems
+
+```solidity
+function _recordRedeems(
+        FlowState storage s,
+        IRobotMoneyFundFull fund,
+        uint256 settlementId,
+        Fill[] memory fills,
+        uint256 x,
+        uint256 grossOut
+    ) private returns (uint256 totalNet);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| fund | `IRobotMoneyFundFull` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| x | `uint256` |  |
+| grossOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| totalNet | `uint256` |  |
+
+<a id="_recordredeem-flowstate-irobotmoneyfundfull-uint256-fill-uint256-uint256-uint256"></a>
+
+### _recordRedeem
+
+```solidity
+function _recordRedeem(
+        FlowState storage s,
+        IRobotMoneyFundFull fund,
+        uint256 settlementId,
+        Fill memory f,
+        uint256 x,
+        uint256 grossOut,
+        uint256 period
+    ) private returns (uint256 feeK, uint256 usdcK);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| fund | `IRobotMoneyFundFull` |  |
+| settlementId | `uint256` |  |
+| f | `Fill` |  |
+| x | `uint256` |  |
+| grossOut | `uint256` |  |
+| period | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| feeK | `uint256` |  |
+| usdcK | `uint256` |  |
+
+<a id="depositside-flowstate-uint256-fill-settlecontext"></a>
+
+### depositSide
+
+```solidity
+function depositSide(
+        FlowState storage s,
+        uint256 settlementId,
+        Fill[] memory fills,
+        SettleContext memory c
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| c | `SettleContext` |  |
+
+<a id="_recorddeposits-flowstate-irobotmoneyfundfull-uint256-fill-uint256-uint256-uint256"></a>
+
+### _recordDeposits
+
+```solidity
+function _recordDeposits(
+        FlowState storage s,
+        IRobotMoneyFundFull fund,
+        uint256 settlementId,
+        Fill[] memory fills,
+        uint256 u,
+        uint256 spent,
+        uint256 sharesOut
+    ) private returns (uint64 maxHoldEnd);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| fund | `IRobotMoneyFundFull` |  |
+| settlementId | `uint256` |  |
+| fills | `Fill[]` |  |
+| u | `uint256` |  |
+| spent | `uint256` |  |
+| sharesOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| maxHoldEnd | `uint64` |  |
+
+<a id="_recorddeposit-flowstate-irobotmoneyfundfull-depositbatch-fill"></a>
+
+### _recordDeposit
+
+```solidity
+function _recordDeposit(
+        FlowState storage s,
+        IRobotMoneyFundFull fund,
+        DepositBatch memory b,
+        Fill memory f
+    ) private returns (uint256 sharesK, uint256 refundK, uint64 unlockAt);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| fund | `IRobotMoneyFundFull` |  |
+| b | `DepositBatch` |  |
+| f | `Fill` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sharesK | `uint256` |  |
+| refundK | `uint256` |  |
+| unlockAt | `uint64` |  |
+
+<a id="_newclaim-flowstate-claim"></a>
+
+### _newClaim
+
+```solidity
+function _newClaim(FlowState storage s, Claim memory c) private returns (uint256 claimId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `Claim` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| claimId | `uint256` |  |
+
+<a id="_claim-uint256-address-requestkind-uint256-uint64"></a>
+
+### _claim
+
+```solidity
+function _claim(
+        uint256 requestId,
+        address owner,
+        RequestKind kind,
+        uint256 settlementId,
+        uint64 unlockAt
+    ) private pure returns (Claim memory c);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+| owner | `address` |  |
+| kind | `RequestKind` |  |
+| settlementId | `uint256` |  |
+| unlockAt | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `Claim` |  |
+
+<a id="_shrink-fill-uint256"></a>
+
+### _shrink
+
+```solidity
+function _shrink(Fill[] memory a, uint256 n) private pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| a | `Fill[]` |  |
+| n | `uint256` |  |
+
+<a id="_expect-uint256-uint256"></a>
+
+### _expect
+
+```solidity
+function _expect(uint256 actual, uint256 expected) private pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| actual | `uint256` |  |
+| expected | `uint256` |  |
+
+## Structs
+
+### Walk
+
+```solidity
+struct Walk {
+        uint64 cur;
+        uint256 period;
+        uint256 budget;
+        uint256 minRequestUsdc;
+        uint256 depRoom;
+        uint256 redRoom;
+        uint256 depTotal;
+        uint256 redValue;
+        uint256 nDep;
+        uint256 nRed;
+        Fill[] dep;
+        Fill[] red;
+        SidePos depPos;
+        SidePos redPos;
+        uint256 settlementId;
+        bool callRoomLow;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| cur | `uint64` |  |
+| period | `uint256` |  |
+| budget | `uint256` |  |
+| minRequestUsdc | `uint256` |  |
+| depRoom | `uint256` |  |
+| redRoom | `uint256` |  |
+| depTotal | `uint256` |  |
+| redValue | `uint256` |  |
+| nDep | `uint256` |  |
+| nRed | `uint256` |  |
+| dep | `Fill[]` |  |
+| red | `Fill[]` |  |
+| depPos | `SidePos` |  |
+| redPos | `SidePos` |  |
+| settlementId | `uint256` |  |
+| callRoomLow | `bool` |  |
+
+### SidePos
+
+```solidity
+struct SidePos {
+        bool walked;
+        bool ended;
+        bool hasStop;
+        uint64 stopE;
+        uint256 stopI;
+        bool hasHold;
+        uint64 holdE;
+        uint256 holdI;
+        uint64 endE;
+        uint256 endI;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| walked | `bool` |  |
+| ended | `bool` |  |
+| hasStop | `bool` |  |
+| stopE | `uint64` |  |
+| stopI | `uint256` |  |
+| hasHold | `bool` |  |
+| holdE | `uint64` |  |
+| holdI | `uint256` |  |
+| endE | `uint64` |  |
+| endI | `uint256` |  |
+
+### DepositBatch
+
+```solidity
+struct DepositBatch {
+        uint256 settlementId;
+        uint256 u;
+        uint256 unused;
+        uint256 sharesOut;
+        uint256 period;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| settlementId | `uint256` |  |
+| u | `uint256` |  |
+| unused | `uint256` |  |
+| sharesOut | `uint256` |  |
+| period | `uint256` |  |
+
+## Enums
+
+### Outcome
+
+```solidity
+enum Outcome {
+        Pass,
+        Fill,
+        Partial,
+        Hold
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Pass |  |
+| Fill |  |
+| Partial |  |
+| Hold |  |
+

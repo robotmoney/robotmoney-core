@@ -49,8 +49,8 @@ Result: 9 tests across 8 suites, 0 failed, 0 skipped. These directly cover:
 | `BasketVault.t.sol::test_AZ_BSK5_reabsorbRemovedAsset_revertsSlippageExceeded` | #23 | refutes quarantine-on-floor claim |
 | `BasketVault.t.sol::test_LIFE6_reabsorbSurvivesDegradedPool` | #1 | pins degraded-oracle fallback |
 | `SecurityReviewRevisionAssessment.t.sol::test_assessment_transientTickPersistsForFullWindowWithoutHonestRecord` | #19 | pins transient-tick mechanic |
-| `RobotMoneyVault.t.sol::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity` (declared at `RobotMoneyVault.t.sol:1472`, line updated after the fix; inherited by `SecurityReviewPoc.t.sol`, `SecurityReviewRecheckVaultPoc.t.sol` and `RevisionVaultAssessment` in `SecurityReviewRevisionAssessment.t.sol`) | #6 | pins Morpho/illiquid-adapter redemption failure |
-| `RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtRefusesEarlierIssuance` (citation updated after the fix; at the pin, the same-second refusal test pinned the refusal) | #17 | pins same-second receipts applying in issuance order |
+| `RobotMoneyVault.t.sol::test_illiquidAdapterEmergencyDrainKeepsExitersAndStayersAtParity` (declared at `RobotMoneyVault.t.sol:1456`; inherited by `SecurityReviewPoc.t.sol`, `SecurityReviewRecheckVaultPoc.t.sol` and `RevisionVaultAssessment` in `SecurityReviewRevisionAssessment.t.sol`) | #6 | pins Morpho/illiquid-adapter redemption failure |
+| `RouterGovernanceApplyReceipt.t.sol::test_applyReceipt_sameRecordedAtRefused` | #17 | pins same-block receipt refusal |
 | `RecorderSellAnchor.t.sol::test_sellAnchor_youngRecorderUsesItsWholeHistory` | #21 | refutes shortened-anchor premise |
 
 ## Limitations

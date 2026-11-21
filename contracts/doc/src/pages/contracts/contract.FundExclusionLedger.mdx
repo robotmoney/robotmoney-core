@@ -1,0 +1,589 @@
+---
+title: "FundExclusionLedger"
+description: "Step 3f (E13, E52, RB-22): tracks exclusion recovery pro rata to holders at the moment an ineligible adapter is excluded, including shares held inside `FlowQueue`."
+---
+
+# FundExclusionLedger
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/FundExclusionLedger.sol)
+
+**Title:** FundExclusionLedger
+
+Step 3f (E13, E52, RB-22): tracks exclusion recovery pro rata to holders at the moment an
+ineligible adapter is excluded, including shares held inside `FlowQueue`.
+
+When `open` records an exclusion `id`, it also snapshots `(depIdx, redIdx)` from `FlowQueue.currentMatchIndexes()`.
+When `_checkpoint` runs lazily on a later balance or queue mutation, it fills one checkpoint per missed
+snapshot `id` using `wallet + FlowQueue.queuedSharesOfAt(holder, depIdx[id], redIdx[id])`, ensuring
+earlier match indexes stay immune to later O(1) whole-match updates between checkpoints.
+
+## Constants
+
+### VAULT
+
+```solidity
+address public immutable VAULT;
+```
+
+### USDC
+
+```solidity
+IERC20 public immutable USDC;
+```
+
+## State Variables
+
+### exclusionCount
+
+```solidity
+uint256 public exclusionCount;
+```
+
+### exclusions
+
+```solidity
+mapping(uint256 id => Exclusion) public exclusions;
+```
+
+### claimed
+
+```solidity
+mapping(uint256 id => mapping(address holder => uint256 amount)) public claimed;
+```
+
+### heldUsdc
+
+```solidity
+uint256 public heldUsdc;
+```
+
+### _checkpoints
+
+```solidity
+mapping(address holder => Checkpoint[]) private _checkpoints;
+```
+
+### _depIndexes
+
+```solidity
+mapping(uint256 id => uint256[2]) private _depIndexes;
+```
+
+### _redIndexes
+
+```solidity
+mapping(uint256 id => uint256[2]) private _redIndexes;
+```
+
+## Functions
+
+<a id="onlyvault"></a>
+
+### onlyVault
+
+```solidity
+modifier onlyVault();
+```
+
+<a id="constructor-address-ierc20"></a>
+
+### constructor
+
+```solidity
+constructor(address vault_, IERC20 usdc_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| vault_ | `address` |  |
+| usdc_ | `IERC20` |  |
+
+<a id="open-uint256-address-uint256"></a>
+
+### open
+
+Open a record and snapshot both supply and `FlowQueue` match indexes (E52). Vault only.
+
+```solidity
+function open(uint256 adapterIndex, address adapter, uint256 snapshotSupply)
+        external
+        onlyVault
+        returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| snapshotSupply | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="credit-uint256-uint256-recoverysource"></a>
+
+### credit
+
+Credit `amount` USDC, already transferred here by the vault, to record `id`. Vault only.
+
+```solidity
+function credit(uint256 id, uint256 amount, RecoverySource source) external onlyVault;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| amount | `uint256` |  |
+| source | `RecoverySource` |  |
+
+<a id="finalize-uint256-finalizereason"></a>
+
+### finalize
+
+Close record `id` to further recovery. It stays claimable. Vault only.
+
+```solidity
+function finalize(uint256 id, FinalizeReason reason) external onlyVault;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| reason | `FinalizeReason` |  |
+
+<a id="checkpoint-address-address"></a>
+
+### checkpoint
+
+Record pre-change share balances for any missed snapshots up to `exclusionCount`. Vault only.
+
+```solidity
+function checkpoint(address from, address to) external onlyVault;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| to | `address` |  |
+
+<a id="claim-uint256-address"></a>
+
+### claim
+
+```solidity
+function claim(uint256 id, address holder) public returns (uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| holder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="claimall-address"></a>
+
+### claimAll
+
+```solidity
+function claimAll(address holder) external returns (uint256 total);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+
+<a id="indexsnapshots-uint256"></a>
+
+### indexSnapshots
+
+Stored match indexes `(depIdx, redIdx)` captured from `FlowQueue` when exclusion `id` opened.
+
+```solidity
+function indexSnapshots(uint256 id)
+        external
+        view
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depIdx | `uint256[2]` |  |
+| redIdx | `uint256[2]` |  |
+
+<a id="balanceat-address-uint256"></a>
+
+### balanceAt
+
+Vault shares `holder` held (wallet + queue at indexed snapshot `id`) when record `id` opened.
+
+```solidity
+function balanceAt(address holder, uint256 id) public view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="claimable-uint256-address"></a>
+
+### claimable
+
+```solidity
+function claimable(uint256 id, address holder) public view returns (uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+| holder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="claimabletotal-address"></a>
+
+### claimableTotal
+
+```solidity
+function claimableTotal(address holder) external view returns (uint256 total);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| holder | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+
+<a id="returnsurplus"></a>
+
+### returnSurplus
+
+```solidity
+function returnSurplus() external returns (uint256 amount);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="sweepforeigntoken-address"></a>
+
+### sweepForeignToken
+
+```solidity
+function sweepForeignToken(address token) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+
+<a id="_flowqueue"></a>
+
+### _flowQueue
+
+```solidity
+function _flowQueue() private view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="_balanceatsnapshot-address-uint256-address"></a>
+
+### _balanceAtSnapshot
+
+```solidity
+function _balanceAtSnapshot(address account, uint256 id, address q)
+        private
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| id | `uint256` |  |
+| q | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_checkpoint-address-uint256-address"></a>
+
+### _checkpoint
+
+```solidity
+function _checkpoint(address account, uint256 current, address q) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| current | `uint256` |  |
+| q | `address` |  |
+
+## Events
+
+### ExclusionOpened
+
+```solidity
+event ExclusionOpened(
+        uint256 indexed exclusionId,
+        uint256 indexed adapterIndex,
+        address indexed adapter,
+        uint256 snapshotSupply,
+        uint256 adapterValue
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exclusionId | `uint256` |  |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| snapshotSupply | `uint256` |  |
+| adapterValue | `uint256` |  |
+
+### ExclusionRecoveryCredited
+
+```solidity
+event ExclusionRecoveryCredited(
+        uint256 indexed exclusionId,
+        RecoverySource indexed source,
+        uint256 amount,
+        uint256 recoveredUsdc
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exclusionId | `uint256` |  |
+| source | `RecoverySource` |  |
+| amount | `uint256` |  |
+| recoveredUsdc | `uint256` |  |
+
+### ExclusionFinalized
+
+```solidity
+event ExclusionFinalized(
+        uint256 indexed exclusionId, FinalizeReason indexed reason, uint256 recoveredUsdc
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exclusionId | `uint256` |  |
+| reason | `FinalizeReason` |  |
+| recoveredUsdc | `uint256` |  |
+
+### ExclusionClaimed
+
+```solidity
+event ExclusionClaimed(uint256 indexed exclusionId, address indexed holder, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exclusionId | `uint256` |  |
+| holder | `address` |  |
+| amount | `uint256` |  |
+
+### ExclusionSurplusReturned
+
+```solidity
+event ExclusionSurplusReturned(uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+## Errors
+
+### OnlyVault
+
+```solidity
+error OnlyVault();
+```
+
+### ExclusionNotOpen
+
+```solidity
+error ExclusionNotOpen(uint256 exclusionId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exclusionId | `uint256` |  |
+
+## Structs
+
+### Exclusion
+
+```solidity
+struct Exclusion {
+        uint256 adapterIndex;
+        address adapter;
+        uint48 openedBlock;
+        uint40 openedAt;
+        bool finalized;
+        uint256 snapshotSupply;
+        uint256 adapterValue;
+        uint256 recoveredUsdc;
+        uint256 claimedUsdc;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| openedBlock | `uint48` |  |
+| openedAt | `uint40` |  |
+| finalized | `bool` |  |
+| snapshotSupply | `uint256` |  |
+| adapterValue | `uint256` |  |
+| recoveredUsdc | `uint256` |  |
+| claimedUsdc | `uint256` |  |
+
+### Checkpoint
+
+```solidity
+struct Checkpoint {
+        uint48 id;
+        uint208 balance;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint48` |  |
+| balance | `uint208` |  |
+
+## Enums
+
+### RecoverySource
+
+```solidity
+enum RecoverySource {
+        EmergencyWithdrawAdapter,
+        EmergencyWithdraw,
+        AdminRebalance,
+        Restoration
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| EmergencyWithdrawAdapter |  |
+| EmergencyWithdraw |  |
+| AdminRebalance |  |
+| Restoration |  |
+
+### FinalizeReason
+
+```solidity
+enum FinalizeReason {
+        Restored,
+        Removed,
+        ForceRemoved
+    }
+```
+
+**Variants**
+
+| Name | Description |
+| ---- | ----------- |
+| Restored |  |
+| Removed |  |
+| ForceRemoved |  |
+

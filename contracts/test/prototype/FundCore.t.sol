@@ -15,10 +15,25 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {FlowParams} from "./src/FlowTypes.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {FundExclusionLedger} from "./src/FundExclusionLedger.sol";
-import {AssetKind, PlanParams, Roles, BPS, LENDING_ROUNDING_UNITS} from "./src/FundTypes.sol";
+import {MechSwapAdapter} from "./mocks/MechSwapAdapter.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {
+    UniswapV3ExactOutSwapAdapterUpgradeable
+} from "../../adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol";
+import {GovernedUUPS} from "../../lib/GovernedUUPS.sol";
+import {FlowParams, IFlowEvents} from "../../FlowTypes.sol";
+import {AssetConfig} from "../../FundTypes.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {FundExclusionLedger} from "../../FundExclusionLedger.sol";
+import {
+    AssetKind,
+    IFundEvents,
+    PlanParams,
+    PlanStatus,
+    Roles,
+    BPS,
+    LENDING_ROUNDING_UNITS
+} from "../../FundTypes.sol";
 
 contract FundCoreTest is PrototypeHarness {
     using Math for uint256;
@@ -30,12 +45,33 @@ contract FundCoreTest is PrototypeHarness {
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
 
-    /// @dev This contract plays the FlowQueue: its answer to the fund's `ledgerBalanceOf` read.
+    /// @dev This contract plays the FlowQueue: its answer to the fund's `ledgerBalanceOf` and Step 3f ledger snapshot reads.
     mapping(address => uint256) internal queued;
 
     function queuedSharesOf(address account) external view returns (uint256) {
         return queued[account];
     }
+
+    function currentMatchIndexes()
+        external
+        pure
+        returns (uint256[2] memory depIdx, uint256[2] memory redIdx)
+    {
+        depIdx[0] = 0;
+        redIdx[0] = 1;
+        redIdx[1] = 1e18;
+    }
+
+    function queuedSharesOfAt(address account, uint256[2] calldata, uint256[2] calldata)
+        external
+        view
+        returns (uint256)
+    {
+        return queued[account];
+    }
+
+    /// @dev Hook called by `RobotMoneyFund.shutdown()` (Step 3f E52).
+    function onShutdown() external {}
 
     /// @dev As the bound queue: the fund's NAV views read the USDC and sequencer feeds from here (E19).
     function feeds() external pure returns (address, uint32, address) {
@@ -371,8 +407,8 @@ contract FundCoreTest is PrototypeHarness {
         fund.mintInKind(1, 0, limits);
     }
 
-    /// @dev RB-13 on the holder's own exit: the in-kind exit asserts check 10 too, with the lending legs two units
-    ///      short of exact.
+    /// @dev RB-13 & E29: `redeemInKind` is closed while live (`InKindClosed`) and opens during wind-down (`shutdown`),
+    ///      closing again upon `restore`; asserts check 10 with the lending legs two units short of exact.
     function test_redeemInKind_keepsEveryAmountPerShare() public fixtureCovered {
         _seedAndInvest();
         uint256 sharesOut = fund.totalSupply() / 50;
@@ -381,6 +417,15 @@ contract FundCoreTest is PrototypeHarness {
         IERC20(USDC).approve(address(fund), maxUsdc);
         fund.mintInKind(sharesOut, maxUsdc, limits);
         fund.transfer(alice, sharesOut);
+
+        // E29: closed while live.
+        vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(sharesOut, alice, alice);
+
+        // Wind-down opens redeemInKind.
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        assertTrue(fund.isShutdown(), "shutdown active");
 
         (uint256 idle0, uint256[] memory held0) = fund.heldBalances();
         uint256 supply0 = fund.totalSupply();
@@ -391,6 +436,13 @@ contract FundCoreTest is PrototypeHarness {
         assertGt(IERC20(WETH).balanceOf(alice), 0, "wETH in kind");
         assertGt(IERC20(CBBTC).balanceOf(alice), 0, "cbBTC in kind");
         assertGt(IERC20(USDC).balanceOf(alice), 0, "idle and lending USDC");
+
+        // Restoring closes redeemInKind again.
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
+        assertFalse(fund.isShutdown(), "restored");
+        vm.prank(alice);
+        vm.expectRevert(IRobotMoneyFund.InKindClosed.selector);
+        fund.redeemInKind(1, alice, alice);
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -453,5 +505,360 @@ contract FundCoreTest is PrototypeHarness {
         assertEq(held[IDX_WETH], IERC20(WETH).balanceOf(address(fund)), "wETH held");
         assertEq(held[IDX_AAVE], aaveAdapter.totalAssets(), "aave held");
         assertEq(held.length, fund.assetCount(), "one entry per asset");
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+    //  Step 3f: Rules 4, 6 & 7 (E32, E43, E57), single-asset unwind (E50), pauseDeposits (E55)
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+    function test_step3f_rules4And7_poolDepthFloorAndMaxBasketCap() public fixtureCovered {
+        _seed(SEED_USDC);
+        _bindFlowToThis();
+        assertEq(fund.minPoolDepthUsdc(), 2_000_000e6, "default minPoolDepthUsdc");
+        assertEq(fund.maxBasketBps(), BPS, "default maxBasketBps = 10 000");
+
+        // Rule 7 (E57): cap total basket allocation at 50% (5 000 bps).
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.setMaxBasketBps, (5_000)));
+        assertEq(fund.maxBasketBps(), 5_000, "updated maxBasketBps");
+
+        uint16[5] memory overBasket = assetVec(2_000, 2_000, 3_000, 3_000, 0);
+        (address[] memory ids, uint256[] memory wOver) = assetArrays(overBasket);
+        vm.expectRevert(
+            abi.encodeWithSelector(IFundEvents.BasketCapExceeded.selector, 6_000, 5_000)
+        );
+        vm.prank(address(governance));
+        fund.setTargetAndOpenPlan(ids, wOver, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
+
+        // Exactly at maxBasketBps passes.
+        uint16[5] memory atBasket = assetVec(2_500, 2_500, 2_500, 2_500, 0);
+        setTargetViaTimelock(atBasket, PlanParams(1 days, COST_BUDGET_BPS));
+        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "at cap opened");
+
+        // Rule 4 (E32): raise minPoolDepthUsdc above pool depth -> PoolDepthTooLow on non-zero basket target,
+        // while a zero target on the low-depth pool is still allowed.
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setMinPoolDepthUsdc, (type(uint256).max))
+        );
+        (address[] memory idsAt, uint256[] memory wAt) = assetArrays(atBasket);
+        vm.expectRevert(); // PoolDepthTooLow(IDX_WETH, depth, type(uint256).max)
+        vm.prank(address(governance));
+        fund.setTargetAndOpenPlan(idsAt, wAt, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
+
+        (address[] memory idsZero, uint256[] memory wZero) =
+            assetArrays(assetVec(5_000, 5_000, 0, 0, 0));
+        vm.prank(address(governance));
+        fund.setTargetAndOpenPlan(idsZero, wZero, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
+        assertEq(uint8(fund.planStatus()), uint8(PlanStatus.Open), "zero basket target allowed");
+    }
+
+    function test_step3f_rule6_requiresFixedFeeAndFeeMargin() public fixtureCovered {
+        _seed(SEED_USDC);
+
+        // Rule 6 on queue: FlowQueue.setFlowParams refuses legBandBps <= maxPoolFeeBps + feeMarginBps.
+        FlowParams memory badFp = defaultFlowParams();
+        badFp.legBandBps = uint16(fund.maxPoolFeeBps() + fund.feeMarginBps());
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 14));
+        queue.setFlowParams(badFp);
+
+        _bindFlowToThis();
+        MechSwapAdapter mech = new MechSwapAdapter(ROUTER);
+        vm.etch(address(swapAdapter), address(mech).code);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(swapAdapter).codehash, true)
+            )
+        );
+        MechSwapAdapter mocked = MechSwapAdapter(address(swapAdapter));
+
+        // Non-fixed fee pool -> PoolNotFixedFee on plan open.
+        mocked.setFixedFeePool(false);
+        (address[] memory ids, uint256[] memory w) =
+            assetArrays(assetVec(3_000, 3_000, 2_000, 2_000, 0));
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL));
+        vm.prank(address(governance));
+        fund.setTargetAndOpenPlan(ids, w, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
+
+        // Fixed fee pool whose fee + feeMarginBps >= legBandBps -> PoolFeeMarginTooSmall on plan open.
+        mocked.setFixedFeePool(true);
+        uint256 legBand = defaultFlowParams().legBandBps;
+        uint256 margin = fund.feeMarginBps();
+        mocked.setPoolFeeBps(uint24(legBand - margin));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.PoolFeeMarginTooSmall.selector, legBand - margin, margin, legBand
+            )
+        );
+        vm.prank(address(governance));
+        fund.setTargetAndOpenPlan(ids, w, PlanParams(1 days, COST_BUDGET_BPS), bytes32(0));
+
+        // Raising feeMarginBps above legBandBps - poolFeeBps while basket target is active reverts too.
+        mocked.setPoolFeeBps(5);
+        setTargetViaTimelock(
+            assetVec(3_000, 3_000, 2_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.PoolFeeMarginTooSmall.selector, 5, legBand - 5, legBand
+            )
+        );
+        fund.setFeeMarginBps(legBand - 5);
+
+        // Admission (`addAsset`) also enforces fixed-fee and fee-margin rules.
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.closePlan, ()));
+        AssetConfig memory wethCfg = fund.assetConfig(IDX_WETH);
+        timelockExecute(
+            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+        );
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.deactivateAsset, (IDX_WETH)));
+        refreshFeeds();
+
+        mocked.setFixedFeePool(false);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PoolNotFixedFee.selector, WETH_POOL));
+        fund.addAsset(wethCfg);
+
+        mocked.setFixedFeePool(true);
+        mocked.setPoolFeeBps(uint24(legBand - margin));
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.PoolFeeMarginTooSmall.selector, legBand - margin, margin, legBand
+            )
+        );
+        fund.addAsset(wethCfg);
+    }
+
+    function test_step3f_emergencyUnwindAssetAndCooldownFreePauseDeposits() public fixtureCovered {
+        _seedAndInvest();
+        assertGt(fund.assetValue(IDX_AAVE), 0, "aave invested");
+        assertGt(fund.assetValue(IDX_WETH), 0, "weth invested");
+
+        // E50: single-asset unwind on Aave recovers into idle and zeroes only Aave's target; fund stays live.
+        // Snapshot immediately after the timelock warp so accrued lending interest during wait is not misread.
+        bytes32 salt = keccak256("step3f-unwind-aave");
+        bytes memory unwindData = abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_AAVE);
+        timelock.schedule(address(fund), 0, unwindData, bytes32(0), salt, TIMELOCK_DELAY);
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        refreshFeeds();
+        uint256 moonBefore = fund.assetValue(IDX_MOONWELL);
+        uint256 moonSharesBefore = IERC20(MOONWELL).balanceOf(address(moonwellAdapter));
+        uint256 idleBefore = fund.idleUsdc();
+        timelock.execute(address(fund), 0, unwindData, bytes32(0), salt);
+        assertLe(fund.assetValue(IDX_AAVE), LENDING_ROUNDING_UNITS, "aave unwound");
+        assertEq(fund.targetBps()[IDX_AAVE], 0, "aave target zeroed");
+        assertGt(fund.idleUsdc(), idleBefore, "idle grew from single-asset unwind");
+        assertEq(fund.assetValue(IDX_MOONWELL), moonBefore, "moonwell untouched");
+        assertEq(
+            IERC20(MOONWELL).balanceOf(address(moonwellAdapter)),
+            moonSharesBefore,
+            "moonwell shares untouched"
+        );
+        assertFalse(fund.isShutdown(), "not shut down");
+
+        // Single-asset unwind on wETH Basket leg.
+        uint256 idleMid = fund.idleUsdc();
+        timelockExecute(
+            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+        );
+        assertEq(fund.assetValue(IDX_WETH), 0, "weth unwound");
+        assertEq(fund.targetBps()[IDX_WETH], 0, "weth target zeroed");
+        assertGt(fund.idleUsdc(), idleMid, "idle grew from basket unwind");
+
+        // E55: pauseDeposits is self-expiring and cooldown-free (repeated calls extend deadline).
+        vm.prank(emergency);
+        fund.pauseDeposits();
+        uint64 until1 = fund.depositsPausedUntil();
+        assertTrue(fund.depositsPaused(), "deposits paused");
+        assertEq(until1, block.timestamp + fund.maxPause(), "expires after maxPause");
+
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(emergency);
+        fund.pauseDeposits();
+        assertGt(fund.depositsPausedUntil(), until1, "cooldown-free repeat extended deadline");
+
+        // Auto-expires without unpauseDeposits.
+        vm.warp(fund.depositsPausedUntil());
+        assertFalse(fund.depositsPaused(), "pause self-expired");
+
+        // By contrast, pauseRebalance enforces PauseOnCooldown after an earlier pause.
+        setTargetViaTimelock(assetVec(0, 5_000, 0, 5_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        vm.prank(emergency);
+        fund.pauseRebalance();
+        uint64 cd = fund.rebalancePauseCooldownUntil();
+        assertGt(cd, block.timestamp, "rebalance cooldown armed");
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.resumePlan, ()));
+        vm.prank(emergency);
+        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.PauseOnCooldown.selector, cd));
+        fund.pauseRebalance();
+    }
+
+    /// @notice `emergencyUnwind(asset)` sells a basket leg with a floor of the feed price times `1 - delistBandBps`
+    ///         (plan section 3.3). A feed far above the pool refuses the sale. A feed on the pool lets it run.
+    function test_step3f_emergencyUnwindAsset_floorsAtFeedLessDelistBand() public fixtureCovered {
+        _seedAndInvest();
+        uint256 wethBefore = IERC20(WETH).balanceOf(address(fund));
+        assertGt(wethBefore, 0, "weth held");
+        uint256 pool8 = poolPrice8(WETH_POOL, WETH);
+        // Feed 10% above the pool: the pool pays about 9% under the feed, past the 3% band.
+        setFeedPrice(IDX_WETH, pool8 * 110 / 100);
+        bytes memory data = abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH);
+        bytes32 salt = keccak256("floor-unwind");
+        timelock.schedule(address(fund), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        refreshFeeds();
+        vm.expectRevert();
+        timelock.execute(address(fund), 0, data, bytes32(0), salt);
+        assertEq(IERC20(WETH).balanceOf(address(fund)), wethBefore, "refused sale sold nothing");
+
+        // Feed on the pool: the same call sells the whole leg.
+        setFeedPrice(IDX_WETH, pool8);
+        timelock.execute(address(fund), 0, data, bytes32(0), salt);
+        assertEq(IERC20(WETH).balanceOf(address(fund)), 0, "weth unwound inside the floor");
+    }
+
+    /// @notice Rule 6 on `setFlowParams` (plan section 3.3 item 4): a funded basket pool that is not fixed-fee
+    ///         refuses new flow params, and so does a `legBandBps` at or under pool fee plus margin.
+    function test_step3f_setFlowParams_rechecksRule6() public fixtureCovered {
+        _seedAndInvest();
+        FlowParams memory p = defaultFlowParams();
+        uint256 floorBand = fund.maxPoolFeeBps() + fund.feeMarginBps();
+        p.legBandBps = uint16(floorBand + 1);
+        vm.prank(address(timelock));
+        queue.setFlowParams(p); // one above the floor is allowed
+        p.legBandBps = uint16(floorBand);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 14));
+        queue.setFlowParams(p);
+
+        MechSwapAdapter mech = new MechSwapAdapter(ROUTER);
+        vm.etch(address(swapAdapter), address(mech).code);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(
+                IRobotMoneyFund.setAdapterCodeHashAllowed, (address(swapAdapter).codehash, true)
+            )
+        );
+        MechSwapAdapter mocked = MechSwapAdapter(address(swapAdapter));
+        mocked.setFixedFeePool(false);
+        p.legBandBps = defaultFlowParams().legBandBps;
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.FlowParamOutOfBounds.selector, 14));
+        queue.setFlowParams(p);
+        mocked.setFixedFeePool(true);
+        vm.prank(address(timelock));
+        queue.setFlowParams(p);
+    }
+
+    // ─── ADR-0019: governed UUPS swap adapters ───────────────────────────────
+
+    /// @dev Deploy an upgradeable adapter implementation for `router` and an ERC-1967 proxy over it, timelock-owned.
+    function _proxyAdapter(address router) internal returns (address proxy, address impl) {
+        impl = address(new UniswapV3ExactOutSwapAdapterUpgradeable(router));
+        proxy = address(
+            new ERC1967Proxy(
+                impl,
+                abi.encodeCall(
+                    UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (address(timelock))
+                )
+            )
+        );
+    }
+
+    function _allow(bytes32 h) internal {
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (h, true))
+        );
+    }
+
+    function _markProxy(bytes32 h) internal {
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterProxyCodeHash, (h, true))
+        );
+    }
+
+    function test_adr0019_setAssetAdapter_movesBasketAssetToVettedProxy() public {
+        _seedAndInvest();
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        assertEq(
+            UniswapV3ExactOutSwapAdapterUpgradeable(proxy).implementation(),
+            impl,
+            "proxy reports impl"
+        );
+        _allow(proxy.codehash);
+        _allow(impl.codehash);
+        _markProxy(proxy.codehash);
+        address old = fund.assetConfig(IDX_WETH).adapter;
+        uint256 navBefore = fund.totalAssets();
+        vm.expectEmit(address(fund));
+        emit IRobotMoneyFund.AssetAdapterSet(IDX_WETH, old, proxy);
+        vm.prank(address(timelock));
+        fund.setAssetAdapter(IDX_WETH, proxy);
+        assertEq(fund.assetConfig(IDX_WETH).adapter, proxy, "asset now uses the proxy");
+        assertEq(fund.totalAssets(), navBefore, "same pool, same TWAP: NAV unchanged");
+    }
+
+    function test_adr0019_setAssetAdapter_refusesUnallowedImplementation() public {
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(proxy.codehash);
+        _markProxy(proxy.codehash);
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl, impl.codehash
+            )
+        );
+        fund.setAssetAdapter(IDX_WETH, proxy);
+    }
+
+    function test_adr0019_setAssetAdapter_refusesUnallowedProxy() public {
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(impl.codehash);
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, proxy, proxy.codehash
+            )
+        );
+        fund.setAssetAdapter(IDX_WETH, proxy);
+    }
+
+    function test_adr0019_setAssetAdapter_refusesLendingAndNonAdmin() public {
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(proxy.codehash);
+        _allow(impl.codehash);
+        _markProxy(proxy.codehash);
+        vm.prank(address(timelock));
+        vm.expectRevert(abi.encodeWithSelector(IFundEvents.InvalidAssetIndex.selector, IDX_AAVE));
+        fund.setAssetAdapter(IDX_AAVE, proxy);
+        vm.expectRevert();
+        fund.setAssetAdapter(IDX_WETH, proxy);
+    }
+
+    function test_adr0019_unallowedUpgradeStopsEveryUse() public {
+        _seedAndInvest();
+        (address proxy, address impl) = _proxyAdapter(ROUTER);
+        _allow(proxy.codehash);
+        _allow(impl.codehash);
+        _markProxy(proxy.codehash);
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAssetAdapter, (IDX_WETH, proxy))
+        );
+
+        // A different router immutable gives a different implementation code hash, not on the allowlist.
+        address impl2 = address(new UniswapV3ExactOutSwapAdapterUpgradeable(address(0xBEEF)));
+        timelockExecute(proxy, abi.encodeCall(GovernedUUPS.upgradeToAndCall, (impl2, "")));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IRobotMoneyFund.AdapterCodeHashNotAllowed.selector, impl2, impl2.codehash
+            )
+        );
+        fund.totalAssets();
+
+        // Allowing the new implementation hash restores it.
+        _allow(impl2.codehash);
+        fund.totalAssets();
     }
 }

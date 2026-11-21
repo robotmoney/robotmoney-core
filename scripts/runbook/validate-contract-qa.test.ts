@@ -1,10 +1,11 @@
 // Drift test for scripts/runbook/validate-contract-qa.ts: the committed contract QA runbook is clean, and each planted drift fails.
 import { expect, test } from "bun:test";
-import { clearVectorProblems } from "./validate-contract-qa.ts";
+import { clearVectorProblems, rcTagHeaderProblems, rcTagPatternOf } from "./validate-contract-qa.ts";
+import { keccak256 } from "../ci/config-check.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, fundPausePairingProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll, scheduledActionProblems, emergencyRevocationProblems } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -933,6 +934,104 @@ test("version bump (owner, 2026-11-13): v0.7.0-onevault stays Deploy 4's record 
   expect(runnableProblems(now, "twin")).toEqual([]);
 });
 
+test("Step 3f E55: fundPausePairingProblems requires prior pauseDeposits() on each target before shutdown, codehash revocation, emergencyUnwind, or delist", () => {
+  const mk = (id: string, cmd: string, extra: Record<string, unknown> = {}) =>
+    ({ id, flow: "fund", cmds: [["bash", "-c", cmd]], expectExit: 0, ...extra }) as never;
+
+  // Protected ops without prior pauseDeposits fail on all applicable targets
+  for (const [op, label] of [
+    [`cast send $FUND 'shutdown()'`, "shutdown"],
+    [`cast send $FUND 'setAdapterCodeHashAllowed(bytes32,bool)' 0x01 false`, "setAdapterCodeHashAllowed(..., false)"],
+    [`cast send $FUND 'emergencyUnwind(address)' $ASSET`, "emergencyUnwind"],
+    [`cast send $FUND 'delistAsset(address)' $ASSET`, "asset delisting"],
+  ] as const) {
+    const errs = fundPausePairingProblems([mk("P9.99-bad", op)], "fund");
+    expect(errs.length).toBe(3); // twin, rehearsal, production
+    expect(errs[0]).toContain(label);
+    expect(errs[0]).toContain("without an active earlier pauseDeposits step (E55 / D33)");
+  }
+
+  // Same-step pauseDeposits + shutdown without earlier pause still fails
+  expect(fundPausePairingProblems([mk("P9.98-same", `cast send $F 'pauseDeposits()' && cast send $F 'shutdown()'`)], "fund").length).toBe(3);
+
+  // An intervening unpauseDeposits() clears pause protection
+  expect(
+    fundPausePairingProblems(
+      [
+        mk("P9.01-pause", `cast send $F 'pauseDeposits()'`),
+        mk("P9.02-unpause", `cast send $F 'unpauseDeposits()'`),
+        mk("P9.03-unwind", `cast send $F 'emergencyUnwind(address)' $A`),
+      ],
+      "fund",
+    ).length,
+  ).toBe(3);
+
+  // Target isolation: pause only on twin leaves rehearsal/production unprotected
+  const onlyTwin = fundPausePairingProblems(
+    [
+      mk("P9.01-pause", `cast send $F 'pauseDeposits()'`, { onlyFor: "twin" }),
+      mk("P9.02-shut", `cast send $F 'shutdown()'`, { onlyFor: ["twin", "rehearsal"] }),
+    ],
+    "fund",
+  );
+  expect(onlyTwin).toEqual(["fund P9.02-shut: schedules/calls shutdown on fund flow (rehearsal) without an active earlier pauseDeposits step (E55 / D33)"]);
+
+  // Valid prior pauseDeposits(), allowing codehash=true, read-only calls, and non-zero expectExit are accepted
+  expect(
+    fundPausePairingProblems(
+      [
+        {
+          id: "P9.00-ro",
+          flow: "fund",
+          expectExit: 0,
+          cmds: [["cast", "call", "$F", "shutdown()"], ["bash", "-c", "true && ! grep -q x log && grep -q 'shutdown()' log"]],
+        } as never,
+        mk("P9.00-reverted", `cast send $F 'shutdown()'`, { expectExit: 1 }),
+        mk("P9.00-allow", `cast send $F 'setAdapterCodeHashAllowed(bytes32,bool)' 0x01 true`),
+        mk("P9.01-pause", `cast send $F 'pauseDeposits()'`),
+        mk("P9.02-shut", `cast send $F 'shutdown()'`),
+        mk("P9.03-revoke", `cast send $F 'setAdapterCodeHashAllowed(bytes32,bool)' 0x01 false`),
+      ],
+      "fund",
+    ),
+  ).toEqual([]);
+});
+
+test("Step 3f OPS-03 and sheet model: scheduleBatch/executeBatch Safe actions and Step 3f fund sheet names validate cleanly", () => {
+  expect(model.safeActions?.has("scheduleBatch")).toBe(true);
+  expect(model.safeActions?.has("executeBatch")).toBe(true);
+  for (const n of [
+    "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS", "FUND_MIN_POOL_DEPTH_USDC",
+    "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
+    "KEEPER_TYPE", "KEEPER_OWNERS", "KEEPER_BOT_KEYS", "RECEIPT_SUBMITTERS",
+  ]) {
+    expect(model.fundSheetNames.has(n), n).toBe(true);
+  }
+
+  const safeCmd = (action: string) =>
+    commandProblems(
+      [{
+        id: "P9.90-batch",
+        standing: ["4.4"],
+        description: "d",
+        host: "control",
+        phase: 9,
+        flow: "fund",
+        cmds: [["bun", "publish-contracts/src/safe/cli.ts", "propose", "--action", action, "--bundle", "b.json"]],
+        expectExit: 0,
+        receipts: [],
+        irreversible: false,
+      }] as never,
+      model,
+      null,
+    );
+  expect(safeCmd("scheduleBatch")).toEqual([]);
+  expect(safeCmd("executeBatch")).toEqual([]);
+  expect(safeCmd("approveBatch")).toEqual([
+    "P9.90-batch: --action approveBatch is no safe/cli.ts action (schedule, execute, scheduleBatch, executeBatch, cancel, updateDelay)",
+  ]);
+});
+
 // ─── the in-place upgrade of Deploy 4 (releases/v0.8.0-onevault-upgrade.yaml, flow fund-upgrade, owner 2026-11-14) ───
 const upgradeRelease = () => parseRelease(readFileSync(join(ROOT, QA_DIR, "releases", "v0.8.0-onevault-upgrade.yaml"), "utf8"), "v0.8.0-onevault-upgrade");
 
@@ -979,4 +1078,158 @@ test("fund-upgrade: the order of the governed changes (code, then minHold, then 
   expect(runnableProblems(r, "twin")).toEqual([]);
   expect(runnableProblems(r, "rehearsal")).toEqual([]);
   expect(runnableProblems(r, "production").join("\n")).toContain("has no step that runs on production");
+});
+
+// ─── the in-place upgrade of Deploy 4 to v0.9.0 (releases/v0.9.0-onevault-upgrade.yaml, flow fund-upgrade) ───
+const upgradeRelease090 = () => parseRelease(readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8"), "v0.9.0-onevault-upgrade");
+
+test("v0.9.0 fund-upgrade: every fund-flow rule holds for the upgrade flow, and refuses the same breaches", () => {
+  const r = upgradeRelease090();
+  const sheet = parseSheetText(readFileSync(join(ROOT, FUND_SHEET), "utf8"));
+  expect([...keeperGasProblems(r), ...fundExecuteProblems(r), ...holdWaitProblems(r, sheet), ...qaSupersetProblems(r)]).toEqual([]);
+  // a direct execute on the fund timelock in the upgrade flow: refused, as in the fund flow
+  const direct = { ...r, steps: r.steps.map((s) => (s.id === "P9.82-upg-unpause-execute" ? { ...s, cmds: [...s.cmds, ["bash", "scripts/runbook/cast-send.sh", "{m:fund-timelock.timelock}", "executeBatch(address[],uint256[],bytes[],bytes32,bytes32)", "{cast}"]] } : s)) };
+  expect(fundExecuteProblems(direct).join("\n")).toContain("P9.82-upg-unpause-execute calls the fund timelock's execute directly");
+  // an execute signed by one owner: refused
+  const oneSig = { ...r, steps: r.steps.map((s) => (s.id === "P2.83-upg-queue-upgrade-execute" ? { ...s, cmds: s.cmds.filter((c) => !c.includes("{ownerSigner2}")) } : s)) };
+  expect(fundExecuteProblems(oneSig).join("\n")).toContain("P2.83-upg-queue-upgrade-execute proposes a fund timelock execute");
+  // the claim inside the hold: refused
+  const early = { ...r, steps: r.steps.map((s) => (s.id === "P6.94-upg-claim-deposit" ? { ...s, notBefore: { afterStep: "P6.93-upg-settle-deposit", hours: 0.5 } } : s)) };
+  expect(holdWaitProblems(early, sheet).join("\n")).toContain("P6.94-upg-claim-deposit claims deposit shares 0.5 h after");
+  // the keeper's first send without the hard gas check before it: refused
+  const noGas = { ...r, steps: r.steps.filter((s) => s.id !== "P0.95-upg-keeper-gas") };
+  expect(keeperGasProblems(noGas).join("\n")).toContain("P6.93-upg-settle-deposit sends from the keeper's key");
+  // a vaults manifest or sheet name in a fund-upgrade step: refused, as in the fund flow
+  const vaultsName = { ...r.steps.find((s) => s.id === "P2.84-upg-after-upgrade")!, cmds: [["cast", "call", "{m:router.router}", "x()"]] };
+  expect(commandProblems([vaultsName], model).join("\n")).toContain("unknown placeholder {m:router.router}");
+});
+
+test("v0.9.0 fund-upgrade: Deploy 4 in-place upgrade constraints (order, live record read-only, v0.9.0 build/rc) and runnable on twin and rehearsal only", () => {
+  const r = upgradeRelease090();
+  for (const target of ["twin", "rehearsal"]) {
+    const ids = applicableSteps(r, target).map((s) => s.id);
+    const at = (id: string) => { const i = ids.indexOf(id); expect(i, `${id} on ${target}`).toBeGreaterThanOrEqual(0); return i; };
+    // One timelock window (ADR-0019, decision D4-19): the three upgrades with their migrations and the adapter batch are scheduled together,
+    // chained by predecessor (rebalancer -> fund -> queue -> adapter batch), and executed in that order. The simulation runs before any schedule.
+    const order = ["P1.84-upg-deploy-rebalancer-impl", "P1.85-upg-simulate-upgrades", "P2.87-upg-rebalancer-upgrade-schedule", "P2.80-upg-fund-upgrade-schedule", "P2.81-upg-queue-upgrade-schedule",
+      "P2.85-upg-adapter-schedule", "P2.88-upg-rebalancer-upgrade-execute", "P2.82-upg-fund-upgrade-execute", "P2.83-upg-queue-upgrade-execute", "P2.84-upg-after-upgrade", "P3.72-upg-adapter-execute", "P3.83-upg-verify"];
+    for (let k = 1; k < order.length; k++) expect(at(order[k - 1]!), `${order[k - 1]} before ${order[k]}`).toBeLessThan(at(order[k]!));
+    expect(at("P1.81-upg-deploy-fund-impl")).toBeLessThan(at("P1.85-upg-simulate-upgrades"));
+    expect(at("P1.82-upg-deploy-queue-impl")).toBeLessThan(at("P1.85-upg-simulate-upgrades"));
+    expect(at("P0.85-upg-copy-record")).toBeLessThan(at("P1.80-upg-record-go"));
+    expect(at("P9.83-upg-verify-final")).toBeGreaterThan(at("P9.82-upg-unpause-execute"));
+  }
+  const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
+  // no governed setFlowParams (the queue migration writes the three new fields); the chain of predecessors; the executor is already the Safe only
+  expect(r.steps.some((x) => x.id === "P2.86-upg-params-schedule" || x.id === "P3.81-upg-params-execute")).toBe(false);
+  expect(j("P2.87-upg-rebalancer-upgrade-schedule")).not.toContain("--predecessor");
+  expect(j("P2.80-upg-fund-upgrade-schedule")).toContain("--predecessor {state:upg-rebalancer-op}");
+  expect(j("P2.81-upg-queue-upgrade-schedule")).toContain("--predecessor {state:upg-fund-op}");
+  expect(j("P2.85-upg-adapter-schedule")).toContain("--predecessor {state:upg-queue-op}");
+  expect(j("P2.82-upg-fund-upgrade-execute")).toContain("--predecessor {state:upg-rebalancer-op}");
+  expect(j("P2.83-upg-queue-upgrade-execute")).toContain("--predecessor {state:upg-fund-op}");
+  expect(j("P3.72-upg-adapter-execute")).toContain("--predecessor {state:upg-queue-op}");
+  for (const n of ["rebalancer", "fund", "queue"]) expect(j("P1.85-upg-simulate-upgrades")).toContain(`publish-contracts/src/fund-migrations.ts data --proxy ${n}`);
+  expect(r.steps.some((s) => s.cmds.some((c) => c.join(" ").includes("grantRole(")))).toBe(false);
+  // new v0.9.0 build is the upgrade build and the release records the rc tag for 8453
+  expect(j("P0.92-upg-new-build")).toContain("{runDir}/v090");
+  expect(j("P1.81-upg-deploy-fund-impl")).toContain("--upgrade-build {runDir}/v090");
+  expect(j("P1.82-upg-deploy-queue-impl")).toContain("--upgrade-build {runDir}/v090");
+  expect(r.decisions.some((d) => `${d.question} ${d.answer ?? ""}`.includes("release/v0.9.0-rc.N-rehearsal"))).toBe(true);
+  // no step writes the live record: it is only read and copied
+  for (const s of r.steps.filter((x) => x.flow === "fund-upgrade")) for (const c of s.cmds) {
+    const t = c.join(" ");
+    expect(/>\s*\{live(Manifest|Evidence)Dir\}|\{live(Manifest|Evidence)Dir\}\/\S*\.tmp|mv \S+ \{live/.test(t), `${s.id} writes the live record`).toBe(false);
+  }
+  expect(runnableProblems(r, "twin")).toEqual([]);
+  expect(runnableProblems(r, "rehearsal")).toEqual([]);
+  expect(runnableProblems(r, "production").join("\n")).toContain("has no step that runs on production");
+});
+
+test("OPS-03: a scheduled Safe action names its signers on call and its execution window", () => {
+  const sched = (extra: Record<string, unknown> = {}) =>
+    ({ id: "P9.10-sched", cmds: [["bun", "publish-contracts/src/safe/cli.ts", "propose", "--action", "scheduleBatch"]], ...extra }) as never;
+  // failing: neither named, then one of the two
+  expect(scheduledActionProblems([sched()], "r").length).toBe(2);
+  expect(scheduledActionProblems([sched({ signersOnCall: "owners A and B" })], "r")).toEqual(["r P9.10-sched: schedules a Safe action without executionWindow, the window it may be executed in (OPS-03)"]);
+  expect(scheduledActionProblems([sched({ signersOnCall: "  ", executionWindow: "x" })], "r").length).toBe(1);
+  // passing
+  expect(scheduledActionProblems([sched({ signersOnCall: "owners A and B", executionWindow: "after the delay" })], "r")).toEqual([]);
+  // an execute step is not a schedule
+  expect(scheduledActionProblems([{ id: "P9.11-exec", cmds: [["x", "--action", "executeBatch"]] } as never], "r")).toEqual([]);
+});
+
+test("OPS-03: a release that drops signersOnCall from a scheduling step fails, and the committed one passes", () => {
+  const f = "releases/v0.8.0-onevault.yaml";
+  expect(problemsWith(f, (t) => t)).toEqual([]);
+  const bad = problemsWith(f, (t) => t.replace(/^    signersOnCall: .*\n/m, ""));
+  expect(bad.some((e) => e.includes("without signersOnCall"))).toBe(true);
+});
+
+test("OPS-03: emergency-key revocation is ONE scheduleBatch that lifts pauses and releases the freeze, then one executeBatch", () => {
+  const rev = (calls: string, action = "scheduleBatch") =>
+    ({ id: "P9.20-revoke", cmds: [["bash", "-c", `cast calldata "revokeRole(bytes32,address)" $(cast keccak EMERGENCY_ROLE) $K ${calls}`], ["bun", "cli.ts", "propose", "--action", action]] }) as never;
+  const lifts = "unpauseDeposits() unpauseQueue() resumePlan() releaseSettlement(uint256)";
+  const exec = { id: "P9.21-exec", cmds: [["bun", "cli.ts", "propose", "--action", "executeBatch"]] } as never;
+  // failing: a single schedule, a batch that lifts nothing, a batch missing the freeze release, no execute
+  expect(emergencyRevocationProblems([rev(lifts, "schedule"), exec], "r")[0]).toContain("outside ONE scheduleBatch");
+  expect(emergencyRevocationProblems([rev(""), exec], "r")[0]).toContain("does not also call unpauseDeposits, unpauseQueue, resumePlan, releaseSettlement");
+  expect(emergencyRevocationProblems([rev("unpauseDeposits() unpauseQueue() resumePlan()"), exec], "r")[0]).toContain("does not also call releaseSettlement");
+  expect(emergencyRevocationProblems([rev(lifts)], "r")[0]).toContain("no later executeBatch step");
+  // passing
+  expect(emergencyRevocationProblems([rev(lifts), exec], "r")).toEqual([]);
+  // a step that revokes some other role is not covered
+  expect(emergencyRevocationProblems([{ id: "P9.22-other", cmds: [["bash", "-c", "cast calldata 'revokeRole(bytes32,address)' $(cast keccak KEEPER_ROLE) $K"]] } as never], "r")).toEqual([]);
+});
+
+// ─── v0.9.0 upgrade: the 21-field FlowParams tuple, the header rc tag, the done markers and the word-aware checks ───
+const GATE_SOURCE = (): string => readFileSync(join(ROOT, "publish-contracts", "src", "release-gate.ts"), "utf8");
+const FLOW_TYPES_SOL = join(ROOT, "contracts", "FlowTypes.sol");
+/** PURE. The tuple types of `struct FlowParams` in FlowTypes.sol, in declaration order. */
+function flowParamsTypes(sol: string): string[] {
+  const body = /struct FlowParams \{([^}]*)\}/.exec(sol);
+  if (!body) throw new Error("FlowTypes.sol declares no struct FlowParams");
+  return body[1]!.split(";").map((l) => l.trim()).filter(Boolean).map((l) => l.split(/\s+/)[0]!);
+}
+const flowParamsSig = (sol: string): string => `setFlowParams((${flowParamsTypes(sol).join(",")}))`;
+/** The 4-byte selector: keccak256 of the signature (the pure keccak in scripts/ci/config-check.ts, so no package install is needed). */
+const selectorOf = (sig: string): string => keccak256(new TextEncoder().encode(sig)).slice(0, 10);
+
+test("v0.9.0 setFlowParams: the selector and arity recompute from FlowParams in FlowTypes.sol, and every setFlowParams in the runbook has that tuple (fails on drift)", () => {
+  const sol = readFileSync(FLOW_TYPES_SOL, "utf8");
+  expect(flowParamsTypes(sol).length).toBe(21);
+  const sig = flowParamsSig(sol);
+  expect(selectorOf(sig)).toBe("0xa0e15366");
+  // P3.72 re-validates the live flowParams with scripts/runbook/flow-params.ts resubmit, so its tuple is checked there as well as in the runbook
+  const runbook = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8") + readFileSync(join(ROOT, "scripts", "runbook", "flow-params.ts"), "utf8");
+  const used = [...runbook.matchAll(/setFlowParams\(\(([^)]*)\)\)/g)].map((m) => `setFlowParams((${m[1]}))`);
+  expect(used.length).toBeGreaterThan(0);
+  for (const u of used) expect(u, "the runbook's setFlowParams tuple").toBe(sig);
+  // a struct that lost the three appended fields has another arity and selector, and the runbook's tuple no longer matches it
+  const drifted = sol.replace(/\s*uint32 cancelBuffer;\n\s*uint32 maxPause;\n\s*uint16 matchBandBps;/, "");
+  expect(flowParamsTypes(drifted).length).toBe(18);
+  expect(selectorOf(flowParamsSig(drifted))).not.toBe("0xa0e15366");
+  expect(used.every((u) => u === flowParamsSig(drifted))).toBe(false);
+});
+
+test("v0.9.0 header: the rc tag is release/v0.9.0-rc.N-rehearsal, which RC_TAG_PATTERN accepts and decision D4-13 names; a planted onevault tag is refused", () => {
+  const pattern = rcTagPatternOf(GATE_SOURCE());
+  const text = readFileSync(join(ROOT, QA_DIR, "releases", "v0.9.0-onevault-upgrade.yaml"), "utf8");
+  const r = parseRelease(text, "v0.9.0-onevault-upgrade");
+  expect(rcTagHeaderProblems(text, "v0.9.0", r.decisions, pattern)).toEqual([]);
+  expect(pattern.test("release/v0.9.0-rc.3-rehearsal")).toBe(true);
+  expect(pattern.test("release/v0.9.0-onevault-rc.3-rehearsal")).toBe(false);
+  const planted = text.replace("# The rc tag of the code is release/v0.9.0-rc.N-rehearsal", "# The rc tag of the code is release/v0.9.0-onevault-rc.N-rehearsal");
+  expect(rcTagHeaderProblems(planted, "v0.9.0", r.decisions, pattern).join("\n")).toContain("release/v0.9.0-onevault-rc.N-rehearsal does not match RC_TAG_PATTERN");
+});
+
+test("v0.9.0 done markers count only this run's build (three proxies), and the setFlowParams re-validation reads the queue's own 21 words", () => {
+  const r = upgradeRelease090();
+  const j = (id: string) => r.steps.find((s) => s.id === id)!.cmds.map((c) => c.join(" ")).join("\n");
+  expect(j("P0.93-upg-done-markers")).toContain('--arg b "{runDir}/v090"');
+  expect(j("P0.93-upg-done-markers")).toContain('.build == \\$b');
+  expect(j("P0.93-upg-done-markers")).toContain("done_upgrade rebalancer {m:rebalancer.rebalancer}");
+  expect(j("P3.72-upg-adapter-execute")).toContain("scripts/runbook/flow-params.ts resubmit --queue {m:queue.queue} --timelock {m:fund-timelock.timelock}");
+  expect(j("P2.84-upg-after-upgrade")).not.toContain("flow-params.ts");
+  expect(r.steps.some((x) => x.id === "P3.82-upg-executor-execute" || x.id === "P3.85-upg-epoch-schedule")).toBe(false);
 });

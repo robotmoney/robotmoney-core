@@ -1,0 +1,171 @@
+---
+title: "FundStorage"
+description: "ERC-7201 namespaced location of `FundState` (`robotmoney.storage.RobotMoneyFund`), so the fund's own state can never collide with the OpenZeppelin upgradeable namespaces behind `GovernedUUPS`."
+---
+
+# FundStorage
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundStorage.sol)
+
+**Title:** FundStorage
+
+ERC-7201 namespaced location of `FundState` (`robotmoney.storage.RobotMoneyFund`), so the fund's
+own state can never collide with the OpenZeppelin upgradeable namespaces behind `GovernedUUPS`.
+
+## Constants
+
+### SLOT
+
+<i>
+
+keccak256(abi.encode(uint256(keccak256("robotmoney.storage.RobotMoneyFund")) - 1)) & ~bytes32(uint256(0xff))
+
+</i>
+
+```solidity
+bytes32 internal constant SLOT =
+        0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00;
+```
+
+### MIN_TWAP_WINDOW
+
+<i>
+
+Basket TWAP window bounds (BasketVault.MIN_TWAP_WINDOW / MAX_TWAP_WINDOW).
+
+</i>
+
+```solidity
+uint32 internal constant MIN_TWAP_WINDOW = 600;
+```
+
+### MAX_TWAP_WINDOW
+
+```solidity
+uint32 internal constant MAX_TWAP_WINDOW = 86_400;
+```
+
+### MIN_POOL_LIQUIDITY
+
+<i>
+
+BasketVault.MIN_POOL_LIQUIDITY: in-range liquidity floor checked at `addAsset`.
+
+</i>
+
+```solidity
+uint128 internal constant MIN_POOL_LIQUIDITY = 1e6;
+```
+
+### MAX_EXIT_FEE_BPS
+
+<i>
+
+BasketVault / RobotMoneyVault ceilings.
+
+</i>
+
+```solidity
+uint256 internal constant MAX_EXIT_FEE_BPS = 100;
+```
+
+### MAX_SLIPPAGE_BPS
+
+```solidity
+uint256 internal constant MAX_SLIPPAGE_BPS = 500;
+```
+
+### MAX_NAV_DEVIATION_BPS
+
+```solidity
+uint256 internal constant MAX_NAV_DEVIATION_BPS = 2_000;
+```
+
+### DEFAULT_MIN_POOL_DEPTH_USDC
+
+<i>
+
+Step 3f Gate 0 / §4.5 working defaults & claim accumulator precision scales.
+
+</i>
+
+```solidity
+uint256 internal constant DEFAULT_MIN_POOL_DEPTH_USDC = 2_000_000e6;
+```
+
+### DEFAULT_FEE_MARGIN_BPS
+
+```solidity
+uint16 internal constant DEFAULT_FEE_MARGIN_BPS = 20;
+```
+
+### DEFAULT_DELIST_BAND_BPS
+
+```solidity
+uint16 internal constant DEFAULT_DELIST_BAND_BPS = 300;
+```
+
+### DEFAULT_DELIST_BUDGET_BPS
+
+```solidity
+uint16 internal constant DEFAULT_DELIST_BUDGET_BPS = 300;
+```
+
+### DEFAULT_MAX_BASKET_BPS
+
+```solidity
+uint16 internal constant DEFAULT_MAX_BASKET_BPS = 10_000;
+```
+
+### DEFAULT_MAX_PAUSE
+
+```solidity
+uint32 internal constant DEFAULT_MAX_PAUSE = 72 hours;
+```
+
+### DELIST_UNIT_SCALE
+
+```solidity
+uint256 internal constant DELIST_UNIT_SCALE = 1e12;
+```
+
+### DELIST_ACC_SCALE
+
+```solidity
+uint256 internal constant DELIST_ACC_SCALE = 1e30;
+```
+
+### LENDING_ACC_NORM
+
+```solidity
+uint256 internal constant LENDING_ACC_NORM = 1e24;
+```
+
+### LENDING_ACC_SCALE
+
+```solidity
+uint256 internal constant LENDING_ACC_SCALE = 1e36;
+```
+
+## Functions
+
+<a id="layout"></a>
+
+### layout
+
+<i>
+
+The fund's state.
+
+</i>
+
+```solidity
+function layout() internal pure returns (FundState storage $);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| $ | `FundState` |  |
+

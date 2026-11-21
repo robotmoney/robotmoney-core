@@ -9,8 +9,8 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ISwapRouter} from "../../../interfaces/ISwapRouter.sol";
 import {TwapTickMath} from "../../../lib/TwapTickMath.sol";
-import {IExactOutSwapAdapter} from "../src/interfaces/IFlowAdapters.sol";
-import {ISwapRouterExactOut} from "../src/adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {IExactOutSwapAdapter} from "../../../interfaces/IFlowAdapters.sol";
+import {ISwapRouterExactOut} from "../../../adapters/UniswapV3ExactOutSwapAdapter.sol";
 import {MechReentry} from "./MechReentry.sol";
 
 /// @title MechSwapAdapter
@@ -36,6 +36,11 @@ contract MechSwapAdapter is MechReentry, IExactOutSwapAdapter {
 
     uint8 public mode;
     uint16 public underDeliverBps;
+    /// @notice When true, `isFixedFeePool` returns false (`E43` negative tests).
+    bool public nonFixedFeePool;
+    /// @notice When true, `poolFeeBps` returns `poolFeeBpsOverride` instead of reading `pool.fee()`.
+    bool public hasPoolFeeOverride;
+    uint24 public poolFeeBpsOverride;
 
     error ZeroAddress();
     error ZeroWindow();
@@ -50,6 +55,47 @@ contract MechSwapAdapter is MechReentry, IExactOutSwapAdapter {
     function setMode(uint8 mode_, uint16 underDeliverBps_) external {
         mode = mode_;
         underDeliverBps = underDeliverBps_;
+    }
+
+    /// @notice Test knob for `isFixedFeePool` (`E43`, default true when unset).
+    function setFixedFeePool(bool fixed_) external {
+        nonFixedFeePool = !fixed_;
+    }
+
+    /// @notice Test knob to force `poolFeeBps` directly in basis points (`E43`).
+    function setPoolFeeBps(uint24 feeBps_) external {
+        hasPoolFeeOverride = true;
+        poolFeeBpsOverride = feeBps_;
+    }
+
+    /// @notice Test knob to force `poolFeeBps` from hundredths of a bip (pips, rounded up).
+    function setPoolFeePips(uint24 feePips_) external {
+        hasPoolFeeOverride = true;
+        poolFeeBpsOverride = uint24((uint256(feePips_) + 99) / 100);
+    }
+
+    /// @notice Clear the `poolFeeBps` override and fall back to `pool.fee()` (or 5 bps).
+    function clearPoolFeeBps() external {
+        hasPoolFeeOverride = false;
+        poolFeeBpsOverride = 0;
+    }
+
+    /// @inheritdoc IExactOutSwapAdapter
+    function isFixedFeePool(address pool) external view returns (bool) {
+        return !nonFixedFeePool && pool != address(0);
+    }
+
+    /// @inheritdoc IExactOutSwapAdapter
+    function poolFeeBps(address pool) external view returns (uint24) {
+        if (hasPoolFeeOverride) return poolFeeBpsOverride;
+        if (pool.code.length > 0) {
+            (bool ok, bytes memory data) = pool.staticcall(abi.encodeWithSignature("fee()"));
+            if (ok && data.length == 32) {
+                uint256 feePips = abi.decode(data, (uint256));
+                if (feePips <= type(uint24).max) return uint24((feePips + 99) / 100);
+            }
+        }
+        return 5;
     }
 
     /// @notice Exact-input swap, as the production `UniswapV3SwapAdapter.swap` (the fund's sale, step legs).

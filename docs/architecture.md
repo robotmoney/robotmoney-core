@@ -855,17 +855,14 @@ never be applied. The evidence check still parses historical
 `receipt_releases` entries.
 
 **Apply order (issue 1831).** `RouterGovernance` stores
-the last applied receipt's `lastAppliedRecordedAt` and 1-based issuance
-index. Receipts from the same second follow their stable append order.
-`applyReceipt` reverts `ReceiptNotNewerThanApplied` if the issuance index
-does not advance. The first application after an upgrade uses the strictly
-newer timestamp rule until the index watermark exists. Upgrade the receipt
-register first to expose its existing indices, then upgrade RouterGovernance.
-The receipt layout and ID format stay the same. The timelock executor can
-execute ready operations in either order. An older receipt stays unreleased
-once a newer one applies. The `apply-receipt` govern row checks the watermark
-before scheduling and again before execution. No EOA can release a receipt
-after handover.
+`lastAppliedRecordedAt`, the `recordedAt` of the last receipt it applied.
+`applyReceipt` reverts `ReceiptNotNewerThanApplied` unless the receipt was
+recorded strictly later. The timelock's executor role is open, so anyone can
+execute two ready apply operations in either order. Executing an older one
+after a newer one therefore reverts, the older receipt stays unreleased, and
+the newer vector stays active. The `apply-receipt` row reads
+`lastAppliedRecordedAt` and refuses with USAGE before it schedules a receipt
+that is not newer. No EOA can release a receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or
@@ -1759,9 +1756,19 @@ stays §8 because other documents cite it by number.
   emergency key, RouterGovernance) can upgrade. The timelock stays the last
   deploy stage: every proxy names its CREATE2 address from the first block and
   the timelock stage refuses a proxy that names another authority. A final
-  release must record and verify its freeze choice. Adapter no-proxy and
-  codehash checks continue to apply. See ADR-0014 and the contract
-  upgradeability plan.
+  release must record and verify its freeze choice. Lending adapters stay
+  direct deployments with codehash checks. Fund basket swap adapters run
+  behind governed UUPS proxies, and the fund checks both the proxy and the
+  implementation code hash on every use (ADR-0019). See ADR-0014 and the
+  contract upgradeability plan.
+- An in-place upgrade whose new code adds state that old entries need, or
+  changes a struct reachable from storage, runs a one-time migration as the
+  data of `upgradeToAndCall`. The migration runs once and only from the
+  upgrade timelock (ADR-0020).
+- The storage layout gate compares the members of every struct reachable
+  from proxy storage against the live release's baseline. A mid-struct change
+  passes only with an allowlist entry that names an existing migration
+  (`scripts/ci/storage-layout-migrations.json`, ADR-0020).
 
 ### Negative Invariants
 

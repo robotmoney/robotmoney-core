@@ -20,13 +20,10 @@
     { "name": "cargo-test-target-coverage", "source": "suite-04-rust-quality.yml" },
     { "name": "rmpc-unit", "source": "suite-06-rmpc-unit.yml" },
     { "name": "rmpc-parity", "source": "suite-07-rmpc-integration.yml" },
-    { "prefix": "rmpc-e2e-", "source": "suite-07-rmpc-integration.yml" },
     { "name": "rmpc-nonce-race-stress", "source": "suite-07-rmpc-integration.yml" },
     { "name": "explorer-indexer-fast", "source": "suite-08-explorer-indexer.yml" },
     { "name": "explorer-api-committee-regime", "source": "suite-08-explorer-indexer.yml" },
-    { "name": "explorer-indexer-devnet", "source": "suite-08-explorer-indexer.yml" },
     { "name": "dapp-lint-build", "source": "suite-09-dapp-quality.yml" },
-    { "name": "dapp-e2e", "source": "suite-10-dapp-e2e.yml" },
     { "name": "opencode-plugin-validate", "source": "suite-11a-opencode-smoke.yml" },
     { "name": "opencode-walkthrough-offline", "source": "suite-11a-opencode-smoke.yml" },
     { "name": "opencode-walkthrough-fork", "source": "suite-11a-opencode-smoke.yml" },
@@ -39,18 +36,6 @@
     { "name": "nightly-and-release-checks", "source": "suite-13-doc-checks.yml" },
     { "name": "smoke-test-guards", "source": "suite-14-smoke-test.yml" },
     { "prefix": "smoke-test-devnet-", "source": "suite-14-smoke-test.yml" },
-    {
-      "name": "smoke-test-twin-publish",
-      "source": "suite-14-smoke-test.yml",
-      "class": "required-on-deploy-paths",
-      "paths": ["contracts/script/", "scripts/deploy/", "scripts/stage/", "publish-contracts/", "deployments/twin-918453/", "config/", "testing/smoke-test/", ".github/workflows/suite-14-smoke-test.yml"]
-    },
-    {
-      "name": "smoke-test-twin-pause-all",
-      "source": "suite-14-smoke-test.yml",
-      "class": "required-on-deploy-paths",
-      "paths": ["contracts/script/", "scripts/deploy/", "scripts/stage/", "publish-contracts/", "deployments/twin-918453/", "config/", "testing/smoke-test/", ".github/workflows/suite-14-smoke-test.yml"]
-    },
     { "name": "robotmoney-analyst", "source": "suite-15-regime-classifier.yml" },
     { "name": "abi-drift-gate", "source": "suite-16-abi-drift.yml" },
     { "name": "secrets-scan", "source": "suite-18-secrets-scan.yml" },
@@ -63,8 +48,8 @@
     { "name": "release-workflow-authority-audit", "source": "suite-18-security-gates.yml" },
     { "name": "mock-tests", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "assert-basescan-mock-tests", "source": "suite-18-upstream-monitoring.yml" },
-    { "name": "recorder-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
-    { "prefix": "erc4626-precondition (", "source": "suite-19-erc4626-demo-tvl-matrix.yml" },
+    { "name": "onevault-share-delivery-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
+    { "name": "onevault-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "watchdog-unit", "source": "suite-20-watchdog.yml" },
     { "name": "watchdog-integration", "source": "suite-20-watchdog.yml" },
     { "name": "forge-invariant-spec-tests", "source": "suite-22-formal-verification.yml" },
@@ -79,25 +64,18 @@
     { "name": "stage-tooling-tests", "source": "suite-28-core-stack-selftest.yml" },
     { "name": "stage-container-rules", "source": "suite-28-core-stack-selftest.yml" },
     { "name": "stage-chain-container", "source": "suite-28-core-stack-selftest.yml" },
-    { "name": "stage-core-stack-containers", "source": "suite-28-core-stack-selftest.yml" },
     { "name": "core-stages-offline", "source": "suite-28-core-stages.yml" },
     { "name": "publish-contracts-tests", "source": "suite-28-core-stages.yml" },
-    { "name": "core-stages-twin-upgrade-lifecycle", "source": "suite-28-core-stages.yml" },
-    { "name": "core-stages-twin-upgrade-from-v050", "source": "suite-28-core-stages.yml" },
     { "name": "check-sha-green-tests", "source": "suite-30-check-sha-green.yml" }
   ],
   "optional": [
-    { "name": "forge-fork-vault-regressions", "source": "suite-01-02-forge-tests.yml", "reason": "It runs on the Twin chain, a pinned lazy fork of real Base state served by a public upstream that can rate limit (core 1498), so a provider outage must not block a deploy sha." },
     { "prefix": "fork-integration-", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 legs on the Twin chain and anvil. Optional since the list was created (core 1505), next to forge-fork-vault-regressions, which reads the same public upstream." },
     { "name": "base-testnet-adapters", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 leg that needs the Base testnet RPC and a funded testnet account from repository secrets. A testnet outage or an empty funder must not block a deploy sha. Kept with fork-integration-*." },
-    { "name": "core-stages-twin-chain", "source": "suite-28-core-stages.yml", "reason": "It reads a public Base upstream that can rate limit, so a required entry would block every deploy sha on a provider outage. It is gated indirectly: freeze-counts refuses a counts file whose rehearsal conclusion is not success, and the plan job needs the committed counts. core-stages-twin-upgrade-lifecycle reads the same upstream and is gated directly (issue 1846)." },
     { "name": "solidity-slither", "source": "suite-03-solidity-quality.yml", "reason": "It installs the latest slither-analyzer from pip with no version pin, so a new detector release can turn it red with no change in the sha." },
-    { "name": "skill-url-reachability", "source": "suite-23-skill-url-reachability.yml", "reason": "It fetches the published raw SKILL.md URLs of the dev ref over the live network, not this sha's files (CI_CLASS heavy, a sweep)." },
-    { "name": "opencode-headless-deposit-replay", "source": "suite-11b-opencode-headless.yml", "reason": "Suite 11b has no push trigger: it runs on the nightly and on dispatch, so a deploy sha does not always carry it." }
+    { "name": "skill-url-reachability", "source": "suite-23-skill-url-reachability.yml", "reason": "It fetches the published raw SKILL.md URLs of the dev ref over the live network, not this sha's files (CI_CLASS heavy, a sweep)." }
   ],
   "exempt": [
     { "name": "twin-pin", "reason": "It chooses the Twin chain pin block for its workflow and tests nothing. Every Twin chain job needs it, so a failed pin skips them, and a skipped required job fails the gate." },
-    { "name": "smoke-test-changes", "source": "suite-14-smoke-test.yml", "reason": "It computes the suite 14 deploy-path flag and tests nothing. On a push it always sets deploy=true, so both required-on-deploy-paths jobs run." },
     { "name": "dispatch-full-suite", "source": "release-tag-suite-dispatch.yml", "reason": "It dispatches the workflow_dispatch suites against a release or qa commit and then runs check-sha-green as the authority. It tests nothing itself, and it cannot gate the sha it is still working on." }
   ]
 }

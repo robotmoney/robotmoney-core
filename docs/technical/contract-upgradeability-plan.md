@@ -39,13 +39,20 @@ Candidates for per-instance proxies are, in the vaults system,
 `ConsensusRecommendationReceipt`, and, in the
 rmpc gateway system, `RobotMoneyGateway`. Inventory each deployment stage before
 implementation; make the decision per contract and record exclusions in the
-release manifest. The strategy and swap adapters, linked libraries,
+release manifest. The strategy adapters, linked libraries,
 `UniswapV4PriceRecorder`, and `TimelockController` remain direct
 deployments in this plan. Safe retains its existing canonical SafeProxy 1.4.1
 and verified SafeL2 singleton topology; it is not converted to a Robot Money
-UUPS proxy. Adapter address and runtime-codehash checks and the
-no-proxy scan remain mandatory. An adapter upgrade means deploying a new
-adapter and approving its address/hash through the existing governance path.
+UUPS proxy. Lending (strategy) adapters stay direct deployments: their
+address and runtime-codehash checks and the no-proxy scan remain mandatory, and
+replacing one means deploying a new adapter and approving its hash. Fund basket
+swap adapters are the exception (ADR-0019, 2026-11-19): each runs behind a
+`GovernedUUPS` proxy whose upgrade authority is the fund timelock. The fund
+pins the proxy code hash (`setAdapterProxyCodeHash`) and the implementation code
+hash (`setAdapterCodeHashAllowed`) and checks both on every use. An upgrade is
+two governed steps: allow the new implementation hash, then `upgradeToAndCall`.
+`setAssetAdapter` moves a basket asset to another vetted adapter without moving
+tokens.
 
 ## Two systems
 
@@ -71,7 +78,9 @@ proxy storage with public getters retaining the current ABI. Constants stay
 constants. Audit inheritance order, namespaced storage, and every external
 library link before choosing final storage layout. Pin and validate that layout
 for every upgrade; append-only layout discipline alone is insufficient when
-inheritance or library linking changes.
+inheritance or library linking changes. A passing layout gate does not make an
+upgrade safe either: new fields read 0 on an upgraded proxy, and old entries
+may need a migration (see "In-place upgrades" below, ADR-0020).
 
 Storage that loses its use is retired in place, never removed or reused. It
 keeps its label and type, becomes `internal`, and is never read or written
@@ -229,7 +238,9 @@ sections 2, 3 and 4.14). A governed upgrade of the line's live proxies is develo
 candidate (`release/vA.B.C-rc.N`) at the squash commit, and executed only from that rc tag through the governed upgrade
 procedure (`deploy-implementation`, `govern --row upgrade-proxy`, `verify`, evidence). The version tag `vA.B.C` is cut
 at the final rc's commit after the postflight is clean. The storage layout of every proxied contract stays append-only
-against the layout of the commit the live implementation was built from, at every QA commit and at the rc. An upgrade
+against the layout of the commit the live implementation was built from, at every QA commit and at the rc. That covers
+the members of every struct reachable from storage. A struct break passes only with a declared migration (see "In-place
+upgrades" below). An upgrade
 needs the owner's recorded go before any Base broadcast, and the timelock delay is the sheet's (48 hours in production,
 900 s in a rehearsal). After `freezeUpgrades` the line takes no contract change: a fix is a new deployment on a new line.
 
@@ -253,6 +264,85 @@ v0.5.0-shaped receipt proxy this way and asserts the roles after the upgrade
 only), the history preserved and the reinitializer refused a second time.
 Another proxy's migration is a reviewed addition to the registry with its own
 Twin proof. The remaining gaps are RM-1022 in `docs/audits.md`.
+
+## In-place upgrades: migration, layout gate, simulation, Twin (ADR-0020)
+
+Owner decision, 2026-11-20, recorded in
+[ADR-0020](../adr/ADR-0020-in-place-upgrades-run-a-one-time-migration.md). The
+cause is the v0.9.0 upgrade of Deploy 4: an upgrade with empty data left every
+new field 0 and three structs misread, and the layout gate had passed
+([audit](v0.9.0-in-place-upgrade-audit.md)).
+
+**When a migration is required.** An upgrade passes empty data only when the new
+code reads the old state correctly as it is. It needs a migration when either
+holds:
+
+- The new code adds state that old entries need. `initialize` writes it on a
+  fresh deployment and never runs on an upgraded proxy, so it reads 0.
+- A struct reachable from storage changes anywhere but at its end.
+
+**What a migration is.** One function on the proxy, passed as the data of
+`upgradeToAndCall`, so the new code never runs on unmigrated state. It carries
+the `reinitializer(n)` gate, so it runs once per proxy. It reverts
+`NotUpgradeTimelock` for any caller but `upgradeTimelock()`. It checks its own
+preconditions and reverts on state it cannot migrate. The v0.9.0 ones are
+`Rebalancer.migrateV090`, `RobotMoneyFund.migrateV090`
+(`contracts/lib/FundMigrateLib.sol`) and `FlowQueue.migrateV090`
+(`contracts/lib/FlowMigrateLib.sol`). They execute in that order, before any
+settlement. ADR-0020 says what each writes and requires. The fund applies the
+reinitializer gate inside `FundMigrateLib`, because the modifier does not fit
+under EIP-170.
+
+**The struct-level layout gate.** `scripts/ci/check-core-storage-layout.sh`
+compares, per proxied contract, the sequential rows, the linked libraries, the
+ERC-7201 namespaces and the `nested` section: every struct reachable from
+storage through mappings, arrays and nested structs, with each member's type,
+slot and offset (`scripts/ci/storage_layout_nested.py`). Namespace structs are
+read through probe contracts (`contracts/test/helpers/StorageLayoutProbe.sol`).
+Against every baseline a struct may only gain members at its end. A struct that
+is an array element may not change size. Before 2026-11-20 the gate listed a
+namespace's mapping as one source line and never compared the struct behind it.
+
+- **Baselines per release.** `--baseline <ref>` compares with a git ref (CI: the
+  pull request's base commit). `--releases` compares with every production
+  `release/*` tag that ships governed proxies. `--baseline-dir <dir>` compares
+  with committed snapshots of a layout that is live on chain. Each live release
+  has one directory under `contracts/test/fixtures/storage-layout/baselines/`.
+  `baselines/v0.8.0/` is the Deploy 4 layout at commit `fa7c47182`.
+- **The allowlist.** `scripts/ci/storage-layout-migrations.json` declares each
+  deliberate struct break: the contract, the struct, the layout hash of the
+  baseline struct (`from`), the layout hash of the live struct (`to`) and the
+  migration as `Contract.function`. The gate accepts a break only when an entry
+  matches all of them. `storage_layout_nested.py hashes <snapshot>` prints the
+  hashes. An entry is never added for a break that no migration repairs.
+- **`--require-migrations`.** The declared function must exist in the contract's
+  ABI. CI passes it (`.github/workflows/suite-01-02-forge-tests.yml`).
+
+The gate proves the layout is declared. It does not prove the migration is
+correct, and it does not see a new field that old entries need.
+
+**Tests.** `contracts/test/prototype/UpgradeMigration.t.sol` runs each v0.9.0
+migration as `upgradeToAndCall` from the timelock on synthetic 0.8.0-shaped
+state and checks the refusals. Trunk holds no 0.8.0 code, so the state is
+written with `vm.store`. A recorded real-state upgrade test in CI is open.
+
+**Simulation before scheduling.** After the new implementations are deployed and
+before the Safe schedules anything, `scripts/runbook/simulate-upgrades.ts` calls
+each `upgradeToAndCall(newImplementation, migration data)` from the timelock by
+`eth_call`, in the on-chain order. A revert fails the step with the decoded
+error. Nothing is sent.
+
+**Twin rehearsal on real state.** The upgrade runs first on a Twin fork of Base
+at a recent pin, on the stage host. The forked proxies hold the state the live
+build wrote, so the migrations run on real state. On the Twin nothing before the
+fork pin is read: the Twin proves what the release changes, and the 8453 run
+keeps the full-history checks (`docs/runbooks/contract-qa/README.md`).
+
+**Tooling.** For the fund system, `publish-contracts/src/fund-migrations.ts` is
+the one encoder of the migration data and the allowlist of what a fund upgrade
+may carry: a proxy's own `migrateV090` or empty data. `fund-upgrade-record`
+records the decoded migration. `verify` reads the migrated state and is the
+single post-state check.
 
 ## Signing clients and disclosure (stage 3)
 
@@ -412,7 +502,7 @@ the target design until code and on-chain evidence exist.
 | `docs/prd.md` §9 and `docs/technical/smart-contract-invariants.md` | The PRD now requires public upgrade/freeze disclosure; add executable invariants once the interface and implementation are settled. | Done: GOV-6 to GOV-11 with their tests; the PRD names the on-chain facts. User-facing disclosure done in stage 3 (issue 1810): explorer API, dapp, `rmpc get-gateway`, watchdog. |
 | `docs/operations/contract-release-runbooks.md`, `docs/development/stage-deployment.md`, per-release runbooks | Add mode approval, storage/layout review, Safe/timelock execution, freeze proof, and existing-address cutover procedure before an upgradeable release. | Stage 2 done (issue 1809): runbook 4.12 covers the mode, the stage order, resume, the verify labels and record, freeze ownership, the deadline, missed-deadline alerts and the voluntary cutover plan. Stage 4 done (issue 1811): runbook 4.1 adds the external security review and the lifecycle rehearsal gates, 4.12 adds the Twin rehearsal, the steps after a governed upgrade and the rollback limits. The per-release runbook is now YAML (`docs/runbooks/contract-qa/template.yaml` plus an add-only release file; Deploy 3 is `releases/v0.5.0.yaml`, launching as an upgradeable proving period), checked by `scripts/runbook/validate-contract-qa.ts`. |
 | `scripts/deploy/stage-table.json`, `publish-contracts/`, manifests, CI, client/indexer configuration | Implement and verify the selected mode; refresh frozen counts and address/config expectations. | Partly done: the stage table names each proxy stage's `SAFE_ADDRESS`, `TIMELOCK_MIN_DELAY`, `UPGRADE_MODE` and linked libraries; publish passes the sheet's `UPGRADE_MODE` (`upgradeable` or `frozen`, no default) and verifies the implementation behind each proxy; the manifests record the implementation, timelock and mode; CI gates the storage layouts. Client and indexer configuration done in stage 3 (issue 1810): `rmpc` `gateway_implementation` + `gateway_implementation_runtime_hash`, the dapp's `VITE_GATEWAY_EXPECTED_IMPLEMENTATION(_HASH)`, the indexer's proxy events. Stage 2 done (issue 1809): the sheet's `UPGRADE_MODE` and `UPGRADE_FREEZE_DEADLINE`, the stage table's `proxies` and `upgradeAuthority`, the verifier's per-proxy labels and `upgradeability.json`, the evidence section, and source verification of every implementation. No frozen counts exist yet for a proxied DEPLOY_SHA: the next Twin rehearsal measures them. |
-| `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern. Accepted 2026-10-16. |
+| `docs/adr/` | Record the final pattern and its irreversibility in an accepted ADR once implementation choices are reviewed; do not rewrite prior ADRs. | ADR-0014 records the pattern. Accepted 2026-10-16. ADR-0020 (2026-11-20) adds the migration rule for in-place upgrades. |
 
 ## References
 

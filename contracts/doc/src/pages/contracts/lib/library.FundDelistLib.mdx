@@ -1,0 +1,384 @@
+---
+title: "FundDelistLib"
+description: "Delisting sales, delisting claim accumulators, asset admission rules 4/6/7 helpers, and initialization with ledger creation for `RobotMoneyFund`, linked externally via DELEGATECALL to preserve EIP-170 headroom. Custody (`safeTransfer` / `forceApprove`) stays in `FundFlowsLib` / `RobotMoneyFund` (G1)."
+---
+
+# FundDelistLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundDelistLib.sol)
+
+**Title:** FundDelistLib
+
+Delisting sales, delisting claim accumulators, asset admission rules 4/6/7 helpers, and
+initialization with ledger creation for `RobotMoneyFund`, linked externally via DELEGATECALL
+to preserve EIP-170 headroom. Custody (`safeTransfer` / `forceApprove`) stays in `FundFlowsLib` / `RobotMoneyFund` (G1).
+
+## Functions
+
+<a id="unwindpauseplan-fundstate"></a>
+
+### unwindPausePlan
+
+Pause an Open/Halted plan on `shutdown` or `emergencyUnwind`, clearing any lazy-expiry deadline.
+
+```solidity
+function unwindPausePlan(FundState storage s) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+<a id="syncexpiredpause-fundstate"></a>
+
+### syncExpiredPause
+
+Materialize lazy expiry of `rebalancePausedUntil` in storage if expired while not shut down.
+
+```solidity
+function syncExpiredPause(FundState storage s) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+
+<a id="requirebasketfeeadmission-fundstate-address-address-uint24"></a>
+
+### requireBasketFeeAdmission
+
+Rule 6 (E43, RUN-01, OPS-04): require fixed-fee pool and `poolFeeBps + feeMarginBps &lt; legBandBps`.
+
+```solidity
+function requireBasketFeeAdmission(
+        FundState storage s,
+        address adapter,
+        address pool,
+        uint24 poolFeePips
+    ) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| adapter | `address` |  |
+| pool | `address` |  |
+| poolFeePips | `uint24` |  |
+
+<a id="requiretargetsfeeband-fundstate-uint16"></a>
+
+### requireTargetsFeeBand
+
+Enforce Rule 6 (and forbid non-zero target for `inSale` assets) across target vector `endBps`.
+
+```solidity
+function requireTargetsFeeBand(FundState storage s, uint16[] memory endBps) public view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| endBps | `uint16[]` |  |
+
+<a id="delistasset-fundstate-uint256"></a>
+
+### delistAsset
+
+ADMIN_ROLE. Open a delisting sale on active Basket asset `index` (D19, D30, E53).
+
+```solidity
+function delistAsset(FundState storage s, uint256 index) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+
+<a id="_snapshotfallbackprice-fundstate-uint256-assetconfig-uint256"></a>
+
+### _snapshotFallbackPrice
+
+```solidity
+function _snapshotFallbackPrice(
+        FundState storage s,
+        uint256 index,
+        AssetConfig storage a,
+        uint256 tokenUnit
+    ) private view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| a | `AssetConfig` |  |
+| tokenUnit | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="recorddelistclaim-fundstate-uint256-address-uint256-uint256"></a>
+
+### recordDelistClaim
+
+Record `claimTok` tokens set aside for `owner` during a redemption while asset `index` is `inSale`.
+Non-dilutive relative to prior sales (`delistUsdcPerScaled`), split net vs linked fee by `feeBps`.
+
+```solidity
+function recordDelistClaim(
+        FundState storage s,
+        uint256 index,
+        address owner,
+        uint256 claimTok,
+        uint256 feeBps
+    ) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| owner | `address` |  |
+| claimTok | `uint256` |  |
+| feeBps | `uint256` |  |
+
+<a id="preparedeliststep-fundstate-uint256-uint256"></a>
+
+### prepareDelistStep
+
+Prepare one bounded delisting sale step on `index`. Closes sale if zero tokens remain.
+
+```solidity
+function prepareDelistStep(FundState storage s, uint256 index, uint256 maxUsdcNotional)
+        public
+        returns (
+            bool shouldSell,
+            uint256 tokensToSell,
+            uint256 minOut,
+            uint256 expectedUsdc,
+            uint256 fundTokensBefore,
+            uint256 claimedBefore
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| maxUsdcNotional | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shouldSell | `bool` |  |
+| tokensToSell | `uint256` |  |
+| minOut | `uint256` |  |
+| expectedUsdc | `uint256` |  |
+| fundTokensBefore | `uint256` |  |
+| claimedBefore | `uint256` |  |
+
+<a id="finalizedelistsale-fundstate-uint256-uint256-uint256-uint256-uint256-uint256-bool"></a>
+
+### finalizeDelistSale
+
+Finalize accounting after a delisting swap (`executeDelistStep` enforces band/budget; `emergencyUnwind` skips them).
+
+```solidity
+function finalizeDelistSale(
+        FundState storage s,
+        uint256 index,
+        uint256 tokensSold,
+        uint256 usdcReceived,
+        uint256 expectedUsdc,
+        uint256 fundTokensBefore,
+        uint256 claimedBefore,
+        bool enforceLimits
+    ) public returns (uint256 usdcClaim);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| tokensSold | `uint256` |  |
+| usdcReceived | `uint256` |  |
+| expectedUsdc | `uint256` |  |
+| fundTokensBefore | `uint256` |  |
+| claimedBefore | `uint256` |  |
+| enforceLimits | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcClaim | `uint256` |  |
+
+<a id="_enforcedelistlimits-fundstate-uint256-uint256-uint256"></a>
+
+### _enforceDelistLimits
+
+```solidity
+function _enforceDelistLimits(
+        FundState storage s,
+        uint256 index,
+        uint256 usdcReceived,
+        uint256 expectedUsdc
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| usdcReceived | `uint256` |  |
+| expectedUsdc | `uint256` |  |
+
+<a id="_recorddelistclaimpot-fundstate-uint256-uint256-uint256-uint256"></a>
+
+### _recordDelistClaimPot
+
+```solidity
+function _recordDelistClaimPot(
+        FundState storage s,
+        uint256 index,
+        uint256 claimedBefore,
+        uint256 claimedSold,
+        uint256 usdcClaim
+    ) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| claimedBefore | `uint256` |  |
+| claimedSold | `uint256` |  |
+| usdcClaim | `uint256` |  |
+
+<a id="closedelistsale-fundstate-uint256"></a>
+
+### closeDelistSale
+
+Close an `inSale` asset once zero tokens remain (`heldBalance == 0 && delistClaimedTokens == 0`),
+deactivating it and recording `lastStateStopEndedAt` if no other `inSale` remains (E40, E53).
+
+```solidity
+function closeDelistSale(FundState storage s, uint256 index) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+
+<a id="consumedelistclaim-fundstate-uint256-address"></a>
+
+### consumeDelistClaim
+
+Consume `owner`'s accrued delisting USDC pot (plus linked fee) into amounts ready for custody payout.
+
+```solidity
+function consumeDelistClaim(FundState storage s, uint256 index, address owner)
+        public
+        returns (uint256 netUsdc, uint256 feeUsdc, bool hasClaim);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| netUsdc | `uint256` |  |
+| feeUsdc | `uint256` |  |
+| hasClaim | `bool` |  |
+
+<a id="_harvestdelist-delistclaimaccount-uint256"></a>
+
+### _harvestDelist
+
+```solidity
+function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| accEntry | `DelistClaimAccount` |  |
+| acc | `uint256` |  |
+
+<a id="createledger-address"></a>
+
+### createLedger
+
+Create the fund's `FundExclusionLedger` once (moved from `FundAdminLib` for EIP-170 headroom).
+
+```solidity
+function createLedger(address usdc) public returns (address ledger);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ledger | `address` |  |
+
+<a id="initflows-fundstate-fundinitparams"></a>
+
+### initFlows
+
+Validate `FundInitParams`, write core & Step 3d/3f defaults, and deploy the exclusion ledger.
+
+```solidity
+function initFlows(FundState storage s, FundInitParams memory p) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| p | `FundInitParams` |  |
+

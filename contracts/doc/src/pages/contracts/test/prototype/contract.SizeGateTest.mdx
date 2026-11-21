@@ -1,20 +1,19 @@
 ---
 title: "SizeGateTest"
-description: "One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue): the fund, the rebalancer and the FlowQueue implementations each deploy under EIP-170 (24,576 bytes, a limit the chain enforces), and every linked library they call deploys at all. Sizes are read from the code the harness actually deployed (the ERC-1967 implementation behind each proxy, the libraries forge linked), compiled with the repo's production optimizer settings. The limit is never edited to pass. The 1 KB headroom G1 first asked for was a chosen margin, not a chain limit; the owner removed it on 2026-11-12 (proposal §13)."
+description: "One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue; step 3f adds `FlowMatchLib` and `FundDelistLib`): the core implementations and every linked library deploy under EIP-170 (24,576 bytes) runtime and EIP-3860 (49,152 bytes) initcode limits. Sizes are read from the code the harness actually deployed (the ERC-1967 implementation behind each proxy, the libraries forge linked), compiled with the repo's production optimizer settings."
 ---
 
 # SizeGateTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/SizeGate.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/SizeGate.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
-One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue): the fund, the rebalancer and the
-FlowQueue implementations each deploy under EIP-170 (24,576 bytes, a limit the chain enforces), and
-every linked library they call deploys at all. Sizes are read from the code the harness actually
+One-vault experiment (plan Step 2.2, gate G1; step 3d adds the queue; step 3f adds `FlowMatchLib` and
+`FundDelistLib`): the core implementations and every linked library deploy under EIP-170 (24,576 bytes)
+runtime and EIP-3860 (49,152 bytes) initcode limits. Sizes are read from the code the harness actually
 deployed (the ERC-1967 implementation behind each proxy, the libraries forge linked), compiled with the
-repo's production optimizer settings. The limit is never edited to pass. The 1 KB headroom G1 first asked
-for was a chosen margin, not a chain limit; the owner removed it on 2026-11-12 (proposal §13).
+repo's production optimizer settings.
 
 ## Constants
 
@@ -28,6 +27,18 @@ EIP-170 runtime code limit.
 
 ```solidity
 uint256 internal constant EIP170_LIMIT = 24_576;
+```
+
+### EIP3860_LIMIT
+
+<i>
+
+EIP-3860 max initcode size.
+
+</i>
+
+```solidity
+uint256 internal constant EIP3860_LIMIT = 49_152;
 ```
 
 ### G1_MAX
@@ -72,14 +83,59 @@ function _impl(address proxy) internal view returns (address impl);
 | ---- | ---- | ----------- |
 | impl | `address` |  |
 
+<a id="_assertlinkedlib-string-address"></a>
+
+### _assertLinkedLib
+
+```solidity
+function _assertLinkedLib(string memory label, address lib) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+| lib | `address` |  |
+
+<a id="_assertinitcode-string-string"></a>
+
+### _assertInitCode
+
+```solidity
+function _assertInitCode(string memory label, string memory artifact) internal view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+| artifact | `string` |  |
+
 <a id="test_g1_fundrebalancerandqueuefitwithheadroom"></a>
 
 ### test_G1_fundRebalancerAndQueueFitWithHeadroom
 
-G1 (§13): fund, rebalancer and queue implementation `code.length` &lt;= 24,576 (EIP-170) each. Logs every size for
-the evidence log, including governance, the fund's exclusion ledger and each linked library.
+G1 (§13): fund, rebalancer and queue implementation `code.length` &lt;= 24,576 (EIP-170), plus all 18
+libraries from `DeployFundLibs` (`FlowMatchLib`, `FundDelistLib`, etc.) and EIP-3860 initcode limits.
 
 ```solidity
 function test_G1_fundRebalancerAndQueueFitWithHeadroom() public fixtureCovered;
 ```
+
+<a id="_assertadapterartifact-string-string"></a>
+
+### _assertAdapterArtifact
+
+```solidity
+function _assertAdapterArtifact(string memory label, string memory artifact) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| label | `string` |  |
+| artifact | `string` |  |
 

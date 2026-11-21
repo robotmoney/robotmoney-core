@@ -92,12 +92,6 @@ describe("four-vault rule", () => {
     ["docs/technical/security-model.md", "Stage 13 holds only the basket vault deposit unpause operations"],
     // D4 smart-contracts.md: emergencyUnwind floors each leg at the TWAP value less slippage
     ["docs/technical/smart-contracts.md", "lossy, fast path (no slippage limit)"],
-    // D5 the vault scripts
-    ["contracts/script/DeployVault.s.sol", "before the vault is opened"],
-    ["contracts/script/BasketVaultDeployBase.sol", "The only mainnet operation after the handover is the vault unpause"],
-    ["contracts/script/DeployProtocolAssetVault.s.sol", "The only operation after the handover is the basket unpause"],
-    ["contracts/script/DeployAgentTokenVault.s.sol", "The only operation after the handover is the basket unpause"],
-    ["contracts/script/DeployRwaBasketVault.s.sol", "The only operation after the handover is the basket unpause"],
     // D6 the owner-decision attribution of "one class of operation"
     ["publish-contracts/README.md", "exactly one class of operation remains"],
     ["publish-contracts/src/govern.ts", "ONE CLASS OF OPERATION AFTER THE HANDOVER (owner decision, 2026-10-05, issue 1520)"],
@@ -145,11 +139,6 @@ describe("VAULT_NAME and the same-core-sha rule in the deploy README (issue 1833
   });
   test("the deploy README states the CLI runs from the same core sha as DEPLOY_SHA", () => {
     expect(readme()).toContain("The CLI must run from the same core sha as `DEPLOY_SHA`");
-  });
-  test("the core-parity test title names the current VAULT_NAME rule", () => {
-    const parity = read("publish-contracts/tests/core-parity.test.ts");
-    expect(parity).not.toContain("VAULT_NAME is read by the registry script only");
-    expect(parity).toContain("no stage script reads VAULT_NAME");
   });
 });
 

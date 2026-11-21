@@ -88,12 +88,6 @@
       "offset": 0,
       "slot": "10",
       "type": "t_struct(WeightSetterRotation)_storage"
-    },
-    {
-      "label": "redemptionAllowance",
-      "offset": 0,
-      "slot": "11",
-      "type": "t_mapping(t_address,t_mapping(t_address,t_mapping(t_address,t_mapping(t_address,t_uint256))))"
     }
   ],
   "structs": {

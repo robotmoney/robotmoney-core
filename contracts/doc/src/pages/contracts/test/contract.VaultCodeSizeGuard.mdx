@@ -5,7 +5,7 @@ description: "Asserts every deployable vault's runtime bytecode stays under the 
 
 # VaultCodeSizeGuard
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9a5abb78f17cecf801493322557775e4886f59cc/contracts/test/VaultCodeSizeGuard.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/VaultCodeSizeGuard.t.sol)
 
 **Inherits:** Test
 
@@ -53,60 +53,6 @@ function _assertUnderLimit(string memory artifact) internal;
 | ---- | ---- | ----------- |
 | artifact | `string` |  |
 
-<a id="test_robotmoneyvault_undereip170"></a>
-
-### test_RobotMoneyVault_underEip170
-
-```solidity
-function test_RobotMoneyVault_underEip170() public;
-```
-
-<a id="test_protocolassetvault_undereip170"></a>
-
-### test_ProtocolAssetVault_underEip170
-
-```solidity
-function test_ProtocolAssetVault_underEip170() public;
-```
-
-<a id="test_rwabasketvault_undereip170"></a>
-
-### test_RwaBasketVault_underEip170
-
-```solidity
-function test_RwaBasketVault_underEip170() public;
-```
-
-<a id="test_hardassetsvault_undereip170"></a>
-
-### test_HardAssetsVault_underEip170
-
-```solidity
-function test_HardAssetsVault_underEip170() public;
-```
-
-<a id="test_agenttokenvault_undereip170"></a>
-
-### test_AgentTokenVault_underEip170
-
-```solidity
-function test_AgentTokenVault_underEip170() public;
-```
-
-<a id="test_bytecodesize_vaultfamilyundereip170"></a>
-
-### test_bytecodeSize_vaultFamilyUnderEip170
-
-Aggregate check matching issue #1284's test-plan command
-(`forge test --match-test test_bytecodeSize`) — the vault-family
-members already individually guarded above, asserted together
-after the last-admin-floor consolidation and BasketVault
-retirement-flag addition.
-
-```solidity
-function test_bytecodeSize_vaultFamilyUnderEip170() public;
-```
-
 <a id="test_aavev3adapter_undereip170"></a>
 
 ### test_AaveV3Adapter_underEip170
@@ -147,54 +93,6 @@ function test_UniswapV3SwapAdapter_underEip170() public;
 function test_AerodromeSwapAdapter_underEip170() public;
 ```
 
-<a id="test_uniswapv4swapadapter_undereip170"></a>
-
-### test_UniswapV4SwapAdapter_underEip170
-
-```solidity
-function test_UniswapV4SwapAdapter_underEip170() public;
-```
-
-<a id="test_uniswapv4pricerecorder_undereip170"></a>
-
-### test_UniswapV4PriceRecorder_underEip170
-
-```solidity
-function test_UniswapV4PriceRecorder_underEip170() public;
-```
-
-<a id="test_robotmoneygateway_undereip170"></a>
-
-### test_RobotMoneyGateway_underEip170
-
-```solidity
-function test_RobotMoneyGateway_underEip170() public;
-```
-
-<a id="test_portfoliorouter_undereip170"></a>
-
-### test_PortfolioRouter_underEip170
-
-```solidity
-function test_PortfolioRouter_underEip170() public;
-```
-
-<a id="test_routergovernance_undereip170"></a>
-
-### test_RouterGovernance_underEip170
-
-```solidity
-function test_RouterGovernance_underEip170() public;
-```
-
-<a id="test_vaultregistry_undereip170"></a>
-
-### test_VaultRegistry_underEip170
-
-```solidity
-function test_VaultRegistry_underEip170() public;
-```
-
 <a id="test_consensusrecommendationreceipt_undereip170"></a>
 
 ### test_ConsensusRecommendationReceipt_underEip170
@@ -225,19 +123,5 @@ function test_ProposerFloorTimelock_underEip170() public;
 
 ```solidity
 function test_linkedLibraries_underEip170() public;
-```
-
-<a id="test_proxiedimplementations_keeptheirmeasuredheadroom"></a>
-
-### test_proxiedImplementations_keepTheirMeasuredHeadroom
-
-The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the
-margins measured with `forge build --sizes` after the governed-UUPS base (core 1808) and the exclusion
-recovery (core 1820, QA plan D3) landed, rounded down: AgentTokenVault 909 bytes, ProtocolAssetVault 956,
-RwaBasketVault 963, RobotMoneyVault 3,604, RobotMoneyGateway 293. A change that eats them fails here
-before it fails an EIP-170 deploy.
-
-```solidity
-function test_proxiedImplementations_keepTheirMeasuredHeadroom() public;
 ```
 

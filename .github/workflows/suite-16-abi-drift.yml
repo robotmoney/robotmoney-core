@@ -16,14 +16,13 @@
 #
 # WHICH FILES ARE DRIFT-GATED
 # - clients/rust-payment-client/abi/Erc20.json
-# - clients/rust-payment-client/abi/RobotMoneyGateway.json
-# - clients/rust-payment-client/abi/VaultRegistry.json          (added #1362)
-# - clients/rust-payment-client/abi/PortfolioRouter.json        (added #1362)
-# - clients/rust-payment-client/abi/RouterGovernance.json       (added #1362)
 # - clients/rust-payment-client/abi/TimelockController.json     (added #1362)
 # - clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json (added #1362)
-# - clients/rust-payment-client/abi/IVault.json                 (added #1464)
-# - clients/dapp/src/lib/abi.generated.ts
+#
+# PR 2042 replaced the old multi-vault contracts with the 0.9.0 fund. RobotMoneyGateway.json,
+# VaultRegistry.json, PortfolioRouter.json, RouterGovernance.json, IVault.json and the dapp's
+# abi.generated.ts were generated from contracts that no longer exist, so they are frozen copies,
+# listed as un-gated in the generator's header with tracking issue 2034.
 #
 # THE OTHER TWO GATES IN THIS JOB (issue #1346)
 # Regenerate-and-diff only covers files this suite regenerates. Two holes sat
@@ -49,8 +48,9 @@
 #    three hand-maintained copies of every event signature, and its
 #    abi_drift_gate compares them only to each other — it reads no Solidity, so
 #    a real contract change leaves it green while the indexer silently drops
-#    every log of that event. The explorer-indexer step below re-derives 27
-#    topic-0 hashes from the out/ artifacts this job already builds. That step
+#    every log of that event. The explorer-indexer step below re-derives the
+#    topic-0 hashes of the remaining first-party contracts (six since PR 2042)
+#    from the out/ artifacts this job already builds. That step
 #    lives here rather than in suite-08 precisely because this is the job with
 #    `forge build`; without artifacts the test fails loudly, it never skips.
 #
@@ -191,12 +191,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-foundry-
 
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install dapp dependencies (needed for Prettier in generate script)
-        run: bun install --frozen-lockfile
-        working-directory: clients/dapp
-
       - name: forge build
         run: forge build
 
@@ -210,14 +204,8 @@ jobs:
         run: |
           if ! git diff --exit-code \
                clients/rust-payment-client/abi/Erc20.json \
-               clients/rust-payment-client/abi/RobotMoneyGateway.json \
-               clients/rust-payment-client/abi/VaultRegistry.json \
-               clients/rust-payment-client/abi/PortfolioRouter.json \
-               clients/rust-payment-client/abi/RouterGovernance.json \
                clients/rust-payment-client/abi/TimelockController.json \
-               clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json \
-               clients/rust-payment-client/abi/IVault.json \
-               clients/dapp/src/lib/abi.generated.ts; then
+               clients/rust-payment-client/abi/ConsensusRecommendationReceipt.json; then
             echo ""
             echo "ERROR: Generated ABI files differ from committed files."
             echo "       Run the following from the repo root and commit the changes:"

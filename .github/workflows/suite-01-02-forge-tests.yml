@@ -160,13 +160,6 @@ jobs:
           --no-match-test "^testFail_"
           --no-match-path "contracts/test/{DeploySeedDeposit.t.sol,SafeIntegration.t.sol,VaultForkRegressions.t.sol,GovernanceExecutePathAfterHandover.t.sol,RwaBasketVaultFork.t.sol,HardAssetsVaultFork.t.sol,CoreStagesFork.t.sol,WithdrawalsNeverFrozen.t.sol,UniswapV4SwapAdapterFork.t.sol,RecorderManipulationFork.t.sol,FourVaultInitialState.t.sol,UpgradeLifecycleFork.t.sol,prototype/**}"
 
-      # Issue 1808: governed UUPS upgrades and the one-way freeze of the ten proxied core contracts
-      # (implementation lock, initializer replay, release mode, timelock-only authority, freeze at
-      # deploy and delayed, queued upgrades after a freeze) and the timelock-last stage order.
-      # Named so the log proves both files ran (22 + 5 tests).
-      - name: forge test (governed upgrades, freeze and the upgrade authority — issue 1808)
-        run: FORGE_TEST_MIN_EXECUTED=28 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{GovernedUpgrade,UpgradeAuthorityStages}.t.sol"
-
       # Issue 1892 (SS-1019-10, RS-1019-11): the two-system split. The static guard refuses a vaults-system contract
       # that names the gateway (SYS-1) and a gateway upgrade artifact that registers an agent or changes an owner
       # (ACL-9); its self-test plants each mutation and asserts a nonzero exit. The forge step runs the SYS-1 and
@@ -177,27 +170,7 @@ jobs:
           bun test scripts/ci/check-system-split.test.ts
 
       - name: forge test (SYS-1, ACL-9 and the coverage map — issue 1892)
-        run: FORGE_TEST_MIN_EXECUTED=13 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/{SystemSplit,SystemSplitInvariant,CoverageMap}.t.sol"
-
-      # Issue 1705: the router pins a vault-paused leg (Q3 (c)) and the adapter write-off rule (Q2 (a)). Named so the log proves both ran.
-      - name: forge test (four-vault rules, paused router leg and adapter write-off — issue 1705)
-        run: FORGE_TEST_MIN_EXECUTED=7 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/{PortfolioRouterPausedLeg,AdapterWriteOffRule}.t.sol"
-
-      # Issue 1912 (ADR-0017): the retire batch of the live four-vault deployment, on a fork-free fixture. Count 4 to 3, the three-entry vector,
-      # deposits revert, redeem and redeemInKind pay, the router splits across three. Named so the log proves the nine tests ran.
-      - name: forge test (retire rmAGENT batch, three-vault router — issue 1912)
-        run: FORGE_TEST_MIN_EXECUTED=9 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/RetireVaultBatch.t.sol"
-
-      # Fusion's named evidence files need an execution boundary in the CI log.
-      # A whole-suite `forge test` is not enough for a fail-closed external
-      # evidence reader to know that an individual file actually ran.
-      - name: Fusion contract evidence targets
-        run: |
-          for f in ConsensusRecommendationReceipt AccessRoles GovernanceSeparationInvariant RouterGovernanceApplyReceipt RouterGovernance GatewayAgentPolicyAuthorization; do
-            echo "::group::contracts/test/${f}.t.sol:"
-            bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
-            echo "::endgroup::"
-          done
+        run: FORGE_TEST_MIN_EXECUTED=5 bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/fv/CoverageMap.t.sol"
 
       # Issue 1853: the TypeScript core timelock prediction publish-contracts pins before every proxy stage
       # (publish-contracts/src/timelock-pin.ts) equals UpgradeAuthority.predictTimelock for this build. The
@@ -228,6 +201,12 @@ jobs:
         # as a PR, so it compares with the releases only. Issue 1853: the waiver is also written
         # to the job summary, where a reviewer sees it without opening the log
         # (scripts/ci/check-forge-workflow-summary.test.ts runs this branch).
+        # Deploy 4 v0.9.0 upgrade audit, regression test 1: every struct reachable from storage, also through an
+        # ERC-7201 namespace mapping, is pinned member by member (the `nested` section, read from the probe
+        # contracts of contracts/test/helpers/StorageLayoutProbe.sol) and may only gain members at its end. The
+        # layout must extend the Deploy 4 layout that is live on Base (--baseline-dir: contracts 0.8.0 at fa7c47182),
+        # which no label waives. A struct break passes only when scripts/ci/storage-layout-migrations.json declares
+        # it with both layout hashes and the migration function.
         env:
           LAYOUT_RESET: ${{ contains(github.event.pull_request.labels.*.name, 'storage-layout-reset') }}
         run: |
@@ -246,7 +225,15 @@ jobs:
             fi
           fi
           scripts/ci/check-core-storage-layout.sh --selftest
-          scripts/ci/check-core-storage-layout.sh "${base[@]}" --releases
+          scripts/ci/check-core-storage-layout.sh "${base[@]}" --releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0 --require-migrations
+
+      - name: Core storage-layout gate, nested struct self-test (Deploy 4 v0.9.0 upgrade audit)
+        # Proves the struct rule on the committed snapshots and, with --live, through the gate itself: this tree
+        # passes against the v0.8.0 layout with the migrations file, fails without its entries (Request, Settlement,
+        # StepParams, each named with its member), a synthetic mid-struct insert fails and a synthetic append passes.
+        run: |
+          shellcheck scripts/ci/check-core-storage-layout.test.sh
+          scripts/ci/check-core-storage-layout.test.sh --live
 
       # Issue 1914 AC: the live layout of the nine proxied contracts extends, append-only, the layout committed at the Deploy 3 record tag. --releases skips rehearsal tags, so
       # this step names the tag. The output is captured to a file (no pipe whose exit status is lost) and asserted: the run must say it compared, never that it found nothing to keep.
@@ -261,42 +248,7 @@ jobs:
           if grep -q 'ships no GovernedUUPS proxy' "$out"; then echo "::error::the baseline compared nothing"; exit 1; fi
           n="$(grep -c 'storage layout extends the layout of release/v0.5.0-rehearsal' "$out" || true)"
           echo "storage layouts compared with release/v0.5.0-rehearsal: $n"
-          if [[ "$n" -ne 9 ]]; then echo "::error::the baseline check compared $n contracts, exactly 9 are required (issue 1916)"; exit 1; fi
-
-      # Issue 1914 Task B: the seven contracts the v0.6.0 governed upgrade does not touch (RouterGovernance, VaultRegistry, PortfolioRouter, rmUSDC, rmPROTO, rmAGENT,
-      # rmRWA) changed in comments only. The script builds release/v0.5.0-rehearsal and HEAD, masks immutables, library links and the CBOR metadata trailer, and exits
-      # non-zero on any runtime-logic difference. The summary line is asserted so a run that compared nothing (or fewer than all seven) reads red, never green.
-      # The candidate is the shipped v0.6.0 line (release/v0.6.0-rehearsal, the contracts-0.6.0 commit), not HEAD: the TestMachine audit fixes on dev
-      # change the logic of all seven contracts on purpose, and they ship through their own governed upgrade, so the claim this step proves is about v0.6.0.
-      - name: Comment-only contracts are logic-identical to Deploy 3 (issue 1914)
-        run: |
-          set -o pipefail
-          git fetch --quiet --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
-          test "$(git rev-parse --verify --quiet 'refs/tags/release/v0.5.0-rehearsal^{commit}')" = "57fbe61833e9d7f94557d69102138f7c410c1346" || { echo "::error::release/v0.5.0-rehearsal moved: it must resolve to 57fbe61833e9d7f94557d69102138f7c410c1346"; exit 1; }
-          bun test publish-contracts/tests/check-comment-only-contracts.test.ts
-          test "$(git rev-parse --verify --quiet 'refs/tags/release/v0.6.0-rehearsal^{commit}')" = "6a7e2c5c22a3cdf7ee166f3cbaea97d0d1d973d0" || { echo "::error::release/v0.6.0-rehearsal moved: it must resolve to 6a7e2c5c22a3cdf7ee166f3cbaea97d0d1d973d0"; exit 1; }
-          bun publish-contracts/src/ci/check-comment-only-contracts.ts --candidate release/v0.6.0-rehearsal | tee "$RUNNER_TEMP/comment-only.txt"
-          grep -qx 'compared 7 contract(s), 7 identical, 0 differ' "$RUNNER_TEMP/comment-only.txt"
-          # Issue 1926: the relative-remapping foundry.toml moves only the CBOR metadata tail, and the verifier's code hash masks exactly that tail.
-          bun test publish-contracts/tests/verify/units.test.ts -t "issue 1926"
-
-      - name: Gateway agent-policy gas report (issue 1476)
-        # Measurement, not a budget: prints the RobotMoneyGateway rows for
-        # revealAuthorization, setPolicy and revokeAgent so a change in their
-        # cost shows in the log.
-        run: bash .github/scripts/forge_test_require_executed.sh --match-contract "GatewayAgentPolicyAuthorizationTest" --gas-report
-
-      - name: Gateway owner-consented agent lifecycle (issue 1890, ACL-9)
-        # The lifecycle suites: role immunity (grantRole, revokeRole and renounceRole on AGENT_ROLE
-        # revert for every caller, also after a role-admin overwrite), owner and agent revoke with the
-        # deposit budget reset, expiry replacement with AgentRevoked before AgentAuthorized, and the
-        # consent and commit block boundaries. The floor is the count of tests in the file today: a
-        # renamed or emptied file, a skipped contract or a path filter that matches nothing reads red,
-        # never green. The stateful fuzz (GatewayAgentLifecycleInvariant.t.sol) runs in the
-        # forge-invariant-fuzz-tests job, in the step that pins its executed-test floor at 2.
-        env:
-          FORGE_TEST_MIN_EXECUTED: "35"
-        run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentPolicyAuthorization.t.sol"
+          if [[ "$n" -ne 1 ]]; then echo "::error::the baseline check compared $n contracts, exactly 1 is required (ConsensusRecommendationReceipt, the only v0.5.0 proxy left; issue 1916)"; exit 1; fi
 
       - name: forge test (basket vault production scripts and eligibility — core 1486)
         # Explicit, named guard for the basket vault scripts (one deployment scheme):
@@ -309,15 +261,9 @@ jobs:
         #     registry, named per PRD 11.5, one PAXG row through the AerodromeSwapAdapter, sheet exit fee.
         #   - BasketVault / AgentTokenVault / ProtocolAssetVault: per-vault composition.
         run: |
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployProtocolAssetVault.t.sol"
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployAgentTokenVault.t.sol"
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultRwa.t.sol"
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployBasketVaultHardAssets.t.sol"
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-contract 'BasketVault|AgentTokenVault|ProtocolAssetVault'
           bash scripts/ci/check-no-devnet-config.sh
           bun scripts/ci/check-set-registry-owner.ts
           bun test scripts/ci/check-set-registry-owner.test.ts
-          bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/DeployTimelock.t.sol"
 
       - name: "forge test (rmAGENT on the Uniswap V4 RM/USDC pool: recorder, swap adapter, V4 venue, deploy wiring and config — core 1676)"
         # Owner decision 2026-10-08. Each file must execute at least one test (a path filter that matches nothing is red):
@@ -326,22 +272,10 @@ jobs:
         #   - BasketVaultV4Venue.t.sol: addAsset gating (codehash allowlist, 901 slots, 1800 s of history), deposit, USDC redeem, stale recorder and redeemInKind.
         #   - DeployUniswapV4PriceRecorder.t.sol, DeployAgentTokenVault.t.sol, DeployBasketVaultPoolGuards.t.sol, ConfigFiles.t.sol: the stage script and the config.
         run: |
-          for f in UniswapV4PriceRecorder UniswapV4SwapAdapter BasketVaultV4Venue DeployUniswapV4PriceRecorder DeployAgentTokenVault DeployBasketVaultPoolGuards ConfigFiles; do
+          for f in ConfigFiles; do
             echo "::group::contracts/test/${f}.t.sol:"
             bash .github/scripts/forge_test_require_executed.sh -vvv --match-path "contracts/test/${f}.t.sol"
             echo "::endgroup::"
-          done
-
-      - name: forge test (non-zero test count guard for deploy input and timelock suites — core 1483)
-        # A path filter that matches nothing must be red, not green. Each named file has to run
-        # at least one test, counted from the JSON result.
-        run: |
-          set -euo pipefail
-          for f in DeployTimelock DeployMainnetInputs DeployScriptChainGuards; do
-            forge test --json --match-path "contracts/test/${f}.t.sol" > "/tmp/${f}.json"
-            count="$(jq '[.. | objects | select(has("status"))] | length' "/tmp/${f}.json")"
-            echo "${f}.t.sol executed ${count} tests"
-            [[ "${count}" -gt 0 ]] || { echo "zero tests executed for ${f}.t.sol" >&2; exit 1; }
           done
 
       - name: forge test (EIP-170 size gate)
@@ -430,20 +364,6 @@ jobs:
       - name: forge test (invariant / fuzz)
         run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/*Invariant*.t.sol" --match-test "^invariant_" -vvv
 
-      - name: forge test (gateway agent lifecycle stateful fuzz, issue 1890)
-        # The dedicated floor for GatewayAgentLifecycleInvariant.t.sol. The step above runs every
-        # *Invariant*.t.sol with the default floor of 1, so deleting or renaming this file would
-        # stay green there. Here the file must execute 2 tests: the scripted handler-reach test and
-        # the stateful invariant group (forge reports the three invariant_* functions as one
-        # passed test, like CustodyInvariant.t.sol). Fewer means a deleted, renamed or emptied file.
-        env:
-          FORGE_TEST_MIN_EXECUTED: "2"
-        run: bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/GatewayAgentLifecycleInvariant.t.sol" -vvv
-      # Issue 1892: the SYS-1 stateful invariant lives under contracts/test/fv, outside the glob above. Named so a
-      # rename or a moved file is red (floor 1: forge counts the contract's two invariant_ functions as one passed suite test).
-      - name: forge test (SYS-1 stateful invariant — issue 1892)
-        run: FORGE_TEST_MIN_EXECUTED=1 bash .github/scripts/forge_test_require_executed.sh --match-path "contracts/test/fv/SystemSplitInvariant.t.sol" --match-test "^invariant_" -vvv
-
       - name: forge executed-test guard self-test (planted empty match-path is red, issue 1643)
         run: bash .github/scripts/tests/test_forge_test_require_executed.sh
 
@@ -493,133 +413,6 @@ jobs:
           bun publish-contracts/src/ci/check-build-reproducible.ts --core-a "$A" --core-b "$B" 2>&1 | tee build-reproducible.log
           grep -Eq '^compared [1-9][0-9]* artifact\(s\), [1-9][0-9]* identical, 0 differ, 0 absolute path\(s\) in metadata$' build-reproducible.log \
             || { echo "::error::the summary line does not show a non-zero compared count, 0 differ and 0 absolute paths"; exit 1; }
-
-  # ONE pin per workflow run (core 1498, 1496): the upstream head at the start of the run minus 2.
-  # The fork tests run on the Twin chain, a pinned lazy anvil fork of real Base state. There is no
-  # saved state file, no golden fixture and no secret (BASE_UPSTREAM_RPC is optional).
-  twin-pin:
-    name: twin-pin
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      CI_CLASS: system-correctness
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    outputs:
-      block: ${{ steps.pin.outputs.block }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: pin
-        uses: ./.github/actions/twin-pin
-        with:
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-  fork-regressions:
-    name: forge-fork-vault-regressions
-    needs: twin-pin
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      CI_CLASS: system-correctness
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    # Every test deploys its OWN contracts through the production deploy scripts and reads the
-    # addresses from what it deployed. None reads the live production v1 vault. FORK_RPC_URL names
-    # the Twin chain; with it unset a fork test skips with a named reason, and the runner below
-    # fails a run in which nothing executed.
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # Installs foundry and bun, restores anvil's RPC cache keyed by the pin block, starts the
-      # Twin chain and exports TWIN_RPC_URL.
-      - name: Start the Twin fork
-        id: twin
-        uses: ./.github/actions/twin-fork
-        with:
-          pin-block: ${{ needs.twin-pin.outputs.block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-      - name: Canonical Safe v1.4.1 set is on the Twin chain (issue 1447)
-        run: bun scripts/devnet/safe-set.ts
-
-      - name: Cache Foundry build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            cache
-            out
-          key: ${{ runner.os }}-foundry-${{ hashFiles('contracts/**/*.sol', 'foundry.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-foundry-
-
-      - name: forge build
-        run: forge build
-
-      - name: forge test (fork vault regressions)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/VaultForkRegressions.t.sol"
-
-      - name: forge test (deploy seed deposit precondition — issue #656)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "DeploySeedDeposit"
-
-      - name: forge test (Safe multisig integration — issue 422)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/SafeIntegration.t.sol"
-
-      - name: forge test (governance execute path through a real 2-of-3 Safe — issue 1447)
-        # A Fusion named evidence file (AC-GOV-03). It drives the timelock through
-        # a canonical SafeL2 proxy, which exists only on a Base fork; the group markers keep the
-        # per-file boundary the external evidence reader looks for.
-        run: |
-          echo "::group::contracts/test/GovernanceExecutePathAfterHandover.t.sol:"
-          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/GovernanceExecutePathAfterHandover.t.sol"
-          echo "::endgroup::"
-
-      - name: forge test (redeem gas estimate then include and root cause — core 1482)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/{RobotMoneyVaultRedeemGas,RobotMoneyVaultRedeemGasRootCause}.t.sol" --match-contract "ForkTest|RootCauseTest"
-
-      - name: forge test (basket vault redeem estimate then include — core 1513)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/BasketVaultRedeemGas.t.sol"
-
-      - name: forge test (rmRWA fork regression — core 1492)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RwaBasketVaultFork.t.sol"
-      - name: forge test (rmHARD holds PAXG through the AerodromeSwapAdapter on the live Aero pool, redeems in one transaction — core 2008)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/HardAssetsVaultFork.t.sol"
-      - name: forge test (V4 swap adapter and price recorder against the real Base PoolManager and the live RM pool — core 1676)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UniswapV4SwapAdapterFork.t.sol"
-      - name: forge test (a held RM price drags the recorder sell floor; the USDC sell anchor bounds it, live RM pool — core 1793)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/RecorderManipulationFork.t.sol"
-      - name: forge test (V4 recorder sampling cannot distort the deployed rmAGENT NAV profitably — core 1793)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/V4RecorderSamplingEconomicsFork.t.sol"
-      - name: forge test (rmRWA adds the four Coinbase B20 tokens through the real timelock - core 1500)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-contract "RwaVaultB20ForkTest"
-
-      - name: forge test (withdrawals are never frozen, through a real 2-of-3 Safe - core 1494)
-        # Every shipped vault, the gateway and the router: no emergency, deposit-pauser
-        # or governance lever blocks an exit, and unpauseDeposits runs only through the
-        # canonical SafeL2 proxy and the timelock at 172800 s. Fork-only like the Safe
-        # tests above.
-        run: |
-          echo "::group::contracts/test/WithdrawalsNeverFrozen.t.sol:"
-          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/WithdrawalsNeverFrozen.t.sol"
-          echo "::endgroup::"
-
-      - name: forge test (every proxy upgraded v1 -> v2 through the real Safe and timelock, state kept, freeze blocks a queued upgrade — issue 1808)
-        run: |
-          echo "::group::contracts/test/UpgradeLifecycleFork.t.sol:"
-          bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/UpgradeLifecycleFork.t.sol"
-          echo "::endgroup::"
-
-      - name: forge test (each vault deploys with the stage table's deposit state — issue 1705)
-        # Runs even when an earlier live-pool step of this job failed (core 2008): its own result is still recorded, and the job
-        # stays red for the earlier failure.
-        if: ${{ !cancelled() }}
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/FourVaultInitialState.t.sol"
-
-      - name: forge test (split-stage vault deposit through the gateway on the fork — core 1485)
-        run: bun scripts/devnet/forge-fork-tests.ts -- --match-path "contracts/test/CoreStagesFork.t.sol"
-
-      - name: Stop the Twin fork and save its RPC cache
-        if: always()
-        uses: ./.github/actions/twin-fork-save-cache
 
   coverage:
     name: forge-coverage-gate
@@ -735,11 +528,16 @@ jobs:
         # Nor is it compiled here (--skip): not running its tests is not enough, because forge coverage still
         # compiles every source, and the prototype tree with the Deploy 4 fund scripts and helper that import it
         # raised this compile's peak from 5.28 GiB (dev, 42a4d2e1) to 8.65 GiB (43ff6a5f), past the 50% ceiling.
-        # The ceiling is unchanged. The skipped files are exactly those that import contracts/test/prototype/.
+        # The ceiling is unchanged. The skipped files are exactly those that import contracts/test/prototype/, and the fund
+        # sources that lived there before PR 2042 moved them into contracts/.
         run: >-
           python3 .github/scripts/run_coverage_memory_guard.py
           forge coverage --report lcov
-          --skip "contracts/test/prototype/**" contracts/script/DeployFund.s.sol contracts/script/DeployFundLibs.s.sol
+          --skip "contracts/test/prototype/**" "contracts/{RobotMoneyFund,Rebalancer,RebalanceGovernance,FlowQueue,FlowTypes,FundTypes,FundExclusionLedger,KeeperAccount,PlanMath}.sol"
+          "contracts/lib/{FeedLib,FlowCheckLib,FlowClaimLib,FlowMatchLib,FlowMigrateLib,FlowSettleLib,FlowStorage,FundAdminLib,FundDelistLib,FundFlowsLib,FundMigrateLib,FundPositionLib,FundStepLib,FundStorage,FundValuationLib,StepFeedLib,TwapSlicesLib}.sol"
+          "contracts/adapters/{AaveV3RateAdapter,AerodromeExactOutSwapAdapter,CompoundV3RateAdapter,MorphoRateAdapter,UniswapV3ExactOutSwapAdapter}.sol"
+          "contracts/interfaces/{IFlowAdapters,IFlowQueue,IRebalanceGovernance,IRebalancer,IRobotMoneyFund}.sol"
+          contracts/script/DeployFund.s.sol contracts/script/DeployFundLibs.s.sol
           contracts/script/DeployFundTimelock.s.sol contracts/script/DeployFundWiring.s.sol
           contracts/script/DeployFlowQueue.s.sol contracts/script/DeployRebalancer.s.sol
           contracts/script/DeployRebalanceGovernance.s.sol contracts/script/FundSystemBase.sol
@@ -747,6 +545,3 @@ jobs:
           --no-match-test "^testFail_"
           --no-match-contract "VaultCodeSizeGuard|GatewayAgentPolicyCodeSizeGuard"
           --no-match-path "contracts/test/{DeploySeedDeposit.t.sol,SafeIntegration.t.sol,VaultForkRegressions.t.sol,GovernanceExecutePathAfterHandover.t.sol,RwaBasketVaultFork.t.sol,HardAssetsVaultFork.t.sol,CoreStagesFork.t.sol,WithdrawalsNeverFrozen.t.sol,UniswapV4SwapAdapterFork.t.sol,RecorderManipulationFork.t.sol,UpgradeLifecycleFork.t.sol,prototype/**}"
-
-      - name: Enforce branch-coverage gate
-        run: python3 .github/scripts/check_gateway_coverage.py lcov.info

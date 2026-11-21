@@ -5,7 +5,7 @@ description: "Step 3e (proposal §5.10, RB-19, A20) on the live harness and the 
 
 # Step3eTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Step3e.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/Step3e.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -322,8 +322,9 @@ function test_RB19_supplyCannotChangeInsideAStep_reentryRefused() public fixture
 
 ### test_3e_backoff_onlyOnTheKeepersOwnFailedCall
 
-After keeperGrace a stranger pushes the wETH pool past the step's floor and calls `step()` in the
-same transaction: the step fails and nothing backs off. The keeper's own failed call does back off.
+Step 3f (`E34`, `RB-20`): `step()` stays keeper-only even past the old grace horizon
+(`permissionlessAt == type(uint256).max`). A stranger's call is refused without backing anything off,
+while the keeper's own failed call into a pushed pool backs wETH off.
 
 ```solidity
 function test_3e_backoff_onlyOnTheKeepersOwnFailedCall() public fixtureCovered;

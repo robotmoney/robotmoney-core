@@ -1,0 +1,159 @@
+---
+title: "FundState"
+---
+
+# FundState
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundStorage.sol)
+
+**Note:**
+
+- **storage-location:** erc7201:robotmoney.storage.RobotMoneyFund
+
+```solidity
+struct FundState {
+    AssetConfig[] assets;
+    mapping(bytes32 codeHash => bool allowed) codeHashAllowed;
+    address usdc;
+    uint256 tvlCap;
+    uint256 perDepositCap;
+    uint256 exitFeeBps;
+    address feeRecipient;
+    uint256 maxSlippageBps;
+    uint256 navDeviationGuardBps;
+    bool depositsPaused;
+    bool shutdown;
+    uint64 lastStepAt;
+    uint16[] targetBps;
+    Plan plan;
+    mapping(uint256 index => uint256) deferredTotal;
+    mapping(uint256 index => mapping(address account => uint256)) deferredOf;
+    bool rolesBound;
+    // ── Step 3d (append-only below this line) ──
+    address flowQueue;
+    bool flowRoleBound;
+    bool seeded;
+    uint256 minSeedUsdc;
+    uint16 poolShareBps;
+    mapping(uint256 index => uint256) positionUnits;
+    mapping(uint256 index => uint256) positionClaimTotal;
+    mapping(uint256 index => mapping(address account => uint256)) positionClaimOf;
+    mapping(uint256 period => uint256) inKindUsed;
+    uint256 lastGoodNav;
+    uint64 lastGoodNavAt;
+    // ── fund-extras (append-only below this line) ──
+    uint16 inKindBps;
+    uint128 inKindFloorUsdc;
+    uint32 inKindPeriod;
+    /// @dev The cost of the step that halted the current plan (0 while it never halted, or once an extension
+    ///      reopened it). A plan is over budget while its budget left is below it (review B-F5: `costSpent` never
+    ///      passes `costBudget` any more, so "spent > budget" can no longer say so).
+    uint256 haltCost;
+
+    // ── step-3f (append-only strictly below `haltCost`) ─────────────────────
+    uint64 depositsPausedUntil;
+    uint64 lastStateStopEndedAt;
+    uint64 rebalancePausedUntil;
+    uint64 rebalancePauseCooldownUntil;
+
+    uint256 minPoolDepthUsdc;
+    uint16 feeMarginBps;
+    uint16 delistBandBps;
+    uint16 delistBudgetBps;
+    uint16 maxBasketBps;
+
+    uint256 reservedClaimUsdc;
+
+    mapping(uint256 index => bool) inSale;
+    mapping(uint256 index => uint256) saleStartValue;
+    mapping(uint256 index => uint256) saleFallbackPrice;
+    mapping(uint256 index => uint256) delistLossSpent;
+    mapping(uint256 index => uint256) delistClaimedTokens;
+    mapping(uint256 index => uint256) delistUsdcPot;
+    mapping(uint256 index => uint256) delistTotalScaled;
+    mapping(uint256 index => uint256) delistUsdcPerScaled;
+    mapping(uint256 index => mapping(address owner => DelistClaimAccount)) delistClaims;
+    mapping(uint256 index => mapping(address owner => DelistClaimAccount)) delistFeeLinked;
+
+    mapping(uint256 index => uint256) lastGoodAssetPrice;
+
+    mapping(uint256 index => uint256) lendingClaimEpoch;
+    mapping(uint256 index => uint256) lendingUsdcPot;
+    mapping(uint256 index => mapping(uint256 epoch => LendingClaimEpoch)) lendingEpochs;
+    mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingClaims;
+    mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingFeeLinked;
+
+    address rebalancer;
+
+    /// @dev ADR-0019: adapter runtime code hashes that are governed UUPS proxies. An adapter whose code hash is
+    ///      here is vetted on every use by the code hash of the implementation it reports (`FundAdapterGuard`).
+    ///      Appended (v0.9.0): the storage layout is append-only.
+    mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `AssetConfig[]` |  |
+| codeHashAllowed | `mapping(bytes32 codeHash => bool allowed)` |  |
+| usdc | `address` |  |
+| tvlCap | `uint256` |  |
+| perDepositCap | `uint256` |  |
+| exitFeeBps | `uint256` |  |
+| feeRecipient | `address` |  |
+| maxSlippageBps | `uint256` |  |
+| navDeviationGuardBps | `uint256` |  |
+| depositsPaused | `bool` |  |
+| shutdown | `bool` |  |
+| lastStepAt | `uint64` |  |
+| targetBps | `uint16[]` |  |
+| plan | `Plan` |  |
+| deferredTotal | `mapping(uint256 index => uint256)` |  |
+| deferredOf | `mapping(uint256 index => mapping(address account => uint256))` |  |
+| rolesBound | `bool` |  |
+| flowQueue | `address` |  |
+| flowRoleBound | `bool` |  |
+| seeded | `bool` |  |
+| minSeedUsdc | `uint256` |  |
+| poolShareBps | `uint16` |  |
+| positionUnits | `mapping(uint256 index => uint256)` |  |
+| positionClaimTotal | `mapping(uint256 index => uint256)` |  |
+| positionClaimOf | `mapping(uint256 index => mapping(address account => uint256))` |  |
+| inKindUsed | `mapping(uint256 period => uint256)` |  |
+| lastGoodNav | `uint256` |  |
+| lastGoodNavAt | `uint64` |  |
+| inKindBps | `uint16` |  |
+| inKindFloorUsdc | `uint128` |  |
+| inKindPeriod | `uint32` |  |
+| haltCost | `uint256` |  |
+| depositsPausedUntil | `uint64` |  |
+| lastStateStopEndedAt | `uint64` |  |
+| rebalancePausedUntil | `uint64` |  |
+| rebalancePauseCooldownUntil | `uint64` |  |
+| minPoolDepthUsdc | `uint256` |  |
+| feeMarginBps | `uint16` |  |
+| delistBandBps | `uint16` |  |
+| delistBudgetBps | `uint16` |  |
+| maxBasketBps | `uint16` |  |
+| reservedClaimUsdc | `uint256` |  |
+| inSale | `mapping(uint256 index => bool)` |  |
+| saleStartValue | `mapping(uint256 index => uint256)` |  |
+| saleFallbackPrice | `mapping(uint256 index => uint256)` |  |
+| delistLossSpent | `mapping(uint256 index => uint256)` |  |
+| delistClaimedTokens | `mapping(uint256 index => uint256)` |  |
+| delistUsdcPot | `mapping(uint256 index => uint256)` |  |
+| delistTotalScaled | `mapping(uint256 index => uint256)` |  |
+| delistUsdcPerScaled | `mapping(uint256 index => uint256)` |  |
+| delistClaims | `mapping(uint256 index => mapping(address owner => DelistClaimAccount))` |  |
+| delistFeeLinked | `mapping(uint256 index => mapping(address owner => DelistClaimAccount))` |  |
+| lastGoodAssetPrice | `mapping(uint256 index => uint256)` |  |
+| lendingClaimEpoch | `mapping(uint256 index => uint256)` |  |
+| lendingUsdcPot | `mapping(uint256 index => uint256)` |  |
+| lendingEpochs | `mapping(uint256 index => mapping(uint256 epoch => LendingClaimEpoch))` |  |
+| lendingClaims | `mapping(uint256 index => mapping(address owner => LendingClaimAccount))` |  |
+| lendingFeeLinked | `mapping(uint256 index => mapping(address owner => LendingClaimAccount))` |  |
+| rebalancer | `address` |  |
+| adapterProxyCodeHash | `mapping(bytes32 codeHash => bool isProxy)` |  |
+

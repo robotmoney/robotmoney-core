@@ -5,8 +5,6 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
-import {IVenueLiquidityAdapter} from "../interfaces/IVenueLiquidityAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {IVenueHealthAdapter} from "../interfaces/IVenueHealthAdapter.sol";
 import {IAavePool} from "../interfaces/IAavePool.sol";
@@ -24,7 +22,7 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 ///      floors and a realized-value return; Aave USDC supply/redemption is
 ///      exact (1:1), so the floors are trivially satisfied but still enforced
 ///      (revert `SlippageExceeded` below the floor). `isExact()` returns true.
-contract AaveV3Adapter is IStrategyAdapter, IVenueHealthAdapter, IVenueLiquidityAdapter, IERC165 {
+contract AaveV3Adapter is IStrategyAdapter, IVenueHealthAdapter {
     using SafeERC20 for IERC20;
 
     /// @dev Aave V3 `ReserveConfigurationMap`: bit 56 is "active", bit 60 is "paused".
@@ -123,21 +121,6 @@ contract AaveV3Adapter is IStrategyAdapter, IVenueHealthAdapter, IVenueLiquidity
     function venueWithdrawable() public view returns (bool) {
         uint256 config = POOL.getConfiguration(USDC);
         return (config >> RESERVE_ACTIVE_BIT) & 1 == 1 && (config >> RESERVE_PAUSED_BIT) & 1 == 0;
-    }
-
-    /// @inheritdoc IERC165
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(IVenueLiquidityAdapter).interfaceId
-            || interfaceId == type(IERC165).interfaceId;
-    }
-
-    /// @inheritdoc IVenueLiquidityAdapter
-    function withdrawalLiquidity() external view returns (bool open, uint256 available) {
-        open = venueWithdrawable();
-        if (!open) return (false, 0);
-        uint256 balance = A_TOKEN.balanceOf(address(this));
-        uint256 cash = IERC20(USDC).balanceOf(address(A_TOKEN));
-        available = cash < balance ? cash : balance;
     }
 
     /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.

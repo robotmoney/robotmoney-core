@@ -18,6 +18,10 @@
 # passed count from bun's summary and checks it against a floor held here, so a
 # run that silently did less (a section skipped, a truncated file, a lost exit
 # status) is red. Raise the floor when cases are added.
+#
+# The stage-core-stack-containers job ran `core-stack chain up`, whose deploy job published the old
+# multi-vault contracts. Those contracts were replaced by the 0.9.0 fund (PR 2042), so the job was
+# removed. stage-chain-container still proves the Twin chain container boots.
 name: core-stack-selftest
 
 on:
@@ -178,77 +182,3 @@ jobs:
         run: |
           export STAGE_UID="$(id -u)" STAGE_GID="$(id -g)" STAGE_REPO="$PWD" STAGE_WORK_DIR="$RUNNER_TEMP/stage-work"
           docker compose --project-name "$STAGE_PROJECT" -f "$STAGE_COMPOSE" --profile deploy down --volumes --remove-orphans || true
-
-  # Core 1549: the whole stage path in containers, for real. `core-stack chain up` on the runner: the pinned lazy Twin
-  # fork in a container, the deploy job (the real publish contracts ceremony with the Safe handover) in a container
-  # against it, then the dapp stack. Then chain status, dapp status and the host-side governance preflight (cast against
-  # the container chain), proof that the chain and the deploy tools are not host processes, and `chain down`. Nothing is
-  # mocked: the ceremony is the one the stage host runs.
-  stage-core-stack-containers:
-    name: stage-core-stack-containers
-    runs-on: ubuntu-latest
-    timeout-minutes: 75
-    env:
-      CI_CLASS: system-correctness
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: oven-sh/setup-bun@v2
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Only the host-side verbs need these: `governance preflight` calls cast. The chain, the ceremony and the dapp
-      # stack need nothing but docker.
-      - uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: v1.8.5
-      # The out dir stays outside the checkout: the publish run refuses a checkout with untracked files.
-      - name: Choose the out dir
-        run: echo "STAGE_OUT=$RUNNER_TEMP/stage-out" >> "$GITHUB_ENV"
-      - name: chain up (chain container, deploy job, dapp stack)
-        env:
-          BASE_UPSTREAM_RPC: ${{ secrets.BASE_UPSTREAM_RPC }}
-        run: bun scripts/stage/core-stack.ts chain up --out-dir "$STAGE_OUT" --timeout 3300
-      - name: chain status and dapp status exit 0
-        run: |
-          set -euo pipefail
-          bun scripts/stage/core-stack.ts chain status --out-dir "$STAGE_OUT"
-          bun scripts/stage/core-stack.ts dapp status
-      - name: Every stage manifest is there and the host verbs reach the container chain
-        run: |
-          set -euo pipefail
-          summary="$STAGE_OUT/core-smoke.log"
-          grep -q '^chain_id=918453$' "$summary"
-          mdir="$(grep '^manifest_dir=' "$summary" | tail -1 | cut -d= -f2-)"
-          bun -e 'import { countStageManifests } from "./scripts/stage/core-stack.ts"; import { expectedManifestCount } from "./scripts/stage/stage-manifests.ts"; const [d] = process.argv.slice(1); const n = countStageManifests(d), want = expectedManifestCount(); console.log(`stage manifests in ${d}: ${n} of ${want}`); if (n !== want || want < 1) process.exit(1);' "$mdir"
-          bun scripts/stage/core-stack.ts governance preflight --out-dir "$STAGE_OUT"
-      - name: The chain and the deploy tools are containers, not host processes
-        run: |
-          set -euo pipefail
-          docker ps --filter label=com.docker.compose.project=robotmoney-stage-chain --filter status=running --format '{{.Names}}' | grep -qx stage-twin-chain
-          # A container's processes are visible from the host: every anvil, smoke-test, forge or cast must sit in a docker cgroup.
-          bad=0
-          for name in anvil smoke-test forge; do
-            for pid in $(pgrep -x "$name" || true); do
-              if ! grep -q docker "/proc/$pid/cgroup"; then echo "::error::host process $name ($pid) is outside a container"; bad=1; fi
-            done
-          done
-          [ "$bad" = 0 ]
-          # No stage container holds the Docker socket.
-          for c in $(docker ps -q); do
-            if docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$c" | grep -q docker.sock; then echo "::error::container $c mounts the Docker socket"; exit 1; fi
-          done
-      - name: Container logs on failure
-        if: failure()
-        run: |
-          for c in $(docker ps -a --format '{{.Names}}'); do echo "::group::$c"; docker logs --tail 80 "$c" 2>&1 || true; echo "::endgroup::"; done
-      - name: chain down removes every stage container and the work directory
-        if: always()
-        run: |
-          bun scripts/stage/core-stack.ts chain down --out-dir "$STAGE_OUT" || true
-          chain="$(docker ps -aq --filter label=com.docker.compose.project=robotmoney-stage-chain | wc -l)"
-          dapp="$(docker ps -aq --filter label=com.docker.compose.project=robotmoney-dapp | wc -l)"
-          echo "left after chain down: chain=$chain dapp=$dapp"
-          [ "$chain" = 0 ] && [ "$dapp" = 0 ]
-          [ ! -e /tmp/robotmoney-stage-work ]

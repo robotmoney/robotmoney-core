@@ -24,7 +24,8 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { MAINNET_CHAIN_ID, MAINNET_DELAY_FLOOR, delayFloor, rehearsalDelayProblem } from "./floors.ts";
-import { DEPLOYMENT_KINDS, kindLabel, type DeploymentKind } from "./chains.ts";
+import { fundMigrationRecordProblems } from "./fund-migrations.ts";
+import { DEPLOYMENT_KINDS, TWIN_CHAIN_ID, kindLabel, type DeploymentKind } from "./chains.ts";
 import { HISTORICAL_REGISTER_ROW, buildHistoricalRegisterCalls } from "./committee-register.ts";
 import { REGISTER_ROW, buildRegisterCall } from "./submitter-register.ts";
 import { CLEAR_ROW, clearCalldata } from "./clear-voted-weights.ts";
@@ -403,6 +404,11 @@ export function governedUpgradeProblems(ev: any, floor: number = MAINNET_DELAY_F
       if (!fields.some((v) => typeof v === "string" && lc(v) === lc(String(e?.to_implementation ?? "")))) bad(`${w}: manifest_fields does not re-record the implementation field to ${e?.to_implementation}`);
       if (typeof e?.build !== "string" || e.build === "") bad(`${w}: build names no core checkout`);
       migrationEntryProblems(e, w, ev?.governance?.address, bad);
+      // v0.9.0 (contracts 588a68598): a fund-system upgrade may carry its proxy's own migrateV090 as the upgradeToAndCall data (fund-migrations.ts allowlist).
+      if (e?.fund_migration !== undefined) {
+        if (e?.migration !== undefined) bad(`${w}: an entry carries both a typed migration and a fund_migration`);
+        for (const x of fundMigrationRecordProblems(e.fund_migration, String(e?.proxy_name))) bad(`${w}: ${x}`);
+      }
     }
   }
   return p;
@@ -755,7 +761,12 @@ export interface ChainReader {
   /** One storage word (viem getStorageAt). Needed for the upgradeability record's ERC-1967 implementation slots (issue 1809). */
   getStorageAt?(a: { address: `0x${string}`; slot: Hex }): Promise<Hex | undefined>;
   readContract(a: { address: `0x${string}`; abi: any; functionName: string }): Promise<unknown>;
+  /** Issue 2044: the fork pin of an anvil fork (anvil_nodeInfo forkConfig.forkBlockNumber), undefined on a plain node. Read on the Twin only. */
+  forkPin?(): Promise<bigint | undefined>;
 }
+
+/** The note of a governed upgrade the Twin does not read back: it landed before the fork pin, on Base itself. */
+export const BEFORE_PIN_NOTE = "before the fork pin: verified on 8453 by the live record";
 
 const TIMELOCK_ABI = parseAbi([
   "event CallScheduled(bytes32 indexed id, uint256 indexed index, address target, uint256 value, bytes data, bytes32 predecessor, uint256 delay)",
@@ -996,9 +1007,19 @@ export async function checkReceiptApplicationsOnChain(ev: any, chain: ChainReade
  * EMPTY when it does not. An entry that claims no migration cannot hide one, and an entry that claims one cannot have scheduled other data. An entry without a schedule tx (an
  * execution adopted from the chain, with its note) is skipped: the offline check already required the note.
  */
-export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader): Promise<string[]> {
+export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader, notes: string[] = []): Promise<string[]> {
   const p: string[] = [];
   const bad = (m: string) => p.push(m);
+  // Issue 2044, owner decision 2026-11-20: on the Twin (918453, an anvil fork of Base) no transaction at or before the fork pin is read back through the fork (anvil would
+  // forward the read to the public Base RPC). Such an entry (the v0.8 upgrades) is noted as checked on 8453 by the live record. An entry after the pin is checked in full.
+  // The record holds block timestamps, not block numbers, so an entry is placed against the pin block's timestamp. An entry with no recorded timestamp is read.
+  let pinTs: number | undefined;
+  if ((await chain.getChainId()) === TWIN_CHAIN_ID) {
+    const pin = await chain.forkPin?.();
+    if (pin === undefined) return ["governed upgrades: chain 918453 is not an anvil fork (anvil_nodeInfo names no fork block): no transaction before a pin it cannot name is read"];
+    pinTs = Number((await chain.getBlock({ blockNumber: pin })).timestamp);
+  }
+  const prePin = (t: unknown): boolean => pinTs !== undefined && typeof t === "number" && t <= pinTs;
   for (const e of Array.isArray(ev?.proxy_upgrades) ? ev.proxy_upgrades : []) {
     const w = `${UPGRADE_ROW} ${e?.proxy_name} ${e?.operation_id}`;
     if (!TX.test(e?.schedule_tx ?? "") || !ADDR.test(e?.proxy ?? "") || !ADDR.test(e?.to_implementation ?? "") || !ADDR.test(ev?.timelock?.address ?? "")) continue; // the offline check already named it
@@ -1007,6 +1028,24 @@ export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader):
       const name = String(e.migration?.name);
       if (!Object.prototype.hasOwnProperty.call(UPGRADE_MIGRATIONS, name) || !ADDR.test(e.migration?.releaser ?? "")) continue; // the offline check already named it
       data = pinnedMigrationData(name, e.migration.releaser);
+    }
+    if (e.fund_migration !== undefined) {
+      if (fundMigrationRecordProblems(e.fund_migration, String(e.proxy_name)).length) continue; // the offline check already named it
+      data = e.fund_migration.data;
+    }
+    const schedPre = prePin(e.schedule_block_timestamp);
+    if (schedPre && (!TX.test(e.execute_tx ?? "") || prePin(e.execute_block_timestamp))) { notes.push(`${w}: ${BEFORE_PIN_NOTE}`); continue; }
+    if (schedPre) {
+      // scheduled before the pin, executed after it: the schedule is Base's; the execute is read here and must carry the recorded operation's upgradeToAndCall
+      notes.push(`${w}: schedule ${BEFORE_PIN_NOTE}; execute read on the Twin`);
+      const want = upgradeCalldata(e.to_implementation, data);
+      try {
+        const ex = await chain.getTransactionReceipt({ hash: e.execute_tx as Hex });
+        if (ex.status !== "success") bad(`${w}: execute receipt on chain is ${ex.status}`);
+        const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted");
+        if (executed.length !== 1 || !executed.some((x) => (typeof e.operation_id !== "string" || lc(x.id) === lc(e.operation_id)) && lc(x.target) === lc(e.proxy) && lc(x.data) === lc(want))) bad(`${w}: execute tx does not contain exactly one matching CallExecuted event`);
+      } catch (x) { bad(`${w}: execute receipt not readable on chain (${(x as Error).message})`); }
+      continue;
     }
     let sc;
     try {
@@ -1020,9 +1059,17 @@ export async function checkGovernedUpgradesOnChain(ev: any, chain: ChainReader):
     if (lc(s.target) !== lc(e.proxy)) bad(`${w}: CallScheduled target ${s.target} is not the proxy ${e.proxy}`);
     if (lc(s.data) !== lc(want)) {
       const got = decodeUpgradeCall(s.data as Hex);
-      bad(`${w}: CallScheduled calldata is not upgradeToAndCall(${e.to_implementation}, ${e.migration ? `${e.migration.function}(${e.migration.releaser})` : '""'}): ${got ? `it schedules upgradeToAndCall(${got.implementation}, ${got.data === "0x" ? '""' : got.data})` : "it is not an upgradeToAndCall"}`);
+      bad(`${w}: CallScheduled calldata is not upgradeToAndCall(${e.to_implementation}, ${e.migration ? `${e.migration.function}(${e.migration.releaser})` : e.fund_migration ? `${e.fund_migration.signature} [${e.fund_migration.args.join(", ")}]` : '""'}): ${got ? `it schedules upgradeToAndCall(${got.implementation}, ${got.data === "0x" ? '""' : got.data})` : "it is not an upgradeToAndCall"}`);
     }
     if (typeof e.operation_id === "string" && lc(e.operation_id) !== lc(s.id)) bad(`${w}: operation_id ${e.operation_id} is not the scheduled operation ${s.id}`);
+    if (TX.test(e.execute_tx ?? "")) {
+      try {
+        const ex = await chain.getTransactionReceipt({ hash: e.execute_tx as Hex });
+        if (ex.status !== "success") bad(`${w}: execute receipt on chain is ${ex.status}`);
+        const executed = timelockEvents(ex, ev.timelock.address, "CallExecuted");
+        if (executed.length !== 1 || !executed.some((x) => lc(x.id) === lc(s.id) && lc(x.target) === lc(e.proxy) && lc(x.data) === lc(want))) bad(`${w}: execute tx does not contain exactly one matching CallExecuted event`);
+      } catch (x) { bad(`${w}: execute receipt not readable on chain (${(x as Error).message})`); }
+    }
   }
   return p;
 }
@@ -1606,10 +1653,17 @@ async function checkGovernedUpgradesMain(values: Record<string, string | boolean
   const m = JSON.parse(readFileSync(values["governed-upgrades"] as string, "utf8"));
   const ev: any = { deployment_kind: kind, timelock: { address: values.timelock }, proxy_upgrades: m.proxy_upgrades, upgrade_freezes: m.upgrade_freezes, ...(typeof values.governance === "string" ? { governance: { address: values.governance } } : {}) };
   const { createPublicClient, http } = await import("viem");
-  const reader = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) as unknown as ChainReader : undefined;
+  const client = typeof values.rpc === "string" ? createPublicClient({ transport: http(values.rpc) }) : undefined;
+  const reader = client ? Object.assign(client as unknown as ChainReader, {
+    forkPin: async () => {
+      try { const n = ((await client.request({ method: "anvil_nodeInfo" } as any)) as any)?.forkConfig?.forkBlockNumber; return n === undefined || n === null ? undefined : BigInt(n); } catch { return undefined; }
+    },
+  }) : undefined;
   const floor = await floorArg(values, kind, reader);
   const problems = [...((Array.isArray(m.proxy_upgrades) && m.proxy_upgrades.length > 0) ? [] : ["the run manifest has no proxy_upgrades entry"]), ...governedUpgradeProblems(ev, floor, repoProxyNames(m.system === "fund" ? "fund" : "legacy"))];
-  if (reader) problems.push(...(await checkGovernedUpgradesOnChain(ev, reader)));
+  const notes: string[] = [];
+  if (reader) problems.push(...(await checkGovernedUpgradesOnChain(ev, reader, notes)));
+  for (const n of notes) console.log(`evidence: ${n}`);
   if (problems.length) { for (const x of problems) console.error(`evidence: ${x}`); process.exit(1); }
   console.log(`evidence ok (governed upgrades: ${m.proxy_upgrades.length} upgrade(s), ${Array.isArray(m.proxy_upgrades) ? m.proxy_upgrades.filter((x: any) => x.migration).length : 0} with a typed migration${reader ? ", chain read" : ", offline shape only"})`);
 }

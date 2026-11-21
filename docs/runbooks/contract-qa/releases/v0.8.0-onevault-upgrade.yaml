@@ -3,7 +3,7 @@
 # existing deployment, as v0.6.0's upgrade flow ran against Deploy 3: the record of the live run (releases/v0.7.0-onevault.yaml, Deploy 4) is copied, never edited.
 # A full copy of template.yaml's steps, unchanged and in order, plus the steps this release adds, each `added: v0.8.0-onevault-upgrade` and `flow: fund-upgrade`.
 # The release runs only the fund-upgrade flow (flows: below), so no template step runs. scripts/runbook/validate-contract-qa.ts checks it; scripts/runbook/run.ts runs it.
-# The rc tag of the code is v0.8.0-onevault's: release/v0.8.0-onevault-rc.N-rehearsal.
+# The rc tag of the code is release/v0.8.0-rc.N-rehearsal (RC_TAG_PATTERN in publish-contracts/src/release-gate.ts, decision D4-13).
 release: v0.8.0-onevault-upgrade
 template: contract-qa
 productionReady: false
@@ -693,6 +693,8 @@ steps:
   - id: "P2.80-upg-fund-upgrade-schedule"
     standing: ["4.12"]
     description: "The Safe schedules ONE call on the fund-system timelock, fund.upgradeToAndCall(the implementation of P1.81, empty): the ERC-1967 slot reads the manifest's implementation, upgradesFrozen is false and upgradeTimelock is the fund timelock first; the Safe tool proposes, two owners sign, the deployer executes as the gas payer. The salt is derived from the run directory, so the execute proposes the same operation"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 2
     cmds:
@@ -716,6 +718,8 @@ steps:
   - id: "P2.81-upg-queue-upgrade-schedule"
     standing: ["4.12"]
     description: "The Safe schedules ONE call on the fund-system timelock, queue.upgradeToAndCall(the implementation of P1.82, empty): the ERC-1967 slot reads the manifest's implementation, upgradesFrozen is false and upgradeTimelock is the fund timelock first; the Safe tool proposes, two owners sign, the deployer executes as the gas payer. The salt is derived from the run directory, so the execute proposes the same operation"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 2
     cmds:
@@ -892,6 +896,8 @@ steps:
   - id: "P3.80-upg-config-schedule"
     standing: ["4.12", "4.10"]
     description: "The Safe schedules the two config operations on the fund timelock in one sitting: (A) ONE call, queue.setFlowParams(the live flowParams with minHold {sheet:FLOW_MIN_HOLD}: every other field the live value, decision D4-11), and (B) ONE batch on the timelock itself, grantRole(EXECUTOR_ROLE, the Safe) and revokeRole(EXECUTOR_ROLE, address(0)) (decision D4-10 applied to the live timelock), with A as its predecessor: B cannot execute before A, and it is the last governed change of the upgrade. Both through the Safe tool, two owner signatures each"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 3
     cmds:
@@ -1000,6 +1006,8 @@ steps:
   - id: "P3.85-upg-epoch-schedule"
     standing: ["4.4"]
     description: "Owner, 2026-11-14 (D4-15): shorter epochs so the flow test does not wait hours. The Safe schedules queue.setFlowParams with epochLength 3600 (the contract floor, 1 h) and settleWindow 720 (12 slices of 60 s, the shortest window the live slice count allows), every other field as it reads now (minHold 3600 after P3.81). A new epochLength applies from the end of the epoch in progress (FlowQueue.setFlowParams), so no open request moves. The change is simulated from the timelock first"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 3
     cmds:
@@ -1763,6 +1771,8 @@ steps:
   - id: "P9.81-upg-unpause-schedule"
     standing: ["4.5"]
     description: "The Safe restores both through the fund timelock: ONE batch, fund.unpauseDeposits() and queue.unpauseQueue(), scheduled through the Safe tool with two owner signatures"
+    signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
+    executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 9
     cmds:

@@ -1,0 +1,69 @@
+---
+title: "UniswapV3ExactOutSwapAdapterUpgradeable"
+description: "The fund's Uniswap V3 swap adapter as the implementation of an OpenZeppelin `ERC1967Proxy` (ADR-0019). The swap and price code is `UniswapV3ExactOutSwapAdapter`'s, unchanged. The router stays an immutable of the implementation, so a router change is an upgrade. The adapter keeps no state between calls: the proxy's only storage is `GovernedUUPS`'s ERC-7201 namespace (upgrade timelock, frozen flag) and OpenZeppelin's. The fund reads `implementation()` to vet the implementation's code hash on every use (`FundAdapterGuard`)."
+---
+
+# UniswapV3ExactOutSwapAdapterUpgradeable
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol)
+
+**Inherits:** [UniswapV3ExactOutSwapAdapter](/contracts/adapters/contract.UniswapV3ExactOutSwapAdapter), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
+
+**Title:** UniswapV3ExactOutSwapAdapterUpgradeable
+
+The fund's Uniswap V3 swap adapter as the implementation of an OpenZeppelin `ERC1967Proxy` (ADR-0019). The
+swap and price code is `UniswapV3ExactOutSwapAdapter`'s, unchanged. The router stays an immutable of the
+implementation, so a router change is an upgrade. The adapter keeps no state between calls: the proxy's
+only storage is `GovernedUUPS`'s ERC-7201 namespace (upgrade timelock, frozen flag) and OpenZeppelin's.
+The fund reads `implementation()` to vet the implementation's code hash on every use
+(`FundAdapterGuard`).
+
+## Functions
+
+<a id="constructor-address"></a>
+
+### constructor
+
+```solidity
+constructor(address router_) UniswapV3ExactOutSwapAdapter(router_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| router_ | `address` |  |
+
+<a id="initialize-address"></a>
+
+### initialize
+
+Name the upgrade timelock (the fund system's Safe-controlled timelock). Run once, atomically with the
+proxy's deployment (`ERC1967Proxy(impl, abi.encodeCall(initialize, (timelock)))`).
+
+```solidity
+function initialize(address timelock) external initializer;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| timelock | `address` |  |
+
+<a id="implementation"></a>
+
+### implementation
+
+The implementation in the proxy's ERC-1967 slot (ADR-0019 vetting).
+
+```solidity
+function implementation() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+

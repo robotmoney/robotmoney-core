@@ -7,9 +7,9 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {PrototypeHarness} from "./PrototypeHarness.sol";
-import {RobotMoneyFund} from "./src/RobotMoneyFund.sol";
-import {FlowQueue} from "./src/FlowQueue.sol";
-import {FlowParams} from "./src/FlowTypes.sol";
+import {RobotMoneyFund} from "../../RobotMoneyFund.sol";
+import {FlowQueue} from "../../FlowQueue.sol";
+import {FlowParams} from "../../FlowTypes.sol";
 
 /// @notice One-vault experiment (plan Step 2, G3; step 3d flows): the two custody invariants the other suites leave
 ///         open. INV-3: fee recipient, fee parameters, quarantine and the flow parameters change only through the

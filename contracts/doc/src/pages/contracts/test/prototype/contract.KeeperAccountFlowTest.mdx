@@ -1,0 +1,28 @@
+---
+title: "KeeperAccountFlowTest"
+description: "E56 on the real queue: the account holds `KEEPER_ROLE`, a bot key settles a round through it, and the owner replaces that bot key without the timelock."
+---
+
+# KeeperAccountFlowTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/KeeperAccount.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** KeeperAccountFlowTest
+
+E56 on the real queue: the account holds `KEEPER_ROLE`, a bot key settles a round through it, and the owner
+replaces that bot key without the timelock.
+
+## Functions
+
+<a id="test_e56_abotkeysettlesthroughtheaccountandtheownerrotatesitwithoutthetimelock"></a>
+
+### test_E56_aBotKeySettlesThroughTheAccountAndTheOwnerRotatesItWithoutTheTimelock
+
+```solidity
+function test_E56_aBotKeySettlesThroughTheAccountAndTheOwnerRotatesItWithoutTheTimelock()
+        public
+        fixtureCovered;
+```
+

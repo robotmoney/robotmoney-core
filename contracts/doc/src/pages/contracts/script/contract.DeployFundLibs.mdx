@@ -5,7 +5,7 @@ description: "The first stage of the `fund` system (Deploy 4). Deploys every lib
 
 # DeployFundLibs
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/script/DeployFundLibs.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/script/DeployFundLibs.s.sol)
 
 **Inherits:** [ExpectedChainGuard](/contracts/script/abstract.ExpectedChainGuard)
 
@@ -118,10 +118,14 @@ struct Deployed {
         address fundAdminLib;
         address fundFlowsLib;
         address fundStepLib;
+        address fundDelistLib;
         address stepFeedLib;
         address flowCheckLib;
+        address flowMatchLib;
         address flowSettleLib;
         address flowClaimLib;
+        address flowMigrateLib;
+        address fundMigrateLib;
     }
 ```
 
@@ -139,8 +143,12 @@ struct Deployed {
 | fundAdminLib | `address` |  |
 | fundFlowsLib | `address` |  |
 | fundStepLib | `address` |  |
+| fundDelistLib | `address` |  |
 | stepFeedLib | `address` |  |
 | flowCheckLib | `address` |  |
+| flowMatchLib | `address` |  |
 | flowSettleLib | `address` |  |
 | flowClaimLib | `address` |  |
+| flowMigrateLib | `address` |  |
+| fundMigrateLib | `address` |  |
 

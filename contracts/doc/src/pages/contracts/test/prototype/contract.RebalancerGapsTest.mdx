@@ -1,0 +1,275 @@
+---
+title: "RebalancerGapsTest"
+description: "Step 3f audit gaps in the rebalancer, one dedicated test each: the last dust step (SAFE-05), the cost floored at 0 (SAFE-06), the Halted rule, the budget fixed in USDC at the plan's start, and the stamp `lastBasketStepAt` that only a basket-pool step moves (E42)."
+---
+
+# RebalancerGapsTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/RebalancerGaps.t.sol)
+
+**Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
+
+**Title:** RebalancerGapsTest
+
+Step 3f audit gaps in the rebalancer, one dedicated test each: the last dust step (SAFE-05), the cost
+floored at 0 (SAFE-06), the Halted rule, the budget fixed in USDC at the plan's start, and the stamp
+`lastBasketStepAt` that only a basket-pool step moves (E42).
+
+## Constants
+
+### DEPOSIT
+
+```solidity
+uint256 internal constant DEPOSIT = 1_000_000e6;
+```
+
+## State Variables
+
+### alice
+
+```solidity
+address internal alice = makeAddr("alice");
+```
+
+## Functions
+
+<a id="_wethplan-uint16-bool"></a>
+
+### _wethPlan
+
+<i>
+
+A plan that buys only wETH with idle USDC. Mirrors the setup of the runaway-cost test.
+
+</i>
+
+```solidity
+function _wethPlan(uint16 budgetBps, bool withDeposit) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| budgetBps | `uint16` |  |
+| withDeposit | `bool` |  |
+
+<a id="_bookedstep"></a>
+
+### _bookedStep
+
+<i>
+
+One keeper step now with the booked cost read from the fund's event.
+
+</i>
+
+```solidity
+function _bookedStep() internal returns (Booked memory b);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| b | `Booked` |  |
+
+<a id="_nextstepwindow"></a>
+
+### _nextStepWindow
+
+```solidity
+function _nextStepWindow() internal;
+```
+
+<a id="test_safe06_afavourablestepbookszeroandneveroffsetsanearlierloss"></a>
+
+### test_SAFE06_aFavourableStepBooksZeroAndNeverOffsetsAnEarlierLoss
+
+SAFE-06: the booked cost is floored at 0. After a step that lost value, a step that GAINED value at the
+feeds books 0 and `costSpent` stays where it was. A favourable step never buys back an earlier loss.
+
+```solidity
+function test_SAFE06_aFavourableStepBooksZeroAndNeverOffsetsAnEarlierLoss()
+        public
+        fixtureCovered;
+```
+
+<a id="_feedvalueoffund"></a>
+
+### _feedValueOfFund
+
+<i>
+
+Fund value at the feeds: idle USDC plus every counted asset's balance at its feed, in USDC units. Only wETH
+and USDC are held in this plan, so that is the whole fund.
+
+</i>
+
+```solidity
+function _feedValueOfFund() internal view returns (uint256 v);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint256` |  |
+
+<a id="_ethfeed"></a>
+
+### _ethFeed
+
+```solidity
+function _ethFeed() internal view returns (uint80, int256, uint256, uint256, uint80);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint80` |  |
+| &lt;none&gt; | `int256` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+| &lt;none&gt; | `uint80` |  |
+
+<a id="test_haltedrule_exhaustedatzeroandbelowonestephaltandafullstepstaysopen"></a>
+
+### test_haltedRule_exhaustedAtZeroAndBelowOneStepHaltAndAFullStepStaysOpen
+
+The Halted rule at its three edges, with the budget set to a multiple of the first step's cost:
+budget == cost leaves 0 and halts (SAFE-06 "exhausted at 0"; for a step with a cost the clause
+`left &lt; cost` also holds there, so the edge below it is the one that pins `&lt;` against `&lt;=`); budget == cost + cost - 1 leaves less than
+one more step and halts; budget == 2 * cost leaves a whole step and stays Open.
+
+```solidity
+function test_haltedRule_exhaustedAtZeroAndBelowOneStepHaltAndAFullStepStaysOpen()
+        public
+        fixtureCovered;
+```
+
+<a id="_setbudget-uint256-uint256"></a>
+
+### _setBudget
+
+<i>
+
+Move the plan's budget to `target` with `extendBudget`, which can only add. The plan is Open, so the
+extension changes nothing else.
+
+</i>
+
+```solidity
+function _setBudget(uint256 target, uint256 current) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| target | `uint256` |  |
+| current | `uint256` |  |
+
+<a id="test_budgetisfixedinusdcattheplansstart"></a>
+
+### test_budgetIsFixedInUsdcAtThePlansStart
+
+The budget is `turnover * costBudgetBps` in USDC at the plan's start. A later change of the fund's NAV
+(a gift of USDC) does not move it.
+
+```solidity
+function test_budgetIsFixedInUsdcAtThePlansStart() public fixtureCovered;
+```
+
+<a id="_dustplan"></a>
+
+### _dustPlan
+
+<i>
+
+A 1 % lending shift on the 100 000 USDC seed fund: every deviation (the shift of about 1 000 USDC and the
+drift the first plan left inside its 50 bp tolerance, about 500 USDC) is below `minStepUsdc` (5 000 USDC)
+and above the 1 bp tolerance (10 USDC). Before `endTime` that is dust and the step skips `BelowMinStep`. After `endTime` it is
+the last dust and takes one step.
+
+</i>
+
+```solidity
+function _dustPlan() internal;
+```
+
+<a id="_shiftlending-uint16"></a>
+
+### _shiftLending
+
+<i>
+
+The fund's current weights as a vector, with `bps` moved from Moonwell to Aave. Basket weights are
+the measured ones, so a plan to it moves lending only. The last asset takes the rounding.
+
+</i>
+
+```solidity
+function _shiftLending(uint16 bps) internal view returns (uint16[5] memory v);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+<a id="test_safe05_dustskipsbeforeendandthelastdusttakesonestepafter"></a>
+
+### test_SAFE05_dustSkipsBeforeEndAndTheLastDustTakesOneStepAfter
+
+SAFE-05: dust is skipped before the plan's end and takes exactly one step after it.
+
+```solidity
+function test_SAFE05_dustSkipsBeforeEndAndTheLastDustTakesOneStepAfter() public fixtureCovered;
+```
+
+<a id="test_e42_lastbasketstepatonlymovesforabasketpoolstep"></a>
+
+### test_E42_lastBasketStepAtOnlyMovesForABasketPoolStep
+
+`lastBasketStepAt` moves with a step that trades a basket pool, and with nothing else: not a
+lending-only step, not a step of a delisting sale (E42, RB-30).
+
+```solidity
+function test_E42_lastBasketStepAtOnlyMovesForABasketPoolStep() public fixtureCovered;
+```
+
+## Structs
+
+### Booked
+
+```solidity
+struct Booked {
+        bool did;
+        SkipReason why;
+        uint256 feedCost;
+        uint256 twapCost;
+        uint256 planCostBefore;
+        uint256 planCostAfter;
+    }
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| did | `bool` |  |
+| why | `SkipReason` |  |
+| feedCost | `uint256` |  |
+| twapCost | `uint256` |  |
+| planCostBefore | `uint256` |  |
+| planCostAfter | `uint256` |  |
+

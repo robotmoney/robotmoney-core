@@ -25,7 +25,7 @@
 // Canonical: docs/technical/contract-upgradeability-plan.md, docs/adr/ADR-0014-governed-uups-upgrades-and-freeze.md, docs/operations/contract-release-runbooks.md 4.12.
 import { scopeTable } from "./stage-table.ts";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAddress, keccak256, type Address, type Hex } from "viem";
 import { PublishError } from "./errors.ts";
 import { assertPinnedForgeWith } from "./forge-version.ts";
@@ -33,11 +33,13 @@ import { LIBRARY_ADDRESS_CAUSE } from "./libs-adopt.ts";
 import { childEnv, confirmStage, loadRunManifest, manifestDir, receiptBlock, saveRunManifest, waitForReceiptBlock, type RunContext, type RunManifest } from "./runner.ts";
 import { getStageTable } from "./stages.ts";
 import { manifestBase } from "./stage-table.ts";
-import { UPGRADE_ROW, layoutExtensionProblems, layoutGateProblems, layoutRenames, runtimeCodeProblems } from "./upgrade-rows.ts";
+import { UPGRADE_ROW, declaredStructMigrations, layoutExtensionProblems, layoutGateProblems, layoutRenames, libraryRenames, runtimeCodeProblems } from "./upgrade-rows.ts";
 import { artifactJson, compareCode, ERC1967_IMPLEMENTATION_SLOT, linkedLibraries, loadArtifact } from "./verify/codehash.ts";
 import { viemReader } from "./verify/reader.ts";
 import { layoutId, proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
 import { proxyBuildDirsOf, UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
+import { upgradeLibraries } from "./upgrade-libraries.ts";
+import { FUND_MIGRATIONS, FUND_MIGRATION_ORDER } from "./fund-migrations.ts";
 
 export const DEPLOY_IMPL_VERB = "deploy-implementation";
 
@@ -95,8 +97,25 @@ export function upgradeCommand(ctx: Pick<RunContext, "chainId" | "coreSha" | "co
 }
 
 /** Deploy 4: the fund system has no govern row. Its upgrade is ONE call the fund Safe schedules on the fund-system timelock with the Safe tool, then executes after the delay. */
-export function fundUpgradeCommand(ctx: Pick<RunContext, "chainId">, d: Pick<ImplementationDeploy, "proxy" | "implementation">): string {
-  return `bun publish-contracts/src/safe/cli.ts propose --action schedule --chain-id ${ctx.chainId} --target ${d.proxy} --data "$(cast calldata "upgradeToAndCall(address,bytes)" ${d.implementation} 0x)" (plus --rpc, --safe <the fund Safe>, --timelock <the fund-system timelock>, --salt and --out), then sign with two owners and execute; after the delay the same with --action execute`;
+export function fundUpgradeCommand(ctx: Pick<RunContext, "chainId">, d: Pick<ImplementationDeploy, "proxy" | "implementation">, migration?: string): string {
+  const data = migration ?? "0x";
+  const chain = migration ? ` --predecessor <the operation id of the previous upgrade in the order ${FUND_MIGRATION_ORDER.join(" -> ")}, or omit it for the first>` : "";
+  return `bun publish-contracts/src/safe/cli.ts propose --action schedule --chain-id ${ctx.chainId} --target ${d.proxy} --data "$(cast calldata "upgradeToAndCall(address,bytes)" ${d.implementation} ${data})"${chain} (plus --rpc, --safe <the fund Safe>, --timelock <the fund-system timelock>, --salt and --out), then sign with two owners and execute; after the delay the same with --action execute (same --salt${migration ? " and --predecessor" : ""})`;
+}
+
+/**
+ * v0.9.0 (contracts 588a68598): the `cast calldata` expression of `proxy`'s migrateV090 when the build's `contract` has one (its ABI names migrateV090), else undefined
+ * (the upgrade data stays 0x). Arguments come from `known` (the Rebalancer proxy for the fund; FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE, FLOW_MATCH_BAND_BPS from the sheet for the
+ * queue); a missing one is printed as a <NAME> placeholder the operator fills in.
+ */
+export function fundMigrationExpr(outDir: string, proxy: string, contract: string, known: Record<string, string | undefined>): string | undefined {
+  const def = FUND_MIGRATIONS[proxy];
+  if (!def || def.contract !== contract) return undefined;
+  let abi: unknown[] = [];
+  try { abi = (artifactJson(outDir, contract).abi ?? []) as unknown[]; } catch { return undefined; }
+  if (!abi.some((x: any) => x?.type === "function" && x?.name === "migrateV090")) return undefined;
+  const args = def.args.map((a) => known[a.sheet ?? a.name] ?? `<${a.sheet ?? (a.name === "rebalancer_" ? "REBALANCER_PROXY" : a.name)}>`);
+  return `$(cast calldata "${def.signature}"${args.map((x) => ` ${x}`).join("")})`;
 }
 
 /**
@@ -162,6 +181,10 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   const manifest = loadRunManifest(ctx.evidenceDir);
   if (!manifest) throw new PublishError("RESUME", `no run manifest in ${ctx.evidenceDir}: ${DEPLOY_IMPL_VERB} deploys into a deployment that exists. Pass the --evidence directory of the run that deployed it.`);
   const u = t.upgradeAuthority;
+  // A fund proxy may have been upgraded since the original deployment. Its
+  // previous build, also used for the runtime-code check, is its layout baseline.
+  const priorOut = fund ? proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")).proxyBuildDirs?.[spec.name] : undefined;
+  const layoutBase = priorOut ? dirname(priorOut) : ctx.coreDir;
   const stageManifest = join(manifestDir(ctx), `${manifestBase(t.stages.find((x) => x.name === spec.stage)!.manifest)}.json`);
   let proxy: Address, recordedLayoutId: string | null | undefined;
   if (!fund) {
@@ -186,7 +209,7 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
     if (m.chain_id !== undefined && Number(m.chain_id) !== ctx.chainId) throw new PublishError("REFUSED", `${stageManifest} is for chain ${m.chain_id}, not ${ctx.chainId}`);
     proxy = getAddress(m[spec.field]) as Address;
     // The deployed snapshot is the DEPLOY_SHA checkout's: the live-code check below refuses a live implementation that is not this checkout's build.
-    if (u && existsSync(join(ctx.coreDir, spec.layout)) && existsSync(join(ctx.coreDir, u.layoutPins))) recordedLayoutId = layoutId(ctx.coreDir, spec.layout, u.layoutPins);
+    if (u && existsSync(join(layoutBase, spec.layout)) && existsSync(join(layoutBase, u.layoutPins))) recordedLayoutId = layoutId(layoutBase, spec.layout, u.layoutPins);
   }
   const refuse = (why: string, details: Record<string, unknown> = {}): never => { throw new PublishError("REFUSED", `${DEPLOY_IMPL_VERB} --proxy ${spec.name}: ${why.replace(/\.$/, "")}. Nothing was sent.`, { proxy: spec.name, ...details }); };
 
@@ -194,15 +217,22 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   const build = o.upgradeBuild ?? ctx.coreDir;
   const outDir = join(build, "out");
   if (!u) refuse("the stage table has no upgradeAuthority (layout pins)");
-  const layout = layoutGateProblems(spec, ctx.coreDir, build, u!.layoutPins, recordedLayoutId);
+  const layout = layoutGateProblems(spec, layoutBase, build, u!.layoutPins, recordedLayoutId);
   // Deploy 4: a second implementation's own pinned snapshot must extend the deployed snapshot too (the base contract's gate above stays).
   if (layout.length === 0 && candidateLayout !== spec.layout) {
     const cand = join(build, candidateLayout);
     if (!existsSync(cand)) layout.push(`${cand} does not exist`);
-    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(ctx.coreDir, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract).map((p) => `${contract}: ${p}`));
+    else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(layoutBase, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract, libraryRenames(build), declaredStructMigrations(build, contract)).map((p) => `${contract}: ${p}`));
   }
   if (layout.length) refuse(`the storage layout gate refuses the build ${build}${contract !== spec.contract ? ` (${contract})` : ""}: ${layout.join("; ")}`, { layout });
-  const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e) : upgradeCommand(ctx, e));
+  // v0.9.0: the fund-system next step carries the proxy's migrateV090 when the build has one (fund-migrations.ts), with the arguments this run knows.
+  const migrationKnown = (): Record<string, string | undefined> => {
+    const params = (ctx.sheet as { fund?: { params?: Record<string, bigint> } } | undefined)?.fund?.params ?? {};
+    const rebPath = join(manifestDir(ctx), "rebalancer.json");
+    const reb = existsSync(rebPath) ? String(JSON.parse(readFileSync(rebPath, "utf8")).rebalancer ?? "") : "";
+    return { rebalancer_: /^0x[0-9a-fA-F]{40}$/.test(reb) ? reb : undefined, ...Object.fromEntries(["FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS"].map((k) => [k, params[k] === undefined ? undefined : String(params[k])])) };
+  };
+  const nextOf = (e: ImplementationDeploy): string => (fund ? fundUpgradeCommand(ctx, e, fundMigrationExpr(outDir, spec.name, contract, migrationKnown())) : upgradeCommand(ctx, e));
 
   // A rerun with the same arguments: the recorded implementation, when it still has the build's code, is the answer.
   const list = implementationDeploysOf(manifest);
@@ -238,13 +268,30 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
   }
   let art: any;
   try { art = artifactJson(outDir, contract); } catch (e) { refuse(`${(e as Error).message}: run forge build in the upgrade build first`); }
-  const linked = linkCreationCode(art, libraries, contract);
-  if (!linked.code) refuse(linked.problems.join("; "), { problems: linked.problems, expected: libraries });
-
   const deployer = await ctx.signer.address();
   if (lc(deployer) !== lc(ctx.sheet.admin)) throw new PublishError("SIGNER", `the signer ${deployer} is not ADMIN_ADDRESS ${ctx.sheet.admin}: the deployer deploys the implementation`);
-  ctx.log.log("info", "deploy_implementation.preview", { proxy: spec.name, proxy_address: proxy, contract, build, live_implementation: live, libraries });
-  await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}, linked to ${Object.entries(libraries).map(([n, a]) => `${n} ${a}`).join(", ") || "no library"}`);
+  let candidateLibraries = libraries;
+  if (fund) {
+    const candidates = { ...libraries };
+    const libsPath = join(manifestDir(ctx), "fund-libs.json");
+    if (existsSync(libsPath)) {
+      const old = JSON.parse(readFileSync(libsPath, "utf8"));
+      for (const l of [...t.libraries, ...(t.create2Libraries ?? [])]) {
+        const key = l.artifact.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+        if (typeof old[key] === "string") candidates[l.artifact] = getAddress(old[key]);
+      }
+    }
+    const recorded = ((manifest as any).upgrade_libraries ??= []);
+    let confirmed = false;
+    candidateLibraries = await upgradeLibraries({ contract, out: outDir, build, candidates, recorded, getCode: (a) => api.getCode(a), create: (code) => api.create(code), link: linkCreationCode,
+      beforeCreate: async (name) => { if (!confirmed) { await confirmStage(ctx, DEPLOY_IMPL_VERB, `deploy verified libraries and ${contract} from ${outDir} for ${spec.name}; first new library ${name}`); confirmed = true; } },
+      record: async (entry) => { recorded.push(entry); saveRunManifest(ctx.evidenceDir, manifest); },
+    });
+    if (!confirmed) await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}`);
+  } else await confirmStage(ctx, DEPLOY_IMPL_VERB, `one CREATE from ${deployer}: a new ${contract} for ${spec.name} (${proxy}) from ${outDir}`);
+  const linked = linkCreationCode(art, candidateLibraries, contract);
+  if (!linked.code) refuse(linked.problems.join("; "), { problems: linked.problems, expected: candidateLibraries });
+  ctx.log.log("info", "deploy_implementation.preview", { proxy: spec.name, proxy_address: proxy, contract, build, live_implementation: live, libraries: candidateLibraries });
   const sent = await api.create(linked.code!);
   if (!sent.status || !sent.address) throw new PublishError("BROADCAST", `the ${contract} deploy ${sent.txHash} reverted or created no contract. No entry was recorded.`, { tx: sent.txHash });
   const implementation = getAddress(sent.address) as Address;
@@ -254,7 +301,7 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
 
   const entry: ImplementationDeploy = {
     step: DEPLOY_IMPL_VERB, proxy_name: spec.name, proxy, contract, build, live_implementation: live, implementation,
-    code_hash: keccak256(await api.getCode(implementation)), libraries, deploy_tx: sent.txHash, deployer, core_sha: ctx.coreSha, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
+    code_hash: keccak256(await api.getCode(implementation)), libraries: candidateLibraries, deploy_tx: sent.txHash, deployer, core_sha: ctx.coreSha, deployed_at: (ctx.now?.() ?? new Date()).toISOString(),
     ...(fund ? { system: "fund" as const } : {}),
   };
   manifest.implementation_deploys = [...list.filter((e) => e !== prior), entry];

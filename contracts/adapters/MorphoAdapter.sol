@@ -6,8 +6,6 @@ pragma solidity ^0.8.24;
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
-import {IVenueLiquidityAdapter} from "../interfaces/IVenueLiquidityAdapter.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 
@@ -24,7 +22,7 @@ import {ForeignTokenQuarantine} from "../lib/ForeignTokenQuarantine.sol";
 ///      checks are trivially satisfied but still enforced (revert
 ///      `SlippageExceeded` below the floor). `isExact()` returns true; the vault
 ///      attests exactness separately at `addAdapter` (spec §2.2, C2).
-contract MorphoAdapter is IStrategyAdapter, IVenueLiquidityAdapter, IERC165 {
+contract MorphoAdapter is IStrategyAdapter {
     using SafeERC20 for IERC20;
 
     /// @notice Moonwell Flagship USDC ERC-4626 vault address.
@@ -127,19 +125,6 @@ contract MorphoAdapter is IStrategyAdapter, IVenueLiquidityAdapter, IERC165 {
             emit DeployRefused(amount, reason);
         }
         IERC20(USDC).forceApprove(address(MORPHO_VAULT), 0);
-    }
-
-    /// @inheritdoc IERC165
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == type(IVenueLiquidityAdapter).interfaceId
-            || interfaceId == type(IERC165).interfaceId;
-    }
-
-    /// @inheritdoc IVenueLiquidityAdapter
-    function withdrawalLiquidity() external view returns (bool open, uint256 available) {
-        if (MORPHO_VAULT.balanceOf(address(this)) == 0) return (true, 0);
-        available = MORPHO_VAULT.maxWithdraw(address(this));
-        open = available != 0;
     }
 
     /// @notice Min-out variant of `deploy`: reverts `SlippageExceeded` below `minValueOut`.

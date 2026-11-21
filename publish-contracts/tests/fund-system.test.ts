@@ -5,10 +5,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseCli } from "../src/cli.ts";
 import { requiredSheetNames, resolveEnv } from "../src/core-wiring.ts";
-import { FUND_ONLY_NAMES, SHEET_SPEC, parseSheet } from "../src/sheet.ts";
+import { FUND_ONLY_NAMES, FUND_STEP3F_UINT_NAMES, SHEET_SPEC, parseSheet } from "../src/sheet.ts";
 import { buildStages, handoverStageOf, peekStageState, restoreStageState, useStageTable, STAGE_NAMES, DEPLOYER_STAGES, proofNoncesBefore } from "../src/stages.ts";
 import { loadStageTable, parseStageTable, scopeTable, timelockExecutorOf } from "../src/stage-table.ts";
 import { predictCoreTimelock } from "../src/timelock-pin.ts";
+import { buildFundVerifySheet } from "../src/verify-fund-stage.ts";
 import { FUND_PROXY_NAMES, proxySpecs } from "../src/verify/upgradeability.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -139,5 +140,84 @@ describe("the fund system's CLI verbs (Deploy 4)", () => {
     expect(parseCli(["record-receipt", ...base, ...rec])).toMatchObject({ verb: "record-receipt", system: "fund" });
     for (const v of ["govern", "pause-all", "redeploy-vault"]) expect(() => parseCli([v, ...base])).toThrow("belongs to the vaults system: the fund system runs publish, verify, record-receipt");
     expect(() => parseCli([...base, "--stage", "govern"])).toThrow("the fund system has no govern stage");
+  });
+});
+
+describe("Step 3f fund sheet fields and buildFundVerifySheet", () => {
+  const withExtras = (extra: Record<string, string | null>): string => {
+    let txt = SHEET;
+    for (const [k, v] of Object.entries(extra)) {
+      const re = new RegExp(`^${k}=.*$`, "m");
+      txt = v === null ? txt.replace(re, "") : re.test(txt) ? txt.replace(re, `${k}=${v}`) : `${txt.replace(/\n?$/, "\n")}${k}=${v}\n`;
+    }
+    return txt;
+  };
+  const A1 = "0x1000000000000000000000000000000000000001";
+  const A2 = "0x2000000000000000000000000000000000000002";
+  const A3 = "0x3000000000000000000000000000000000000003";
+
+  test("Step 3f optional uints parse into sheet.fund.params and reject non-uint or vaults sheets", () => {
+    expect(FUND_STEP3F_UINT_NAMES).toEqual([
+      "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS", "FUND_MIN_POOL_DEPTH_USDC",
+      "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
+    ]);
+    const s = fundSheet(withExtras({
+      FLOW_CANCEL_BUFFER: "900",
+      FLOW_MAX_PAUSE: "259200",
+      FUND_MIN_POOL_DEPTH_USDC: "2000000000000",
+      FUND_FEE_MARGIN_BPS: "20",
+      FUND_DELIST_BAND_BPS: "300",
+      FUND_DELIST_BUDGET_BPS: "300",
+      FUND_MAX_BASKET_BPS: "6500",
+    }));
+    expect(s.fund!.params.FLOW_CANCEL_BUFFER).toBe(900n);
+    expect(s.fund!.params.FLOW_MAX_PAUSE).toBe(259200n);
+    expect(s.fund!.params.FUND_MIN_POOL_DEPTH_USDC).toBe(2000000000000n);
+    expect(s.fund!.params.FUND_FEE_MARGIN_BPS).toBe(20n);
+    expect(s.fund!.params.FUND_DELIST_BAND_BPS).toBe(300n);
+    expect(s.fund!.params.FUND_DELIST_BUDGET_BPS).toBe(300n);
+    expect(s.fund!.params.FUND_MAX_BASKET_BPS).toBe(6500n);
+    expect(() => fundSheet(withExtras({ FLOW_CANCEL_BUFFER: "abc" }))).toThrow("FLOW_CANCEL_BUFFER");
+  });
+
+  test("keeperType, keeperOwners, keeperBotKeys, and receiptSubmitters validate and allow 'none' as []", () => {
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "multisig" }))).toThrow("KEEPER_TYPE must be 'eoa' or 'smart-account'");
+    // E56: a smart-account keeper must name its owners and its bot keys.
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_BOT_KEYS: "none" }))).toThrow("needs KEEPER_OWNERS");
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_OWNERS: A1 }))).toThrow("needs KEEPER_BOT_KEYS");
+    const eoa = fundSheet(withExtras({ KEEPER_TYPE: "eoa", KEEPER_BOT_KEYS: "none", RECEIPT_SUBMITTERS: "none" }));
+    expect(eoa.fund!.keeperType).toBe("eoa");
+    expect(eoa.fund!.keeperBotKeys).toEqual([]);
+    expect(eoa.fund!.receiptSubmitters).toEqual([]);
+
+    const sa = fundSheet(withExtras({
+      KEEPER_TYPE: "smart-account",
+      KEEPER_OWNERS: `${A1},${A2}`,
+      KEEPER_BOT_KEYS: A3,
+      RECEIPT_SUBMITTERS: `${A1},${A3}`,
+    }));
+    expect(sa.fund!.keeperType).toBe("smart-account");
+    expect(sa.fund!.keeperOwners).toEqual([A1, A2]);
+    expect(sa.fund!.keeperBotKeys).toEqual([A3]);
+    expect(sa.fund!.receiptSubmitters).toEqual([A1, A3]);
+  });
+
+  test("buildFundVerifySheet forwards feeRecipient and Step 3f fields and rejects non-fund sheets", () => {
+    const s = fundSheet(withExtras({
+      FEE_RECIPIENT_ADDRESS: A2,
+      FLOW_CANCEL_BUFFER: "900",
+      KEEPER_TYPE: "smart-account",
+      KEEPER_OWNERS: A1,
+      KEEPER_BOT_KEYS: A3,
+      RECEIPT_SUBMITTERS: A2,
+    }));
+    const vs = buildFundVerifySheet({ sheet: s, chainId: 8453 });
+    expect(vs.fund!.feeRecipient).toBe(A2);
+    expect(vs.fund!.params.FLOW_CANCEL_BUFFER).toBe(900n);
+    expect(vs.fund!.keeperType).toBe("smart-account");
+    expect(vs.fund!.keeperOwners).toEqual([A1]);
+    expect(vs.fund!.keeperBotKeys).toEqual([A3]);
+    expect(vs.fund!.receiptSubmitters).toEqual([A2]);
+    expect(() => buildFundVerifySheet({ sheet: { ...s, fund: undefined } as never, chainId: 8453 })).toThrow("needs a fund sheet");
   });
 });

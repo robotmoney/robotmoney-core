@@ -73,7 +73,6 @@ vi.mock("wagmi", () => ({
       case "getEffectiveWeights":
         data = [[VAULT], [10_000n]];
         break;
-      case "previewDepositFor":
       case "previewDeposit":
         data =
           opts.address === ROUTER

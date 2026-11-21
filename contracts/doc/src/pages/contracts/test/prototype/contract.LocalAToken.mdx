@@ -1,0 +1,44 @@
+---
+title: "LocalAToken"
+---
+
+# LocalAToken
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/Adapters.t.sol)
+
+**Inherits:** [LocalMintableErc20](/contracts/test/prototype/contract.LocalMintableErc20)
+
+## Constants
+
+### pool
+
+```solidity
+address public immutable pool;
+```
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor() LocalMintableErc20("Mock aUSDC", "maUSDC", 6);
+```
+
+<a id="releaseunderlying-ierc20-address-uint256"></a>
+
+### releaseUnderlying
+
+```solidity
+function releaseUnderlying(IERC20 usdc, address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `IERC20` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+

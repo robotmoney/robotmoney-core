@@ -5,7 +5,7 @@ description: "Shared logic for the permissionless foreign-token sweep that enfor
 
 # ForeignTokenQuarantine
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/lib/ForeignTokenQuarantine.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/ForeignTokenQuarantine.sol)
 
 **Title:** ForeignTokenQuarantine
 
@@ -35,12 +35,12 @@ Two sweep overloads are provided:
 </i>
 
 `sweep(token, triggeredBy)` — uses the hardcoded `QUARANTINE` constant.
-Used by immutable adapters and by BasketVault's fixed quarantine paths.
+Used by adapters that have no on-chain admin (immutable contracts).
 
 `sweep(token, destination, triggeredBy)` — uses a caller-supplied
 `destination` that must be the per-contract governance-controlled
-quarantine address (see `quarantineAddress` on RobotMoneyVault
-and PortfolioRouter). The destination is never the raw
+quarantine address (see `quarantineAddress` on RobotMoneyVault,
+BasketVault, and PortfolioRouter). The destination is never the raw
 `msg.sender`; it is set only through the TimelockController (INV-3)
 and therefore cannot be steered by a calling-time argument.
 
@@ -49,9 +49,10 @@ and therefore cannot be steered by a calling-time argument.
 ### QUARANTINE
 
 The protocol-wide default quarantine ("trash") address used by
-immutable adapters and BasketVault. RobotMoneyVault and PortfolioRouter
-store a timelock-settable `quarantineAddress` and call the
-three-argument `sweep` overload.
+adapters that have no on-chain governance (immutable contracts).
+Main protocol contracts (RobotMoneyVault, BasketVault,
+PortfolioRouter) store a timelock-settable `quarantineAddress`
+state variable and call the three-argument `sweep` overload.
 
 ```solidity
 address internal constant QUARANTINE = 0x0000000000000000000000000000000000deaD11;
@@ -64,7 +65,8 @@ address internal constant QUARANTINE = 0x0000000000000000000000000000000000deaD1
 ### sweep
 
 Move the caller contract's full balance of `token` to the fixed
-`QUARANTINE` constant address. Used by immutable adapters and BasketVault.
+`QUARANTINE` constant address. Used by adapters that are
+immutable and have no on-chain access control.
 
 <i>
 
@@ -100,8 +102,8 @@ function sweep(address token, address triggeredBy) internal returns (uint256 amo
 Move the caller contract's full balance of `token` to a
 governance-controlled `destination`. Use this overload when the
 quarantine address is stored as a timelock-settable state variable
-on the calling contract (RobotMoneyVault or PortfolioRouter).
-The `destination` MUST NOT be a caller-supplied
+on the calling contract (RobotMoneyVault, BasketVault,
+PortfolioRouter). The `destination` MUST NOT be a caller-supplied
 argument; it must be read from the contract's governed storage.
 
 ```solidity

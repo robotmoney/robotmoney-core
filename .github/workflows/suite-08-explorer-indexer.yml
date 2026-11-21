@@ -6,14 +6,12 @@
 # The migration idempotency test exists because migrations run once on deploy and any
 # non-idempotent migration will crash a rollback or a fresh staging environment.
 #
-# WHY THE JOB SPLITS INTO fast AND devnet
+# WHY THERE IS NO DEVNET JOB
 # The fast job covers everything that can be tested with a Postgres testcontainer alone (no
-# chain), which cuts its wall time to ~5 min. The devnet job runs in parallel because it uses an
-# entirely different environment with no shared state. It runs the indexer against the Twin
-# chain (id 918453), a pinned lazy fork of real Base state made with anvil (core 1498, 1496), with
-# a vault the test deploys itself through the deploy scripts. The reorg paths are covered by the
-# fast job's stub-RPC tests (cursor_header_reorg, reorg_cursor_vault_status): a stub can produce
-# the exact competing tips an instant-finality anvil chain cannot.
+# chain). The devnet job ran the indexer against a vault of the old multi-vault system deployed on
+# the Twin chain. Those contracts were replaced by the 0.9.0 fund (PR 2042), so that job and its
+# fork_indexer test were removed. The reorg paths are covered by the fast job's stub-RPC tests
+# (cursor_header_reorg, reorg_cursor_vault_status).
 #
 # WHY cargo test --no-run RUNS BEFORE THE INDIVIDUAL TEST STEPS
 # Compiling test binaries is the most expensive part of the fast job. Running it once
@@ -26,9 +24,6 @@
 #   confusing "connection refused" error, not a "Docker not found" error. The fast job
 #   deliberately omits a Docker availability check because it should not need compose;
 #   if you start seeing connection refused in migrations, verify the runner has Docker.
-# - fork_indexer needs the Twin fork (TWIN_RPC_URL, started by .github/actions/twin-fork at the run
-#   pin) and the publish-contracts run (the one deploy driver in this repo), because it deploys its own vault.
-#   A rate-limited upstream (HTTP 429) is retried by anvil and the twin-fork tool.
 # - EXECUTED FLOORS (QA plan v1 T5). Every cargo_test_require_executed.sh call here names its
 #   floor, and the floor is the number of tests the call selects, so one test fewer is red. Before
 #   T5 most calls kept the default floor of 1: the seven read-path targets (49 tests) were green with
@@ -47,15 +42,6 @@ env:
   CI_CLASS: system-correctness
 
 on:
-  # Called by suite-29-nightly-twin-fork.yml, which chooses ONE pin for the whole nightly run and
-  # hands it down as pin_block. Steps are not copied: the nightly calls this very workflow.
-  workflow_call:
-    inputs:
-      pin_block:
-        description: "Twin chain pin handed down by a parent run. Empty: this run chooses one."
-        type: string
-        required: false
-        default: ""
   # system-correctness: defer until the PR is ready for review (no draft runs),
   # plus push to dev/dev-phase-* for merged-commit coverage. paths-ignore bypasses
   # docs-only PRs (no behavioural code to exercise).
@@ -115,10 +101,10 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --lib -- abi::tests::abi_drift_gate --nocapture
 
-      # Vault risk_label classifier (issue 1566). Fails below its six tests.
+      # Vault risk_label classifier (issue 1566). Fails below its five tests.
       - name: Vault risk_label classifier lib tests
         run: |
-          CARGO_TEST_MIN_EXECUTED=6 bash .github/scripts/cargo_test_require_executed.sh \
+          CARGO_TEST_MIN_EXECUTED=5 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer --lib -- indexer::tests::risk_label --nocapture
 
       # RPC URL redaction (issue 1729). A keyed RPC URL must never reach logs or
@@ -331,8 +317,9 @@ jobs:
           # 47 tests: reorg_cursor_vault_status 10, account_history 9, account_position_vote_power 1,
           # multi_vault 4, vault_detail 16, vault_registry 7 (QA plan v1 T5; C1 removed the governance-vote
           # cases with the voting tables; core 1891 removed the 11 committee_indexing cases and the 5
-          # committee reorg cases with the committee tables, migration 0030).
-          CARGO_TEST_MIN_EXECUTED=48 bash .github/scripts/cargo_test_require_executed.sh \
+          # committee reorg cases with the committee tables, migration 0030). PR 2042 removed the
+          # vault_detail case that read the deleted contracts/RobotMoneyVault.sol (48 to 47).
+          CARGO_TEST_MIN_EXECUTED=47 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-indexer \
             --test reorg_cursor_vault_status \
             --test account_history \
@@ -454,61 +441,3 @@ jobs:
           CARGO_TEST_MIN_EXECUTED=4 bash .github/scripts/cargo_test_require_executed.sh \
             -p explorer-api \
             --test boot_schema_guard -- --nocapture
-
-  # ONE pin per workflow run (core 1498, 1496): upstream head minus 2, chosen once.
-  pin:
-    name: twin-pin
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    outputs:
-      block: ${{ steps.pin.outputs.block }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: pin
-        uses: ./.github/actions/twin-pin
-        with:
-          pin-block: ${{ inputs.pin_block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-  devnet:
-    name: explorer-indexer-devnet
-    needs: pin
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # fork_indexer deploys its own vault through the "publish contracts" runbook (publish-contracts/ in this repo).
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
-      - name: Verify Docker is available (Postgres testcontainer)
-        run: docker version
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
-
-      # Installs foundry and bun, restores anvil's RPC cache keyed by the pin block, starts the
-      # Twin fork and exports TWIN_RPC_URL.
-      - name: Start the Twin chain at the run pin
-        uses: ./.github/actions/twin-fork
-        with:
-          pin-block: ${{ needs.pin.outputs.block }}
-          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-      - name: Fork indexer test (own vault on the Twin chain)
-        working-directory: services/explorer-indexer
-        run: |
-          CARGO_TEST_MIN_EXECUTED=2 bash ../../.github/scripts/cargo_test_require_executed.sh \
-            --test fork_indexer -- --nocapture
-
-      - name: Stop the Twin fork and save its RPC cache
-        if: always()
-        uses: ./.github/actions/twin-fork-save-cache

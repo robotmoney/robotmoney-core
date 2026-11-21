@@ -33,22 +33,14 @@ implicit 100% expectation — appears in any other file.
 The canonical list lives in `NATSPEC_SCOPE` inside `scripts/natspec/check.sh`:
 
 ```
-contracts/gateway/RobotMoneyGateway.sol
-contracts/gateway/AccessRoles.sol
-contracts/gateway/MockUSDC.sol
-contracts/gateway/MockVault.sol
-contracts/gateway/interfaces/IGateway.sol
-contracts/RobotMoneyVault.sol
 contracts/interfaces/IStrategyAdapter.sol
 contracts/adapters/AaveV3Adapter.sol
 contracts/adapters/CompoundV3Adapter.sol
 contracts/adapters/MorphoAdapter.sol
 contracts/script/DeployLibs.s.sol
-contracts/script/DeployVault.s.sol
-contracts/script/DeployGateway.s.sol
 ```
 
-The list spans two separate systems (`docs/technical/smart-contracts.md` §1.1). The `contracts/gateway/` files and `DeployGateway.s.sol` belong to the rmpc gateway system. The rest belong to the vaults system.
+The gateway, vault and their deploy scripts left this list when the 0.9.0 fund contracts replaced them; the remaining files are the strategy adapters and the library deploy script.
 
 **Out of scope** (not checked):
 - `lib/` — third-party dependencies.
@@ -68,7 +60,7 @@ bash scripts/natspec/check.sh
 To check a single file (e.g. after editing it):
 
 ```bash
-bash scripts/natspec/check.sh contracts/gateway/RobotMoneyGateway.sol
+bash scripts/natspec/check.sh contracts/adapters/AaveV3Adapter.sol
 ```
 
 The script prints a per-file report and exits non-zero on any issue. The output

@@ -79,9 +79,6 @@ const legsWithUnavailable: LegRaw[] = [
   { vault: VAULT_B, weightBps: 4000n, legAmount: 4_000_000n, estShares: 0n, unavailable: true },
 ];
 
-/** Fixed read time of the mocked router quote, in ms (a whole second). */
-const PREVIEW_UPDATED_AT_MS = 1_800_000_000_000;
-
 interface WagmiMockState {
   isConnected: boolean;
   address: Address | undefined;
@@ -135,12 +132,8 @@ vi.mock("wagmi", () => ({
   useAccount: () => ({ address: mockState.address, isConnected: mockState.isConnected }),
   useReadContract: (opts: { functionName?: string }) => {
     if (opts.functionName === "allowance") return { data: mockState.allowance, refetch: vi.fn() };
-    if (opts.functionName === "previewDepositFor")
-      return {
-        data: mockState.previewDepositLegs,
-        dataUpdatedAt: PREVIEW_UPDATED_AT_MS,
-        error: null,
-      };
+    if (opts.functionName === "previewDeposit")
+      return { data: mockState.previewDepositLegs, error: null };
     if (opts.functionName === "getEffectiveWeights") {
       if (mockState.effectiveWeightsVaults === undefined) return { data: undefined };
       // Real getEffectiveWeights() returns (address[] vaults, uint256[] bps) —
@@ -157,7 +150,7 @@ vi.mock("wagmi", () => ({
     query?: { enabled?: boolean };
   }) => {
     if (opts.functionName === "approve") return { data: mockState.approveSim, error: null };
-    if (opts.functionName === "depositWithQuote") {
+    if (opts.functionName === "deposit") {
       capturedDepositArgs = opts.args;
       capturedDepositEnabled = opts.query?.enabled;
       return { data: mockState.depositSim, error: null };
@@ -359,16 +352,7 @@ describe("RouterDepositTab submits non-zero per-leg minSharesPerLeg floors deriv
     });
 
     expect(capturedDepositArgs).toBeDefined();
-    const [, amountArg, vaultsArg, floorsArg, deadline] = capturedDepositArgs as [
-      Address,
-      bigint,
-      Address[],
-      bigint[],
-      bigint,
-    ];
-    expect(vaultsArg).toEqual(activeLegsPrev.map((leg) => leg.vault));
-    // The deadline is the quote's read time plus 10 minutes, so a stale quote cannot extend itself.
-    expect(deadline).toBe(BigInt(PREVIEW_UPDATED_AT_MS / 1000 + 600));
+    const [amountArg, floorsArg] = capturedDepositArgs as [bigint, bigint[]];
 
     // 10 USDC (6 decimals) -> the deposit amount the user typed.
     expect(amountArg).toBe(10_000_000n);

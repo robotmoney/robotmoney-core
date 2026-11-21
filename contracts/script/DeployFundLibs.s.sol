@@ -11,15 +11,19 @@ import {TwapTickMath} from "../lib/TwapTickMath.sol";
 import {BasketSwaps} from "../lib/BasketSwaps.sol";
 import {BasketAssetConfigGuard} from "../lib/BasketAssetConfigGuard.sol";
 import {GovernedUpgrade} from "../lib/GovernedUUPS.sol";
-import {FundPositionLib} from "../test/prototype/src/lib/FundPositionLib.sol";
-import {FundValuationLib} from "../test/prototype/src/lib/FundValuationLib.sol";
-import {FundAdminLib} from "../test/prototype/src/lib/FundAdminLib.sol";
-import {FundFlowsLib} from "../test/prototype/src/lib/FundFlowsLib.sol";
-import {FundStepLib} from "../test/prototype/src/lib/FundStepLib.sol";
-import {StepFeedLib} from "../test/prototype/src/lib/StepFeedLib.sol";
-import {FlowCheckLib} from "../test/prototype/src/lib/FlowCheckLib.sol";
-import {FlowSettleLib} from "../test/prototype/src/lib/FlowSettleLib.sol";
-import {FlowClaimLib} from "../test/prototype/src/lib/FlowClaimLib.sol";
+import {FundPositionLib} from "../lib/FundPositionLib.sol";
+import {FundValuationLib} from "../lib/FundValuationLib.sol";
+import {FundAdminLib} from "../lib/FundAdminLib.sol";
+import {FundFlowsLib} from "../lib/FundFlowsLib.sol";
+import {FundStepLib} from "../lib/FundStepLib.sol";
+import {FundDelistLib} from "../lib/FundDelistLib.sol";
+import {StepFeedLib} from "../lib/StepFeedLib.sol";
+import {FlowCheckLib} from "../lib/FlowCheckLib.sol";
+import {FlowMatchLib} from "../lib/FlowMatchLib.sol";
+import {FlowSettleLib} from "../lib/FlowSettleLib.sol";
+import {FlowClaimLib} from "../lib/FlowClaimLib.sol";
+import {FlowMigrateLib} from "../lib/FlowMigrateLib.sol";
+import {FundMigrateLib} from "../lib/FundMigrateLib.sol";
 import {ExpectedChainGuard} from "./ExpectedChainGuard.sol";
 
 /// @title DeployFundLibs
@@ -51,10 +55,14 @@ contract DeployFundLibs is ExpectedChainGuard {
         address fundAdminLib;
         address fundFlowsLib;
         address fundStepLib;
+        address fundDelistLib;
         address stepFeedLib;
         address flowCheckLib;
+        address flowMatchLib;
         address flowSettleLib;
         address flowClaimLib;
+        address flowMigrateLib;
+        address fundMigrateLib;
     }
 
     /// @notice Forge broadcast entrypoint.
@@ -84,15 +92,20 @@ contract DeployFundLibs is ExpectedChainGuard {
         d.fundAdminLib = address(FundAdminLib);
         d.fundFlowsLib = address(FundFlowsLib);
         d.fundStepLib = address(FundStepLib);
+        d.fundDelistLib = address(FundDelistLib);
         d.stepFeedLib = address(StepFeedLib);
         d.flowCheckLib = address(FlowCheckLib);
+        d.flowMatchLib = address(FlowMatchLib);
         d.flowSettleLib = address(FlowSettleLib);
         d.flowClaimLib = address(FlowClaimLib);
+        // The one-time 0.8.0 to 0.9.0 state migrations (`FlowQueue.migrateV090`, `RobotMoneyFund.migrateV090`).
+        d.flowMigrateLib = address(FlowMigrateLib);
+        d.fundMigrateLib = address(FundMigrateLib);
         // The call proves TickMath is linked to working code, not only to an address (finding L3-D1).
         require(
             TickMath.getSqrtRatioAtTick(0) == SQRT_RATIO_AT_TICK_ZERO, "TickMath: tick 0 mismatch"
         );
-        address[14] memory all = [
+        address[18] memory all = [
             d.tickMath,
             d.twapTickMath,
             d.basketSwaps,
@@ -103,10 +116,14 @@ contract DeployFundLibs is ExpectedChainGuard {
             d.fundAdminLib,
             d.fundFlowsLib,
             d.fundStepLib,
+            d.fundDelistLib,
             d.stepFeedLib,
             d.flowCheckLib,
+            d.flowMatchLib,
             d.flowSettleLib,
-            d.flowClaimLib
+            d.flowClaimLib,
+            d.flowMigrateLib,
+            d.fundMigrateLib
         ];
         for (uint256 i = 0; i < all.length; i++) {
             require(all[i] != address(0), "fund-libs: zero linked library");
@@ -127,10 +144,14 @@ contract DeployFundLibs is ExpectedChainGuard {
         vm.serializeAddress(obj, "fund_admin_lib", d.fundAdminLib);
         vm.serializeAddress(obj, "fund_flows_lib", d.fundFlowsLib);
         vm.serializeAddress(obj, "fund_step_lib", d.fundStepLib);
+        vm.serializeAddress(obj, "fund_delist_lib", d.fundDelistLib);
         vm.serializeAddress(obj, "step_feed_lib", d.stepFeedLib);
         vm.serializeAddress(obj, "flow_check_lib", d.flowCheckLib);
+        vm.serializeAddress(obj, "flow_match_lib", d.flowMatchLib);
         vm.serializeAddress(obj, "flow_settle_lib", d.flowSettleLib);
-        string memory json = vm.serializeAddress(obj, "flow_claim_lib", d.flowClaimLib);
+        vm.serializeAddress(obj, "flow_claim_lib", d.flowClaimLib);
+        vm.serializeAddress(obj, "flow_migrate_lib", d.flowMigrateLib);
+        string memory json = vm.serializeAddress(obj, "fund_migrate_lib", d.fundMigrateLib);
         vm.writeJson(json, outPath);
         console2.log("Wrote fund-libs deployment JSON to", outPath);
     }

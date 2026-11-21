@@ -207,13 +207,4 @@ describe("Deploy 2 addresses (QA plan v1 E10)", () => {
     expect(sh.out).toContain("scripts/ops/planted-fork.sh:2");
     expect(sh.out).toContain(`${DEPLOY_2} rmAGENT UniswapV4PriceRecorder`);
   });
-
-  test("the recorder keeper fork test reads rmAGENT and its recorder from the Deploy 2 manifest", () => {
-    for (const rel of ["scripts/ops/test-recorder-keeper-fork.sh", "scripts/ops/integration/RecorderKeeperDeposit.t.sol"]) {
-      const text = readFileSync(join(repo, rel), "utf8");
-      expect(scanText(rel, text)).toEqual([]);
-      expect(text).toContain("deployments/8453/deploy-2");
-      expect(text).toContain("agent-token-vault.json");
-    }
-  });
 });

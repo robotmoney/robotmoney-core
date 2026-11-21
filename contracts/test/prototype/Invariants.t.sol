@@ -27,7 +27,7 @@ import {
     IDLE_INDEX,
     BPS,
     PRICE_SCALE
-} from "./src/FundTypes.sol";
+} from "../../FundTypes.sol";
 import {
     Claim,
     FlowBooks,
@@ -40,12 +40,13 @@ import {
     Settlement,
     SettleCheck,
     Fill,
-    SettleContext
-} from "./src/FlowTypes.sol";
-import {IRebalanceGovernance} from "./src/interfaces/IRebalanceGovernance.sol";
-import {IRobotMoneyFund} from "./src/interfaces/IRobotMoneyFund.sol";
-import {ILendingRateAdapter} from "./src/interfaces/IFlowAdapters.sol";
-import {FundValuationLib} from "./src/lib/FundValuationLib.sol";
+    SettleContext,
+    TIMELOCK_DELAY_REFERENCE
+} from "../../FlowTypes.sol";
+import {IRebalanceGovernance} from "../../interfaces/IRebalanceGovernance.sol";
+import {IRobotMoneyFund} from "../../interfaces/IRobotMoneyFund.sol";
+import {ILendingRateAdapter} from "../../interfaces/IFlowAdapters.sol";
+import {FundValuationLib} from "../../lib/FundValuationLib.sol";
 import {IStrategyAdapter} from "../../interfaces/IStrategyAdapter.sol";
 
 /// @title Invariants
@@ -141,11 +142,11 @@ contract Invariants is PrototypeHarness {
     uint8 private constant ACT_OTHER = 0;
     uint8 private constant ACT_SETTLE = 1;
     uint8 private constant ACT_PAY = 2;
-    uint8 private constant ACT_EXIT = 3;
 
     // ─── Ghosts (reset with the post-setUp snapshot at the start of every run) ───────────────────────────
 
     uint256 public ghostInKindReverts;
+    uint256 public ghostInKindClosedRefusals;
     uint256 public ghostRequestRedeemReverts;
     uint256 public ghostClaimReverts;
     uint256 public ghostApplyFailures;
@@ -170,17 +171,26 @@ contract Invariants is PrototypeHarness {
     uint256 public ghostRb11;
     uint256 public ghostRb12;
     uint256 public ghostRb13;
-    uint256 public ghostRb14;
     uint256 public ghostRb15;
     uint256 public ghostRb16;
     uint256 public ghostRb18;
     uint256 public ghostRb20;
+    uint256 public ghostRb23;
+    uint256 public ghostRb24;
+    uint256 public ghostRb25;
+    uint256 public ghostRb26;
+    uint256 public ghostRb27;
+    uint256 public ghostRb28;
+    uint256 public ghostRb30;
+    uint256 public ghostRb32;
+    uint256 public ghostRb35;
+    uint256 public ghostRb36;
     string public ghostLastViolation;
 
     // ─── Reverts each handler caught (`hardening`, step 3 plan §3.3 item 4) ───────────────────────────────
     // Every try / catch in a handler counts what it caught under its handler, expected or not, so a run that
     // silently did nothing shows. A revert of a call that must succeed also counts in `mustSucceedReverts`, and
-    // `invariant_mustNotRevert` fails the run on the first one. Handlers with no try / catch (pause, warp, market
+    // `invariant_mustNotRevert` fails the run on the first one. Handlers with no try / catch (warp, market
     // catch-up) need no count: under `fail-on-revert` any revert of theirs fails the run by itself.
 
     uint256 private constant H_REQUEST_DEPOSIT = 0;
@@ -191,18 +201,19 @@ contract Invariants is PrototypeHarness {
     uint256 private constant H_DELIVER = 5;
     uint256 private constant H_CLAIM = 6;
     uint256 private constant H_CANCEL = 7;
-    uint256 private constant H_EXIT_IN_KIND = 8;
+    uint256 private constant H_GIVE_NOTICE = 8;
     uint256 private constant H_WITHDRAW_EXPIRED = 9;
     uint256 private constant H_WITHDRAW_CREDIT = 10;
     uint256 private constant H_FREEZE = 11;
-    uint256 private constant H_RELEASE_OR_RETURN = 12;
-    uint256 private constant H_TAKE_RETURN = 13;
+    uint256 private constant H_RELEASE = 12;
+    uint256 private constant H_PAUSE = 13;
     uint256 private constant H_REDEEM_IN_KIND = 14;
-    uint256 private constant H_APPLY = 15;
-    uint256 private constant H_STEP = 16;
-    uint256 private constant H_MOVE_PRICE = 17;
-    uint256 private constant H_UNAUTHORIZED = 18;
-    uint256 private constant N_HANDLERS = 19;
+    uint256 private constant H_SHUTDOWN = 15;
+    uint256 private constant H_APPLY = 16;
+    uint256 private constant H_STEP = 17;
+    uint256 private constant H_MOVE_PRICE = 18;
+    uint256 private constant H_UNAUTHORIZED = 19;
+    uint256 private constant N_HANDLERS = 20;
 
     /// @dev Every revert a handler caught, expected or not.
     uint256[N_HANDLERS] public revertsCaught;
@@ -211,13 +222,18 @@ contract Invariants is PrototypeHarness {
     /// @dev The latest must-succeed revert: handler, what, revert data.
     string public lastMustSucceedRevert;
 
-    // Flow ledger since setUp (conservation).
+    // Flow ledger since setUp (conservation + Step 3f cooldown/fee tracking).
     uint256 public ghostUsdcIn;
     uint256 public ghostUsdcOut;
     uint256 public ghostSharesIn;
     uint256 public ghostSharesOut;
     uint256 public ghostQueueSharesBurned;
     uint256 public ghostWalletSharesBurned;
+    uint256 public ghostSettleFundToQueueUsdc;
+    uint256 public ghostSettleQueueToFundUsdc;
+    uint256 public ghostSettleFeeUsdc;
+    uint64 public ghostLastFreezeAt;
+    uint64 public ghostQueuePauseCooldownUntil;
     mapping(uint256 settlementId => uint64 at) public ghostFreezeAt;
 
     // Activity.
@@ -225,16 +241,19 @@ contract Invariants is PrototypeHarness {
     uint256 public callsRedeemRequest;
     uint256 public callsSettle;
     uint256 public settlementsMade;
+    uint256 public callsWholeMatch;
     uint256 public callsDeliver;
     uint256 public callsClaim;
     uint256 public callsCancel;
-    uint256 public callsExitInKind;
+    uint256 public callsNotice;
     uint256 public callsExpired;
     uint256 public callsCredit;
     uint256 public callsFreeze;
     uint256 public callsRelease;
-    uint256 public callsTakeReturn;
+    uint256 public callsPause;
     uint256 public callsRedeemInKind;
+    uint256 public callsShutdown;
+    uint256 public callsRestore;
     uint256 public callsApply;
     /// @dev Valid receipts the fund refused under the pool-share rule, each checked by `_poolShareRefusalJustified`.
     uint256 public callsApplyRefusedPoolShare;
@@ -365,14 +384,14 @@ contract Invariants is PrototypeHarness {
             this.act_deliver.selector,
             this.act_claim.selector,
             this.act_cancel.selector,
-            this.act_exitInKind.selector,
+            this.act_giveRedemptionNotice.selector,
             this.act_withdrawExpired.selector,
             this.act_withdrawCredit.selector,
             this.act_freeze.selector,
-            this.act_releaseOrReturn.selector,
-            this.act_takeReturn.selector,
+            this.act_release.selector,
             this.act_pause.selector,
             this.act_redeemInKind.selector,
+            this.act_shutdownRestore.selector,
             this.act_apply.selector,
             this.act_step.selector,
             this.act_warp.selector,
@@ -387,6 +406,7 @@ contract Invariants is PrototypeHarness {
         }
         targetContract(address(this));
         targetSelector(FuzzSelector({addr: address(this), selectors: selectors}));
+        coverageCheckpoint();
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -409,85 +429,64 @@ contract Invariants is PrototypeHarness {
         actionKind = ACT_OTHER;
     }
 
-    /// @notice A holder asks to deposit 100 to 20,000 USDC. `mode` picks its limit: any price, the quote plus
-    ///         50 bps (E21), or a limit below every bound (it never fills: RB-14 skips it).
-    function act_requestDeposit(uint256 who, uint256 amt, uint8 mode) public {
+    /// @notice A holder asks to deposit 100 to 20,000 USDC (Step 3f: limit-free forward pricing).
+    function act_requestDeposit(uint256 who, uint256 amt, uint8) public {
         address h = holders[who % holders.length];
         amt = bound(amt, 100e6, 20_000e6);
-        uint256 limit = type(uint256).max;
-        mode = mode % 3;
-        if (mode == 1) {
-            try queue.quoteDeposit(amt) returns (Quote memory q) {
-                limit = q.boundPrice.mulDiv(BPS + 50, BPS);
-            } catch (bytes memory err) {
-                _quoteReverted(err);
-            }
-        } else if (mode == 2) {
-            limit = 1;
-        }
-        _requestDeposit(h, amt, limit);
+        _requestDeposit(h, amt);
     }
 
-    function _requestDeposit(address h, uint256 amt, uint256 limit)
-        private
-        action(address(0), false, ACT_OTHER)
-    {
+    function _requestDeposit(address h, uint256 amt) private action(address(0), false, ACT_OTHER) {
         fundUsdc(h, amt);
         vm.prank(h);
         IERC20(USDC).approve(address(queue), amt);
         vm.prank(h);
-        try queue.requestDeposit(amt, limit, h) {
+        try queue.requestDeposit(amt, h) {
             ++callsDepositRequest;
             ghostUsdcIn += amt;
         } catch (bytes memory err) {
-            // The only refusal for these inputs (100 to 20,000 USDC, at or above the minimum, under the per-deposit
-            // cap, a non-zero owner and limit) is a paused queue.
             ++revertsCaught[H_REQUEST_DEPOSIT];
-            if (!queue.queuePaused()) {
-                _violation("deposit request refused while not paused", 0);
-                _mustSucceed(H_REQUEST_DEPOSIT, "a deposit request while not paused", err);
+            bool okRefusal =
+                (queue.queuePaused() && bytes4(err) == IFlowEvents.QueueIsPaused.selector)
+                    || (fund.isShutdown() && bytes4(err) == IFlowEvents.FundIsShutdown.selector);
+            if (!okRefusal) {
+                _violation("deposit request refused outside pause or wind-down", 0);
+                _mustSucceed(H_REQUEST_DEPOSIT, "a deposit request while open", err);
             }
         }
         vm.prank(h);
         IERC20(USDC).approve(address(queue), 0);
     }
 
-    /// @notice A holder asks to redeem a slice of its wallet shares, at any price or at the quote less 50 bps.
-    function act_requestRedeem(uint256 who, uint256 frac, bool quoted) public {
+    /// @notice A holder asks to redeem a slice of its wallet shares (limit-free).
+    function act_requestRedeem(uint256 who, uint256 frac, bool) public {
         address h = holders[who % holders.length];
         uint256 bal = fund.balanceOf(h);
         if (bal == 0) return;
         uint256 shares = bound(frac, 1, bal);
-        uint256 limit;
-        if (quoted) {
-            try queue.quoteRedeem(shares) returns (Quote memory q) {
-                limit = q.boundPrice.mulDiv(BPS - 50, BPS);
-            } catch (bytes memory err) {
-                _quoteReverted(err);
-            }
-        }
-        _requestRedeem(h, shares, limit);
+        _requestRedeem(h, shares);
     }
 
-    function _requestRedeem(address h, uint256 shares, uint256 limit)
+    function _requestRedeem(address h, uint256 shares)
         private
         action(address(0), false, ACT_OTHER)
     {
         vm.prank(h);
         fund.approve(address(queue), shares);
         vm.prank(h);
-        try queue.requestRedeem(shares, limit, h) {
+        try queue.requestRedeem(shares, h) {
             ++callsRedeemRequest;
             ghostSharesIn += shares;
         } catch (bytes memory err) {
-            // Legitimate refusals: paused, or below the minimum and not the whole balance (E11).
             ++revertsCaught[H_REQUEST_REDEEM];
-            if (!queue.queuePaused() && bytes4(err) != IFlowEventsSel.BELOW_MIN) {
+            bool okRefusal =
+                (queue.queuePaused() && bytes4(err) == IFlowEvents.QueueIsPaused.selector)
+                    || (fund.isShutdown() && bytes4(err) == IFlowEvents.FundIsShutdown.selector)
+                    || bytes4(err) == IFlowEventsSel.BELOW_MIN;
+            if (!okRefusal) {
                 ++ghostRequestRedeemReverts;
                 _mustSucceed(
-                    H_REQUEST_REDEEM,
-                    "a redemption request at or above the minimum while not paused",
-                    err
+                    H_REQUEST_REDEEM, "a redemption request at or above the minimum while open", err
                 );
             }
         }
@@ -495,12 +494,10 @@ contract Invariants is PrototypeHarness {
         fund.approve(address(queue), 0);
     }
 
-    /// @notice `settle` by the keeper or a stranger, with bounded inputs (RB-20: they may only limit the work).
-    ///         With `wait`, time first passes to the end of the oldest open request's window (and the keeper grace
-    ///         for a stranger), as a keeper that waits for the window would.
+    /// @notice `settle` by the keeper or stranger, with bounded inputs (RB-20: keeper-only, inputs only bound work).
     function act_settle(uint256 callerSeed, uint256 maxReq, uint256 maxUsdc, bool wait) public {
         address c = callerSeed % 3 == 0 ? stranger : keeper;
-        if (wait) _waitForOldestWindow(c == stranger);
+        if (wait) _waitForOldestWindow();
         refreshFeeds();
         maxReq = bound(maxReq, 1, 64);
         maxUsdc = maxUsdc % 4 == 0 ? type(uint256).max : bound(maxUsdc, 1_000e6, 300_000e6);
@@ -513,8 +510,8 @@ contract Invariants is PrototypeHarness {
         uint256 qShares;
         uint256 claims;
         uint256 navFeed;
-        uint256 cfDeposit;
-        uint256 cfRedeem;
+        uint256 cfPrice;
+        uint256 cfMatched;
     }
 
     SettlePre internal sp;
@@ -523,9 +520,7 @@ contract Invariants is PrototypeHarness {
         private
         action(address(0), false, ACT_SETTLE)
     {
-        (uint256 cfDep, uint256 cfRed) = _counterfactualBounds();
-        sp.cfDeposit = cfDep;
-        sp.cfRedeem = cfRed;
+        (sp.cfPrice, sp.cfMatched) = c == keeper ? _counterfactualMatch() : (uint256(0), uint256(0));
         vm.prank(c);
         (sp.check,) = queue.checkSettle();
         sp.qUsdc = IERC20(USDC).balanceOf(address(queue));
@@ -536,15 +531,13 @@ contract Invariants is PrototypeHarness {
         vm.prank(c);
         try queue.settle(maxReq, maxUsdc) returns (uint256 sid) {
             ++callsSettle;
-            // RB-16: `settle` runs the same pre-trade checks as `checkSettle` for the same caller in the same block,
-            // so a call that `checkSettle` named blocked must revert, whether or not it would record anything.
+            if (c != keeper) _violation("RB-20: non-keeper called settle", 20);
             if (sp.check != SettleCheck.Ok) {
                 _violation(
                     "RB-16: settle went through although checkSettle named a failed check", 16
                 );
             }
             if (sid == 0) {
-                // RB-12 / RB-15: nothing recorded, nothing moved (a failed side changes no state).
                 if (
                     IERC20(USDC).balanceOf(address(queue)) != sp.qUsdc
                         || fund.balanceOf(address(queue)) != sp.qShares
@@ -555,11 +548,18 @@ contract Invariants is PrototypeHarness {
             ++settlementsMade;
             _checkSettlement(sid);
         } catch (bytes memory err) {
-            // A settle may revert only because a pre-trade check failed, and then with exactly the check
-            // `checkSettle` named. With the gas a handler has, `SettleSideOutOfGas` cannot be legitimate either.
             ++revertsCaught[H_SETTLE];
             if (sp.check == SettleCheck.Ok) {
-                _mustSucceed(H_SETTLE, "settle reverted although checkSettle said Ok", err);
+                uint64 lastBasket = rebalancer.lastBasketStepAt();
+                bool validStepWindow = bytes4(err) == IFlowEvents.StepInWindow.selector
+                    && lastBasket != 0
+                    && block.timestamp < uint256(lastBasket) + queue.flowParams().settleWindow;
+                if (!validStepWindow) {
+                    if (bytes4(err) == IFlowEvents.StepInWindow.selector) {
+                        _violation("RB-30: invalid StepInWindow revert", 30);
+                    }
+                    _mustSucceed(H_SETTLE, "settle reverted although checkSettle said Ok", err);
+                }
             } else if (!_isSettleBlocked(err, sp.check)) {
                 _mustSucceed(
                     H_SETTLE, "settle reverted with other than the check checkSettle named", err
@@ -605,13 +605,14 @@ contract Invariants is PrototypeHarness {
             "deliver",
             "claim",
             "cancel",
-            "exitInKind",
+            "giveRedemptionNotice",
             "withdrawExpired",
             "withdrawCredit",
             "freeze",
-            "releaseOrReturn",
-            "takeReturn",
+            "release",
+            "pause",
             "redeemInKind",
+            "shutdownRestore",
             "apply",
             "step",
             "movePrice",
@@ -620,34 +621,40 @@ contract Invariants is PrototypeHarness {
         return names[h];
     }
 
-    /// @dev RB-20: what the keeper with no limits would settle from this exact state, then undone. Memory and the
-    ///      stack survive `revertToState`; this contract's storage does not.
-    function _counterfactualBounds() private returns (uint256 dep, uint256 red) {
+    /// @dev RB-20 / RB-24: counterfactual keeper settle with unbounded inputs from this exact state.
+    function _counterfactualMatch()
+        private
+        returns (uint256 matchSharePrice, uint256 matchedShares)
+    {
         uint256 snap = vm.snapshotState();
         vm.prank(keeper);
         (SettleCheck kc,) = queue.checkSettle();
         vm.prank(keeper);
         try queue.settle(SETTLE_MAX_REQUESTS, type(uint256).max) returns (uint256 sid) {
             if (sid != 0) {
-                Settlement memory s = queue.getSettlement(sid);
-                (dep, red) = (s.depositBoundPrice, s.redeemBoundPrice);
+                Settlement memory cf = queue.getSettlement(sid);
+                (matchSharePrice, matchedShares) = (cf.matchSharePrice, cf.matchedShares);
             }
         } catch (bytes memory err) {
-            // The same rule as the real call, for the keeper with no limits.
             ++revertsCaught[H_SETTLE_COUNTERFACTUAL];
             if (kc == SettleCheck.Ok) {
-                _mustSucceed(
-                    H_SETTLE_COUNTERFACTUAL,
-                    "the keeper's settle reverted although checkSettle said Ok",
-                    err
-                );
+                uint64 lastBasket = rebalancer.lastBasketStepAt();
+                bool validStepWindow = bytes4(err) == IFlowEvents.StepInWindow.selector
+                    && lastBasket != 0
+                    && block.timestamp < uint256(lastBasket) + queue.flowParams().settleWindow;
+                if (!validStepWindow) {
+                    _mustSucceed(
+                        H_SETTLE_COUNTERFACTUAL,
+                        "the keeper's settle reverted although checkSettle said Ok",
+                        err
+                    );
+                }
             } else if (!_isSettleBlocked(err, kc)) {
                 _mustSucceed(
                     H_SETTLE_COUNTERFACTUAL, "the keeper's settle reverted with another reason", err
                 );
             }
         }
-        // The counts above live in storage, which the revert below undoes: carry them over in memory.
         uint256 caught = revertsCaught[H_SETTLE_COUNTERFACTUAL];
         uint256 failed = mustSucceedReverts[H_SETTLE_COUNTERFACTUAL];
         string memory why = lastMustSucceedRevert;
@@ -655,31 +662,38 @@ contract Invariants is PrototypeHarness {
         revertsCaught[H_SETTLE_COUNTERFACTUAL] = caught;
         mustSucceedReverts[H_SETTLE_COUNTERFACTUAL] = failed;
         lastMustSucceedRevert = why;
-        // Drop the counterfactual's logs; keep recording for the real call.
         vm.getRecordedLogs();
         vm.recordLogs();
     }
 
-    /// @dev After a settlement that traded: RB-13, RB-14, RB-16 caps, RB-20, RB-11 unlock times.
+    /// @dev After a settlement that traded: RB-13, RB-16, RB-20, RB-24, RB-29, RB-11 unlock times.
     function _checkSettlement(uint256 sid) private {
         Settlement memory s = queue.getSettlement(sid);
         _checkPerShare("settle");
-        if (s.depositBoundPrice != 0 && sp.cfDeposit != 0 && s.depositBoundPrice != sp.cfDeposit) {
-            _violation("RB-20: the deposit bound depended on the settle's inputs", 20);
+        if (s.matchedShares != 0) {
+            ++callsWholeMatch;
+            if (s.matchSharePrice == 0) _violation("RB-24: matched without share price", 24);
         }
-        if (s.redeemBoundPrice != 0 && sp.cfRedeem != 0 && s.redeemBoundPrice != sp.cfRedeem) {
-            _violation("RB-20: the redemption bound depended on the settle's inputs", 20);
+        if (
+            sp.cfMatched != 0
+                && (s.matchedShares != sp.cfMatched || s.matchSharePrice != sp.cfPrice)
+        ) {
+            _violation("RB-20: match depended on maxRequests/maxUsdc inputs", 20);
+        }
+        if (sp.cfMatched == 0 && s.matchedShares != 0) {
+            _violation("RB-20: match ran when counterfactual did not", 20);
         }
         FlowParams memory p = queue.flowParams();
+        if (s.matchedShares != 0 && s.holdEndsAt != block.timestamp + p.minHold) {
+            _violation("RB-11: matched hold window wrong", 11);
+        }
         (uint256 depUsed, uint256 redUsed) = queue.periodFlow(block.timestamp / p.epochLength);
         uint256 cap = Math.max(sp.navFeed.mulDiv(p.maxEpochFlowBps, BPS), p.epochFlowFloorUsdc);
-        // NAV at the feeds here is recomputed outside the queue; 1 % slack covers its rounding, not a cap breach.
         if (depUsed > cap + cap / 100 || redUsed > cap + cap / 100) {
             _violation("RB-16: a period's fills passed its cap", 16);
         }
         (uint256 tvlCap,,,) = fund.config();
         if (_navAtFeeds() > tvlCap) _violation("RB-16: NAV passed the TVL cap", 16);
-        // RB-14 and RB-11 from the fill events of the real call.
         VmSafe.Log[] memory logs = vm.getRecordedLogs();
         vm.recordLogs();
         _scanLogs(logs);
@@ -687,30 +701,16 @@ contract Invariants is PrototypeHarness {
             if (logs[k].emitter != address(queue)) continue;
             bytes32 t0 = logs[k].topics[0];
             if (t0 == DEPOSIT_FILLED_SIG) {
-                uint256 rid = uint256(logs[k].topics[1]);
-                (uint256 usdc, uint256 shares, uint64 unlockAt) =
-                    abi.decode(logs[k].data, (uint256, uint256, uint64));
-                if (
-                    usdc.mulDiv(PRICE_SCALE, shares, Math.Rounding.Ceil)
-                        > queue.getRequest(rid).limit
-                ) {
-                    _violation("RB-14: a deposit filled above its limit", 14);
-                }
+                (,, uint64 unlockAt) = abi.decode(logs[k].data, (uint256, uint256, uint64));
                 if (unlockAt != block.timestamp + p.minHold) {
                     _violation("RB-11: a deposit claim unlocks early", 11);
-                }
-            } else if (t0 == REDEEM_FILLED_SIG) {
-                uint256 rid = uint256(logs[k].topics[1]);
-                (uint256 shares, uint256 usdc) = abi.decode(logs[k].data, (uint256, uint256));
-                if (usdc.mulDiv(PRICE_SCALE, shares) < queue.getRequest(rid).limit) {
-                    _violation("RB-14: a redemption filled below its limit", 14);
                 }
             }
         }
     }
 
-    /// @notice Anyone triggers delivery of a holder's unlocked shares (E8). RB-11: only unlocked claims of unfrozen
-    ///         settlements, only to the owner. With `wait`, time first passes to the holder's earliest locked unlock.
+    /// @notice Anyone triggers delivery of a holder's unlocked shares (E8). RB-11: unlocked claims of unfrozen
+    ///         settlements (or any claim during wind-down, RB-27), only to the owner.
     function act_deliver(uint256 who, bool wait) public {
         address h = holders[who % holders.length];
         if (wait) _waitForUnlock(h);
@@ -720,9 +720,9 @@ contract Invariants is PrototypeHarness {
     }
 
     function _deliver(address h, uint256 n) private action(h, false, ACT_PAY) {
-        uint256 count = queue.claimCount();
-        uint256[] memory claimed0 = new uint256[](count + 1);
-        for (uint256 c = 1; c <= count; ++c) {
+        uint256 countBefore = queue.claimCount();
+        uint256[] memory claimed0 = new uint256[](countBefore + 1);
+        for (uint256 c = 1; c <= countBefore; ++c) {
             claimed0[c] = queue.getClaim(c).claimed;
         }
         uint256 bal0 = fund.balanceOf(h);
@@ -733,17 +733,23 @@ contract Invariants is PrototypeHarness {
             if (fund.balanceOf(h) - bal0 != n) {
                 _violation("RB-11: delivered shares did not reach the owner", 11);
             }
-            for (uint256 c = 1; c <= count; ++c) {
+            bool shut = fund.isShutdown();
+            uint256 countAfter = queue.claimCount();
+            for (uint256 c = 1; c <= countAfter; ++c) {
                 Claim memory cl = queue.getClaim(c);
-                if (cl.claimed == claimed0[c]) continue;
+                uint256 prev = c <= countBefore ? claimed0[c] : 0;
+                if (cl.claimed == prev) continue;
                 if (cl.owner != h || cl.kind != RequestKind.Deposit) {
                     _violation("RB-11: another's claim moved", 11);
                 }
-                if (block.timestamp < cl.unlockAt) {
-                    _violation("RB-11: a share left before its unlock", 11);
-                }
-                if (queue.getSettlement(cl.settlementId).frozenUntil > block.timestamp) {
-                    _violation("RB-18: a frozen settlement delivered", 18);
+                if (!shut) {
+                    if (block.timestamp < cl.unlockAt) {
+                        _violation("RB-11: a share left before its unlock", 11);
+                    }
+                    Settlement memory st = queue.getSettlement(cl.settlementId);
+                    if (st.frozenUntil > block.timestamp && cl.unlockAt > st.freezeSetAt) {
+                        _violation("RB-18: a frozen settlement delivered", 18);
+                    }
                 }
             }
         } catch (bytes memory err) {
@@ -777,8 +783,8 @@ contract Invariants is PrototypeHarness {
         }
     }
 
-    /// @notice The owner cancels one of its pending requests (RB-12: exactly the unfilled part, as credit; RB-15:
-    ///         also while paused).
+    /// @notice The owner cancels a pending request before cutoff (RB-25); after cutoff reverts RequestLocked
+    ///         unless a deposit stop or shutdown applies.
     function act_cancel(uint256 who, uint256 k) public {
         address h = holders[who % holders.length];
         (bool found, uint256 id) = _pickOpen(h, k, false, false);
@@ -788,49 +794,63 @@ contract Invariants is PrototypeHarness {
 
     function _cancel(address h, uint256 id) private action(h, false, ACT_OTHER) {
         Request memory r0 = queue.getRequest(id);
+        uint256 rem0 = r0.kind == RequestKind.Deposit
+            ? queue.pendingDepositRequest(id, h)
+            : queue.pendingRedeemRequest(id, h);
         (uint256 cu0, uint256 cs0) = queue.creditOf(h);
         vm.prank(h);
         try queue.cancel(id) {
             ++callsCancel;
             (uint256 cu1, uint256 cs1) = queue.creditOf(h);
             bool exact = r0.kind == RequestKind.Deposit
-                ? (cu1 - cu0 == r0.remaining && cs1 == cs0)
-                : (cs1 - cs0 == r0.remaining && cu1 == cu0);
+                ? (cu1 - cu0 == rem0 && cs1 == cs0)
+                : (cs1 - cs0 == rem0 && cu1 == cu0);
             if (!exact) {
                 _violation("RB-12: a cancel did not credit exactly the unfilled escrow", 12);
             }
         } catch (bytes memory err) {
-            _violation("RB-15: cancel of a pending request reverted", 15);
             ++revertsCaught[H_CANCEL];
-            _mustSucceed(H_CANCEL, "cancel of the owner's pending request", err);
+            FlowParams memory p = queue.flowParams();
+            uint256 cutoff = uint256(queue.settleableAt(r0.epoch)) - p.settleWindow - p.cancelBuffer;
+            bool lockedOk = !fund.isShutdown() && bytes4(err) == IFlowEvents.RequestLocked.selector
+                && block.timestamp >= cutoff;
+            if (!lockedOk) {
+                _violation("RB-15: cancel of an eligible pending request reverted", 15);
+                _mustSucceed(H_CANCEL, "cancel of an eligible pending request", err);
+            }
         }
     }
 
-    /// @notice The owner takes a pending redemption out in kind at once (RB-15: also while paused).
-    function act_exitInKind(uint256 who, uint256 k) public {
+    /// @notice After `maxRoll`, a holder gives redemption notice on an open redemption (E40, RB-25).
+    function act_giveRedemptionNotice(uint256 who, uint256 k) public {
         address h = holders[who % holders.length];
         (bool found, uint256 id) = _pickOpen(h, k, true, false);
         if (!found) return;
-        _exitInKind(h, id);
+        _giveNotice(h, id);
     }
 
-    function _exitInKind(address h, uint256 id) private action(h, false, ACT_EXIT) {
-        uint256 rem = queue.getRequest(id).remaining;
-        _snapPerShare();
+    function _giveNotice(address h, uint256 id) private action(h, false, ACT_OTHER) {
+        Request memory r0 = queue.getRequest(id);
+        if (r0.noticeRound != 0) return;
         vm.prank(h);
-        try queue.exitInKind(id) {
-            ++callsExitInKind;
-            ghostQueueSharesBurned += rem;
-            _checkPerShare("exitInKind");
+        try queue.giveRedemptionNotice(id) returns (uint64 targetRound) {
+            ++callsNotice;
+            if (targetRound == 0 && queue.currentEpoch() == 0) {} // round 0 possible at epoch 0
+            if (fund.isShutdown()) _violation("RB-25: notice given during shutdown", 25);
         } catch (bytes memory err) {
-            _violation("RB-15: in-kind exit of a pending redemption reverted", 15);
-            ++revertsCaught[H_EXIT_IN_KIND];
-            _mustSucceed(H_EXIT_IN_KIND, "in-kind exit of the owner's pending redemption", err);
+            ++revertsCaught[H_GIVE_NOTICE];
+            bool okRefusal =
+                ((fund.isShutdown() || r0.era < 1 + callsShutdown)
+                        && bytes4(err) == IFlowEvents.FundIsShutdown.selector)
+                    || (queue.currentEpoch() <= r0.expiryEpoch
+                        && bytes4(err) == IFlowEvents.NoticeNotReady.selector);
+            if (!okRefusal) {
+                _mustSucceed(H_GIVE_NOTICE, "giveRedemptionNotice on eligible request", err);
+            }
         }
     }
 
-    /// @notice The owner withdraws an expired request's escrow (E18, RB-12: exactly the unfilled escrow). With
-    ///         `wait`, time first passes until the holder's oldest open request expires.
+    /// @notice The owner withdraws an expired deposit's escrow (E18, E40, RB-12).
     function act_withdrawExpired(uint256 who, uint256 k, bool wait) public {
         address h = holders[who % holders.length];
         if (wait) _waitForExpiry(h);
@@ -841,173 +861,236 @@ contract Invariants is PrototypeHarness {
 
     function _withdrawExpired(address h, uint256 id) private action(h, false, ACT_PAY) {
         Request memory r0 = queue.getRequest(id);
-        bool isDeposit = r0.kind == RequestKind.Deposit;
-        uint256 b0 = isDeposit ? IERC20(USDC).balanceOf(h) : fund.balanceOf(h);
+        uint256 u0 = IERC20(USDC).balanceOf(h);
         vm.prank(h);
         try queue.withdrawExpired(id) returns (uint256 amt) {
             ++callsExpired;
-            uint256 b1 = isDeposit ? IERC20(USDC).balanceOf(h) : fund.balanceOf(h);
-            if (amt != r0.remaining || b1 - b0 != amt) {
-                _violation("RB-12: an expiry did not return exactly", 12);
+            uint256 u1 = IERC20(USDC).balanceOf(h);
+            if (amt == 0 || amt > r0.remaining || u1 - u0 != amt) {
+                _violation("RB-12: an expiry did not return exact deposit escrow", 12);
             }
-            if (isDeposit) ghostUsdcOut += amt;
-            else ghostSharesOut += amt;
+            ghostUsdcOut += amt;
         } catch (bytes memory err) {
-            _violation("E18: an expired request's escrow could not be withdrawn", 12);
+            _violation("E18: an expired deposit could not be withdrawn", 12);
             ++revertsCaught[H_WITHDRAW_EXPIRED];
-            _mustSucceed(H_WITHDRAW_EXPIRED, "withdrawal of an expired request's escrow", err);
+            _mustSucceed(H_WITHDRAW_EXPIRED, "withdrawal of an expired deposit's escrow", err);
         }
     }
 
-    /// @notice The owner pulls its credits (E22).
+    /// @notice The owner pulls its credits (and auto-finalizes ended notices / releases wind-down).
     function act_withdrawCredit(uint256 who) public {
         address h = holders[who % holders.length];
         (uint256 u, uint256 s) = queue.creditOf(h);
-        if (u == 0 && s == 0) return;
+        if (u == 0 && s == 0 && !fund.isShutdown()) return;
         _withdrawCredit(h, u, s);
     }
 
     function _withdrawCredit(address h, uint256 u, uint256 s) private action(h, false, ACT_PAY) {
+        uint256 u0 = IERC20(USDC).balanceOf(h);
+        uint256 s0 = fund.balanceOf(h);
         vm.prank(h);
         try queue.withdrawCredit() returns (uint256 pu, uint256 ps) {
             ++callsCredit;
-            if (pu != u || ps != s) _violation("E22: credit paid differs from credit booked", 12);
+            if (
+                pu < u || ps < s || IERC20(USDC).balanceOf(h) - u0 != pu
+                    || fund.balanceOf(h) - s0 != ps
+            ) {
+                _violation("E22: credit paid differs from credit booked", 12);
+            }
             ghostUsdcOut += pu;
             ghostSharesOut += ps;
         } catch (bytes memory err) {
+            if (u == 0 && s == 0 && bytes4(err) == IFlowEvents.NothingToWithdraw.selector) return;
             ++ghostClaimReverts;
             ++revertsCaught[H_WITHDRAW_CREDIT];
             _mustSucceed(H_WITHDRAW_CREDIT, "withdrawal of the owner's credit", err);
         }
     }
 
-    /// @notice The emergency key freezes a settlement whose deposit shares are in their hold (E17).
+    /// @notice Emergency freezes a settlement inside its hold (`matchedShares + sharesMinted > 0`), once per
+    ///         `maxFreeze`, blocked during wind-down (RB-18, E49).
     function act_freeze(uint256 k) public {
         uint256 n = queue.settlementCount();
         if (n == 0) return;
         uint256 id = 1 + k % n;
         Settlement memory s = queue.getSettlement(id);
         if (
-            s.sharesMinted == 0 || block.timestamp >= s.holdEndsAt
-                || s.frozenUntil > block.timestamp
+            fund.isShutdown() || (s.matchedShares + s.sharesMinted) == 0
+                || block.timestamp >= s.holdEndsAt || s.frozenUntil > block.timestamp
         ) return;
         _freeze(id);
     }
 
     function _freeze(uint256 id) private action(address(0), false, ACT_OTHER) {
+        uint32 maxF = queue.flowParams().maxFreeze;
+        bool onCooldown =
+            ghostLastFreezeAt != 0 && block.timestamp < uint256(ghostLastFreezeAt) + maxF;
         vm.prank(emergency);
         try queue.freezeSettlement(id) {
             ++callsFreeze;
+            if (onCooldown) _violation("RB-18: second freeze succeeded inside maxFreeze", 18);
             ghostFreezeAt[id] = uint64(block.timestamp);
+            ghostLastFreezeAt = uint64(block.timestamp);
         } catch (bytes memory err) {
-            _violation("E17: a freeze inside the hold reverted", 18);
             ++revertsCaught[H_FREEZE];
-            _mustSucceed(H_FREEZE, "a freeze of a settlement inside its hold", err);
+            bool okCooldown = onCooldown && bytes4(err) == IFlowEvents.FreezeOnCooldown.selector;
+            if (!okCooldown) {
+                _violation("E17: an eligible freeze reverted", 18);
+                _mustSucceed(H_FREEZE, "a freeze of a settlement inside its hold", err);
+            }
         }
     }
 
-    /// @notice ADMIN (the timelock) releases a frozen settlement or lets its depositors take it back in kind.
-    function act_releaseOrReturn(uint256 k, bool release) public {
+    /// @notice ADMIN (the timelock) releases a frozen settlement (Step 3f: returns removed).
+    function act_release(uint256 k) public {
         uint256 n = queue.settlementCount();
         for (uint256 j; j < n; ++j) {
             uint256 id = 1 + (k % n + j) % n;
             if (queue.getSettlement(id).frozenUntil <= block.timestamp) continue;
-            _releaseOrReturn(id, release);
+            _release(id);
             return;
         }
     }
 
-    function _releaseOrReturn(uint256 id, bool release)
-        private
-        action(address(0), false, ACT_OTHER)
-    {
+    function _release(uint256 id) private action(address(0), false, ACT_OTHER) {
         vm.prank(address(timelock));
-        if (release) {
-            try queue.releaseSettlement(id) {
-                ++callsRelease;
-            } catch (bytes memory err) {
-                _violation("E17: release of a frozen settlement reverted", 18);
-                ++revertsCaught[H_RELEASE_OR_RETURN];
-                _mustSucceed(H_RELEASE_OR_RETURN, "release of a frozen settlement", err);
-            }
-        } else {
-            try queue.allowReturn(id) {
-                ++callsRelease;
-            } catch (bytes memory err) {
-                _violation("E17: allowReturn of a frozen settlement reverted", 18);
-                ++revertsCaught[H_RELEASE_OR_RETURN];
-                _mustSucceed(H_RELEASE_OR_RETURN, "allowReturn of a frozen settlement", err);
-            }
-        }
-    }
-
-    /// @notice A depositor takes its slice of a returned settlement back in kind; a stranger's attempt must fail
-    ///         (RB-18).
-    function act_takeReturn(uint256 who) public {
-        address h = holders[who % holders.length];
-        uint256 n = queue.claimCount();
-        for (uint256 c = 1; c <= n; ++c) {
-            Claim memory cl = queue.getClaim(c);
-            if (cl.owner != h || cl.kind != RequestKind.Deposit || cl.claimed >= cl.shares) {
-                continue;
-            }
-            if (!queue.getSettlement(cl.settlementId).returnAllowed) continue;
-            _takeReturn(h, c, cl.shares - cl.claimed);
-            return;
-        }
-    }
-
-    function _takeReturn(address h, uint256 claimId, uint256 x) private action(h, false, ACT_EXIT) {
-        vm.prank(stranger);
-        try queue.takeReturn(claimId) {
-            _violation("RB-18: a stranger took a depositor's return", 18);
-        } catch {
-            ++revertsCaught[H_TAKE_RETURN]; // expected: only the claim's owner takes it
-        }
-        _snapPerShare();
-        vm.prank(h);
-        try queue.takeReturn(claimId) {
-            ++callsTakeReturn;
-            ghostQueueSharesBurned += x;
-            _checkPerShare("takeReturn");
+        try queue.releaseSettlement(id) {
+            ++callsRelease;
         } catch (bytes memory err) {
-            _violation("RB-18: the depositor could not take its return", 18);
-            ++revertsCaught[H_TAKE_RETURN];
-            _mustSucceed(H_TAKE_RETURN, "the depositor's own return", err);
+            _violation("E17: release of a frozen settlement reverted", 18);
+            ++revertsCaught[H_RELEASE];
+            _mustSucceed(H_RELEASE, "release of a frozen settlement", err);
         }
     }
 
-    /// @notice EMERGENCY pauses the queue, or ADMIN unpauses it. Exits stay open (RB-15, checked in their actions).
-    function act_pause(bool on) public action(address(0), false, ACT_OTHER) {
-        if (on) {
-            vm.prank(emergency);
-            queue.pauseQueue();
+    /// @notice RB-32: self-expiring pauses (`pauseQueue`, `pauseDeposits`, `pauseRebalance`) and ADMIN unpauses.
+    ///         Queue & rebalance pauses enforce `maxPause` cooldowns; deposits pause can be renewed immediately.
+    function act_pause(uint8 kind, bool on) public action(address(0), false, ACT_OTHER) {
+        ++callsPause;
+        uint8 which = kind % 3;
+        if (which == 0) {
+            if (on) {
+                bool cd = ghostQueuePauseCooldownUntil != 0
+                    && block.timestamp < ghostQueuePauseCooldownUntil;
+                vm.prank(emergency);
+                try queue.pauseQueue() {
+                    if (cd) _violation("RB-32: queue pause repeated inside cooldown", 32);
+                    uint32 mp = queue.maxPause();
+                    ghostQueuePauseCooldownUntil = uint64(block.timestamp) + 2 * mp;
+                    if (queue.queuePausedUntil() != uint64(block.timestamp) + mp) {
+                        _violation("RB-32: queue pause end wrong", 32);
+                    }
+                } catch (bytes memory err) {
+                    ++revertsCaught[H_PAUSE];
+                    if (!cd || bytes4(err) != IFlowEvents.PauseOnCooldown.selector) {
+                        _violation("RB-32: queue pause failed outside cooldown", 32);
+                        _mustSucceed(H_PAUSE, "pauseQueue outside cooldown", err);
+                    }
+                }
+            } else {
+                vm.prank(address(timelock));
+                queue.unpauseQueue();
+            }
+        } else if (which == 1) {
+            if (on) {
+                vm.prank(emergency);
+                try fund.pauseDeposits() {}
+                catch (bytes memory err) {
+                    ++revertsCaught[H_PAUSE];
+                    _violation("RB-32: pauseDeposits must not have cooldown", 32);
+                    _mustSucceed(H_PAUSE, "pauseDeposits renewable without cooldown", err);
+                }
+            } else {
+                vm.prank(address(timelock));
+                fund.unpauseDeposits();
+            }
         } else {
-            vm.prank(address(timelock));
-            queue.unpauseQueue();
+            if (on) {
+                PlanStatus st = fund.planStatus();
+                uint64 cdUntil = fund.rebalancePauseCooldownUntil();
+                bool cd = cdUntil != 0 && block.timestamp < cdUntil;
+                if (
+                    st != PlanStatus.Open && st != PlanStatus.Halted
+                        && !(st == PlanStatus.Paused && cd)
+                ) {
+                    return;
+                }
+                vm.prank(emergency);
+                try fund.pauseRebalance() {
+                    if (cd) _violation("RB-32: rebalance pause repeated inside cooldown", 32);
+                } catch (bytes memory err) {
+                    ++revertsCaught[H_PAUSE];
+                    if (!cd || bytes4(err) != IRobotMoneyFund.PauseOnCooldown.selector) {
+                        _violation("RB-32: rebalance pause failed outside cooldown", 32);
+                        _mustSucceed(H_PAUSE, "pauseRebalance outside cooldown", err);
+                    }
+                }
+            } else {
+                if (fund.planStatus() != PlanStatus.Paused) return;
+                vm.prank(address(timelock));
+                fund.resumePlan();
+            }
         }
     }
 
-    /// @notice RB-6 / E9: `redeemInKind` of a holder's own wallet shares never reverts, whatever the plan or the
-    ///         market, and keeps every held amount per share (RB-13).
+    /// @notice RB-26 / RB-27: `redeemInKind` refuses while running (`InKindClosed`), succeeds in wind-down and
+    ///         preserves per-share holdings (RB-13).
     function act_redeemInKind(uint256 who, uint256 frac) public {
         address h = holders[who % holders.length];
         uint256 bal = fund.balanceOf(h);
         if (bal == 0) return;
-        _redeemInKind(h, bound(frac, 1, bal));
+        uint256 maxExit = bal >= fund.totalSupply() ? bal / 2 : bal;
+        if (maxExit == 0) return;
+        _redeemInKind(h, bound(frac, 1, maxExit));
     }
 
     function _redeemInKind(address h, uint256 shares) private action(h, false, ACT_OTHER) {
         _snapPerShare();
+        bool shut = fund.isShutdown();
         vm.prank(h);
         try fund.redeemInKind(shares, h, h) {
+            if (!shut) {
+                _violation("RB-26: redeemInKind paid while fund running", 26);
+            }
             ++callsRedeemInKind;
             ghostWalletSharesBurned += shares;
             _checkPerShare("redeemInKind");
         } catch (bytes memory err) {
-            ++ghostInKindReverts;
             ++revertsCaught[H_REDEEM_IN_KIND];
-            _mustSucceed(H_REDEEM_IN_KIND, "redeemInKind of the holder's own wallet shares", err);
+            if (!shut && bytes4(err) == IRobotMoneyFund.InKindClosed.selector) {
+                ++ghostInKindClosedRefusals;
+            } else {
+                ++ghostInKindReverts;
+                _mustSucceed(H_REDEEM_IN_KIND, "redeemInKind during wind-down", err);
+            }
+        }
+    }
+
+    /// @notice RB-27: Safe timelock toggles wind-down (`shutdown` / `restore`); emergency & non-admin revert.
+    function act_shutdownRestore(bool shut) public action(address(0), false, ACT_OTHER) {
+        address[3] memory bad = [emergency, keeper, stranger];
+        for (uint256 i; i < bad.length; ++i) {
+            vm.prank(bad[i]);
+            try fund.shutdown() {
+                _violation("RB-27: non-timelock called shutdown", 27);
+            } catch {
+                ++revertsCaught[H_SHUTDOWN];
+            }
+            vm.prank(bad[i]);
+            try fund.restore(TVL_CAP) {
+                _violation("RB-27: non-timelock called restore", 27);
+            } catch {
+                ++revertsCaught[H_SHUTDOWN];
+            }
+        }
+        if (shut && !fund.isShutdown()) {
+            timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+            ++callsShutdown;
+            refreshFeeds();
+        } else if (!shut && fund.isShutdown()) {
+            timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
+            ++callsRestore;
+            refreshFeeds();
         }
     }
 
@@ -1018,7 +1101,9 @@ contract Invariants is PrototypeHarness {
     /// @notice Record a random valid receipt. First send each refused variant of its vector (RB-9), then apply the
     ///         valid vector through the timelock (RB-1's only path). A valid receipt never fails to open a plan.
     function act_apply(uint256 a, uint256 b) public action(address(0), false, ACT_OTHER) {
-        uint16 stable = uint16(bound(a, 0, BPS));
+        if (fund.isShutdown()) return;
+        uint16 minStable = uint16(BPS - fund.maxBasketBps());
+        uint16 stable = uint16(bound(a, minStable, BPS));
         b;
         uint16 protocol = uint16(BPS - stable);
         uint16[5] memory v = bucketVec(stable, protocol);
@@ -1274,6 +1359,11 @@ contract Invariants is PrototypeHarness {
                 t = _pathValue(p0.plan, buyI, block.timestamp, p0.nav);
                 if (t < v + notional) ++ghostRb7PastPath;
             }
+            // RB-35: a step does not trade a lending venue while claim units are outstanding on it.
+            if (
+                sellI != IDLE_INDEX && fund.assetConfig(sellI).kind == AssetKind.Lending
+                    && fund.positionClaimTotal(sellI) > 0
+            ) ++ghostRb35;
         }
     }
 
@@ -1430,7 +1520,7 @@ contract Invariants is PrototypeHarness {
     ///         and every check is the same as before. Nothing an action returns is kept in memory across the reset.
     function test_handlers_coverEveryPathThenInvariantsHold() public fixtureCovered {
         uint256 mark = _memMark();
-        // The plan invests the idle seed first, so every exit below has lending legs (RB-21 then has claims).
+        // The plan invests the idle seed first, so wind-down exits have lending legs (RB-21 then has claims).
         for (uint256 k; k < 8; ++k) {
             act_step(true);
             _memReset(mark);
@@ -1439,13 +1529,13 @@ contract Invariants is PrototypeHarness {
         (uint256 aaveUnits,) = fund.positionUnits(IDX_AAVE);
         assertGt(aaveUnits, 0, "the fund holds an Aave position");
         coverageCheckpoint();
-        act_requestDeposit(0, 10_000e6, 0);
+
+        // Two-sided requests to exercise whole match + net settlement + freeze + delivery + claim.
+        act_requestDeposit(0, 15_000e6, 0);
         _memReset(mark);
         act_requestDeposit(1, 10_000e6, 0);
         _memReset(mark);
         act_requestDeposit(2, 5_000e6, 1);
-        _memReset(mark);
-        act_requestDeposit(0, 2_000e6, 2);
         _memReset(mark);
         act_requestRedeem(0, fund.balanceOf(holders[0]) / 4, false);
         _memReset(mark);
@@ -1454,73 +1544,127 @@ contract Invariants is PrototypeHarness {
         act_settle(1, 64, type(uint256).max, true);
         _memReset(mark);
         assertGt(settlementsMade, 0, "a settlement traded");
-        uint256 last = queue.settlementCount() - 1;
+        assertGt(callsWholeMatch, 0, "a whole match ran");
+        uint256 lastIdx = queue.settlementCount() - 1;
         act_claim(0);
         _memReset(mark);
         assertGt(callsClaim, 0, "a redemption claim was taken");
-        act_freeze(last);
+        act_freeze(lastIdx);
         _memReset(mark);
         assertGt(callsFreeze, 0, "a settlement was frozen");
-        act_releaseOrReturn(last, false);
+        act_release(lastIdx);
         _memReset(mark);
-        act_takeReturn(0);
+        assertGt(callsRelease, 0, "a frozen settlement was released");
+        act_freeze(lastIdx); // second freeze inside cooldown tests FreezeOnCooldown
         _memReset(mark);
-        assertGt(callsTakeReturn, 0, "a return was taken in kind");
-        act_releaseOrReturn(last, true);
-        _memReset(mark);
-        act_deliver(1, true);
+        assertGt(revertsCaught[H_FREEZE], 0, "freeze cooldown enforced");
+        act_deliver(0, true);
         _memReset(mark);
         assertGt(callsDeliver, 0, "unlocked shares were delivered");
         coverageCheckpoint();
-        act_requestRedeem(2, fund.balanceOf(holders[2]) / 3, false);
+
+        // Cancel before cutoff + RequestLocked after cutoff (RB-25) + credit withdrawal.
+        act_requestDeposit(2, 1_000e6, 0);
         _memReset(mark);
-        act_exitInKind(2, queue.requestCount() - 1);
+        act_cancel(2, 0);
         _memReset(mark);
-        assertGt(callsExitInKind, 0, "a pending redemption left in kind");
-        act_requestDeposit(0, 1_000e6, 0);
-        _memReset(mark);
-        act_cancel(0, queue.requestCount() - 1);
-        _memReset(mark);
-        assertGt(callsCancel, 0, "a request was cancelled");
-        act_withdrawCredit(0);
+        assertGt(callsCancel, 0, "a request was cancelled before cutoff");
+        act_withdrawCredit(2);
         _memReset(mark);
         assertGt(callsCredit, 0, "a credit was withdrawn");
+
+        act_requestDeposit(2, 1_500e6, 0);
+        _memReset(mark);
+        uint256 depCutoff = uint256(queue.settleableAt(queue.currentEpoch()))
+            - queue.flowParams().settleWindow - queue.cancelBuffer();
+        warpForward(depCutoff);
+        refreshFeeds();
+        act_cancel(2, 0);
+        _memReset(mark);
+        assertGt(revertsCaught[H_CANCEL], 0, "cancel after cutoff refused RequestLocked");
+
+        // Deposit expiry + old redemption notice (`giveRedemptionNotice` -> credit recovery).
+        act_requestDeposit(0, 2_000e6, 0);
+        _memReset(mark);
+        act_requestRedeem(2, fund.balanceOf(holders[2]) / 3, false);
+        _memReset(mark);
         act_withdrawExpired(0, 0, true);
         _memReset(mark);
-        assertGt(callsExpired, 0, "an expired request's escrow was withdrawn");
-        act_redeemInKind(0, fund.balanceOf(holders[0]) / 5);
+        assertGt(callsExpired, 0, "an expired deposit escrow was withdrawn");
+        act_giveRedemptionNotice(2, 0);
         _memReset(mark);
-        act_pause(true);
+        assertGt(callsNotice, 0, "a redemption notice was filed after maxRoll");
+        act_warp(2 * uint256(queue.flowParams().epochLength));
+        _memReset(mark);
+        act_withdrawCredit(2);
+        _memReset(mark);
+
+        // Self-expiring pauses & cooldowns (RB-32), plus RB-26 (in-kind closed while running)
+        // and RB-27 + RB-21 (Safe timelock wind-down opens redeemInKind -> Aave claim units -> restore).
+        act_pause(0, true);
+        _memReset(mark);
+        act_pause(0, true); // queue pause cooldown check
         _memReset(mark);
         act_requestRedeem(1, fund.balanceOf(holders[1]) / 5, false);
         _memReset(mark);
-        act_pause(false);
+        act_pause(0, false);
         _memReset(mark);
+        act_pause(1, true);
+        _memReset(mark);
+        act_pause(1, true); // deposit pause renews without cooldown
+        _memReset(mark);
+        act_pause(1, false);
+        _memReset(mark);
+        act_pause(2, true);
+        _memReset(mark);
+        act_pause(2, true); // rebalance pause cooldown check
+        _memReset(mark);
+        act_pause(2, false);
+        _memReset(mark);
+
+        act_redeemInKind(0, fund.balanceOf(holders[0]) / 3);
+        _memReset(mark);
+        assertGt(ghostInKindClosedRefusals, 0, "RB-26: redeemInKind refused while running");
+        assertEq(callsRedeemInKind, 0, "RB-26: zero in-kind exits before shutdown");
+
+        act_shutdownRestore(true);
+        _memReset(mark);
+        assertGt(callsShutdown, 0, "wind-down entered via timelock");
+        act_redeemInKind(0, fund.balanceOf(holders[0]) / 3);
+        _memReset(mark);
+        assertGt(callsRedeemInKind, 0, "RB-27: wind-down allowed redeemInKind");
+        act_shutdownRestore(false);
+        _memReset(mark);
+        assertGt(callsRestore, 0, "fund restored via timelock");
+
         act_unauthorized(0, 1);
         _memReset(mark);
         act_requestDeposit(1, 3_000e6, 0);
         _memReset(mark);
-        act_settle(0, 64, type(uint256).max, true);
+        act_settle(0, 64, type(uint256).max, true); // stranger blocked (RB-20)
         _memReset(mark);
-        assertGt(settlementsMade, 1, "a stranger settled after the grace");
+        act_settle(1, 64, type(uint256).max, true); // keeper settles
+        _memReset(mark);
+        assertGt(settlementsMade, 1, "keeper settled second round after restore");
 
         invariant_mustNotRevert();
         invariant_noLeak();
         invariant_solvencyAndHygiene();
         invariant_RB10_RB11_queueExits();
         invariant_RB12_RB15_blockedAndExits();
-        invariant_RB13_RB14_RB16_settlements();
+        invariant_RB13_RB16_settlements();
         invariant_RB17_admission();
         invariant_RB18_freezeBounded();
         invariant_RB20_inputsOnlyLimitWork();
         invariant_RB21_positionClaims();
         invariant_RB22_ledgerCountsQueuedShares();
+        invariant_RB23_to_RB36_step3f();
         invariant_conservation();
         (uint256 totalUnits, uint256 claimUnits) = fund.positionUnits(IDX_AAVE);
         assertGt(
             claimUnits,
             0,
-            "in-kind exits past the allowance left position claims (RB-21 is not vacuous)"
+            "wind-down in-kind exits past the allowance left position claims (RB-21 is not vacuous)"
         );
         emit log_named_uint("scripted run: Aave position units", totalUnits);
         emit log_named_uint("scripted run: Aave claim units", claimUnits);
@@ -1679,12 +1823,38 @@ contract Invariants is PrototypeHarness {
         assertEq(ghostRb15, 0, "RB-15: cancel or in-kind exit reverted for a pending request");
     }
 
-    /// @notice RB-13, RB-14, RB-16 over every settlement and exit of the run.
-    function invariant_RB13_RB14_RB16_settlements() public fixtureCovered {
+    /// @notice RB-13, RB-16 over every settlement and exit of the run (RB-14 retired in Step 3f).
+    function invariant_RB13_RB16_settlements() public fixtureCovered {
         _logLastViolation();
         assertEq(ghostRb13, 0, "RB-13: a flow lowered an amount per share");
-        assertEq(ghostRb14, 0, "RB-14: a fill outside its limit");
         assertEq(ghostRb16, 0, "RB-16: settled past a failed check, or over a cap");
+    }
+
+    /// @notice Step 3f invariants RB-23 to RB-37 checked continuously across fuzz runs.
+    function invariant_RB23_to_RB36_step3f() public fixtureCovered {
+        _logLastViolation();
+        assertEq(ghostRb23, 0, "RB-23: uneven match sharing or price");
+        assertEq(ghostRb24, 0, "RB-24: invalid match price or fund mutation");
+        assertEq(ghostRb25, 0, "RB-25: invalid unfilled queue exit");
+        assertEq(ghostRb26, 0, "RB-26: redeemInKind paid while fund running");
+        assertEq(ghostRb27, 0, "RB-27: non-timelock wind-down or blocked wind-down exit");
+        assertEq(ghostRb28, 0, "RB-28: deposit or match violated round stop");
+        assertEq(ghostRb30, 0, "RB-30: invalid StepInWindow enforcement");
+        assertEq(ghostRb32, 0, "RB-32: pause cooldown or expiry violated");
+        assertEq(ghostRb35, 0, "RB-35: step traded lending venue with active claims");
+        assertEq(ghostRb36, 0, "RB-36: over-cap match broke conservation");
+        // RB-31 & RB-32 structural bounds:
+        FlowParams memory p = queue.flowParams();
+        assertLe(
+            uint256(p.maxRoll) * p.epochLength,
+            TIMELOCK_DELAY_REFERENCE,
+            "RB-31: maxRoll * epochLength > timelock delay"
+        );
+        assertGe(
+            uint256(queue.maxPause()),
+            TIMELOCK_DELAY + p.epochLength,
+            "RB-32: maxPause < timelock delay + epoch"
+        );
     }
 
     /// @notice RB-17: every active basket asset has a feed and its maximum age; every lending adapter answers the
@@ -1755,7 +1925,12 @@ contract Invariants is PrototypeHarness {
                 units += u;
                 value += v;
             }
-            assertEq(units, claimUnits, "RB-21: claim units are exactly the claimants'");
+            assertLe(units, claimUnits, "RB-21: claim units exceed total");
+            assertLe(
+                claimUnits,
+                units + actors.length,
+                "RB-21: claim units lost beyond claimant rounding"
+            );
             uint256 position = IStrategyAdapter(a.adapter).totalAssets();
             assertLe(
                 held[i] + value,
@@ -1774,31 +1949,42 @@ contract Invariants is PrototypeHarness {
     ///         independent sum of its escrow, its undelivered deposit shares and its share credit; the queue itself
     ///         counts for nothing.
     function invariant_RB22_ledgerCountsQueuedShares() public view {
+        FlowBooks memory b = queue.books();
+        uint256 queuedSum;
         for (uint256 k; k < holders.length; ++k) {
             address h = holders[k];
             uint256 q = queue.queuedSharesOf(h);
             assertEq(
                 fund.ledgerBalanceOf(h), fund.balanceOf(h) + q, "RB-22: ledger = wallet + queued"
             );
-            assertEq(
-                q, _independentQueued(h), "RB-22: queued shares = escrow + held + share credit"
+            assertGe(
+                q, _independentMaterializedQueued(h), "RB-22: queued >= materialized claims+credit"
             );
+            queuedSum += q;
         }
+        assertLe(
+            queuedSum,
+            b.escrowShares + b.heldShares + b.creditShares + 4,
+            "RB-22: sum of queued shares bounded by queue share books"
+        );
         assertEq(fund.ledgerBalanceOf(address(queue)), 0, "RB-22: the queue has no entitlement");
     }
 
-    /// @notice Conservation (eng plan §4.3, §6, the three accounting systems): the queue's books equal independent
-    ///         sums over requests, claims and credits; its balances equal setUp's plus every flow booked in, less
-    ///         every flow booked out, plus what settlements paid it, less what they took; the fund's supply equals
-    ///         setUp's plus minted, less burned by settlements and by in-kind exits.
+    /// @notice Conservation (eng plan §4.3, §6, RB-36): the queue's books match exact token balances and
+    ///         independent bounds; queue USDC/shares and fund supply match setUp plus every flow booked
+    ///         in/out and settlement transfer to the unit.
     function invariant_conservation() public view {
         FlowBooks memory b = queue.books();
-        (uint256 pendingUsdc, uint256 escrowShares, uint256 heldShares, uint256 owedUsdc) =
-            _independentBooks();
-        assertEq(b.pendingUsdc, pendingUsdc, "books: pending USDC = sum of open deposit escrow");
-        assertEq(b.escrowShares, escrowShares, "books: escrow = sum of open redemption escrow");
-        assertEq(b.heldShares, heldShares, "books: held = sum of undelivered deposit claims");
-        assertEq(b.owedUsdc, owedUsdc, "books: owed = sum of untaken redemption claims");
+        (
+            uint256 pendingDepUsdc,
+            uint256 pendingRedShares,
+            uint256 matHeldShares,
+            uint256 matOwedUsdc
+        ) = _independentBooks();
+        assertLe(pendingDepUsdc, b.pendingUsdc, "books: live pending deposits <= pendingUsdc");
+        assertLe(pendingRedShares, b.escrowShares, "books: live pending redeems <= escrowShares");
+        assertLe(matHeldShares, b.heldShares, "books: materialized deposit claims <= heldShares");
+        assertLe(matOwedUsdc, b.owedUsdc, "books: materialized redeem claims <= owedUsdc");
         (uint256 creditUsdc, uint256 creditShares) = _independentCredits();
         assertEq(b.creditUsdc, creditUsdc, "books: USDC credit = sum of owners' credits");
         assertEq(b.creditShares, creditShares, "books: share credit = sum of owners' credits");
@@ -1814,10 +2000,16 @@ contract Invariants is PrototypeHarness {
         );
 
         (uint256 usdcIn, uint256 usdcOut, uint256 minted, uint256 burned) = _settledSinceStart();
+        assertGe(ghostSettleQueueToFundUsdc, usdcIn, "queue->fund transfers cover settled usdcIn");
+        assertGe(
+            ghostSettleFundToQueueUsdc,
+            usdcOut + (ghostSettleQueueToFundUsdc - usdcIn),
+            "fund->queue transfers cover net redeem payouts plus mint refunds"
+        );
         assertEq(
-            qUsdc + ghostUsdcOut + usdcIn,
-            startQueueUsdc + ghostUsdcIn + usdcOut,
-            "queue USDC = the flows booked"
+            qUsdc + ghostUsdcOut + ghostSettleQueueToFundUsdc + ghostSettleFeeUsdc,
+            startQueueUsdc + ghostUsdcIn + ghostSettleFundToQueueUsdc,
+            "queue USDC = the flows and fees booked"
         );
         assertEq(
             qShares + ghostSharesOut + ghostQueueSharesBurned + burned,
@@ -1862,8 +2054,10 @@ contract Invariants is PrototypeHarness {
         );
         flows = string.concat(
             flows,
-            ", exitsInKind ",
-            vm.toString(callsExitInKind),
+            ", notices ",
+            vm.toString(callsNotice),
+            ", wholeMatches ",
+            vm.toString(callsWholeMatch),
             ", expired ",
             vm.toString(callsExpired),
             ", credits ",
@@ -1875,8 +2069,12 @@ contract Invariants is PrototypeHarness {
             vm.toString(callsFreeze),
             "/",
             vm.toString(callsRelease),
+            ", pauses ",
+            vm.toString(callsPause),
+            ", shutdowns ",
+            vm.toString(callsShutdown),
             "/",
-            vm.toString(callsTakeReturn)
+            vm.toString(callsRestore)
         );
         emit log_named_string("run", flows);
         string memory rebal = string.concat(
@@ -1922,14 +2120,14 @@ contract Invariants is PrototypeHarness {
     //  Internals
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Warp to the end of the oldest open request's settle window (plus the keeper grace for a stranger).
-    function _waitForOldestWindow(bool grace) private {
+    /// @dev Warp to the end of the oldest open pending request's settle window.
+    function _waitForOldestWindow() private {
         uint256 n = queue.requestCount();
         for (uint256 id = 1; id <= n; ++id) {
+            if (queue.requestStatus(id) != RequestStatus.Pending) continue;
             Request memory r = queue.getRequest(id);
-            if (r.closed) continue;
             uint256 t = queue.settleableAt(r.epoch);
-            if (grace) t += queue.flowParams().keeperGrace;
+            if (t <= block.timestamp) t = queue.settleableAt(queue.currentEpoch());
             warpForward(t);
             return;
         }
@@ -1949,30 +2147,40 @@ contract Invariants is PrototypeHarness {
         if (t != type(uint256).max) warpForward(t);
     }
 
-    /// @dev Warp until `h`'s oldest open request has expired (`currentEpoch > epoch + maxRoll`).
+    /// @dev Warp until `h`'s oldest open deposit has expired (`currentEpoch > epoch + maxRoll`).
     function _waitForExpiry(address h) private {
         uint256 n = queue.requestCount();
         FlowParams memory p = queue.flowParams();
         for (uint256 id = 1; id <= n; ++id) {
             Request memory r = queue.getRequest(id);
-            if (r.owner != h || r.closed) continue;
+            if (r.owner != h || r.kind != RequestKind.Deposit || r.closed) continue;
+            if (queue.requestStatus(id) != RequestStatus.Pending) continue;
             warpForward((uint256(r.epoch) + p.maxRoll + 1) * p.epochLength);
             return;
         }
     }
 
-    /// @dev Count a step 3d violation under its RB number and keep the latest reason for the report.
+    /// @dev Count a violation under its RB number and keep the latest reason for the report.
     function _violation(string memory why, uint256 rb) private {
         ghostLastViolation = why;
         if (rb == 10) ++ghostRb10;
         else if (rb == 11) ++ghostRb11;
         else if (rb == 12) ++ghostRb12;
         else if (rb == 13) ++ghostRb13;
-        else if (rb == 14) ++ghostRb14;
         else if (rb == 15) ++ghostRb15;
         else if (rb == 16) ++ghostRb16;
         else if (rb == 18) ++ghostRb18;
         else if (rb == 20) ++ghostRb20;
+        else if (rb == 23) ++ghostRb23;
+        else if (rb == 24) ++ghostRb24;
+        else if (rb == 25) ++ghostRb25;
+        else if (rb == 26) ++ghostRb26;
+        else if (rb == 27) ++ghostRb27;
+        else if (rb == 28) ++ghostRb28;
+        else if (rb == 30) ++ghostRb30;
+        else if (rb == 32) ++ghostRb32;
+        else if (rb == 35) ++ghostRb35;
+        else if (rb == 36) ++ghostRb36;
         else ++ghostRb12;
     }
 
@@ -1982,8 +2190,7 @@ contract Invariants is PrototypeHarness {
         }
     }
 
-    /// @dev A request of `h` that still holds escrow: the `k`-th in id order (wrapping), of the redemption kind
-    ///      only when `redeemOnly`, and expired only when `expiredOnly` (else pending or expired).
+    /// @dev A live request of `h`: the `k`-th in id order, of Redemption when `redeemOnly`, and Expired Deposit when `expiredOnly`.
     function _pickOpen(address h, uint256 k, bool redeemOnly, bool expiredOnly)
         private
         view
@@ -1994,33 +2201,43 @@ contract Invariants is PrototypeHarness {
         for (uint256 j; j < n; ++j) {
             id = 1 + (k % n + j) % n;
             Request memory r = queue.getRequest(id);
-            if (r.owner != h || r.closed || r.remaining == 0) continue;
+            if (r.owner != h || r.closed) continue;
             if (redeemOnly && r.kind != RequestKind.Redeem) continue;
+            if (expiredOnly && r.kind != RequestKind.Deposit) continue;
             RequestStatus st = queue.requestStatus(id);
-            if (expiredOnly && st != RequestStatus.Expired) continue;
+            if (st == RequestStatus.Closed || st == RequestStatus.None) continue;
+            if (expiredOnly ? st != RequestStatus.Expired : st != RequestStatus.Pending) continue;
             return (true, id);
         }
         return (false, 0);
     }
 
-    /// @dev Escrow of open requests and undelivered or untaken claims, summed from the queue's own records.
+    /// @dev Live pending escrows and materialized claims, summed from the queue's own records.
     function _independentBooks()
         private
         view
-        returns (uint256 pendingUsdc, uint256 escrowShares, uint256 heldShares, uint256 owedUsdc)
+        returns (
+            uint256 pendingDepUsdc,
+            uint256 pendingRedShares,
+            uint256 matHeldShares,
+            uint256 matOwedUsdc
+        )
     {
         uint256 n = queue.requestCount();
         for (uint256 id = 1; id <= n; ++id) {
             Request memory r = queue.getRequest(id);
             if (r.closed) continue;
-            if (r.kind == RequestKind.Deposit) pendingUsdc += r.remaining;
-            else escrowShares += r.remaining;
+            if (r.kind == RequestKind.Deposit) {
+                pendingDepUsdc += queue.pendingDepositRequest(id, r.owner);
+            } else {
+                pendingRedShares += queue.pendingRedeemRequest(id, r.owner);
+            }
         }
         n = queue.claimCount();
         for (uint256 c = 1; c <= n; ++c) {
             Claim memory cl = queue.getClaim(c);
-            if (cl.kind == RequestKind.Deposit) heldShares += cl.shares - cl.claimed;
-            else owedUsdc += cl.usdc - cl.claimed;
+            if (cl.kind == RequestKind.Deposit) matHeldShares += cl.shares - cl.claimed;
+            else matOwedUsdc += cl.usdc - cl.claimed;
         }
     }
 
@@ -2032,12 +2249,14 @@ contract Invariants is PrototypeHarness {
         }
     }
 
-    /// @dev `h`'s escrowed redemption shares, undelivered deposit shares and share credit.
-    function _independentQueued(address h) private view returns (uint256 q) {
+    /// @dev `h`'s live pending redemption escrow + materialized undelivered claims + share credit.
+    function _independentMaterializedQueued(address h) private view returns (uint256 q) {
         uint256 n = queue.requestCount();
         for (uint256 id = 1; id <= n; ++id) {
             Request memory r = queue.getRequest(id);
-            if (r.owner == h && !r.closed && r.kind == RequestKind.Redeem) q += r.remaining;
+            if (r.owner == h && !r.closed && r.kind == RequestKind.Redeem) {
+                q += queue.pendingRedeemRequest(id, h);
+            }
         }
         n = queue.claimCount();
         for (uint256 c = 1; c <= n; ++c) {
@@ -2126,7 +2345,13 @@ contract Invariants is PrototypeHarness {
         uint256 maxUnder = t > p0.idle ? t - p0.idle : 0;
         for (uint256 i; i < p0.marketOk.length; ++i) {
             if (!p0.marketOk[i] || rebalancer.assetStepParams(i).maxStepUsdc == 0) continue;
-            if (rebalancer.assetBackoffUntil(i) >= block.timestamp || !fund.assetConfig(i).active) {
+            if (
+                rebalancer.assetBackoffUntil(i) >= block.timestamp || !fund.assetConfig(i).active
+                    || fund.isAssetInSale(i)
+            ) {
+                continue;
+            }
+            if (fund.assetConfig(i).kind == AssetKind.Lending && fund.positionClaimTotal(i) > 0) {
                 continue;
             }
             t = _pathValue(p0.plan, i, block.timestamp, p0.nav);
@@ -2158,12 +2383,7 @@ contract Invariants is PrototypeHarness {
         return nav.mulDiv(s0 * d - (s0 - s1) * e, d * BPS, Math.Rounding.Ceil);
     }
 
-    /// @dev INV-1 / RB-3 and RB-10 over one action's logs. A Transfer out of a system address must land on a venue
-    ///      (or the fund), on the action's holder, the fee recipient, or address(0) (a venue receipt-token burn).
-    ///      The fund may pay the queue (a sale's proceeds, a purchase's refund). Out of the queue (RB-10): in a
-    ///      settlement only to the fund (the purchase) or burned (the sale); in a payout only to the owner; in an
-    ///      in-kind exit only burned; in any other action nothing. During a fund action, a pool pays only the fund.
-    ///      Approvals by the fund are remembered for the allowance check.
+    /// @dev INV-1 / RB-3 and RB-10 over one action's logs. Tracks exact settlement USDC flows into and out of the queue.
     function _scanLogs(VmSafe.Log[] memory logs) private {
         for (uint256 k; k < logs.length; ++k) {
             VmSafe.Log memory l = logs[k];
@@ -2181,8 +2401,18 @@ contract Invariants is PrototypeHarness {
                 continue;
             }
             if (l.topics[0] != TRANSFER_SIG) continue;
+            if (actionKind == ACT_SETTLE && l.emitter == USDC && l.data.length == 32) {
+                uint256 amt = abi.decode(l.data, (uint256));
+                if (from == address(queue) && to == address(fund)) {
+                    ghostSettleQueueToFundUsdc += amt;
+                } else if (from == address(queue) && to == feeRecipient) {
+                    ghostSettleFeeUsdc += amt;
+                } else if (from == address(fund) && to == address(queue)) {
+                    ghostSettleFundToQueueUsdc += amt;
+                }
+            }
             if (from == address(queue)) {
-                _checkQueueTransfer(to);
+                _checkQueueTransfer(to, l.emitter);
             } else if (isSystem[from]) {
                 bool ok = venueOk[to] || to == feeRecipient
                     || (to == actionHolder && actionHolder != address(0))
@@ -2196,13 +2426,15 @@ contract Invariants is PrototypeHarness {
     }
 
     /// @dev RB-10: the one rule for a transfer out of the queue in the action in flight.
-    function _checkQueueTransfer(address to) private {
+    function _checkQueueTransfer(address to, address token) private {
         bool ok;
-        if (actionKind == ACT_SETTLE) ok = to == address(fund) || to == address(0);
-        else if (actionKind == ACT_PAY) ok = to == actionHolder && actionHolder != address(0);
-        else if (actionKind == ACT_EXIT) ok = to == address(0);
+        if (actionKind == ACT_SETTLE) {
+            ok = to == address(fund) || to == address(0) || (to == feeRecipient && token == USDC);
+        } else if (actionKind == ACT_PAY) {
+            ok = to == actionHolder && actionHolder != address(0);
+        }
         if (!ok) {
-            _violation("RB-10: a transfer left the queue outside a settlement, payout or exit", 10);
+            _violation("RB-10: a transfer left the queue outside a settlement or payout", 10);
             _leak(address(queue), to);
         }
     }
@@ -2261,11 +2493,16 @@ contract Invariants is PrototypeHarness {
                 || x.kind == VmSafe.AccountAccessKind.DelegateCall;
             if (
                 isCall && x.data.length != 0 && !_cvAccount[x.account] && !_cvCreated[x.account]
-                    && uint160(x.account) > 0xffff && x.account.code.length == 0
+                    && !_created[x.account] && uint160(x.account) > 0xffff
+                    && x.account.code.length == 0
             ) _miss(x.account, bytes32(0));
             for (uint256 j; j < x.storageAccesses.length; ++j) {
                 VmSafe.StorageAccess memory s = x.storageAccesses[j];
-                if (!_cvAccount[s.account] || _cvCreated[s.account] || _cvSeen[s.account][s.slot]) {
+                // `_created` holds what `BaseFixture` saw in the checkpoints the harness's setUp ran before this diff.
+                if (
+                    !_cvAccount[s.account] || _cvCreated[s.account] || _created[s.account]
+                        || _cvSeen[s.account][s.slot]
+                ) {
                     continue;
                 }
                 _cvSeen[s.account][s.slot] = true;

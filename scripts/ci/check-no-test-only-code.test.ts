@@ -15,7 +15,7 @@ const temps: string[] = [];
 function copy(): string {
   const dir = mkdtempSync(join(tmpdir(), "nto-"));
   temps.push(dir);
-  for (const d of ["contracts/script", "contracts/test", "contracts/vaults", "scripts", ".github"]) {
+  for (const d of ["contracts/script", "contracts/test", "scripts", ".github"]) {
     mkdirSync(join(dir, d), { recursive: true });
     cpSync(join(repo, d), join(dir, d), { recursive: true, filter: (s) => !s.includes("node_modules") });
   }
@@ -97,17 +97,6 @@ describe("no test-only code gate", () => {
       expect(r.code).not.toBe(0);
       expect(r.out).toContain("pranked Safe");
     }
-  });
-
-  test("the migrated governed-path tests hold no pranked Safe", () => {
-    for (const f of ["AgentTokenVault", "BasketVault", "ConsensusRecommendationReceipt", "GovernedVaultSafeTimelock", "DeployTimelock", "WeightSetterRotation", "PortfolioRouter", "GovernedSurfacesSafeTimelock"]) {
-      const r = planted(`contracts/test/${f}.t.sol`, "// vm.prank(safe) planted\ncontract T { function t() external { vm.prank(safe); } }\n");
-      expect(r.code).not.toBe(0);
-      expect(r.out).toContain(`contracts/test/${f}.t.sol:2`);
-    }
-    const clean = run();
-    expect(clean.code).toBe(0);
-    expect(clean.out + "").not.toContain("AgentTokenVault.t.sol");
   });
 
   test("a planted chain-id branch fails", () => {

@@ -15,7 +15,8 @@
  *
  * The router calls `vault.redeem` as the share spender, so the holder first approves the router for
  * exactly `shares` on the vault's share token, and the redeem spends that allowance to zero. The
- * router requires an independent holder allowance for any delegated caller. The tab approves the exact amount and offers a
+ * router's NatSpec forbids a STANDING share approval to it: a party the holder has approved on that
+ * token could spend it through `redeemFor`. So the tab approves the exact amount, and it offers a
  * revoke for any allowance a redeem will not spend (`leftoverRouterAllowance`). On the direct route
  * that is all of it, a router that failed its pins included (`leftoverRouterAllowanceText`).
  *

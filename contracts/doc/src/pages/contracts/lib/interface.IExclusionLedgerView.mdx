@@ -1,0 +1,71 @@
+---
+title: "IExclusionLedgerView"
+---
+
+# IExclusionLedgerView
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowCheckLib.sol)
+
+<i>
+
+Minimal interface of FundExclusionLedger read by Check 6 (cycled exclusions, review Q-F3).
+
+</i>
+
+## Functions
+
+<a id="exclusioncount"></a>
+
+### exclusionCount
+
+```solidity
+function exclusionCount() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="exclusions-uint256"></a>
+
+### exclusions
+
+```solidity
+function exclusions(uint256 id)
+        external
+        view
+        returns (
+            uint256 adapterIndex,
+            address adapter,
+            uint48 openedBlock,
+            uint40 openedAt,
+            bool finalized,
+            uint256 snapshotSupply,
+            uint256 adapterValue,
+            uint256 recoveredUsdc,
+            uint256 claimedUsdc
+        );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| adapterIndex | `uint256` |  |
+| adapter | `address` |  |
+| openedBlock | `uint48` |  |
+| openedAt | `uint40` |  |
+| finalized | `bool` |  |
+| snapshotSupply | `uint256` |  |
+| adapterValue | `uint256` |  |
+| recoveredUsdc | `uint256` |  |
+| claimedUsdc | `uint256` |  |
+

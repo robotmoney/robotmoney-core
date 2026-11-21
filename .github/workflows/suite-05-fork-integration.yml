@@ -20,21 +20,15 @@
 # saved .anvil-state fixture, no genesis snapshot and no docker compose chain. ONE pin per workflow
 # run: the `pin` job chooses it (upstream head minus 2) and every slot takes it as input. The
 # upstream is https://mainnet.base.org unless the optional secret BASE_UPSTREAM_RPC is set.
-# - The three twin-* slots run the tests straight on the Twin fork (RMPC_TESTNET_RPC_URL).
-# - The goldens and governance slots point RMPC_FORK_RPC_URL at the Twin fork, so each test forks
-#   the Twin again at the pin (RMPC_FORK_BLOCK) and may move time and rewind state without
-#   touching the shared Twin chain. The governance scenarios deploy their own receipt-path stack
-#   and drive the one-call RouterGovernance.applyReceipt (issue 1698): there is no voting period
-#   to wait for.
+# - The twin-light slot runs the tests straight on the Twin fork (RMPC_TESTNET_RPC_URL).
+# - The anvil-* slots point RMPC_FORK_RPC_URL at the Twin fork, so each test forks the Twin again
+#   at the pin (RMPC_FORK_BLOCK) and may move time and rewind state without touching the shared
+#   Twin chain.
 #
 # WHY --test-threads=1
 # Within a slot, ephemeral accounts are funded through the anvil admin RPCs (fund gas, fund USDC).
 # Running tests concurrently on one chain would race on block time and shared state.
 # Sequential within a slot, parallel across slots.
-#
-# WHY forge build RUNS IN EVERY SLOT
-# tests/registry.rs reads the VaultRegistry.json artefact. The twin-fork action installs foundry
-# and bun first.
 #
 # EXECUTED FLOORS (issue 1656, QA plan v1 T5)
 # Every wrapped step names its floor, and the floor is the number of tests the step selects, so
@@ -118,65 +112,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Issue 1889: the gateway has no router path and no agent withdrawal. The router file keeps
-          # its four human-wallet tests and adds two that prove the router is never a gateway
-          # destination (six, as before). The gateway_deposit file replaces the five retired
-          # agent-withdrawal tests with five depositTo tests (eight with the three registry tests, as before).
-          - group: twin-router
-            cargo_tests: --test router
-            mode: shared
-            min_executed: 6
-          - group: twin-gateway-registry
-            cargo_tests: --test gateway_deposit --test registry
-            mode: shared
-            min_executed: 8
+          # The old multi-vault contracts were replaced by the 0.9.0 fund (PR 2042). Every test that
+          # deployed or read the old vault, router, gateway, registry or timelock stack was deleted
+          # with its slot (twin-router, twin-gateway-registry, twin-governance-topology,
+          # anvil-governance). What remains reads real Base state only: USDC, Uniswap V3 pools and
+          # the rmpc read commands.
           - group: twin-light
             cargo_tests: >-
-              --test failure_surface_smoke
-              --test rmpc_get_vault_fork
               --test rmpc_get_balance_fork
               --test rmpc_get_allowance_fork
               --test rmpc_get_tx_fork
             mode: shared
-            min_executed: 5
-          # Issue 1647: rmpc get-timelock on the REAL Safe topology. The smoke-test Fixture runs the one
-          # deploy driver on the shared Twin chain (real 2-of-3 Safe, timelock, handover), the Safe
-          # schedules a pending operation, and the test reads rmpc's output against on-chain state.
-          # Its own group: the topology deploy takes minutes and must not eat twin-light's budget.
-          - group: twin-governance-topology
-            cargo_tests: --test rmpc_get_timelock_fork
-            mode: shared
-            min_executed: 1
-            required_markers: |
-              [get_timelock_integration] all assertions passed
-          - group: anvil-goldens
-            cargo_tests: >-
-              --test abi_address_sanity
-              --test dex_route_smoke
-              --test vault_deposit_redeem_smoke
-            mode: fork
             min_executed: 3
-          # Issue 1656: these four binaries use skip_if_no_devnet_fork!, which needs RMPC_FORK_RPC_URL
-          # and anvil. Under mode shared that variable is empty, so they silently skipped (and counted
-          # as passed) in twin-light. mode fork sets it, so they now run, and the macro panics under CI
-          # if the fork is ever absent.
-          # Issue 1683 (QA plan T3): the deposit gas ceiling was 920,000 (measured 833,900 plus about
-          # 10%), then 1,060,000 after the QA merge measured 964,197, and is 1,190,000 since the TestMachine audit fixes measured 1,080,403 (see the test). The test prints the marker below only after the deposit assertion passed; the
-          # wrapper matches it as a line prefix, so the line's gasUsed and budget values may vary.
+          - group: anvil-goldens
+            cargo_tests: --test dex_route_smoke
+            mode: fork
+            min_executed: 1
+          # Issue 1656: landing_price_strip_fork uses skip_if_no_devnet_fork!, which needs
+          # RMPC_FORK_RPC_URL and anvil, so it runs in mode fork. The macro panics under CI if the
+          # fork is ever absent.
           - group: anvil-devnet-adapters
-            cargo_tests: >-
-              --test devnet_adapter_round_trip
-              --test gas_estimate_reality_check
-              --test landing_price_strip_fork
-              --test basket_vault_round_trip
+            cargo_tests: --test landing_price_strip_fork
             mode: fork
-            min_executed: 5
-            required_markers: |
-              [gas_estimate_reality_check] deposit gasUsed=
-          - group: anvil-governance
-            cargo_tests: --test governance
-            mode: fork
-            min_executed: 5
+            min_executed: 2
 
     steps:
       - uses: actions/checkout@v4
@@ -197,13 +155,6 @@ jobs:
         with:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
-
-      # The fixture deploys through the one deploy driver and the rehearsal key helper (publish-contracts/, Bun).
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
-      - name: Build Solidity contracts (required by registry fork-e2e)
-        run: forge build
 
       - name: Build test binaries
         working-directory: testing/fork-e2e-rust
@@ -243,10 +194,6 @@ jobs:
       BASE_TESTNET_RPC_URL: ${{ secrets.BASE_TESTNET_RPC_URL }}
       BASE_TESTNET_FUNDER_KEY: ${{ secrets.BASE_TESTNET_FUNDER_KEY }}
       BASE_TESTNET_FUNDER_ADDR: ${{ secrets.BASE_TESTNET_FUNDER_ADDR }}
-      # Robot Money contracts deployed to Base's public testnet (deploy is a prerequisite,
-      # out of scope for #839). Only the separate vault_stack_base_testnet test reads it, and
-      # every step below leaves that test out by name (QA plan v1 T5).
-      RM_TESTNET_VAULT_ADDR: ${{ secrets.RM_TESTNET_VAULT_ADDR }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -320,10 +267,6 @@ jobs:
           pin-block: ${{ needs.pin.outputs.block }}
           upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
 
-      # The fixture deploys through the one deploy driver and the rehearsal key helper (publish-contracts/, Bun).
-      - name: Install publish-contracts dependencies (the one deploy driver, in this repo)
-        uses: ./.github/actions/publish-contracts-setup
-
       # QA plan v1 T5: parameterized_e2e! makes one test per network. This step runs the devnet leg
       # on the Twin fork and leaves the Base testnet leg out by name. Before T5 both legs were one
       # test, and the devnet leg met the floor of 1 while the testnet leg skipped on every run. The
@@ -335,7 +278,6 @@ jobs:
           REQUIRE_EXECUTED_MARKERS: |
             [multi_network_adapters] Uniswap on Robot Money Devnet: OK
             [multi_network_adapters] Aave on Robot Money Devnet: OK
-            [multi_network_adapters] Compound/Morpho/Curve via vault on Robot Money Devnet: OK
         run: |
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
             --release --test multi_network_adapters -- --test-threads=1 --nocapture --skip base_testnet
@@ -343,10 +285,6 @@ jobs:
       # The Base testnet leg talks to Base's public testnet, so it needs the RPC and a funded key.
       # Like the funding assertion above, it runs only when both secrets are set, and the leg
       # panics under CI when either is missing. The leg runs Uniswap and Aave and skips nothing.
-      # The vault-stack part is its own test, vault_stack_base_testnet, which this step leaves out
-      # by name: no Robot Money deploy exists on Base's public testnet (RM_TESTNET_VAULT_ADDR,
-      # #839), and that test panics under CI without one (QA plan v1 T5). Drop the --skip when the
-      # deploy exists.
       - name: Multi-network adapter e2e, Base testnet leg (needs the testnet secrets)
         if: ${{ env.BASE_TESTNET_RPC_URL != '' && env.BASE_TESTNET_FUNDER_KEY != '' }}
         working-directory: testing/fork-e2e-rust
@@ -356,8 +294,7 @@ jobs:
             [multi_network_adapters] Aave on Base testnet: OK
         run: |
           CARGO_TEST_MIN_EXECUTED=1 bash ../../.github/scripts/cargo_test_require_executed.sh \
-            --release --test multi_network_adapters -- --test-threads=1 --nocapture base_testnet \
-            --skip vault_stack_base_testnet
+            --release --test multi_network_adapters -- --test-threads=1 --nocapture base_testnet
 
       # A ref without the testnet secrets does not run the leg above. Say so in the run summary
       # instead of letting a skipped step pass unnoticed.
@@ -375,8 +312,7 @@ jobs:
           # bare-cargo-test-allowed: this step expects cargo test to FAIL (the skip refusal).
           set +e
           out="$(env -u BASE_TESTNET_RPC_URL -u BASE_TESTNET_FUNDER_KEY CI=true \
-            cargo test --release --test multi_network_adapters base_testnet \
-            -- --skip vault_stack_base_testnet 2>&1)"
+            cargo test --release --test multi_network_adapters base_testnet 2>&1)"
           status=$?
           set -e
           echo "$out" | tail -25

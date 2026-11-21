@@ -5,7 +5,9 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeFunctionData, keccak256, parseAbi, toHex, type Address, type Hex } from "viem";
-import { executorSwitchCalls, operationProblems, recordExecutorSwitch, recordUpgrade, type ChainFacts } from "../src/fund-upgrade-record.ts";
+import { executorSwitchCalls, hashOperation, hashOperationBatch, operationProblems, recordExecutorSwitch, recordUpgrade, type ChainFacts } from "../src/fund-upgrade-record.ts";
+import { FUND_MIGRATIONS, decodeFundMigration, fundMigrationData } from "../src/fund-migrations.ts";
+import { toFunctionSelector } from "viem";
 import { changes, takenFirst, type ClaimRow } from "../src/ci/fund-claims.ts";
 import { fundProxyBuildDir } from "../src/verify/fund.ts";
 import { BUNDLE_FORMAT, type SafeTxBundle } from "../src/safe/tx.ts";
@@ -16,6 +18,9 @@ const FUND = "0x000000000000000000000000000000000000f00d" as Address;
 const OLD = "0x0000000000000000000000000000000000000a01" as Address;
 const NEW = "0x0000000000000000000000000000000000000b02" as Address;
 const ID = `0x${"11".repeat(32)}` as Hex;
+const REB = "0x000000000000000000000000000000000000beb0" as Address;
+const LEDGER_OLD = "0x0000000000000000000000000000000000001ed0" as Address;
+const LEDGER_NEW = "0x0000000000000000000000000000000000001ed1" as Address;
 const Z = `0x${"00".repeat(32)}` as Hex;
 const ABI = parseAbi([
   "function schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay)",
@@ -31,10 +36,13 @@ const bundle = (action: string, data: Hex, over: Partial<SafeTxBundle> = {}): Sa
   nonce: 1, safe_tx_hash: `0x${"22".repeat(32)}`, timelock_operation_id: ID, threshold: 2, owners: [], signatures: [], proposed_at: "2026-11-14T00:00:00Z",
   executed: { tx_hash: `0x${action === "schedule" || action === "scheduleBatch" ? "33" : "44"}${"00".repeat(31)}` as Hex, block: 1, sent_by: SAFE, status: 1 }, ...over,
 });
-const single = (target: Address, data: Hex) => ({
-  s: bundle("schedule", encodeFunctionData({ abi: ABI, functionName: "schedule", args: [target, 0n, data, Z, Z, 900n] })),
-  e: bundle("execute", encodeFunctionData({ abi: ABI, functionName: "execute", args: [target, 0n, data, Z, Z] })),
-});
+const single = (target: Address, data: Hex, pred: Hex = Z) => {
+  const id = hashOperation(target, 0n, data, pred, Z);
+  return {
+    s: bundle("schedule", encodeFunctionData({ abi: ABI, functionName: "schedule", args: [target, 0n, data, pred, Z, 900n] }), { timelock_operation_id: id }),
+    e: bundle("execute", encodeFunctionData({ abi: ABI, functionName: "execute", args: [target, 0n, data, pred, Z] }), { timelock_operation_id: id }),
+  };
+};
 
 describe("operationProblems: one executed timelock operation of the fund Safe", () => {
   test("a schedule and its execute: no problem, the call decoded", () => {
@@ -42,7 +50,11 @@ describe("operationProblems: one executed timelock operation of the fund Safe", 
     const r = operationProblems(s, e, TL, SAFE, false);
     expect(r.problems).toEqual([]);
     expect(r.calls.map((c) => ({ ...c, target: c.target.toLowerCase() }))).toEqual([{ target: FUND, value: 0n, data: upgradeData(NEW) }]);
-    expect(r.id).toBe(ID);
+    expect(r.id).toBe(hashOperation(FUND, 0n, upgradeData(NEW), Z, Z));
+  });
+  test("the operation id is recomputed from the scheduled call: a bundle naming another id is refused", () => {
+    const { s, e } = single(FUND, upgradeData(NEW));
+    expect(operationProblems({ ...s, timelock_operation_id: ID }, { ...e, timelock_operation_id: ID }, TL, SAFE, false).problems.join()).toContain("hash to");
   });
   test("an execute of other calldata, another Safe, an unexecuted bundle, another operation: each refused", () => {
     const { s, e } = single(FUND, upgradeData(NEW));
@@ -62,7 +74,8 @@ describe("the records against a run manifest and manifests on disk", () => {
     const ev = join(d, "evidence"), man = join(d, "manifests");
     mkdirSync(ev); mkdirSync(man);
     writeFileSync(join(ev, "publish-run.json"), JSON.stringify({ version: 1, system: "fund", coreSha: "7c23569f85e96232fc75bbba32ebbd469da31966", stages: {}, implementation_deploys: [{ system: "fund", proxy_name: "fund", implementation: NEW, build: "/b/v080" }] }));
-    writeFileSync(join(man, "fund.json"), JSON.stringify({ chain_id: 918453, fund: FUND, fund_implementation: OLD }));
+    writeFileSync(join(man, "fund.json"), JSON.stringify({ chain_id: 918453, fund: FUND, fund_implementation: OLD, exclusion_ledger: LEDGER_OLD }));
+    writeFileSync(join(man, "rebalancer.json"), JSON.stringify({ chain_id: 918453, rebalancer: REB }));
     writeFileSync(join(man, "fund-timelock.json"), JSON.stringify({ timelock: TL, safe: SAFE, executorPolicy: "open", code_hashes: { fund_implementation: "0x00" } }));
     writeFileSync(join(man, "safe.json"), JSON.stringify({ safe: SAFE }));
     return { ev, man };
@@ -70,7 +83,7 @@ describe("the records against a run manifest and manifests on disk", () => {
   const coreDir = join(import.meta.dir, "..", "..");
   const facts = (over: Partial<ChainFacts> = {}): ChainFacts => ({
     implementationOf: async () => NEW, code: async (a) => (`0x60${a.slice(2, 6)}` as Hex), isOperationDone: async () => true,
-    hasRole: async (_at, role, who) => role === EXEC && who.toLowerCase() === SAFE, tx: async () => ({ status: "success", timestamp: 1000 }), ...over,
+    hasRole: async (_at, role, who) => role === EXEC && who.toLowerCase() === SAFE, tx: async () => ({ status: "success", timestamp: 1000 }), exclusionLedger: async () => LEDGER_NEW, ...over,
   });
 
   test("upgrade: re-records the manifest copy and appends proxy_upgrades with the build; a slot that is not the upgrade's writes nothing", async () => {
@@ -82,22 +95,26 @@ describe("the records against a run manifest and manifests on disk", () => {
     const wrongBuild = await recordUpgrade({ evidenceDir: ev, manifestDir: man, scheduleBundle: s, executeBundle: e, coreDir, proxy: "fund", upgradeBuild: "/elsewhere" }, facts());
     expect(wrongBuild.problems.join()).toContain("records no deploy-implementation --system fund");
     const migration = single(FUND, upgradeData(NEW, "0x1234"));
-    expect((await recordUpgrade({ evidenceDir: ev, manifestDir: man, scheduleBundle: migration.s, executeBundle: migration.e, coreDir, proxy: "fund", upgradeBuild: "/b/v080" }, facts())).problems.join()).toContain("migration data");
+    expect((await recordUpgrade({ evidenceDir: ev, manifestDir: man, scheduleBundle: migration.s, executeBundle: migration.e, coreDir, proxy: "fund", upgradeBuild: "/b/v080" }, facts())).problems.join()).toContain("selector");
     const ok = await recordUpgrade({ evidenceDir: ev, manifestDir: man, scheduleBundle: s, executeBundle: e, coreDir, proxy: "fund", upgradeBuild: "/b/v080" }, facts());
     expect(ok.problems).toEqual([]);
     expect(JSON.parse(readFileSync(join(man, "fund.json"), "utf8")).fund_implementation.toLowerCase()).toBe(NEW);
     const m = JSON.parse(readFileSync(join(ev, "publish-run.json"), "utf8"));
     expect(m.proxy_upgrades).toHaveLength(1);
-    expect({ ...m.proxy_upgrades[0], from_implementation: m.proxy_upgrades[0].from_implementation.toLowerCase(), to_implementation: m.proxy_upgrades[0].to_implementation.toLowerCase() }).toMatchObject({ step: "upgrade-proxy", proxy_name: "fund", from_implementation: OLD, to_implementation: NEW, build: "/b/v080", operation_id: ID, schedule_status: 1, execute_status: 1 });
+    expect({ ...m.proxy_upgrades[0], from_implementation: m.proxy_upgrades[0].from_implementation.toLowerCase(), to_implementation: m.proxy_upgrades[0].to_implementation.toLowerCase() }).toMatchObject({ step: "upgrade-proxy", proxy_name: "fund", from_implementation: OLD, to_implementation: NEW, build: "/b/v080", operation_id: hashOperation(FUND, 0n, upgradeData(NEW), Z, Z), schedule_status: 1, execute_status: 1, predecessor: null });
+    expect(m.proxy_upgrades[0].fund_migration).toBeUndefined();
   });
 
   test("executor: exactly grant to the Safe and revoke from address(0); the chain must read the Safe as the only executor", async () => {
     const { ev, man } = setup();
     const calls = executorSwitchCalls(TL, SAFE);
-    const batch = (cs: typeof calls) => ({
-      s: bundle("scheduleBatch", encodeFunctionData({ abi: ABI, functionName: "scheduleBatch", args: [cs.map((c) => c.target), cs.map(() => 0n), cs.map((c) => c.data), ID, Z, 900n] })),
-      e: bundle("executeBatch", encodeFunctionData({ abi: ABI, functionName: "executeBatch", args: [cs.map((c) => c.target), cs.map(() => 0n), cs.map((c) => c.data), ID, Z] })),
-    });
+    const batch = (cs: typeof calls) => {
+      const id = hashOperationBatch(cs.map((c) => c.target), cs.map(() => 0n), cs.map((c) => c.data), ID, Z);
+      return {
+        s: bundle("scheduleBatch", encodeFunctionData({ abi: ABI, functionName: "scheduleBatch", args: [cs.map((c) => c.target), cs.map(() => 0n), cs.map((c) => c.data), ID, Z, 900n] }), { timelock_operation_id: id }),
+        e: bundle("executeBatch", encodeFunctionData({ abi: ABI, functionName: "executeBatch", args: [cs.map((c) => c.target), cs.map(() => 0n), cs.map((c) => c.data), ID, Z] }), { timelock_operation_id: id }),
+      };
+    };
     const grantOnly = batch(calls.slice(0, 1));
     expect((await recordExecutorSwitch({ evidenceDir: ev, manifestDir: man, scheduleBundle: grantOnly.s, executeBundle: grantOnly.e, coreDir: "" }, facts())).problems.join()).toContain("not exactly [grantRole");
     const b = batch(calls);
@@ -107,8 +124,76 @@ describe("the records against a run manifest and manifests on disk", () => {
     expect(ok.problems).toEqual([]);
     const tm = JSON.parse(readFileSync(join(man, "fund-timelock.json"), "utf8"));
     expect(tm.executorPolicy).toBe("safe-only");
-    expect(tm.executor_policy_change).toMatchObject({ from_policy: "open", to_policy: "safe-only", operation_id: ID, predecessor: ID });
+    expect(tm.executor_policy_change).toMatchObject({ from_policy: "open", to_policy: "safe-only", operation_id: b.s.timelock_operation_id, predecessor: ID });
     expect(JSON.parse(readFileSync(join(ev, "publish-run.json"), "utf8")).timelock_executor_switches).toHaveLength(1);
+  });
+});
+
+describe("v0.9.0 migrations (contracts 588a68598)", () => {
+  test("the allowlisted selectors are the contracts' migrateV090 signatures", () => {
+    for (const d of Object.values(FUND_MIGRATIONS)) expect(toFunctionSelector(`function ${d.signature}`)).toBe(d.selector);
+    expect(FUND_MIGRATIONS.rebalancer!.selector).toBe("0x27491b91");
+    expect(FUND_MIGRATIONS.fund!.selector).toBe("0xd85cc223");
+    expect(FUND_MIGRATIONS.queue!.selector).toBe("0x1d74ec6f");
+  });
+  test("decode: each proxy's own migration decodes; another proxy's, arbitrary data or trailing bytes are refused", () => {
+    expect(decodeFundMigration("queue", fundMigrationData("queue", [900, 259200, 10])).record).toMatchObject({ name: "queue-v090", args: ["900", "259200", "10"] });
+    expect(decodeFundMigration("rebalancer", fundMigrationData("rebalancer", [])).record?.data).toBe("0x27491b91");
+    expect(decodeFundMigration("fund", fundMigrationData("queue", [900, 259200, 10])).problem).toContain("selector");
+    expect(decodeFundMigration("fund-governance", "0x27491b91").problem).toContain("has no v0.9.0 migration");
+    expect(decodeFundMigration("rebalancer", "0x27491b9100").problem).toBeDefined();
+    expect(decodeFundMigration("fund", "0x").problem).toBeUndefined();
+  });
+});
+
+describe("recordUpgrade with migration data", () => {
+  const coreDir = join(import.meta.dir, "..", "..");
+  const EXEC = keccak256(toHex("EXECUTOR_ROLE"));
+  const setup = () => {
+    const d = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "fund-upgrade-migrate-"));
+    const ev = join(d, "evidence"), man = join(d, "manifests");
+    mkdirSync(ev); mkdirSync(man);
+    writeFileSync(join(ev, "publish-run.json"), JSON.stringify({ version: 1, system: "fund", coreSha: "7c23569f85e96232fc75bbba32ebbd469da31966", stages: {}, implementation_deploys: [{ system: "fund", proxy_name: "fund", implementation: NEW, build: "/b/v090" }] }));
+    writeFileSync(join(man, "fund.json"), JSON.stringify({ chain_id: 918453, fund: FUND, fund_implementation: OLD, exclusion_ledger: LEDGER_OLD }));
+    writeFileSync(join(man, "rebalancer.json"), JSON.stringify({ chain_id: 918453, rebalancer: REB }));
+    writeFileSync(join(man, "fund-timelock.json"), JSON.stringify({ timelock: TL, safe: SAFE, executorPolicy: "safe-only" }));
+    writeFileSync(join(man, "safe.json"), JSON.stringify({ safe: SAFE }));
+    return { ev, man };
+  };
+  const notDone = new Set<string>();
+  const facts = (over: Partial<ChainFacts> = {}): ChainFacts => ({
+    implementationOf: async () => NEW, code: async (a) => (`0x60${a.slice(2, 6)}` as Hex), isOperationDone: async (_t, id) => !notDone.has(id),
+    hasRole: async (_at, role, who) => role === EXEC && who.toLowerCase() === SAFE, tx: async () => ({ status: "success", timestamp: 1000 }), exclusionLedger: async () => LEDGER_NEW, ...over,
+  });
+  const PRED = `0x${"77".repeat(32)}` as Hex;
+  const run = async (data: Hex, f = facts(), pred: Hex = PRED) => {
+    const { ev, man } = setup();
+    const { s, e } = single(FUND, upgradeData(NEW, data), pred);
+    const r = await recordUpgrade({ evidenceDir: ev, manifestDir: man, scheduleBundle: s, executeBundle: e, coreDir, proxy: "fund", upgradeBuild: "/b/v090" }, f);
+    return { r, ev, man };
+  };
+
+  test("the fund migration with a predecessor: recorded with its data, the operation id over the real data, the ledger re-recorded from the chain", async () => {
+    const { r, ev, man } = await run(fundMigrationData("fund", [REB]));
+    expect(r.problems).toEqual([]);
+    const entry = JSON.parse(readFileSync(join(ev, "publish-run.json"), "utf8")).proxy_upgrades[0];
+    expect(entry.fund_migration).toMatchObject({ name: "fund-v090", selector: "0xd85cc223", function: "migrateV090" });
+    expect(entry.fund_migration.args[0].toLowerCase()).toBe(REB);
+    expect(entry.predecessor).toBe(PRED);
+    expect(entry.operation_id).toBe(hashOperation(FUND, 0n, upgradeData(NEW, fundMigrationData("fund", [REB])), PRED, Z));
+    expect(entry.exclusion_ledger_replaced.from).toBe(LEDGER_OLD);
+    expect(entry.exclusion_ledger_replaced.to.toLowerCase()).toBe(LEDGER_NEW);
+    expect(JSON.parse(readFileSync(join(man, "fund.json"), "utf8")).exclusion_ledger.toLowerCase()).toBe(LEDGER_NEW);
+  });
+  test("refused: another rebalancer, another proxy's migration, a predecessor not done, a ledger that did not change (nothing written)", async () => {
+    expect((await run(fundMigrationData("fund", [NEW]))).r.problems.join()).toContain("not the rebalancer proxy");
+    expect((await run(fundMigrationData("queue", [900, 259200, 10]))).r.problems.join()).toContain("selector");
+    notDone.add(PRED);
+    expect((await run(fundMigrationData("fund", [REB]))).r.problems.join()).toContain("predecessor");
+    notDone.clear();
+    const same = await run(fundMigrationData("fund", [REB]), facts({ exclusionLedger: async () => LEDGER_OLD }));
+    expect(same.r.problems.join()).toContain("did not replace it");
+    expect(JSON.parse(readFileSync(join(same.man, "fund.json"), "utf8")).fund_implementation).toBe(OLD);
   });
 });
 

@@ -86,14 +86,20 @@ const GLOBAL_NAMES: Record<string, NameSpec> = {
  * them at those initializers' value (FUND_LEVER_INIT_VALUES) and the fund verifier reads both back.
  */
 export const FUND_ONLY_NAMES = [
-  "KEEPER_ADDRESS",
+  "KEEPER_ADDRESS", "KEEPER_TYPE", "KEEPER_OWNERS", "KEEPER_BOT_KEYS", "RECEIPT_SUBMITTERS",
   "FUND_TVL_CAP", "FUND_PER_DEPOSIT_CAP", "FUND_EXIT_FEE_BPS", "FUND_MAX_SLIPPAGE_BPS", "FUND_NAV_DEVIATION_BPS", "FUND_LENDING_CAP_BPS", "FUND_MIN_SEED_USDC",
-  "REBALANCER_KEEPER_GRACE", "REBALANCER_MAX_OVERRUN", "REBALANCER_MAX_STEP_COST_BPS", "REBALANCER_TOLERANCE_BPS", "REBALANCER_MIN_STEP_USDC",
+  "FUND_MIN_POOL_DEPTH_USDC", "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
+  "REBALANCER_MAX_OVERRUN", "REBALANCER_MAX_STEP_COST_BPS", "REBALANCER_TOLERANCE_BPS", "REBALANCER_MIN_STEP_USDC",
   "REBALANCER_LENDING_MAX_STEP_USDC", "REBALANCER_MAJOR_MAX_STEP_USDC", "REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS", "REBALANCER_STEP_DEPTH_BPS",
   "PLAN_DURATION", "PLAN_COST_BUDGET_BPS",
   "FLOW_EPOCH_LENGTH", "FLOW_SETTLE_WINDOW", "FLOW_MIN_HOLD", "FLOW_KEEPER_GRACE", "FLOW_MAX_EPOCH_FLOW_BPS", "FLOW_EPOCH_FLOOR_USDC", "FLOW_MAX_SHARE_PRICE_MOVE_BPS",
   "FLOW_MAX_ROLL", "FLOW_MIN_REQUEST_USDC", "FLOW_MAX_FREEZE", "FLOW_SLICES", "FLOW_QUORUM", "FLOW_DISPERSION_BPS", "FLOW_REF_BAND_BPS", "FLOW_LEG_BAND_BPS",
-  "FLOW_SEQUENCER_GRACE", "FLOW_USDC_PEG_BAND_BPS", "FLOW_MAX_LEND_RATE_GROWTH_BPS", "FLOW_BASKET_CALL_BPS",
+  "FLOW_SEQUENCER_GRACE", "FLOW_USDC_PEG_BAND_BPS", "FLOW_MAX_LEND_RATE_GROWTH_BPS", "FLOW_BASKET_CALL_BPS", "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS",
+] as const;
+/** Optional Step 3f fund sheet names (`FUND_OPTIONAL` keeps older Step 3e sheets valid while refusing them on vaults/gateway sheets). */
+export const FUND_STEP3F_UINT_NAMES = [
+  "FLOW_CANCEL_BUFFER", "FLOW_MAX_PAUSE", "FLOW_MATCH_BAND_BPS",
+  "FUND_MIN_POOL_DEPTH_USDC", "FUND_FEE_MARGIN_BPS", "FUND_DELIST_BAND_BPS", "FUND_DELIST_BUDGET_BPS", "FUND_MAX_BASKET_BPS",
 ] as const;
 /** The levers the fund sheet carries that no stage sets: each must equal the value the contract's initializer sets (see FUND_ONLY_NAMES). */
 export const FUND_LEVER_INIT_VALUES: Readonly<Record<string, bigint>> = { FLOW_BASKET_CALL_BPS: 5n, REBALANCER_STEP_DEPTH_BPS: 5n };
@@ -103,8 +109,18 @@ export const FUND_SHEET_NAMES = [
   "SAFE_OWNERS", "SAFE_THRESHOLD", "SAFE_VERSION", "SAFE_SALT_NONCE", "FEE_RECIPIENT_ADDRESS", "SWAP_ROUTER", "SEED_DEPOSIT_USDC", "TIMELOCK_MIN_DELAY",
   "UPGRADE_MODE", "UPGRADE_FREEZE_DEADLINE", ...FUND_ONLY_NAMES,
 ] as const;
-const FUND_OPTIONAL = new Set(["DEPLOYMENT_KIND", "USDC_ADDRESS", "SAFE_VERSION", "SAFE_SALT_NONCE", "UPGRADE_FREEZE_DEADLINE"]);
-const FUND_NAMES: Record<string, NameSpec> = Object.fromEntries(FUND_ONLY_NAMES.map((n) => [n, { kind: (n === "KEEPER_ADDRESS" ? "address" : "uint") as Kind }]));
+const FUND_OPTIONAL = new Set([
+  "DEPLOYMENT_KIND", "USDC_ADDRESS", "SAFE_VERSION", "SAFE_SALT_NONCE", "UPGRADE_FREEZE_DEADLINE",
+  "KEEPER_TYPE", "KEEPER_OWNERS", "KEEPER_BOT_KEYS", "RECEIPT_SUBMITTERS", ...FUND_STEP3F_UINT_NAMES,
+]);
+const FUND_NAME_KINDS: Readonly<Record<string, Kind>> = {
+  KEEPER_ADDRESS: "address",
+  KEEPER_TYPE: "string",
+  KEEPER_OWNERS: "address-list",
+  KEEPER_BOT_KEYS: "address-list",
+  RECEIPT_SUBMITTERS: "address-list",
+};
+const FUND_NAMES: Record<string, NameSpec> = Object.fromEntries(FUND_ONLY_NAMES.map((n) => [n, { kind: FUND_NAME_KINDS[n] ?? "uint" }]));
 const VAULT_NAMES: Record<string, NameSpec> = Object.fromEntries(VAULT_KEYS.flatMap((k) => [...vaultSheetNames(k), ...basketSheetNames(k)].map((n) => [n, { kind: "uint" as Kind }])));
 export const SHEET_SPEC: Record<string, NameSpec> = { ...GLOBAL_NAMES, ...VAULT_NAMES, ...FUND_NAMES };
 
@@ -539,8 +555,12 @@ function gatewaySheet(v: Record<string, string>): Sheet {
 export interface FundSheet {
   keeper: Address;
   tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint; maxSlippageBps: bigint; navDeviationBps: bigint; lendingCapBps: bigint; minSeedUsdc: bigint;
-  /** Every FLOW_*, REBALANCER_* and PLAN_* value, by sheet name. */
+  /** Every FLOW_*, REBALANCER_* and PLAN_* value (plus optional Step 3f parameters), by sheet name. */
   params: Record<string, bigint>;
+  keeperType?: "eoa" | "smart-account";
+  keeperOwners?: Address[];
+  keeperBotKeys?: Address[];
+  receiptSubmitters?: Address[];
 }
 /** The fund's own ceilings (contracts/test/prototype/src/lib/FundStorage.sol), refused here before any transaction. */
 export const FUND_MAX_EXIT_FEE_BPS = 100n, FUND_MAX_SLIPPAGE_BPS = 500n, FUND_MAX_NAV_DEVIATION_BPS = 2000n;
@@ -551,7 +571,7 @@ export const FUND_FLOW_BOUNDS: Readonly<Record<string, [bigint, bigint]>> = {
   FLOW_MIN_REQUEST_USDC: [1n, 1_000_000_000_000n], FLOW_MAX_FREEZE: [3600n, 1_209_600n], FLOW_SLICES: [3n, 48n], FLOW_QUORUM: [1n, 48n], FLOW_DISPERSION_BPS: [1n, 2000n],
   FLOW_REF_BAND_BPS: [1n, 2000n], FLOW_LEG_BAND_BPS: [1n, 2000n], FLOW_SEQUENCER_GRACE: [0n, 86400n], FLOW_USDC_PEG_BAND_BPS: [1n, 1000n], FLOW_MAX_LEND_RATE_GROWTH_BPS: [1n, 1000n],
   PLAN_DURATION: [86400n, 7_776_000n], PLAN_COST_BUDGET_BPS: [0n, 500n],
-  REBALANCER_KEEPER_GRACE: [1800n, 604800n], REBALANCER_MAX_OVERRUN: [0n, 2_592_000n], REBALANCER_MAX_STEP_COST_BPS: [1n, 500n], REBALANCER_TOLERANCE_BPS: [1n, 500n],
+  REBALANCER_MAX_OVERRUN: [0n, 2_592_000n], REBALANCER_MAX_STEP_COST_BPS: [1n, 500n], REBALANCER_TOLERANCE_BPS: [1n, 500n],
   REBALANCER_MIN_STEP_USDC: [0n, (1n << 128n) - 1n], REBALANCER_LENDING_MAX_STEP_USDC: [1n, (1n << 128n) - 1n], REBALANCER_MAJOR_MAX_STEP_USDC: [1n, (1n << 128n) - 1n],
   REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS: [0n, 10000n],
 };
@@ -622,15 +642,38 @@ function fundSheet(v: Record<string, string>, opts: ParseSheetOpts): Sheet {
     if (x !== want) throw err(`${name} is ${x}, but no stage sets it: it holds the value the contract's initializer sets (${want}), so the sheet must say ${want}`, { name });
     params[name] = x;
   }
+  for (const name of FUND_STEP3F_UINT_NAMES) {
+    if (v[name] !== undefined && v[name] !== "") params[name] = u(name);
+  }
+  const keeperTypeRaw = v.KEEPER_TYPE;
+  if (keeperTypeRaw !== undefined && keeperTypeRaw !== "eoa" && keeperTypeRaw !== "smart-account") {
+    throw err(`KEEPER_TYPE must be 'eoa' or 'smart-account', got '${keeperTypeRaw}'`, { name: "KEEPER_TYPE" });
+  }
+  const keeperOwners = v.KEEPER_OWNERS !== undefined ? asList("KEEPER_OWNERS", v.KEEPER_OWNERS) : undefined;
+  const keeperBotKeys = v.KEEPER_BOT_KEYS !== undefined ? (v.KEEPER_BOT_KEYS === "none" ? [] : asList("KEEPER_BOT_KEYS", v.KEEPER_BOT_KEYS)) : undefined;
+  // E56: the keeper is a team smart account. Naming it one without its owners and bot keys would leave the verifier
+  // nothing to compare, so the sheet refuses it (a silent skip is how an EOA keeper passes).
+  if (keeperTypeRaw === "smart-account") {
+    if (keeperOwners === undefined || keeperOwners.length === 0) throw err("KEEPER_TYPE smart-account needs KEEPER_OWNERS: the verifier compares the account's owners() with them", { name: "KEEPER_OWNERS" });
+    if (keeperBotKeys === undefined) throw err("KEEPER_TYPE smart-account needs KEEPER_BOT_KEYS (a list, or the word none): the verifier compares the account's botKeys() with it", { name: "KEEPER_BOT_KEYS" });
+    for (const o of keeperOwners) if (lc(o) === lc(keeper)) throw err(`KEEPER_OWNERS ${o} is the keeper account itself`, { name: "KEEPER_OWNERS" });
+  }
+  const receiptSubmitters = v.RECEIPT_SUBMITTERS !== undefined ? (v.RECEIPT_SUBMITTERS === "none" ? [] : asList("RECEIPT_SUBMITTERS", v.RECEIPT_SUBMITTERS)) : undefined;
   if (params.FLOW_SETTLE_WINDOW! >= params.FLOW_EPOCH_LENGTH!) throw err("FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH", { name: "FLOW_SETTLE_WINDOW" });
   if (params.FLOW_QUORUM! > params.FLOW_SLICES!) throw err("FLOW_QUORUM exceeds FLOW_SLICES", { name: "FLOW_QUORUM" });
   if (params.REBALANCER_MIN_STEP_USDC! > params.REBALANCER_LENDING_MAX_STEP_USDC! || params.REBALANCER_MIN_STEP_USDC! > params.REBALANCER_MAJOR_MAX_STEP_USDC!) throw err("REBALANCER_MIN_STEP_USDC exceeds a per-asset max step (MaxStepBelowMinStep)", { name: "REBALANCER_MIN_STEP_USDC" });
   const values: Record<string, string> = {};
-  for (const [k, val] of Object.entries(v)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && !val.includes(",") ? getAddress(val) : val;
+  for (const [k, val] of Object.entries(v)) values[k] = SHEET_SPEC[k]!.kind.startsWith("address") && val !== "@safe" && val !== "none" && !val.includes(",") ? getAddress(val) : val;
   return {
     system: "fund", values, chainId, expectedChainId, kind, admin, pauser, emergency, receiptAdmin, safeOwners, safeThreshold, safeSalt: v.SAFE_SALT_NONCE,
     usdc: USDC_ADDRESS as Address, swapRouter, feeRecipient, seedDeposit, timelockMinDelay, upgrade,
-    fund: { keeper, tvlCap, perDepositCap, exitFeeBps, maxSlippageBps, navDeviationBps, lendingCapBps, minSeedUsdc, params },
+    fund: {
+      keeper, tvlCap, perDepositCap, exitFeeBps, maxSlippageBps, navDeviationBps, lendingCapBps, minSeedUsdc, params,
+      ...(keeperTypeRaw ? { keeperType: keeperTypeRaw as "eoa" | "smart-account" } : {}),
+      ...(keeperOwners ? { keeperOwners } : {}),
+      ...(keeperBotKeys ? { keeperBotKeys } : {}),
+      ...(receiptSubmitters ? { receiptSubmitters } : {}),
+    },
     // inert: the fund system has no share receiver (the seed is minted to the fund itself), no vault of the vaults system, no router vector and no unpause row. The update-delay
     // target is the deployed delay itself: the fund system has no update-delay row, and nothing lower than the floor is ever named.
     shareReceiver: ZERO_ADDRESS, vaults: {} as Record<VaultKey, SheetVault>, eligibleVaults: [], weights: [], govern: { unpauseVaults: [], newDelay: timelockMinDelay },

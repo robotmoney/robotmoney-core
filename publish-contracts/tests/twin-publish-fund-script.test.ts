@@ -11,7 +11,7 @@ import { FUND_RUN_MARKERS, VAULTS_RUN_MARKERS, markerProblems } from "../src/ci/
 import { parseSheet, parseSheetText } from "../src/sheet.ts";
 
 /** The fund system's deployer stage counts (the shape of evidence-fund.test.ts), plus one vaults key the publish's counts file may also hold: counts.json must drop it. */
-const FUND_COUNTS: Record<string, number> = { safe: 1, "fund-libs": 14, "fund-receipt": 2, fund: 18, rebalancer: 7, "fund-governance": 2, queue: 2, "fund-wiring": 3, "fund-timelock": 15 };
+const FUND_COUNTS: Record<string, number> = { safe: 1, "fund-libs": 16, "fund-receipt": 2, fund: 18, rebalancer: 7, "fund-governance": 2, queue: 2, "fund-wiring": 3, "fund-timelock": 15 };
 const fundSum = Object.values(FUND_COUNTS).reduce((a, b) => a + b, 0);
 const A = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 

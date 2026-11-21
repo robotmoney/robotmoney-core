@@ -76,6 +76,7 @@ use std::fmt;
 use std::path::Path;
 use zeroize::Zeroizing;
 
+use crate::flow_queue::FlowQueueMonitorConfig;
 use crate::governance::WeightSetterMonitorConfig;
 use crate::liveness::IndexerLagBudget;
 use crate::pause::PauserSigningKey;
@@ -153,6 +154,10 @@ pub struct Config {
     /// disabled, so pre-existing configs keep parsing unchanged.
     #[serde(default)]
     pub governance: WeightSetterMonitorConfig,
+    /// Flow-queue stop, cancel-deadline, band and liveness check (OPS-07, FLOW-08).
+    /// Absent means disabled.
+    #[serde(default)]
+    pub flow_queue: FlowQueueMonitorConfig,
     /// How far the explorer indexer may trail before a poll with no new block
     /// stops counting as watching (DI-5). Absent means the defaults in
     /// [`IndexerLagBudget`], so pre-existing configs keep parsing unchanged.
@@ -332,6 +337,7 @@ impl Config {
         // An enabled weight-setter-path check with nowhere to read from would
         // log an error every cycle and page never (issue 1698).
         self.governance.validate()?;
+        self.flow_queue.validate()?;
 
         // A zero indexer-lag budget would page on every poll (DI-5).
         self.indexer_lag.validate()?;

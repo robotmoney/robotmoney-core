@@ -36,20 +36,20 @@ describe("the storage-layout-reset waiver of the forge-unit-tests job", () => {
     expect(r.code).toBe(0);
     expect(r.summary).toContain("storage-layout-reset");
     expect(r.summary).toContain("not** compared with the base commit");
-    expect(r.gateArgs).toEqual(["--selftest", "--releases"]);
+    expect(r.gateArgs).toEqual(["--selftest", "--releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0 --require-migrations"]);
   });
 
   test("a pull request without the label writes no waiver and compares with the base commit", () => {
     const r = runStep("pull_request", "false");
     expect(r.code).toBe(0);
     expect(r.summary).toBe("");
-    expect(r.gateArgs).toEqual(["--selftest", "--baseline HEAD^1 --releases"]);
+    expect(r.gateArgs).toEqual(["--selftest", "--baseline HEAD^1 --releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0 --require-migrations"]);
   });
 
   test("a push to dev writes no waiver", () => {
     const r = runStep("push", "false");
     expect(r.code).toBe(0);
     expect(r.summary).toBe("");
-    expect(r.gateArgs).toEqual(["--selftest", "--releases"]);
+    expect(r.gateArgs).toEqual(["--selftest", "--releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0 --require-migrations"]);
   });
 });

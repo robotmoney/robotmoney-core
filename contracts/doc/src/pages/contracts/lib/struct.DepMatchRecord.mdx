@@ -1,0 +1,39 @@
+---
+title: "DepMatchRecord"
+description: "Immutable record of one whole-match booking for deposits (E24, E52)."
+---
+
+# DepMatchRecord
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowStorage.sol)
+
+Immutable record of one whole-match booking for deposits (E24, E52).
+
+```solidity
+struct DepMatchRecord {
+    uint64 roundEpoch;
+    uint64 settlementId;
+    uint64 matchTime;
+    uint256 matchCycle;
+    uint256 matchedShares;
+    uint256 matchedUsdc;
+    uint256 totalNormBasis;
+    uint256 remainingNormBasis;
+    uint256 remainingShares;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| roundEpoch | `uint64` |  |
+| settlementId | `uint64` |  |
+| matchTime | `uint64` |  |
+| matchCycle | `uint256` |  |
+| matchedShares | `uint256` |  |
+| matchedUsdc | `uint256` |  |
+| totalNormBasis | `uint256` |  |
+| remainingNormBasis | `uint256` |  |
+| remainingShares | `uint256` |  |
+

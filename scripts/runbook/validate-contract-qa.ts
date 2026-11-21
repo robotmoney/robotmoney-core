@@ -66,7 +66,7 @@ export const SCALARS = new Set([
   // per command and needs the threshold of 2), the keeper's and the emergency key's keystores for cast (keeper first settle and step, the emergency pause drill), and the fund
   // target vector the Safe applies with a receipt (cast array syntax, "[0x..,0x..]" and "[2000,..]"): no tool derives it from a receipt payload yet (the release's notes).
   "ownerSigner2", "keeperKeystore", "emergencyKeystore", "fundTargetAssets", "fundTargetBps",
-  // The fund-upgrade flow (releases/v0.8.0-onevault-upgrade.yaml): the LIVE Deploy 4 record the run copies and never edits, its manifests, its run manifest's evidence directory and
+  // The fund-upgrade flow (releases/v0.8.0-onevault-upgrade.yaml, v0.9.0-onevault-upgrade.yaml): the LIVE Deploy 4 record the run copies and never edits, its manifests, its run manifest's evidence directory and
   // its run sheet. {manifestDir} and {evidenceDir} are the run's own copies (on 8453 also {v050ManifestDir} and {v050EvidenceDir}, run.ts configProblems).
   "liveManifestDir", "liveEvidenceDir", "liveSheet",
 ]);
@@ -110,6 +110,8 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // deployed from (7c23569f8, release/v0.7.0-onevault-rc.5-rehearsal), made and built by the flow ({runDir}/v070): its out/ is the live code the upgrade tools compare with, and
   // the release gate on 8453 runs at that sha (its tag, its green CI, its committed frozen counts). The new build is the --upgrade-build checkout ({runDir}/v080, the run's sha).
   d4common: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v070", "--core-sha", "7c23569f85e96232fc75bbba32ebbd469da31966", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
+  // The v0.9.0 upgrade retains the deployment's original v0.7 SHA; the two previously upgraded proxies use the separately rebuilt v0.8 artifacts recorded in their entries.
+  d4live: ["--chain", "{chainId}", "--rpc", "{rpcUrl}", "--sheet", "{sheet}", "--core-dir", "{runDir}/v070", "--core-sha", "7c23569f85e96232fc75bbba32ebbd469da31966", "--signer", "{signer}", "--environment", "{environmentName}", "--counts-dir", "{countsDir}", "--evidence", "{evidenceDir}"],
 };
 export const MANIFEST_FILES = ["libs", "recorder", "vault", "registry", "router", "gateway", "ic-policy", "receipt", "governance", "protocol-asset-vault", "agent-token-vault", "rwa-basket-vault", "hard-assets-vault", "gateway-handover", "timelock", "safe"];
 /**
@@ -123,7 +125,7 @@ const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)(?::([A-Za-z0-9_.\-]+))?\}/g;
 
 // ─── the step schema ────────────────────────────────────────────────────────────────────────────────────────────
 export const HOSTS = ["control", "stage"] as const;
-const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises"]);
+const STEP_KEYS = new Set(["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises", "signersOnCall", "executionWindow"]);
 export const ID_PATTERN = /^P(\d{1,2})\.(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface RunbookStep {
@@ -132,6 +134,10 @@ export interface RunbookStep {
   irreversible: boolean; onlyFor?: string | string[]; flow?: string | string[]; refresh?: boolean; notBefore?: { afterStep: string; hours: number | "timelockDelay" };
   gateAbsent?: string | string[]; sheetIs?: Record<string, string>; go?: string; triage?: boolean; maxMinutes?: number; writes?: string[]; added?: string;
   exercises?: Exercise;
+  /** OPS-03: who signs a scheduled Safe action, named on the step that schedules it. */
+  signersOnCall?: string;
+  /** OPS-03: when the scheduled action may be executed, named on the step that schedules it. */
+  executionWindow?: string;
 }
 /**
  * Issue 1984: what a user-facing round step proves on the vaults, named on the step (`exercises:`): a direct vault deposit, a deposit through the router, or a redeem.
@@ -206,9 +212,10 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.writes !== undefined && !(isStringArray(raw.writes) && raw.writes.length > 0 && raw.writes.every((w) => /^[A-Za-z0-9][A-Za-z0-9.\-]*$/.test(w)))) errors.push(`${at}: writes is a list of state names`);
   if (raw.added !== undefined && (typeof raw.added !== "string" || raw.added === "")) errors.push(`${at}: added is a non-empty release name`);
   if (raw.exercises !== undefined && !(EXERCISES as readonly string[]).includes(raw.exercises as string)) errors.push(`${at}: exercises is ${EXERCISES.join(" | ")}`);
+  for (const k of ["signersOnCall", "executionWindow"]) if (raw[k] !== undefined && !(typeof raw[k] === "string" && (raw[k] as string).trim() !== "")) errors.push(`${at}: ${k} is a non-empty string`);
   if (errors.length > 0) return { errors };
   const step: Record<string, unknown> = {};
-  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises"]) if (raw[k] !== undefined) step[k] = raw[k];
+  for (const k of ["id", "standing", "description", "host", "phase", "cmds", "env", "expectExit", "receipts", "irreversible", "onlyFor", "flow", "refresh", "notBefore", "gateAbsent", "sheetIs", "go", "triage", "maxMinutes", "writes", "added", "exercises", "signersOnCall", "executionWindow"]) if (raw[k] !== undefined) step[k] = raw[k];
   return { step: step as unknown as RunbookStep };
 }
 
@@ -271,6 +278,8 @@ export interface CliModel {
   /** Deploy 4: the fund sheet's names and the fund system's manifests, for the steps of the fund flow. */
   fundSheetNames: Set<string>;
   fundManifestFiles: Set<string>;
+  /** Safe CLI actions parsed from safe/cli.ts (including scheduleBatch/executeBatch for OPS-03). */
+  safeActions?: Set<string>;
 }
 const read = (root: string, rel: string): string => readFileSync(join(root, rel), "utf8");
 const flagsIn = (text: string): Set<string> => new Set([...text.matchAll(/(?<![\w-])--([a-z][a-z0-9-]*)/g)].map((m) => m[1]!));
@@ -347,7 +356,17 @@ export function loadModel(root: string = ROOT): CliModel {
   const sections = new Set([...doc.matchAll(/^#{2,3} (\d+(?:\.\d+)?)\./gm)].map((m) => m[1]!));
   const sheetNames = new Set([...read(root, TARGETS.twin.sheetTemplate!).matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]!));
   const fundSheetNames = new Set(existsSync(join(root, FUND_SHEET)) ? [...read(root, FUND_SHEET).matchAll(/^([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]!) : []);
-  return { publish, coreStack, tools, rmpc, sections, sheetNames, manifestFiles: new Set(MANIFEST_FILES), fundSheetNames, fundManifestFiles: new Set(FUND_MANIFEST_FILES) };
+  if (existsSync(join(root, "publish-contracts/src/sheet.ts"))) {
+    const sheetTs = read(root, "publish-contracts/src/sheet.ts");
+    for (const arrName of ["FUND_ONLY_NAMES", "FUND_STEP3F_UINT_NAMES", "FUND_SHEET_NAMES"]) {
+      const m = new RegExp(`export const ${arrName} = \\[([\\s\\S]*?)\\] as const;`).exec(sheetTs);
+      if (m) for (const q of m[1]!.matchAll(/"([A-Z][A-Z0-9_]*)"/g)) fundSheetNames.add(q[1]!);
+    }
+  }
+  const safeActions = new Set<string>();
+  const actionsBlock = /\/\/ Actions:\s*([\s\S]*?)\nimport /m.exec(safe)?.[1] ?? "";
+  for (const m of actionsBlock.matchAll(/\b(scheduleBatch|executeBatch|schedule|execute|cancel|updateDelay)\b/g)) safeActions.add(m[1]!);
+  return { publish, coreStack, tools, rmpc, sections, sheetNames, manifestFiles: new Set(MANIFEST_FILES), fundSheetNames, fundManifestFiles: new Set(FUND_MANIFEST_FILES), safeActions };
 }
 
 /** Argv elements with list placeholders expanded (the flags they stand for are checked here, once). */
@@ -452,6 +471,13 @@ export function commandProblems(steps: RunbookStep[], model: CliModel, root: str
             if (!verb || !t.verbs.has(verb)) out.push(`${at}: ${inv.tool} has no verb '${verb}' (${[...t.verbs].join(", ")})`);
           }
           for (const f of flagsOf(inv.args)) if (!t.flags.has(f)) out.push(`${at}: --${f} is no ${inv.tool} flag`);
+          if (inv.tool === "publish-contracts/src/safe/cli.ts" && model.safeActions && model.safeActions.size > 0) {
+            const ai = inv.args.indexOf("--action");
+            const act = ai >= 0 ? inv.args[ai + 1] : undefined;
+            if (act && !act.includes("{") && !model.safeActions.has(act)) {
+              out.push(`${at}: --action ${act} is no safe/cli.ts action (${[...model.safeActions].join(", ")})`);
+            }
+          }
         }
       }
       if (root) for (const a of cmd.concat(...(cmd[0] === "bash" ? [wordsOf(cmd[2] ?? "")] : []))) if (looksLikeRepoPath(a) && !existsSync(join(root, a))) out.push(`${at}: ${a} does not exist in the checkout`);
@@ -534,6 +560,32 @@ export function decisionProblems(decisions: unknown, where: string): string[] {
       if (typeof d.decidedOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d.decidedOn)) out.push(`${where}: decision ${d.id} is decided but has no decidedOn date (YYYY-MM-DD)`);
       if (typeof d.ref !== "string" || d.ref.trim() === "") out.push(`${where}: decision ${d.id} is decided but names no reference (an issue, ADR or commit)`);
     }
+  }
+  return out;
+}
+
+/** PURE. The RC_TAG_PATTERN literal of publish-contracts/src/release-gate.ts, read as text so the validator does not load the gate's modules. */
+export function rcTagPatternOf(gateSource: string): RegExp {
+  const m = /RC_TAG_PATTERN\s*=\s*(\/.+\/);/.exec(gateSource);
+  if (!m) throw new Error("publish-contracts/src/release-gate.ts declares no RC_TAG_PATTERN literal");
+  const lit = /^\/(.+)\/$/.exec(m[1]!)!;
+  return new RegExp(lit[1]!);
+}
+
+/**
+ * PURE. A release file whose header says `# The rc tag of the code is ...` names the tag its code is released under. Every tag its header names must match
+ * RC_TAG_PATTERN (read with rc.N as rc.1), and decision D4-13 must name each one. A header without that line is not checked.
+ */
+export function rcTagHeaderProblems(text: string, where: string, decisions: readonly { id: string; question?: string; answer?: string }[], pattern: RegExp): string[] {
+  const header = text.split("\n").filter((l) => l.startsWith("#")).join("\n");
+  if (!/^# The rc tag of the code is/m.test(header)) return [];
+  const tags = [...new Set([...header.matchAll(/release\/v\d+\.\d+\.\d+-[\w-]*rc\.[\w-]+/g)].map((m) => m[0]))];
+  if (tags.length === 0) return [`${where}: its header names no rc tag (release/vA.B.C-rc.N[-rehearsal])`];
+  const d = decisions.find((x) => x.id === "D4-13");
+  const out: string[] = [];
+  for (const t of tags) {
+    if (!pattern.test(t.replace("rc.N", "rc.1"))) out.push(`${where}: the header rc tag ${t} does not match RC_TAG_PATTERN (release/vA.B.C-rc.N[-rehearsal])`);
+    if (!d || !`${d.question ?? ""} ${d.answer ?? ""}`.includes(t)) out.push(`${where}: the header rc tag ${t} is not the tag decision D4-13 names`);
   }
   return out;
 }
@@ -908,6 +960,107 @@ export function fundExecuteProblems(r: Pick<ReleaseRunbook, "release" | "steps">
   return out;
 }
 
+const STEP_PROTECTED_OPS: readonly { name: string; re: RegExp }[] = [
+  { name: "shutdown", re: /\bshutdown\s*\(/ },
+  { name: "setAdapterCodeHashAllowed(..., false)", re: /\bsetAdapterCodeHashAllowed\s*\([^)]*\)[^;\n|&]*\bfalse\b/ },
+  { name: "emergencyUnwind", re: /\bemergencyUnwind\s*\(/ },
+  { name: "asset delisting", re: /\b(?:startDelist|delistAsset|scheduleDelist|initiateDelist)\w*\s*\(/ },
+];
+
+const shellSegments = (s: Pick<RunbookStep, "cmds">): string[] => {
+  const segs: string[] = [];
+  for (const c of s.cmds) {
+    const joined = expandArgv(c).join(" ");
+    for (const part of joined.split(/\s*(?:&&|\|\||;|\||\n)\s*/)) {
+      const t = part.trim();
+      if (t !== "") segs.push(t);
+    }
+  }
+  return segs;
+};
+
+const isActionableFundSegment = (seg: string): boolean => !/^\s*(?:!|grep\b|cast\s+(?:call|balance|nonce)\b)/.test(seg);
+const stepCanSucceed = (expectExit?: number | number[]): boolean =>
+  expectExit === undefined || (Array.isArray(expectExit) ? expectExit : [expectExit]).includes(0);
+
+/**
+ * PURE (E55 / D33). On the `"fund"` flow, any step that schedules or calls `shutdown`, lending adapter code-hash
+ * revocation (`setAdapterCodeHashAllowed(..., false)`), `emergencyUnwind`, or asset delisting must follow an earlier
+ * `"fund"` step on that target that schedules/executes `pauseDeposits` without an intervening `unpauseDeposits`
+ * cancelling it.
+ */
+export function fundPausePairingProblems(
+  steps: (Pick<RunbookStep, "id" | "cmds" | "flow" | "onlyFor"> & { expectExit?: number | number[] })[],
+  where = "runbook",
+): string[] {
+  const out: string[] = [];
+  for (const target of TARGET_NAMES) {
+    const run = steps.filter(
+      (s) => flowsOf(s).includes("fund") && (onlyForList(s).length === 0 || onlyForList(s).includes(target)),
+    );
+    let pauseActive = false;
+    for (const s of run) {
+      if (!stepCanSucceed(s.expectExit)) continue;
+      const segs = shellSegments(s).filter(isActionableFundSegment);
+      if (!pauseActive) {
+        for (const op of STEP_PROTECTED_OPS) {
+          if (segs.some((seg) => op.re.test(seg))) {
+            out.push(`${where} ${s.id}: schedules/calls ${op.name} on fund flow (${target}) without an active earlier pauseDeposits step (E55 / D33)`);
+          }
+        }
+      }
+      for (const seg of segs) {
+        if (/\bpauseDeposits\s*\(/.test(seg)) pauseActive = true;
+        if (/\bunpauseDeposits\s*\(/.test(seg)) pauseActive = false;
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
+// ─── OPS-03: scheduled Safe actions and emergency-key revocation ───────────────────────────────────────────────────
+const stepText = (s: Pick<RunbookStep, "cmds">): string => s.cmds.map((c) => c.join(" ")).join("\n");
+/** The Safe tool's `--action` of a command: "schedule", "scheduleBatch", "execute", "executeBatch" and so on. */
+const safeActionsOf = (s: Pick<RunbookStep, "cmds">): string[] =>
+  s.cmds.flatMap((c) => c.flatMap((a, i) => (a === "--action" && c[i + 1] !== undefined ? [c[i + 1]!] : [])));
+/** What the revoke batch must lift or release: both pauses the Safe lifts, the plan pause, and the freeze (FlowQueue.releaseSettlement). */
+export const REVOCATION_LIFTS = ["unpauseDeposits", "unpauseQueue", "resumePlan", "releaseSettlement"] as const;
+
+/**
+ * PURE (OPS-03). Every step that schedules a Safe action (`--action schedule` or `scheduleBatch`) names the signers on call (`signersOnCall`)
+ * and the execution window (`executionWindow`).
+ */
+export function scheduledActionProblems(steps: Pick<RunbookStep, "id" | "cmds" | "signersOnCall" | "executionWindow">[], where = "runbook"): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    if (!safeActionsOf(s).some((a) => a === "schedule" || a === "scheduleBatch")) continue;
+    if (!s.signersOnCall?.trim()) out.push(`${where} ${s.id}: schedules a Safe action without signersOnCall, the signers on call (OPS-03)`);
+    if (!s.executionWindow?.trim()) out.push(`${where} ${s.id}: schedules a Safe action without executionWindow, the window it may be executed in (OPS-03)`);
+  }
+  return out;
+}
+
+/**
+ * PURE (OPS-03). A step that revokes EMERGENCY_ROLE does it in ONE scheduleBatch whose calls also lift the active pauses (unpauseDeposits,
+ * unpauseQueue, resumePlan) and release the freeze (releaseSettlement), and a later step executes it with ONE executeBatch.
+ */
+export function emergencyRevocationProblems(steps: Pick<RunbookStep, "id" | "cmds">[], where = "runbook"): string[] {
+  const out: string[] = [];
+  steps.forEach((s, i) => {
+    const t = stepText(s);
+    if (!/\brevokeRole\b/.test(t) || !/\bEMERGENCY_ROLE\b/.test(t)) return;
+    const actions = safeActionsOf(s);
+    if (!actions.includes("scheduleBatch") || actions.includes("schedule")) {
+      out.push(`${where} ${s.id}: revokes EMERGENCY_ROLE outside ONE scheduleBatch (OPS-03)`);
+      return;
+    }
+    const missing = REVOCATION_LIFTS.filter((l) => !new RegExp(`\\b${l}\\b`).test(t));
+    if (missing.length > 0) out.push(`${where} ${s.id}: the emergency-key revocation batch does not also call ${missing.join(", ")} (lift every active pause, release the freeze; OPS-03)`);
+    if (!steps.slice(i + 1).some((e) => safeActionsOf(e).includes("executeBatch"))) out.push(`${where} ${s.id}: the emergency-key revocation batch has no later executeBatch step (OPS-03)`);
+  });
+  return out;
+}
+
 export function validateAll(root: string = ROOT, model: CliModel = loadModel(root), pinnedTemplate: (sha: string) => string | undefined = templateAtCommit): Loaded {
   const problems: string[] = [];
   const tplPath = join(root, QA_DIR, "template.yaml");
@@ -915,7 +1068,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
   let template: { name: string; steps: RunbookStep[] } = { name: TEMPLATE_NAME, steps: [] };
   try { template = parseTemplate(tplText); } catch (e) { problems.push(...(e as Error).message.split("\n")); }
   problems.push(...secretProblems(tplText, "template.yaml"));
-  problems.push(...commandProblems(template.steps, model, root));
+  problems.push(...commandProblems(template.steps, model, root), ...fundPausePairingProblems(template.steps, "template.yaml"), ...scheduledActionProblems(template.steps, "template.yaml"), ...emergencyRevocationProblems(template.steps, "template.yaml"));
   problems.push(...clearVectorProblems(template.steps, "template.yaml"));
   problems.push(...upgradeBuildGateProblems(template.steps, "template.yaml"));
   problems.push(...recordStepProblems(template.steps), ...localForkProblems(template.steps), ...stateSelfReadProblems(template.steps));
@@ -930,6 +1083,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
     try {
       const r = parseRelease(text, name);
       releases.set(name, r);
+      problems.push(...rcTagHeaderProblems(text, `releases/${f}`, r.decisions, rcTagPatternOf(read(root, "publish-contracts/src/release-gate.ts"))));
       problems.push(...unwindGuardProblems(r));
       problems.push(...mainOutProblems(r));
       problems.push(...qaSupersetProblems(r));
@@ -944,7 +1098,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
         continue;
       }
       problems.push(...checkAddOnly(template, r));
-      problems.push(...commandProblems(r.steps, model, root));
+      problems.push(...commandProblems(r.steps, model, root), ...fundPausePairingProblems(r.steps, `releases/${f}`), ...scheduledActionProblems(r.steps, `releases/${f}`), ...emergencyRevocationProblems(r.steps, `releases/${f}`));
       problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps), ...stateSelfReadProblems(r.steps));

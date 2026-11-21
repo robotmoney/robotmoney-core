@@ -1,0 +1,139 @@
+---
+title: "LocalAavePool"
+---
+
+# LocalAavePool
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/Adapters.t.sol)
+
+## Constants
+
+### usdc
+
+```solidity
+IERC20 public immutable usdc;
+```
+
+### aToken
+
+```solidity
+LocalAToken public immutable aToken;
+```
+
+## State Variables
+
+### partialWithdrawBps
+
+```solidity
+uint16 public partialWithdrawBps;
+```
+
+## Functions
+
+<a id="constructor-ierc20"></a>
+
+### constructor
+
+```solidity
+constructor(IERC20 usdc_);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc_ | `IERC20` |  |
+
+<a id="setpartialwithdrawbps-uint16"></a>
+
+### setPartialWithdrawBps
+
+```solidity
+function setPartialWithdrawBps(uint16 bps) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| bps | `uint16` |  |
+
+<a id="supply-address-uint256-address-uint16"></a>
+
+### supply
+
+```solidity
+function supply(address, uint256 amount, address onBehalfOf, uint16) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| amount | `uint256` |  |
+| onBehalfOf | `address` |  |
+| _ | `uint16` |  |
+
+<a id="withdraw-address-uint256-address"></a>
+
+### withdraw
+
+```solidity
+function withdraw(address, uint256 amount, address to) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+| amount | `uint256` |  |
+| to | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="getreservenormalizedincome-address"></a>
+
+### getReserveNormalizedIncome
+
+```solidity
+function getReserveNormalizedIncome(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="getconfiguration-address"></a>
+
+### getConfiguration
+
+```solidity
+function getConfiguration(address) external pure returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| _ | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+

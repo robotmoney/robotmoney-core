@@ -7,21 +7,20 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-import {Rebalancer} from "../test/prototype/src/Rebalancer.sol";
-import {RobotMoneyFund} from "../test/prototype/src/RobotMoneyFund.sol";
-import {AssetStepParams, StepParams, Roles} from "../test/prototype/src/FundTypes.sol";
+import {Rebalancer} from "../Rebalancer.sol";
+import {RobotMoneyFund} from "../RobotMoneyFund.sol";
+import {AssetStepParams, StepParams, Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
 /// @title DeployRebalancer
 /// @notice The `rebalancer` stage (Deploy 4): `Rebalancer` behind its ERC-1967 proxy, initialized with the fund, the
-///         deployer as ADMIN_ROLE until the handover, KEEPER_ADDRESS as KEEPER_ROLE (§5.4: the keeper steps first, anyone
-///         after `keeperGrace`), the §5.6 step parameters, and the predicted fund-system timelock as its only upgrade
+///         deployer as ADMIN_ROLE until the handover, KEEPER_ADDRESS as KEEPER_ROLE (E34: `step` is keeper-only), the §5.6 step parameters, and the predicted fund-system timelock as its only upgrade
 ///         authority. Then the per-asset step parameters: lending withdrawals are 1:1 (slippage 0), wETH and cbBTC sit
 ///         REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS above their pool fee, capped at the fund's maxSlippageBps.
 ///
 ///         `stepInterval` is not a sheet value: it is max(30 minutes, the fund's longest TWAP window) (§5.6).
 ///
-///         Required env vars (no defaults): ADMIN_ADDRESS, FUND_ADDRESS, KEEPER_ADDRESS, REBALANCER_KEEPER_GRACE,
+///         Required env vars (no defaults): ADMIN_ADDRESS, FUND_ADDRESS, KEEPER_ADDRESS,
 ///         REBALANCER_MAX_OVERRUN, REBALANCER_MAX_STEP_COST_BPS, REBALANCER_TOLERANCE_BPS, REBALANCER_MIN_STEP_USDC,
 ///         REBALANCER_LENDING_MAX_STEP_USDC, REBALANCER_MAJOR_MAX_STEP_USDC, REBALANCER_MAJOR_SLIPPAGE_OVER_FEE_BPS,
 ///         SAFE_ADDRESS, TIMELOCK_MIN_DELAY, UPGRADE_MODE, DEPLOYMENT_OUT.
@@ -69,7 +68,6 @@ contract DeployRebalancer is FundSystemBase {
         uint32 interval = uint32(Math.max(30 minutes, RobotMoneyFund(i.fund).maxTwapWindow()));
         i.step = StepParams({
             stepInterval: interval,
-            keeperGrace: uint32(_envUintMax("REBALANCER_KEEPER_GRACE", type(uint32).max)),
             maxOverrun: uint32(_envUintMax("REBALANCER_MAX_OVERRUN", type(uint32).max)),
             maxStepCostBps: uint16(_envUintMax("REBALANCER_MAX_STEP_COST_BPS", type(uint16).max)),
             toleranceBps: uint16(_envUintMax("REBALANCER_TOLERANCE_BPS", type(uint16).max)),

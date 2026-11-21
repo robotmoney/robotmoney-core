@@ -1,0 +1,1161 @@
+{
+  "nested": {
+    "openzeppelin.storage.AccessControl": {
+      "t_struct(AccessControlStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_roles",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_bytes32,t_struct(RoleData)_storage)"
+          }
+        ]
+      },
+      "t_struct(RoleData)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "hasRole",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_address,t_bool)"
+          },
+          {
+            "label": "adminRole",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_bytes32"
+          }
+        ]
+      }
+    },
+    "openzeppelin.storage.AccessControlEnumerable": {
+      "t_struct(AccessControlEnumerableStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_roleMembers",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_bytes32,t_struct(AddressSet)_storage)"
+          }
+        ]
+      },
+      "t_struct(AddressSet)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "_inner",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_struct(Set)_storage"
+          }
+        ]
+      },
+      "t_struct(Set)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "_values",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_array(t_bytes32)dyn_storage"
+          },
+          {
+            "label": "_positions",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_mapping(t_bytes32,t_uint256)"
+          }
+        ]
+      }
+    },
+    "openzeppelin.storage.Initializable": {
+      "t_struct(InitializableStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_initialized",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "_initializing",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_bool"
+          }
+        ]
+      }
+    },
+    "openzeppelin.storage.ReentrancyGuard": {
+      "t_struct(ReentrancyGuardStorage)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "_status",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint256"
+          }
+        ]
+      }
+    },
+    "robotmoney.storage.FlowQueue": {
+      "t_struct(Claim)_storage": {
+        "arrayElement": false,
+        "bytes": 224,
+        "members": [
+          {
+            "label": "requestId",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint256"
+          },
+          {
+            "label": "owner",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_address"
+          },
+          {
+            "label": "kind",
+            "offset": 20,
+            "slot": "1",
+            "type": "t_enum(RequestKind)"
+          },
+          {
+            "label": "settlementId",
+            "offset": 21,
+            "slot": "1",
+            "type": "t_uint64"
+          },
+          {
+            "label": "unlockAt",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint64"
+          },
+          {
+            "label": "shares",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_uint256"
+          },
+          {
+            "label": "usdc",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_uint256"
+          },
+          {
+            "label": "claimed",
+            "offset": 0,
+            "slot": "5",
+            "type": "t_uint256"
+          },
+          {
+            "label": "sharesClaimed",
+            "offset": 0,
+            "slot": "6",
+            "type": "t_uint256"
+          }
+        ]
+      },
+      "t_struct(FlowLevers)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "basketCallBps",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint16"
+          },
+          {
+            "label": "legPriceMode",
+            "offset": 2,
+            "slot": "0",
+            "type": "t_uint8"
+          }
+        ]
+      },
+      "t_struct(FlowParams)_storage": {
+        "arrayElement": false,
+        "bytes": 128,
+        "members": [
+          {
+            "label": "epochLength",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint32"
+          },
+          {
+            "label": "settleWindow",
+            "offset": 4,
+            "slot": "0",
+            "type": "t_uint32"
+          },
+          {
+            "label": "minHold",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_uint32"
+          },
+          {
+            "label": "keeperGrace",
+            "offset": 12,
+            "slot": "0",
+            "type": "t_uint32"
+          },
+          {
+            "label": "maxEpochFlowBps",
+            "offset": 16,
+            "slot": "0",
+            "type": "t_uint16"
+          },
+          {
+            "label": "epochFlowFloorUsdc",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_uint128"
+          },
+          {
+            "label": "maxSharePriceMoveBps",
+            "offset": 16,
+            "slot": "1",
+            "type": "t_uint16"
+          },
+          {
+            "label": "maxRoll",
+            "offset": 18,
+            "slot": "1",
+            "type": "t_uint16"
+          },
+          {
+            "label": "minRequestUsdc",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint128"
+          },
+          {
+            "label": "maxFreeze",
+            "offset": 16,
+            "slot": "2",
+            "type": "t_uint32"
+          },
+          {
+            "label": "slices",
+            "offset": 20,
+            "slot": "2",
+            "type": "t_uint8"
+          },
+          {
+            "label": "quorum",
+            "offset": 21,
+            "slot": "2",
+            "type": "t_uint8"
+          },
+          {
+            "label": "dispersionBps",
+            "offset": 22,
+            "slot": "2",
+            "type": "t_uint16"
+          },
+          {
+            "label": "refBandBps",
+            "offset": 24,
+            "slot": "2",
+            "type": "t_uint16"
+          },
+          {
+            "label": "legBandBps",
+            "offset": 26,
+            "slot": "2",
+            "type": "t_uint16"
+          },
+          {
+            "label": "sequencerGrace",
+            "offset": 28,
+            "slot": "2",
+            "type": "t_uint32"
+          },
+          {
+            "label": "usdcPegBandBps",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_uint16"
+          },
+          {
+            "label": "maxLendRateGrowthBps",
+            "offset": 2,
+            "slot": "3",
+            "type": "t_uint16"
+          }
+        ]
+      },
+      "t_struct(FlowState)_storage": {
+        "arrayElement": false,
+        "bytes": 1792,
+        "members": [
+          {
+            "label": "fund",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "label": "usdc",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_address"
+          },
+          {
+            "label": "usdcFeed",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_address"
+          },
+          {
+            "label": "usdcFeedMaxAge",
+            "offset": 20,
+            "slot": "2",
+            "type": "t_uint32"
+          },
+          {
+            "label": "sequencerFeed",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_address"
+          },
+          {
+            "label": "params",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_struct(FlowParams)_storage"
+          },
+          {
+            "label": "paused",
+            "offset": 0,
+            "slot": "8",
+            "type": "t_bool"
+          },
+          {
+            "label": "requests",
+            "offset": 0,
+            "slot": "9",
+            "type": "t_mapping(t_uint256,t_struct(Request)_storage)"
+          },
+          {
+            "label": "requestCount",
+            "offset": 0,
+            "slot": "10",
+            "type": "t_uint256"
+          },
+          {
+            "label": "epochRequests",
+            "offset": 0,
+            "slot": "11",
+            "type": "t_mapping(t_uint64,t_array(t_uint256)dyn_storage)"
+          },
+          {
+            "label": "oldestEpoch",
+            "offset": 0,
+            "slot": "12",
+            "type": "t_uint64"
+          },
+          {
+            "label": "claims",
+            "offset": 0,
+            "slot": "13",
+            "type": "t_mapping(t_uint256,t_struct(Claim)_storage)"
+          },
+          {
+            "label": "claimCount",
+            "offset": 0,
+            "slot": "14",
+            "type": "t_uint256"
+          },
+          {
+            "label": "claimsOf",
+            "offset": 0,
+            "slot": "15",
+            "type": "t_mapping(t_address,t_array(t_uint256)dyn_storage)"
+          },
+          {
+            "label": "claimCursor",
+            "offset": 0,
+            "slot": "16",
+            "type": "t_mapping(t_address,t_uint256)"
+          },
+          {
+            "label": "settlements",
+            "offset": 0,
+            "slot": "17",
+            "type": "t_mapping(t_uint256,t_struct(Settlement)_storage)"
+          },
+          {
+            "label": "settlementCount",
+            "offset": 0,
+            "slot": "18",
+            "type": "t_uint256"
+          },
+          {
+            "label": "usdcCredit",
+            "offset": 0,
+            "slot": "19",
+            "type": "t_mapping(t_address,t_uint256)"
+          },
+          {
+            "label": "shareCredit",
+            "offset": 0,
+            "slot": "20",
+            "type": "t_mapping(t_address,t_uint256)"
+          },
+          {
+            "label": "queuedShares",
+            "offset": 0,
+            "slot": "21",
+            "type": "t_mapping(t_address,t_uint256)"
+          },
+          {
+            "label": "depositUsed",
+            "offset": 0,
+            "slot": "22",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "redeemUsed",
+            "offset": 0,
+            "slot": "23",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "lastSettleAt",
+            "offset": 0,
+            "slot": "24",
+            "type": "t_uint64"
+          },
+          {
+            "label": "lastSharePrice",
+            "offset": 0,
+            "slot": "25",
+            "type": "t_uint256"
+          },
+          {
+            "label": "lastLendRate",
+            "offset": 0,
+            "slot": "26",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "totalPendingUsdc",
+            "offset": 0,
+            "slot": "27",
+            "type": "t_uint256"
+          },
+          {
+            "label": "totalEscrowShares",
+            "offset": 0,
+            "slot": "28",
+            "type": "t_uint256"
+          },
+          {
+            "label": "totalHeldShares",
+            "offset": 0,
+            "slot": "29",
+            "type": "t_uint256"
+          },
+          {
+            "label": "totalOwedUsdc",
+            "offset": 0,
+            "slot": "30",
+            "type": "t_uint256"
+          },
+          {
+            "label": "totalCreditUsdc",
+            "offset": 0,
+            "slot": "31",
+            "type": "t_uint256"
+          },
+          {
+            "label": "totalCreditShares",
+            "offset": 0,
+            "slot": "32",
+            "type": "t_uint256"
+          },
+          {
+            "label": "epochOpen",
+            "offset": 0,
+            "slot": "33",
+            "type": "t_mapping(t_uint64,t_uint256)"
+          },
+          {
+            "label": "cursorEpoch",
+            "offset": 0,
+            "slot": "34",
+            "type": "t_uint64"
+          },
+          {
+            "label": "cursorIndex",
+            "offset": 0,
+            "slot": "35",
+            "type": "t_uint256"
+          },
+          {
+            "label": "requestClaims",
+            "offset": 0,
+            "slot": "36",
+            "type": "t_mapping(t_uint256,t_array(t_uint256)dyn_storage)"
+          },
+          {
+            "label": "dustUsdc",
+            "offset": 0,
+            "slot": "37",
+            "type": "t_uint256"
+          },
+          {
+            "label": "dustShares",
+            "offset": 0,
+            "slot": "38",
+            "type": "t_uint256"
+          },
+          {
+            "label": "sideIds",
+            "offset": 0,
+            "slot": "39",
+            "type": "t_array(t_mapping(t_uint64,t_array(t_uint256)dyn_storage))_storage"
+          },
+          {
+            "label": "sideOpen",
+            "offset": 0,
+            "slot": "41",
+            "type": "t_array(t_mapping(t_uint64,t_uint256))_storage"
+          },
+          {
+            "label": "cursors",
+            "offset": 0,
+            "slot": "43",
+            "type": "t_array(t_array(t_struct(WalkCursor)_storage)_storage)_storage"
+          },
+          {
+            "label": "epochAnchorIndex",
+            "offset": 0,
+            "slot": "47",
+            "type": "t_uint64"
+          },
+          {
+            "label": "epochAnchorTime",
+            "offset": 8,
+            "slot": "47",
+            "type": "t_uint64"
+          },
+          {
+            "label": "epochEnd",
+            "offset": 0,
+            "slot": "48",
+            "type": "t_mapping(t_uint64,t_uint64)"
+          },
+          {
+            "label": "lastSettleEpoch",
+            "offset": 0,
+            "slot": "49",
+            "type": "t_uint64"
+          },
+          {
+            "label": "lastExcludedMask",
+            "offset": 0,
+            "slot": "50",
+            "type": "t_uint256"
+          },
+          {
+            "label": "lastLendPerShare",
+            "offset": 0,
+            "slot": "51",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "levers",
+            "offset": 0,
+            "slot": "52",
+            "type": "t_struct(FlowLevers)_storage"
+          },
+          {
+            "label": "leverTradeBlock",
+            "offset": 0,
+            "slot": "53",
+            "type": "t_uint64"
+          },
+          {
+            "label": "leverBlockDep",
+            "offset": 8,
+            "slot": "53",
+            "type": "t_uint128"
+          },
+          {
+            "label": "leverBlockRed",
+            "offset": 0,
+            "slot": "54",
+            "type": "t_uint128"
+          },
+          {
+            "label": "lastExclusionCount",
+            "offset": 0,
+            "slot": "55",
+            "type": "t_uint256"
+          }
+        ]
+      },
+      "t_struct(Request)_storage": {
+        "arrayElement": false,
+        "bytes": 160,
+        "members": [
+          {
+            "label": "owner",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "label": "kind",
+            "offset": 20,
+            "slot": "0",
+            "type": "t_enum(RequestKind)"
+          },
+          {
+            "label": "epoch",
+            "offset": 21,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "amount",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_uint256"
+          },
+          {
+            "label": "remaining",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint256"
+          },
+          {
+            "label": "limit",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_uint256"
+          },
+          {
+            "label": "closed",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_bool"
+          }
+        ]
+      },
+      "t_struct(Settlement)_storage": {
+        "arrayElement": false,
+        "bytes": 256,
+        "members": [
+          {
+            "label": "time",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "settler",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "label": "depositBoundPrice",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_uint256"
+          },
+          {
+            "label": "redeemBoundPrice",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint256"
+          },
+          {
+            "label": "usdcIn",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_uint256"
+          },
+          {
+            "label": "sharesMinted",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_uint256"
+          },
+          {
+            "label": "sharesBurned",
+            "offset": 0,
+            "slot": "5",
+            "type": "t_uint256"
+          },
+          {
+            "label": "usdcOut",
+            "offset": 0,
+            "slot": "6",
+            "type": "t_uint256"
+          },
+          {
+            "label": "frozenUntil",
+            "offset": 0,
+            "slot": "7",
+            "type": "t_uint64"
+          },
+          {
+            "label": "returnAllowed",
+            "offset": 8,
+            "slot": "7",
+            "type": "t_bool"
+          },
+          {
+            "label": "holdEndsAt",
+            "offset": 9,
+            "slot": "7",
+            "type": "t_uint64"
+          }
+        ]
+      },
+      "t_struct(WalkCursor)_storage": {
+        "arrayElement": true,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "epoch",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "index",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_uint192"
+          }
+        ]
+      }
+    },
+    "robotmoney.storage.GovernedUUPS": {
+      "t_struct(Layout)_storage": {
+        "arrayElement": false,
+        "bytes": 32,
+        "members": [
+          {
+            "label": "upgradeTimelock",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "label": "upgradesFrozen",
+            "offset": 20,
+            "slot": "0",
+            "type": "t_bool"
+          }
+        ]
+      }
+    },
+    "robotmoney.storage.RobotMoneyFund": {
+      "t_struct(AssetConfig)_storage": {
+        "arrayElement": true,
+        "bytes": 128,
+        "members": [
+          {
+            "label": "kind",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_enum(AssetKind)"
+          },
+          {
+            "label": "active",
+            "offset": 1,
+            "slot": "0",
+            "type": "t_bool"
+          },
+          {
+            "label": "capBps",
+            "offset": 2,
+            "slot": "0",
+            "type": "t_uint16"
+          },
+          {
+            "label": "adapter",
+            "offset": 4,
+            "slot": "0",
+            "type": "t_address"
+          },
+          {
+            "label": "token",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_address"
+          },
+          {
+            "label": "pool",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_address"
+          },
+          {
+            "label": "poolFee",
+            "offset": 20,
+            "slot": "2",
+            "type": "t_uint24"
+          },
+          {
+            "label": "twapWindow",
+            "offset": 23,
+            "slot": "2",
+            "type": "t_uint32"
+          },
+          {
+            "label": "venue",
+            "offset": 27,
+            "slot": "2",
+            "type": "t_enum(Venue)"
+          },
+          {
+            "label": "feed",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_address"
+          },
+          {
+            "label": "maxFeedAge",
+            "offset": 20,
+            "slot": "3",
+            "type": "t_uint32"
+          }
+        ]
+      },
+      "t_struct(FundState)_storage": {
+        "arrayElement": false,
+        "bytes": 1088,
+        "members": [
+          {
+            "label": "assets",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_array(t_struct(AssetConfig)_storage)dyn_storage"
+          },
+          {
+            "label": "codeHashAllowed",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_mapping(t_bytes32,t_bool)"
+          },
+          {
+            "label": "usdc",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_address"
+          },
+          {
+            "label": "tvlCap",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_uint256"
+          },
+          {
+            "label": "perDepositCap",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_uint256"
+          },
+          {
+            "label": "exitFeeBps",
+            "offset": 0,
+            "slot": "5",
+            "type": "t_uint256"
+          },
+          {
+            "label": "feeRecipient",
+            "offset": 0,
+            "slot": "6",
+            "type": "t_address"
+          },
+          {
+            "label": "maxSlippageBps",
+            "offset": 0,
+            "slot": "7",
+            "type": "t_uint256"
+          },
+          {
+            "label": "navDeviationGuardBps",
+            "offset": 0,
+            "slot": "8",
+            "type": "t_uint256"
+          },
+          {
+            "label": "depositsPaused",
+            "offset": 0,
+            "slot": "9",
+            "type": "t_bool"
+          },
+          {
+            "label": "shutdown",
+            "offset": 1,
+            "slot": "9",
+            "type": "t_bool"
+          },
+          {
+            "label": "lastStepAt",
+            "offset": 2,
+            "slot": "9",
+            "type": "t_uint64"
+          },
+          {
+            "label": "targetBps",
+            "offset": 0,
+            "slot": "10",
+            "type": "t_array(t_uint16)dyn_storage"
+          },
+          {
+            "label": "plan",
+            "offset": 0,
+            "slot": "11",
+            "type": "t_struct(Plan)_storage"
+          },
+          {
+            "label": "deferredTotal",
+            "offset": 0,
+            "slot": "22",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "deferredOf",
+            "offset": 0,
+            "slot": "23",
+            "type": "t_mapping(t_uint256,t_mapping(t_address,t_uint256))"
+          },
+          {
+            "label": "rolesBound",
+            "offset": 0,
+            "slot": "24",
+            "type": "t_bool"
+          },
+          {
+            "label": "flowQueue",
+            "offset": 1,
+            "slot": "24",
+            "type": "t_address"
+          },
+          {
+            "label": "flowRoleBound",
+            "offset": 21,
+            "slot": "24",
+            "type": "t_bool"
+          },
+          {
+            "label": "seeded",
+            "offset": 22,
+            "slot": "24",
+            "type": "t_bool"
+          },
+          {
+            "label": "minSeedUsdc",
+            "offset": 0,
+            "slot": "25",
+            "type": "t_uint256"
+          },
+          {
+            "label": "poolShareBps",
+            "offset": 0,
+            "slot": "26",
+            "type": "t_uint16"
+          },
+          {
+            "label": "positionUnits",
+            "offset": 0,
+            "slot": "27",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "positionClaimTotal",
+            "offset": 0,
+            "slot": "28",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "positionClaimOf",
+            "offset": 0,
+            "slot": "29",
+            "type": "t_mapping(t_uint256,t_mapping(t_address,t_uint256))"
+          },
+          {
+            "label": "inKindUsed",
+            "offset": 0,
+            "slot": "30",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          },
+          {
+            "label": "lastGoodNav",
+            "offset": 0,
+            "slot": "31",
+            "type": "t_uint256"
+          },
+          {
+            "label": "lastGoodNavAt",
+            "offset": 0,
+            "slot": "32",
+            "type": "t_uint64"
+          },
+          {
+            "label": "inKindBps",
+            "offset": 8,
+            "slot": "32",
+            "type": "t_uint16"
+          },
+          {
+            "label": "inKindFloorUsdc",
+            "offset": 10,
+            "slot": "32",
+            "type": "t_uint128"
+          },
+          {
+            "label": "inKindPeriod",
+            "offset": 26,
+            "slot": "32",
+            "type": "t_uint32"
+          },
+          {
+            "label": "haltCost",
+            "offset": 0,
+            "slot": "33",
+            "type": "t_uint256"
+          }
+        ]
+      },
+      "t_struct(Plan)_storage": {
+        "arrayElement": false,
+        "bytes": 352,
+        "members": [
+          {
+            "label": "id",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_uint64"
+          },
+          {
+            "label": "status",
+            "offset": 8,
+            "slot": "0",
+            "type": "t_enum(PlanStatus)"
+          },
+          {
+            "label": "receiptId",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_bytes32"
+          },
+          {
+            "label": "startTime",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint64"
+          },
+          {
+            "label": "endTime",
+            "offset": 8,
+            "slot": "2",
+            "type": "t_uint64"
+          },
+          {
+            "label": "startBps",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_array(t_uint16)dyn_storage"
+          },
+          {
+            "label": "endBps",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_array(t_uint16)dyn_storage"
+          },
+          {
+            "label": "startIdleBps",
+            "offset": 0,
+            "slot": "5",
+            "type": "t_uint16"
+          },
+          {
+            "label": "navAtOpen",
+            "offset": 0,
+            "slot": "6",
+            "type": "t_uint256"
+          },
+          {
+            "label": "turnoverUsdc",
+            "offset": 0,
+            "slot": "7",
+            "type": "t_uint256"
+          },
+          {
+            "label": "costBudget",
+            "offset": 0,
+            "slot": "8",
+            "type": "t_uint256"
+          },
+          {
+            "label": "costSpent",
+            "offset": 0,
+            "slot": "9",
+            "type": "t_uint256"
+          },
+          {
+            "label": "stepCount",
+            "offset": 0,
+            "slot": "10",
+            "type": "t_uint32"
+          }
+        ]
+      }
+    },
+    "robotmoney.storage.RobotMoneyVaultExclusions": {
+      "t_struct(Exclusions)_storage": {
+        "arrayElement": false,
+        "bytes": 64,
+        "members": [
+          {
+            "label": "ledger",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_contract(ExclusionLedger)"
+          },
+          {
+            "label": "snapshots",
+            "offset": 20,
+            "slot": "0",
+            "type": "t_bool"
+          },
+          {
+            "label": "openExclusionOf",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_mapping(t_uint256,t_uint256)"
+          }
+        ]
+      }
+    },
+    "storage": {}
+  }
+}

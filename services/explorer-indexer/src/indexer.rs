@@ -4281,44 +4281,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn risk_label_deploy_script_vault_names_classify_as_baskets() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/script");
-        let mut found = Vec::new();
-        for entry in std::fs::read_dir(&dir).expect("read contracts/script") {
-            let path = entry.expect("dir entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("sol") {
-                continue;
-            }
-            for line in std::fs::read_to_string(&path).expect("read script").lines() {
-                let t = line.trim_start();
-                if t.starts_with("//") || !t.contains("VAULT_NAME = \"") {
-                    continue;
-                }
-                if !t.contains("string public constant VAULT_NAME") {
-                    continue;
-                }
-                let lit = t.split('"').nth(1).expect("string literal");
-                found.push(lit.to_string());
-            }
-        }
-        assert!(
-            found.len() >= 3,
-            "scraped only {found:?}; scrape went blind"
-        );
-        assert!(
-            found.iter().any(|n| n == "Robot Money Hard Assets"),
-            "scraped {found:?}; the rmHARD script name is missing"
-        );
-        for name in &found {
-            let label = classify_vault_risk_label(name);
-            assert!(
-                matches!(label, Some("VOLATILE") | Some("SPECULATIVE")),
-                "{name} classified {label:?}, expected a basket label"
-            );
-        }
-    }
-
     fn server_error(message: &str) -> Result<Bytes, RpcError> {
         Err(RpcError::Server {
             method: "eth_getCode".to_string(),

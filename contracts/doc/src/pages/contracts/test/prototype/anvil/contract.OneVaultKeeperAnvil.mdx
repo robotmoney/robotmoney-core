@@ -1,0 +1,159 @@
+---
+title: "OneVaultKeeperAnvil"
+description: "Local anvil Rebalancer and one lending asset for the one-vault keeper self-test. Parameters follow PrototypeHarness._deployRebalancer and _addAssets."
+---
+
+# OneVaultKeeperAnvil
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
+
+**Inherits:** Script
+
+**Title:** OneVaultKeeperAnvil
+
+Local anvil Rebalancer and one lending asset for the one-vault keeper self-test. Parameters follow
+PrototypeHarness._deployRebalancer and _addAssets.
+
+## Constants
+
+### MAX_OVERRUN
+
+```solidity
+uint32 internal constant MAX_OVERRUN = 7 days;
+```
+
+### MAX_STEP_COST_BPS
+
+```solidity
+uint16 internal constant MAX_STEP_COST_BPS = 50;
+```
+
+### TOLERANCE_BPS
+
+```solidity
+uint16 internal constant TOLERANCE_BPS = 50;
+```
+
+### MIN_STEP_USDC
+
+```solidity
+uint128 internal constant MIN_STEP_USDC = 100e6;
+```
+
+### LENDING_MAX_STEP_USDC
+
+```solidity
+uint128 internal constant LENDING_MAX_STEP_USDC = 500_000e6;
+```
+
+### LENDING_CAP_BPS
+
+```solidity
+uint16 internal constant LENDING_CAP_BPS = 10_000;
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+```solidity
+function run() external;
+```
+
+<a id="_deployrebalancer-address-address-address"></a>
+
+### _deployRebalancer
+
+<i>
+
+Deploys the Rebalancer proxy and binds its rebalance roles. The deployer is the admin and the governance slot.
+
+</i>
+
+```solidity
+function _deployRebalancer(address fund, address timelock, address keeper)
+        internal
+        returns (Rebalancer);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` |  |
+| timelock | `address` |  |
+| keeper | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `Rebalancer` |  |
+
+<a id="_addlending-address-rebalancer-address"></a>
+
+### _addLending
+
+<i>
+
+One lending asset over a mock Aave pool. Its plan target is the whole NAV in the test.
+
+</i>
+
+```solidity
+function _addLending(address fund, Rebalancer rebalancer, address usdc)
+        internal
+        returns (address pool, address aToken, address adapter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` |  |
+| rebalancer | `Rebalancer` |  |
+| usdc | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| aToken | `address` |  |
+| adapter | `address` |  |
+
+<a id="_addbasket-address-rebalancer-address"></a>
+
+### _addBasket
+
+<i>
+
+One basket asset, with no holding and a zero target. The test puts a holding in place and then delists it.
+
+</i>
+
+```solidity
+function _addBasket(address fund, Rebalancer rebalancer, address usdc)
+        internal
+        returns (address token, address feed, uint256 index, address router);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| fund | `address` |  |
+| rebalancer | `Rebalancer` |  |
+| usdc | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| feed | `address` |  |
+| index | `uint256` |  |
+| router | `address` |  |
+

@@ -117,8 +117,41 @@ export interface VerifySheet {
   defaultWeights: { vault: string; bps: number }[];
   /** Issue 1892, the gateway system only: the explicit governance inputs of the gateway sheet (GATEWAY_ADMIN_ADDRESS, GATEWAY_UPGRADE_TIMELOCK). */
   gateway?: { admin: Address; upgradeTimelock: Address };
+  /** Expected asset config read back from `RobotMoneyFund.assetConfigs()` (DEP-01). */
   /** Deploy 4, the fund system only: what the fund sheet decided (the keeper, the fund's caps and guards, every FLOW_*, REBALANCER_* and PLAN_* value by sheet name). */
-  fund?: { keeper: Address; tvlCap: bigint; perDepositCap: bigint; exitFeeBps: bigint; maxSlippageBps: bigint; navDeviationBps: bigint; minSeedUsdc: bigint; params: Record<string, bigint> };
+  fund?: {
+    keeper: Address;
+    tvlCap: bigint;
+    perDepositCap: bigint;
+    exitFeeBps: bigint;
+    maxSlippageBps: bigint;
+    navDeviationBps: bigint;
+    minSeedUsdc: bigint;
+    params: Record<string, bigint>;
+    feeRecipient?: Address | "@safe";
+    receiptSubmitters?: Address[];
+    assets?: ExpectedFundAsset[];
+    safeModules?: Address[];
+    safeGuard?: Address;
+    safeFallbackHandler?: Address;
+    keeperType?: "eoa" | "smart-account";
+    keeperOwners?: Address[];
+    keeperBotKeys?: Address[];
+  };
+}
+
+export interface ExpectedFundAsset {
+  kind: number;
+  active: boolean;
+  capBps: bigint;
+  adapter: Address;
+  token: Address;
+  pool: Address;
+  poolFee: bigint;
+  twapWindow: bigint;
+  venue: number;
+  feed: Address;
+  maxFeedAge: bigint;
 }
 
 export interface VerifyOptions {
@@ -211,6 +244,8 @@ export interface VerifyOptions {
   consumedVaultsManifests?: Record<string, string>;
   /** Delay in ms between 429 retries (tests set 0). */
   retryBaseMs?: number;
+  /** Issue 2044: tries of one throttled eth_getLogs call (--logs-tries). Absent: the scan's default (7 tries). */
+  logTries?: number;
 }
 
 /** Issue 1851: what the creation proof of the log scans reads from one deploy transaction's receipt. */
@@ -263,4 +298,9 @@ export interface ChainReader {
   callRaw(to: Address, data: Hex, from?: Address): Promise<RawCallResult>;
   /** `address` may be a list (eth_getLogs matches any of them): the shared verify scan reads every scanned contract in one pass (issue 1977). */
   getLogs(params: { address?: Address | Address[]; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }): Promise<LogEntry[]>;
+  /**
+   * Issue 2044: the fork pin block of an anvil fork (anvil_nodeInfo forkConfig.forkBlockNumber), or undefined when the node is not an anvil fork or does not answer.
+   * Optional: only the Twin (918453) role checks read it, so they never ask for logs before the pin.
+   */
+  forkPin?(): Promise<bigint | undefined>;
 }

@@ -599,10 +599,6 @@ Access model: `ADMIN_ROLE` is self-administered (its own role-admin). The deploy
 
 The legs that run execute atomically: if any of them reverts, the entire deposit reverts. No USDC is left with the router and none is returned to the user. If no leg is available, the deposit reverts `NoWeightsSet` and the revert undoes the USDC pull. If every computed leg amount is 0 (only a zero-amount deposit, or only 0 bps legs left available), the deposit reverts `NoFundedLeg` and calls no vault. The sum of the leg amounts always equals `amount`, so nothing is stranded. See "Routing eligibility" below and `docs/architecture.md` §4.2.1.
 
-`previewDepositFor(receiver, amount)` checks the beneficiary’s deposit capacity. Use its ordered vault addresses, amounts and per-vault share quotes to build `depositWithQuote(receiver, amount, expectedVaults, minSharesPerLeg, deadline)`. The router checks the full vault order and expiration before collecting USDC. The legacy `deposit` and `depositFor` methods remain direct public entry points. A client’s `PORTFOLIO_ROUTER_ENABLED` setting only controls the surfaces that client offers. To restrict on-chain deposits, use the vault’s deposit and routing controls.
-
-For delegated redemption, the share holder uses `setRedemptionAllowance(operator, vault, recipient, shares)`. Each successful redemption spends that router allowance for the specified operator, vault and recipient. The vault separately spends the holder’s share-token allowance to the router. Existing share-token approvals to an operator do not create a router allowance. A holder using `redeemFor` for their own shares only needs to approve the router on the share token.
-
 ### 9.1.2 Weight vectors and governance integration
 
 The router maintains two weight vectors:

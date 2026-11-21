@@ -30,21 +30,22 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /// @dev Two sweep overloads are provided:
 ///
 ///      `sweep(token, triggeredBy)` — uses the hardcoded `QUARANTINE` constant.
-///      Used by immutable adapters and by BasketVault's fixed quarantine paths.
+///      Used by adapters that have no on-chain admin (immutable contracts).
 ///
 ///      `sweep(token, destination, triggeredBy)` — uses a caller-supplied
 ///      `destination` that must be the per-contract governance-controlled
-///      quarantine address (see `quarantineAddress` on RobotMoneyVault
-///      and PortfolioRouter). The destination is never the raw
+///      quarantine address (see `quarantineAddress` on RobotMoneyVault,
+///      BasketVault, and PortfolioRouter). The destination is never the raw
 ///      `msg.sender`; it is set only through the TimelockController (INV-3)
 ///      and therefore cannot be steered by a calling-time argument.
 library ForeignTokenQuarantine {
     using SafeERC20 for IERC20;
 
     /// @notice The protocol-wide default quarantine ("trash") address used by
-    ///         immutable adapters and BasketVault. RobotMoneyVault and PortfolioRouter
-    ///         store a timelock-settable `quarantineAddress` and call the
-    ///         three-argument `sweep` overload.
+    ///         adapters that have no on-chain governance (immutable contracts).
+    ///         Main protocol contracts (RobotMoneyVault, BasketVault,
+    ///         PortfolioRouter) store a timelock-settable `quarantineAddress`
+    ///         state variable and call the three-argument `sweep` overload.
     address internal constant QUARANTINE = 0x0000000000000000000000000000000000deaD11;
 
     /// @notice Emitted when a foreign token is swept to the quarantine address.
@@ -61,7 +62,8 @@ library ForeignTokenQuarantine {
     error ZeroQuarantineAddress();
 
     /// @notice Move the caller contract's full balance of `token` to the fixed
-    ///         `QUARANTINE` constant address. Used by immutable adapters and BasketVault.
+    ///         `QUARANTINE` constant address. Used by adapters that are
+    ///         immutable and have no on-chain access control.
     /// @param token Foreign ERC-20 to sweep. Must not be protected.
     /// @param triggeredBy The unprivileged account that triggered the sweep.
     /// @return amount The amount swept to quarantine.
@@ -81,8 +83,8 @@ library ForeignTokenQuarantine {
     /// @notice Move the caller contract's full balance of `token` to a
     ///         governance-controlled `destination`. Use this overload when the
     ///         quarantine address is stored as a timelock-settable state variable
-    ///         on the calling contract (RobotMoneyVault or PortfolioRouter).
-    ///         The `destination` MUST NOT be a caller-supplied
+    ///         on the calling contract (RobotMoneyVault, BasketVault,
+    ///         PortfolioRouter). The `destination` MUST NOT be a caller-supplied
     ///         argument; it must be read from the contract's governed storage.
     /// @param token       Foreign ERC-20 to sweep. Must not be protected.
     /// @param destination Governed quarantine address. Must not be address(0).

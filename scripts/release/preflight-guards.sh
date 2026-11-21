@@ -63,7 +63,7 @@ CEREMONY_CONTRACTS=(
   "ProtocolAssetVault"
   # Deploy 4: the fund system (the one-vault prototype as a rehearsal). Its four proxied
   # contracts, the ledger the fund creates, its adapter copies and every library a fund stage
-  # creates (FundAdminLib sits near the limit). out/<Name>.sol resolves to contracts/test/prototype/src
+  # creates (FundAdminLib sits near the limit). out/<Name>.sol resolves to contracts/
   # (the baseline tree's same-named contracts build under out/src/), asserted by preflight-guards.test.ts.
   "RobotMoneyFund"
   "Rebalancer"
@@ -79,10 +79,14 @@ CEREMONY_CONTRACTS=(
   "FundAdminLib"
   "FundFlowsLib"
   "FundStepLib"
+  "FundDelistLib"
   "StepFeedLib"
   "FlowCheckLib"
+  "FlowMatchLib"
   "FlowSettleLib"
   "FlowClaimLib"
+  "FlowMigrateLib"
+  "FundMigrateLib"
 )
 
 fail() {

@@ -1,0 +1,84 @@
+---
+title: "DeployKeeperAccount"
+description: "Deploys the keeper smart account (E56) at a CREATE2 address, before the sheet is final. The queue and the rebalancer take the keeper at initialization, so the sheet's KEEPER_ADDRESS must already be this account. The address is fixed by the salt, the owners and the bot keys. Run with `PREDICT_ONLY=true` to print it without broadcasting. The deploy stages check that KEEPER_ADDRESS holds KEEPER_ROLE, and the wiring stage records the account's type, owners and bot keys in its manifest. The verifier compares them with the sheet."
+---
+
+# DeployKeeperAccount
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/script/DeployKeeperAccount.s.sol)
+
+**Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
+
+**Title:** DeployKeeperAccount
+
+Deploys the keeper smart account (E56) at a CREATE2 address, before the sheet is final. The queue and the
+rebalancer take the keeper at initialization, so the sheet's KEEPER_ADDRESS must already be this account.
+The address is fixed by the salt, the owners and the bot keys. Run with `PREDICT_ONLY=true` to print it
+without broadcasting. The deploy stages check that KEEPER_ADDRESS holds KEEPER_ROLE, and the wiring stage
+records the account's type, owners and bot keys in its manifest. The verifier compares them with the sheet.
+
+Required env vars: KEEPER_OWNERS, KEEPER_BOT_KEYS (comma lists; KEEPER_BOT_KEYS may be `none`), KEEPER_SALT
+(a bytes32), DEPLOYMENT_OUT. Optional: KEEPER_ADDRESS (must equal the predicted address), PREDICT_ONLY.
+
+## Constants
+
+### MANIFEST_FILE
+
+Manifest file name the operator gives DEPLOYMENT_OUT.
+
+```solidity
+string public constant MANIFEST_FILE = "keeper-account.json";
+```
+
+## Functions
+
+<a id="run"></a>
+
+### run
+
+```solidity
+function run() external returns (address account);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+
+<a id="_botkeys"></a>
+
+### _botKeys
+
+```solidity
+function _botKeys() internal view returns (address[] memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address[]` |  |
+
+<a id="_writedeploymentjson-address-address-address-bytes32"></a>
+
+### _writeDeploymentJson
+
+```solidity
+function _writeDeploymentJson(
+        address account,
+        address[] memory owners,
+        address[] memory bots,
+        bytes32 salt
+    ) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| account | `address` |  |
+| owners | `address[]` |  |
+| bots | `address[]` |  |
+| salt | `bytes32` |  |
+

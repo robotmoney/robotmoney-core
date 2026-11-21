@@ -5,7 +5,7 @@ description: "Interface for the ConsensusRecommendationReceipt contract."
 
 # IConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/77c18cc501b58598887747e7c5881b622e1b4fe3/contracts/interfaces/IConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/interfaces/IConsensusRecommendationReceipt.sol)
 
 **Title:** IConsensusRecommendationReceipt
 
@@ -130,28 +130,6 @@ function getReceiptById(bytes32 receiptId) external view returns (Receipt memory
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `Receipt` |  |
-
-<a id="receiptsequence-bytes32"></a>
-
-### receiptSequence
-
-The 1-based issuance index, or zero if the receipt does not exist.
-
-```solidity
-function receiptSequence(bytes32 receiptId) external view returns (uint256);
-```
-
-**Parameters**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| receiptId | `bytes32` |  |
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint256` |  |
 
 <a id="isrecorded-bytes32"></a>
 

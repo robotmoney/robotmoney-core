@@ -1,0 +1,35 @@
+---
+title: "AssetPrice"
+description: "Per-swap price limits and NAV prices of one asset (E12, checks 8 and 9, E53), in USDC units per whole token."
+---
+
+# AssetPrice
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/FlowTypes.sol)
+
+Per-swap price limits and NAV prices of one asset (E12, checks 8 and 9, E53), in USDC units per whole token.
+
+```solidity
+struct AssetPrice {
+    uint8 kind;
+    bool inSale;
+    uint256 unit;
+    uint256 buyPerToken;
+    uint256 sellPerToken;
+    uint256 feedPerToken;
+    uint256 twapPerToken;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| kind | `uint8` |  |
+| inSale | `bool` |  |
+| unit | `uint256` |  |
+| buyPerToken | `uint256` |  |
+| sellPerToken | `uint256` |  |
+| feedPerToken | `uint256` |  |
+| twapPerToken | `uint256` |  |
+

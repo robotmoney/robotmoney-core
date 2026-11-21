@@ -224,7 +224,6 @@ contract ExclusionLedger {
         if (id == 0 || id > exclusionCount || e.finalized) revert ExclusionNotOpen(id);
         uint256 recovered = e.recoveredUsdc + amount;
         e.recoveredUsdc = recovered;
-        // Retain rounding dust in reserve so every outstanding claim stays covered.
         heldUsdc += amount;
         emit ExclusionRecoveryCredited(id, source, amount, recovered);
     }

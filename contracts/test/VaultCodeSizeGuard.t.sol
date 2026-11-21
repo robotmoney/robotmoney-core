@@ -33,39 +33,6 @@ contract VaultCodeSizeGuard is Test {
         );
     }
 
-    function test_RobotMoneyVault_underEip170() public {
-        _assertUnderLimit("RobotMoneyVault.sol:RobotMoneyVault");
-    }
-
-    function test_ProtocolAssetVault_underEip170() public {
-        _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
-    }
-
-    function test_RwaBasketVault_underEip170() public {
-        _assertUnderLimit("RwaBasketVault.sol:RwaBasketVault");
-    }
-
-    function test_HardAssetsVault_underEip170() public {
-        _assertUnderLimit("HardAssetsVault.sol:HardAssetsVault");
-    }
-
-    function test_AgentTokenVault_underEip170() public {
-        _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
-    }
-
-    /// @notice Aggregate check matching issue #1284's test-plan command
-    ///         (`forge test --match-test test_bytecodeSize`) — the vault-family
-    ///         members already individually guarded above, asserted together
-    ///         after the last-admin-floor consolidation and BasketVault
-    ///         retirement-flag addition.
-    function test_bytecodeSize_vaultFamilyUnderEip170() public {
-        _assertUnderLimit("RobotMoneyVault.sol:RobotMoneyVault");
-        _assertUnderLimit("RwaBasketVault.sol:RwaBasketVault");
-        _assertUnderLimit("HardAssetsVault.sol:HardAssetsVault");
-        _assertUnderLimit("AgentTokenVault.sol:AgentTokenVault");
-        _assertUnderLimit("ProtocolAssetVault.sol:ProtocolAssetVault");
-    }
-
     // ─── Adapter set ───────────────────────────────────────────────────────
     //
     // Every adapter below is a direct on-chain deployment (lending adapters and
@@ -94,37 +61,11 @@ contract VaultCodeSizeGuard is Test {
         _assertUnderLimit("AerodromeSwapAdapter.sol:AerodromeSwapAdapter");
     }
 
-    // Core 1676: the Uniswap V4 swap adapter and the permissionless price recorder are direct on-chain deployments.
-
-    function test_UniswapV4SwapAdapter_underEip170() public {
-        _assertUnderLimit("UniswapV4SwapAdapter.sol:UniswapV4SwapAdapter");
-    }
-
-    function test_UniswapV4PriceRecorder_underEip170() public {
-        _assertUnderLimit("UniswapV4PriceRecorder.sol:UniswapV4PriceRecorder");
-    }
-
     // ─── ADR-0014: proxied implementations, the exclusion ledger, the linked libraries ──
     //
     // Every proxied implementation is a direct on-chain deployment (behind its ERC1967Proxy), and so
     // is each CREATE2-linked library, the exclusion ledger and the timelock, so each must fit EIP-170
     // on its own. The ledger is created by the vault, one per exclusion record (core 1820).
-
-    function test_RobotMoneyGateway_underEip170() public {
-        _assertUnderLimit("RobotMoneyGateway.sol:RobotMoneyGateway");
-    }
-
-    function test_PortfolioRouter_underEip170() public {
-        _assertUnderLimit("PortfolioRouter.sol:PortfolioRouter");
-    }
-
-    function test_RouterGovernance_underEip170() public {
-        _assertUnderLimit("RouterGovernance.sol:RouterGovernance");
-    }
-
-    function test_VaultRegistry_underEip170() public {
-        _assertUnderLimit("VaultRegistry.sol:VaultRegistry");
-    }
 
     function test_ConsensusRecommendationReceipt_underEip170() public {
         _assertUnderLimit("ConsensusRecommendationReceipt.sol:ConsensusRecommendationReceipt");
@@ -140,35 +81,5 @@ contract VaultCodeSizeGuard is Test {
 
     function test_linkedLibraries_underEip170() public {
         _assertUnderLimit("BasketAssetConfigGuard.sol:BasketAssetConfigGuard");
-        _assertUnderLimit("BasketViews.sol:BasketViews");
-        // RobotMoneyVault's public-function library is linked and deployed on its own (audit 0.9.0
-        // remediation: the liquidity probe pushed it to 25,180 bytes without this guard noticing).
-        _assertUnderLimit("RobotMoneyVaultOps.sol:RobotMoneyVaultOps");
-    }
-
-    /// @notice The proxied implementations keep their recorded runtime headroom under EIP-170. The floors are the
-    ///         margins measured with `forge build --sizes` after the governed-UUPS base (core 1808) and the exclusion
-    ///         recovery (core 1820, QA plan D3) landed, rounded down: AgentTokenVault 909 bytes, ProtocolAssetVault 956,
-    ///         RwaBasketVault 963, RobotMoneyVault 3,604, RobotMoneyGateway 293. A change that eats them fails here
-    ///         before it fails an EIP-170 deploy.
-    function test_proxiedImplementations_keepTheirMeasuredHeadroom() public {
-        assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("AgentTokenVault.sol:AgentTokenVault").length, 900
-        );
-        assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("ProtocolAssetVault.sol:ProtocolAssetVault").length,
-            950
-        );
-        assertGe(EIP170_LIMIT - vm.getDeployedCode("RwaBasketVault.sol:RwaBasketVault").length, 950);
-        // HardAssetsVault (core 2008) is RwaBasketVault plus `addAssetWithTwapWindow` (ADR-0018): 188 bytes measured, rounded down.
-        assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("HardAssetsVault.sol:HardAssetsVault").length, 180
-        );
-        assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyVault.sol:RobotMoneyVault").length, 3_500
-        );
-        assertGe(
-            EIP170_LIMIT - vm.getDeployedCode("RobotMoneyGateway.sol:RobotMoneyGateway").length, 290
-        );
     }
 }

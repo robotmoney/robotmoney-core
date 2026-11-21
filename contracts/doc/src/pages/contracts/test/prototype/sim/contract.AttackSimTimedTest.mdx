@@ -5,7 +5,7 @@ description: "The four sim attacks against the live fund (eng plan §5 work pack
 
 # AttackSimTimedTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/sim/AttackSim.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/sim/AttackSim.t.sol)
 
 **Inherits:** [TimedSimBase](/contracts/test/prototype/sim/abstract.TimedSimBase), [AttackSimCore](/contracts/test/prototype/sim/abstract.AttackSimCore)
 
@@ -464,9 +464,10 @@ function _lagBps() internal view returns (int256 lag);
 ### a9Run
 
 Self-call: when `run`, runners 0-4 ask to redeem everything now and runners 5-9 one epoch later, with
-no limit; a runner still waiting 24 hours after its request exits the rest in kind. 4 days. Logs
-each runner's first fill, completion, USDC and in-kind value. The result's `atk` is the runners' total
-value and `vic` 0; the scored loss is the stayers' (holders').
+limit-free requests; a runner still waiting after `expiryEpoch` gives post-`maxRoll` redemption notice
+and withdraws any returned credit once the notice round ends. 4 days. Logs each runner's first fill,
+completion, USDC and remaining credit/position value. The result's `atk` is the runners' total value
+and `vic` 0; the scored loss is the stayers' (holders').
 
 ```solidity
 function a9Run(bool run) external returns (Res memory r);
@@ -511,7 +512,11 @@ function _a9Requests(
 ### _a9InKind
 
 ```solidity
-function _a9InKind(uint256[] memory ids, uint256[] memory askedAt) internal;
+function _a9InKind(
+        uint256[] memory ids,
+        uint256[] memory /*askedAt*/
+    )
+        internal;
 ```
 
 **Parameters**
@@ -519,7 +524,7 @@ function _a9InKind(uint256[] memory ids, uint256[] memory askedAt) internal;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | ids | `uint256[]` |  |
-| askedAt | `uint256[]` |  |
+| _ | `uint256[]` |  |
 
 <a id="_positionvalue-address"></a>
 

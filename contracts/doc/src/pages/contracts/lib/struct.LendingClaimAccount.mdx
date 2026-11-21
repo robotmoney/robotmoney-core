@@ -1,0 +1,29 @@
+---
+title: "LendingClaimAccount"
+description: "Accumulator state for one claim owner (or linked fee share) on a lending position."
+---
+
+# LendingClaimAccount
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundStorage.sol)
+
+Accumulator state for one claim owner (or linked fee share) on a lending position.
+
+```solidity
+struct LendingClaimAccount {
+    uint256 epoch;
+    uint256 scaled;
+    uint256 usdcDebt;
+    uint256 pendingUsdc;
+}
+```
+
+**Properties**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| epoch | `uint256` |  |
+| scaled | `uint256` |  |
+| usdcDebt | `uint256` |  |
+| pendingUsdc | `uint256` |  |
+

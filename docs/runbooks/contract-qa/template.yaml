@@ -19,6 +19,10 @@
 # environment's sheet (deployments/twin-918453/stage-sheet.env, deployments/base-8453-rehearsal/stage-sheet.example.env,
 # the frozen production sheet). Only parameters differ; a step that exists for one environment says so with onlyFor.
 #
+# The Twin proves what the release changes, on a fork pinned at a recent block: no Twin step depends on Base history before the pin.
+# Full-history checks are proofs of the 8453 run. Each step is a short call to a tested script (scripts/runbook/, with a bun test), and a
+# description says in one or two sentences what the step proves. A release's notes say what its run does and why, never patch history.
+#
 # Step keys (the frontend release runbook schema, adapted to contract deployment):
 #   id            P<phase>.<nn>-<slug>, the phase number first. Unique.
 #   standing      sections of docs/operations/contract-release-runbooks.md the step proves ("4.3", "4.12").

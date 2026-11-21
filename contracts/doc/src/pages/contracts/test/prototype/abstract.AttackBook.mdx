@@ -5,7 +5,7 @@ description: "Mixin for the two attack contracts (timed fund, frozen baseline). 
 
 # AttackBook
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/Attacks.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/Attacks.t.sol)
 
 **Inherits:** Test
 
@@ -99,6 +99,29 @@ function _assertG8(string memory id, AttackPnl memory r) internal pure;
 | ---- | ---- | ----------- |
 | id | `string` |  |
 | r | `AttackPnl` |  |
+
+<a id="_assertg8aftersale-string-attackpnl-uint256"></a>
+
+### _assertG8AfterSale
+
+G8 for an attack that includes a sale the Safe ordered (a delisting step or `emergencyUnwind`). A sale
+sells into a pool, so it pays the pool's fee and its price impact. The fund's own part of that cost is
+a known, budgeted spend (`delistBudgetBps`), not a leak. The holders' loss may exceed the 1 bps bound by
+at most that measured cost. Anything beyond it (a value leak in the split) still fails.
+
+```solidity
+function _assertG8AfterSale(string memory id, AttackPnl memory r, uint256 saleCost)
+        internal
+        pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `string` |  |
+| r | `AttackPnl` |  |
+| saleCost | `uint256` |  |
 
 <a id="_g8orfinding-string-attackpnl"></a>
 

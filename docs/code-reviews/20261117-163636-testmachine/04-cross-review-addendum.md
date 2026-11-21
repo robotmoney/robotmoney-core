@@ -61,10 +61,7 @@ at `:167` and deduplicates only by `receiptId` (`:165`), so two distinct receipt
 one second both succeed with equal `recordedAt`. `RouterGovernance.sol:191-193`
 requires strictly `>` with no tie-breaker and no cursor setter; `:195-196` updates
 the cursor before release and weight application. Test-pinned by
-the pin's same-second refusal test. Citation updated after the fix: the finding 17
-remediation replaced it with `RouterGovernanceApplyReceipt.t.sol:377-404`
-(`test_applyReceipt_sameRecordedAtAppliesInIssuanceOrder`,
-`test_applyReceipt_sameRecordedAtRefusesEarlierIssuance`).
+`RouterGovernanceApplyReceipt.t.sol:379` (`test_applyReceipt_sameRecordedAtRefused`).
 
 The second review's mitigations hold: role-gated creation/application, fail-safe
 loser (revert, no wrong vector), and a real tooling pre-check at

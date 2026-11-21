@@ -5,7 +5,7 @@ description: "One-vault experiment, step 3d (timed flows). Deploys the full prot
 
 # PrototypeHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/d51a8ed56dc72ae8662acc53f88fb090d86e44cb/contracts/test/prototype/PrototypeHarness.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/PrototypeHarness.sol)
 
 **Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
 
@@ -973,15 +973,42 @@ function fundUsdc(address to, uint256 amount) internal;
 | to | `address` |  |
 | amount | `uint256` |  |
 
+<a id="opendepositrequest-address-uint256"></a>
+
+### openDepositRequest
+
+Fund `user` with `usdc` and open a forward-priced deposit request (limit-free in Step 3f).
+The user approves the queue and is the caller and the owner.
+
+```solidity
+function openDepositRequest(address user, uint256 usdc) internal returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| usdc | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
 <a id="opendepositrequest-address-uint256-uint256"></a>
 
 ### openDepositRequest
 
-Fund `user` with `usdc` and open a deposit request for it with the limit `maxUsdcPerShare`
-(PRICE_SCALE units). The user approves the queue and is the caller and the owner.
+Compatibility overload for pre-Step 3f callers passing a retired price limit.
 
 ```solidity
-function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare)
+function openDepositRequest(
+        address user,
+        uint256 usdc,
+        uint256 /*retiredLimit*/
+    )
         internal
         returns (uint256 id);
 ```
@@ -992,7 +1019,30 @@ function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare)
 | ---- | ---- | ----------- |
 | user | `address` |  |
 | usdc | `uint256` |  |
-| maxUsdcPerShare | `uint256` |  |
+| _ | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
+
+<a id="openredeemrequest-address-uint256"></a>
+
+### openRedeemRequest
+
+`user` approves the queue for `shares` and opens a forward-priced redemption request (limit-free in Step 3f).
+
+```solidity
+function openRedeemRequest(address user, uint256 shares) internal returns (uint256 id);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| user | `address` |  |
+| shares | `uint256` |  |
 
 **Returns**
 
@@ -1004,11 +1054,14 @@ function openDepositRequest(address user, uint256 usdc, uint256 maxUsdcPerShare)
 
 ### openRedeemRequest
 
-`user` approves the queue for `shares` and opens a redemption request with the limit
-`minUsdcPerShare` (PRICE_SCALE units, after the exit fee).
+Compatibility overload for pre-Step 3f callers passing a retired price limit.
 
 ```solidity
-function openRedeemRequest(address user, uint256 shares, uint256 minUsdcPerShare)
+function openRedeemRequest(
+        address user,
+        uint256 shares,
+        uint256 /*retiredLimit*/
+    )
         internal
         returns (uint256 id);
 ```
@@ -1019,7 +1072,7 @@ function openRedeemRequest(address user, uint256 shares, uint256 minUsdcPerShare
 | ---- | ---- | ----------- |
 | user | `address` |  |
 | shares | `uint256` |  |
-| minUsdcPerShare | `uint256` |  |
+| _ | `uint256` |  |
 
 **Returns**
 

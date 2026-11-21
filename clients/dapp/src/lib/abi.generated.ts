@@ -1306,11 +1306,6 @@ export const gatewayAbiGenerated = [
   },
   {
     type: "error",
-    name: "MinSharesLengthMismatch",
-    inputs: [],
-  },
-  {
-    type: "error",
     name: "NotAgentOwner",
     inputs: [],
   },
@@ -1363,11 +1358,6 @@ export const gatewayAbiGenerated = [
   {
     type: "error",
     name: "ShareReceiverNotAuthorized",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "SlippageExceeded",
     inputs: [],
   },
   {
@@ -6173,17 +6163,6 @@ export const registryAbiGenerated = [
   },
   {
     type: "error",
-    name: "VaultHasNoCode",
-    inputs: [
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-  },
-  {
-    type: "error",
     name: "ZeroAddress",
     inputs: [],
   },
@@ -6358,45 +6337,6 @@ export const routerAbiGenerated = [
         name: "minSharesPerLeg",
         type: "uint256[]",
         internalType: "uint256[]",
-      },
-    ],
-    outputs: [
-      {
-        name: "sharesPerLeg",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-    ],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "depositWithQuote",
-    inputs: [
-      {
-        name: "receiver",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "amount",
-        type: "uint256",
-        internalType: "uint256",
-      },
-      {
-        name: "expectedVaults",
-        type: "address[]",
-        internalType: "address[]",
-      },
-      {
-        name: "minSharesPerLeg",
-        type: "uint256[]",
-        internalType: "uint256[]",
-      },
-      {
-        name: "deadline",
-        type: "uint256",
-        internalType: "uint256",
       },
     ],
     outputs: [
@@ -6734,57 +6674,6 @@ export const routerAbiGenerated = [
   },
   {
     type: "function",
-    name: "previewDepositFor",
-    inputs: [
-      {
-        name: "receiver",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "amount",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    outputs: [
-      {
-        name: "legs",
-        type: "tuple[]",
-        internalType: "struct PortfolioRouter.LegPreview[]",
-        components: [
-          {
-            name: "vault",
-            type: "address",
-            internalType: "address",
-          },
-          {
-            name: "weightBps",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "legAmount",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "estShares",
-            type: "uint256",
-            internalType: "uint256",
-          },
-          {
-            name: "unavailable",
-            type: "bool",
-            internalType: "bool",
-          },
-        ],
-      },
-    ],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
     name: "proposeWeightSetterRotation",
     inputs: [
       {
@@ -6865,40 +6754,6 @@ export const routerAbiGenerated = [
       },
     ],
     stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "redemptionAllowance",
-    inputs: [
-      {
-        name: "holder",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "operator",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "recipient",
-        type: "address",
-        internalType: "address",
-      },
-    ],
-    outputs: [
-      {
-        name: "shares",
-        type: "uint256",
-        internalType: "uint256",
-      },
-    ],
-    stateMutability: "view",
   },
   {
     type: "function",
@@ -6988,34 +6843,6 @@ export const routerAbiGenerated = [
         name: "newAddr",
         type: "address",
         internalType: "address",
-      },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "setRedemptionAllowance",
-    inputs: [
-      {
-        name: "operator",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "vault",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "recipient",
-        type: "address",
-        internalType: "address",
-      },
-      {
-        name: "shares",
-        type: "uint256",
-        internalType: "uint256",
       },
     ],
     outputs: [],
@@ -7263,43 +7090,6 @@ export const routerAbiGenerated = [
         type: "address",
         indexed: true,
         internalType: "address",
-      },
-    ],
-    anonymous: false,
-  },
-  {
-    type: "event",
-    name: "RedemptionAllowanceSet",
-    inputs: [
-      {
-        name: "holder",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "operator",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "vault",
-        type: "address",
-        indexed: true,
-        internalType: "address",
-      },
-      {
-        name: "recipient",
-        type: "address",
-        indexed: false,
-        internalType: "address",
-      },
-      {
-        name: "shares",
-        type: "uint256",
-        indexed: false,
-        internalType: "uint256",
       },
     ],
     anonymous: false,
@@ -7626,11 +7416,6 @@ export const routerAbiGenerated = [
   {
     type: "error",
     name: "DeadlineExpired",
-    inputs: [],
-  },
-  {
-    type: "error",
-    name: "DepositRouteChanged",
     inputs: [],
   },
   {

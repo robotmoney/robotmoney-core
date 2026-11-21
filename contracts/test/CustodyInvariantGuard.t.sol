@@ -23,30 +23,20 @@ contract CustodyInvariantGuardTest is Test {
     ///      contracts/doc). Kept as an explicit list so the guard is
     ///      deterministic and a newly-added contract is a deliberate edit here.
     function _productionSources() internal pure returns (string[] memory paths) {
-        paths = new string[](21);
-        paths[0] = "contracts/PortfolioRouter.sol";
-        paths[1] = "contracts/RobotMoneyVault.sol";
-        paths[2] = "contracts/VaultRegistry.sol";
-        paths[3] = "contracts/RouterGovernance.sol";
-        paths[4] = "contracts/FeatureFlags.sol";
-        paths[5] = "contracts/vaults/BasketVault.sol";
-        paths[6] = "contracts/vaults/AgentTokenVault.sol";
-        paths[7] = "contracts/vaults/ProtocolAssetVault.sol";
-        paths[8] = "contracts/vaults/RwaBasketVault.sol";
-        paths[9] = "contracts/adapters/AaveV3Adapter.sol";
-        paths[10] = "contracts/adapters/CompoundV3Adapter.sol";
-        paths[11] = "contracts/adapters/MorphoAdapter.sol";
-        paths[12] = "contracts/adapters/AerodromeSwapAdapter.sol";
-        paths[13] = "contracts/adapters/UniswapV3SwapAdapter.sol";
-        paths[14] = "contracts/interfaces/IStrategyAdapter.sol";
+        paths = new string[](11);
+        paths[0] = "contracts/adapters/AaveV3Adapter.sol";
+        paths[1] = "contracts/adapters/CompoundV3Adapter.sol";
+        paths[2] = "contracts/adapters/MorphoAdapter.sol";
+        paths[3] = "contracts/adapters/AerodromeSwapAdapter.sol";
+        paths[4] = "contracts/adapters/UniswapV3SwapAdapter.sol";
+        paths[5] = "contracts/interfaces/IStrategyAdapter.sol";
         // ADR-0014: the upgrade base, the exclusion ledger that holds recovered USDC, and the
-        // linked libraries that move vault or gateway assets as the vault or the gateway.
-        paths[15] = "contracts/lib/GovernedUUPS.sol";
-        paths[16] = "contracts/ExclusionLedger.sol";
-        paths[17] = "contracts/lib/RobotMoneyVaultOps.sol";
-        paths[18] = "contracts/lib/BasketSwaps.sol";
-        paths[19] = "contracts/lib/GatewayWindows.sol";
-        paths[20] = "contracts/ProposerFloorTimelock.sol";
+        // linked libraries that move vault assets.
+        paths[6] = "contracts/lib/GovernedUUPS.sol";
+        paths[7] = "contracts/ExclusionLedger.sol";
+        paths[8] = "contracts/lib/RobotMoneyVaultOps.sol";
+        paths[9] = "contracts/lib/BasketSwaps.sol";
+        paths[10] = "contracts/ProposerFloorTimelock.sol";
     }
 
     /// @dev True if `haystack` contains `needle`. The scan is the `contains` cheatcode, not a byte loop in the EVM: the
@@ -87,19 +77,6 @@ contract CustodyInvariantGuardTest is Test {
     ///         exposed a rescue function now exposes the permissionless
     ///         `sweepForeignToken(token)` quarantine sweep instead.
     function test_INV2_sweepForeignTokenReplacesRescue() public view {
-        string[3] memory mustHaveSweep = [
-            "contracts/PortfolioRouter.sol",
-            "contracts/RobotMoneyVault.sol",
-            "contracts/vaults/BasketVault.sol"
-        ];
-        for (uint256 i = 0; i < mustHaveSweep.length; i++) {
-            string memory src = vm.readFile(mustHaveSweep[i]);
-            assertTrue(
-                _contains(src, "function sweepForeignToken"),
-                string.concat("INV-2: sweepForeignToken missing from ", mustHaveSweep[i])
-            );
-        }
-
         // Every concrete adapter exposes the sweep, and the interface declares it.
         string[4] memory adapterSweep = [
             "contracts/adapters/AaveV3Adapter.sol",

@@ -106,19 +106,12 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   });
 
   // -------- router.previewDeposit (view call, AC §6 / §11) --------
-  const {
-    data: previewRaw,
-    dataUpdatedAt: previewUpdatedAt,
-    error: previewError,
-  } = useReadContract({
+  const { data: previewRaw, error: previewError } = useReadContract({
     address: routerAddress,
     abi: routerAbi,
-    functionName: "previewDepositFor",
-    args: address && depositAssets !== null ? [address, depositAssets] : undefined,
-    query: {
-      enabled: isConnected && Boolean(address) && depositAssets !== null,
-      refetchInterval: 12_000,
-    },
+    functionName: "previewDeposit",
+    args: depositAssets !== null ? [depositAssets] : undefined,
+    query: { enabled: isConnected && depositAssets !== null },
   });
 
   // Root cause (issue #1036): `router.previewDeposit` may decode a leg whose
@@ -150,17 +143,9 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const shareSymbolOf = useVaultShareSymbols(
     legs.map((l) => l.vault).filter((v): v is Address => typeof v === "string"),
   );
-  // Derive the expiry from the quote read so a stale quote cannot extend itself. With no quote
-  // there are no legs and no deposit to sign, so the zero fallback is never submitted.
-  const deadline = BigInt(Math.floor((previewUpdatedAt ?? 0) / 1000) + 600);
   const routerPreview =
-    address && depositAssets !== null && legs.length > 0
-      ? buildRouterPreview(
-          depositAssets,
-          legs,
-          { ...ctx, shareSymbolOf },
-          { receiver: address, deadline },
-        )
+    depositAssets !== null && legs.length > 0
+      ? buildRouterPreview(depositAssets, legs, { ...ctx, shareSymbolOf })
       : null;
 
   // -------- getEffectiveWeights() live check (AC §7) --------
@@ -271,11 +256,8 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
     account: address,
     address: routerAddress,
     abi: routerAbi,
-    functionName: "depositWithQuote",
-    args:
-      address && depositAssets !== null
-        ? [address, depositAssets, legs.map((leg) => leg.vault), minSharesPerLeg, deadline]
-        : undefined,
+    functionName: "deposit",
+    args: depositAssets !== null ? [depositAssets, minSharesPerLeg] : undefined,
     query: { enabled: canSimDeposit, retry: 5 },
   });
 
@@ -312,7 +294,7 @@ export function RouterDepositTab({ routerAddress, usdcAddress, ctx }: Props) {
   const onDeposit = () => {
     if (!depositSim || !canSimDeposit) return;
     if (!sameAddress(depositSim.request.address)) return;
-    // The router's entry floor is 2.8M per effective-weight leg (QA plan U3). `previewDeposit` returns
+    // The router's entry floor is 2.4M per effective-weight leg (QA plan U3). `previewDeposit` returns
     // one leg per entry of that vector, and submit requires it to match `getEffectiveWeights()`.
     const legCount = Math.max(legs.length, currentActiveVaults?.length ?? 0);
     depositWrite.writeContract(withGasLimit(depositSim.request, routerDepositGasLimit(legCount)));

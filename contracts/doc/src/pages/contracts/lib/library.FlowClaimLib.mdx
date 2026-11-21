@@ -1,0 +1,760 @@
+---
+title: "FlowClaimLib"
+description: "Limit-free requests, cancels (with `cancelBuffer` & deposit-stop exits), expiry, redemption notice, claims, wind-down-aware freeze, and sweep for Step 3f `FlowQueue`."
+---
+
+# FlowClaimLib
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowClaimLib.sol)
+
+**Title:** FlowClaimLib
+
+Limit-free requests, cancels (with `cancelBuffer` & deposit-stop exits), expiry, redemption notice,
+claims, wind-down-aware freeze, and sweep for Step 3f `FlowQueue`.
+
+Ledger rule (E13, RB-22, E52): before any mutation of an owner's queued shares (escrow, held, credit),
+`fund.ledgerCheckpoint(owner)` runs first so index snapshots capture pre-change balances.
+
+## Functions
+
+<a id="requestdeposit-flowstate-uint256-address"></a>
+
+### requestDeposit
+
+Body of `FlowQueue.requestDeposit(usdc, owner)` (limit-free, terms locked at creation).
+
+```solidity
+function requestDeposit(FlowState storage s, uint256 usdc, address owner)
+        public
+        returns (uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| usdc | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+<a id="requestdepositwithpermit-flowstate-uint256-address-uint256-uint8-bytes32-bytes32"></a>
+
+### requestDepositWithPermit
+
+Body of `FlowQueue.requestDepositWithPermit(usdc, owner, deadline, v, r, s)`: an EIP-2612
+single-transaction deposit. The caller signs a permit typed-data message (spender = this queue,
+value = `usdc`) and the queue runs `permit(msg.sender, address(this), usdc, deadline, v, r, s)`
+inside a try/catch BEFORE the pull, so a mempool front-run of the permit cannot DoS the deposit:
+the revert is absorbed and the pull succeeds on the front-run allowance. The Request is created
+identically to `requestDeposit`, sharing its validation and Request-creation/pull helpers.
+
+```solidity
+function requestDepositWithPermit(
+        FlowState storage s,
+        uint256 usdc,
+        address owner,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 sigS
+    ) public returns (uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| usdc | `uint256` |  |
+| owner | `address` |  |
+| deadline | `uint256` |  |
+| v | `uint8` |  |
+| r | `bytes32` |  |
+| sigS | `bytes32` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+<a id="requestredeem-flowstate-uint256-address"></a>
+
+### requestRedeem
+
+Body of `FlowQueue.requestRedeem(shares, owner)` (limit-free, snapshots `exitFeeBps`, never expires).
+
+```solidity
+function requestRedeem(FlowState storage s, uint256 shares, address owner)
+        public
+        returns (uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| shares | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+<a id="cancel-flowstate-uint256"></a>
+
+### cancel
+
+Body of `FlowQueue.cancel`: cancels the unfilled remainder to credit.
+Respects `cancelBuffer`, except after cutoff when shutdown or a deposit stop unlocks deposits (E40).
+
+```solidity
+function cancel(FlowState storage s, uint256 requestId) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+<a id="withdrawexpired-flowstate-uint256"></a>
+
+### withdrawExpired
+
+Body of `FlowQueue.withdrawExpired`: deposits only (E40). Redemptions never expire.
+
+```solidity
+function withdrawExpired(FlowState storage s, uint256 requestId)
+        public
+        returns (uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| amount | `uint256` |  |
+
+<a id="giveredemptionnotice-flowstate-uint256"></a>
+
+### giveRedemptionNotice
+
+Body of `FlowQueue.giveRedemptionNotice`: after `maxRoll`, schedules unfilled remainder to
+return at the end of the active open round or the forming epoch's round (E40, RB-25).
+
+```solidity
+function giveRedemptionNotice(FlowState storage s, uint256 requestId)
+        public
+        returns (uint64 targetRound);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| targetRound | `uint64` |  |
+
+<a id="withdrawcredit-flowstate"></a>
+
+### withdrawCredit
+
+Body of `FlowQueue.withdrawCredit`: finalizes ended notices and releases wind-down escrows
+automatically if shut down, then pays all USDC and share credits to `msg.sender`.
+
+```solidity
+function withdrawCredit(FlowState storage s) public returns (uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+<a id="deliver-flowstate-address-uint256-bool"></a>
+
+### deliver
+
+Body of `FlowQueue.deposit` (`byShares == false`) and `FlowQueue.mint` (`byShares == true`).
+
+```solidity
+function deliver(FlowState storage s, address receiver, uint256 amount, bool byShares)
+        public
+        returns (uint256 shares, uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| receiver | `address` |  |
+| amount | `uint256` |  |
+| byShares | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| shares | `uint256` |  |
+| assets | `uint256` |  |
+
+<a id="_take-claim-uint256-bool"></a>
+
+### _take
+
+```solidity
+function _take(Claim storage c, uint256 left, bool byShares)
+        private
+        view
+        returns (uint256 x, uint256 cost, uint256 leftAfter);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `Claim` |  |
+| left | `uint256` |  |
+| byShares | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| x | `uint256` |  |
+| cost | `uint256` |  |
+| leftAfter | `uint256` |  |
+
+<a id="redeemclaims-flowstate-uint256-address-address"></a>
+
+### redeemClaims
+
+Body of `FlowQueue.redeem`: syncs owner redemption matches, then pays claim USDC FIFO.
+
+```solidity
+function redeemClaims(FlowState storage s, uint256 shares, address receiver, address owner)
+        public
+        returns (uint256 assets);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| shares | `uint256` |  |
+| receiver | `address` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| assets | `uint256` |  |
+
+<a id="freeze-flowstate-uint256"></a>
+
+### freeze
+
+Body of `FlowQueue.freezeSettlement`: covers matched + net-minted deposit shares while in hold;
+at most one freeze per `maxFreeze` window (E49); blocked during wind-down (E38).
+
+```solidity
+function freeze(FlowState storage s, uint256 id) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| id | `uint256` |  |
+
+<a id="release-flowstate-uint256"></a>
+
+### release
+
+Body of `FlowQueue.releaseSettlement`: ends an active freeze early.
+
+```solidity
+function release(FlowState storage s, uint256 id) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| id | `uint256` |  |
+
+<a id="sweep-flowstate"></a>
+
+### sweep
+
+Body of `FlowQueue.sweep`: sends surplus above obligations (gifts + dust) to the fund.
+
+```solidity
+function sweep(FlowState storage s) public returns (uint256 usdc, uint256 shares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
+| shares | `uint256` |  |
+
+<a id="epochrequests-flowstate-uint64"></a>
+
+### epochRequests
+
+```solidity
+function epochRequests(FlowState storage s, uint64 epoch)
+        public
+        view
+        returns (uint256[] memory ids);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| epoch | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `uint256[]` |  |
+
+<a id="deliverable-flowstate-claim"></a>
+
+### deliverable
+
+```solidity
+function deliverable(FlowState storage s, Claim storage c) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `Claim` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_deliverable-flowstate-claim-bool"></a>
+
+### _deliverable
+
+```solidity
+function _deliverable(FlowState storage s, Claim storage c, bool isShutdown)
+        private
+        view
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| c | `Claim` |  |
+| isShutdown | `bool` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="status-flowstate-uint256"></a>
+
+### status
+
+```solidity
+function status(FlowState storage s, uint256 requestId) public view returns (RequestStatus);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `RequestStatus` |  |
+
+<a id="pending-flowstate-uint256-address-requestkind"></a>
+
+### pending
+
+```solidity
+function pending(FlowState storage s, uint256 requestId, address controller, RequestKind kind)
+        public
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+| controller | `address` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="claimable-flowstate-uint256-address-requestkind"></a>
+
+### claimable
+
+```solidity
+function claimable(FlowState storage s, uint256 requestId, address controller, RequestKind kind)
+        public
+        view
+        returns (uint256 total);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+| controller | `address` |  |
+| kind | `RequestKind` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| total | `uint256` |  |
+
+<a id="maxclaims-flowstate-address"></a>
+
+### maxClaims
+
+```solidity
+function maxClaims(FlowState storage s, address owner)
+        public
+        view
+        returns (uint256 depositAssets, uint256 depositShares, uint256 redeemShares);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| depositAssets | `uint256` |  |
+| depositShares | `uint256` |  |
+| redeemShares | `uint256` |  |
+
+<a id="_open-flowstate-address"></a>
+
+### _open
+
+```solidity
+function _open(FlowState storage s, address owner) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+
+<a id="_checkdeposit-flowstate-uint256-address"></a>
+
+### _checkDeposit
+
+<i>
+
+Shared deposit validation of `requestDeposit` and `requestDepositWithPermit` (E11): open queue, then
+the zero / minimum / per-deposit-cap gates, returning the fund's current `exitFeeBps` for the request.
+
+</i>
+
+```solidity
+function _checkDeposit(FlowState storage s, uint256 usdc, address owner)
+        private
+        view
+        returns (uint16 exitFeeBps);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| usdc | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| exitFeeBps | `uint16` |  |
+
+<a id="_createdeposit-flowstate-address-uint256-uint16"></a>
+
+### _createDeposit
+
+<i>
+
+Shared Request creation of `requestDeposit` and `requestDepositWithPermit`: `_newRequest`, the
+pending-USDC book, match registration and `DepositRequested`, identically for both entry points.
+
+</i>
+
+```solidity
+function _createDeposit(FlowState storage s, address owner, uint256 usdc, uint16 exitFeeBps)
+        private
+        returns (uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+| usdc | `uint256` |  |
+| exitFeeBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+<a id="_pullusdc-flowstate-uint256"></a>
+
+### _pullUsdc
+
+<i>
+
+Shared USDC pull of `requestDeposit` and `requestDepositWithPermit`: `safeTransferFrom` the caller,
+then require the balance increased by exactly `usdc` (fee-on-transfer guard, shared with deposits).
+
+</i>
+
+```solidity
+function _pullUsdc(FlowState storage s, uint256 usdc) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| usdc | `uint256` |  |
+
+<a id="_newrequest-flowstate-address-requestkind-uint256-uint16"></a>
+
+### _newRequest
+
+```solidity
+function _newRequest(
+        FlowState storage s,
+        address owner,
+        RequestKind kind,
+        uint256 amount,
+        uint16 exitFeeBps
+    ) private returns (uint256 requestId);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| owner | `address` |  |
+| kind | `RequestKind` |  |
+| amount | `uint256` |  |
+| exitFeeBps | `uint16` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| requestId | `uint256` |  |
+
+<a id="_owned-flowstate-uint256"></a>
+
+### _owned
+
+```solidity
+function _owned(FlowState storage s, uint256 requestId)
+        private
+        view
+        returns (Request storage r);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| requestId | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| r | `Request` |  |
+
+<a id="_isdepositexpired-flowstate-request"></a>
+
+### _isDepositExpired
+
+```solidity
+function _isDepositExpired(FlowState storage s, Request storage r) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| r | `Request` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_depositstopallowscancel-flowstate-irobotmoneyfundfull-request"></a>
+
+### _depositStopAllowsCancel
+
+```solidity
+function _depositStopAllowsCancel(
+        FlowState storage s,
+        IRobotMoneyFundFull fund,
+        Request storage r
+    ) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| fund | `IRobotMoneyFundFull` |  |
+| r | `Request` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_settlement-flowstate-uint256"></a>
+
+### _settlement
+
+```solidity
+function _settlement(FlowState storage s, uint256 id)
+        private
+        view
+        returns (Settlement storage st);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| id | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| st | `Settlement` |  |
+
+<a id="_done-claim"></a>
+
+### _done
+
+```solidity
+function _done(Claim storage c) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| c | `Claim` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
