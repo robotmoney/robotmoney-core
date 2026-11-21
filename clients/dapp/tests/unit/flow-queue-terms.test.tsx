@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { render, screen } from "./helpers/render";
-import { FlowQueueTerms } from "../../src/components/FlowQueueTerms";
+import { FlowQueueTerms, FlowQueueTermsReadState } from "../../src/components/FlowQueueTerms";
 import {
   formatBandBps,
   formatUnixUtc,
@@ -71,6 +71,20 @@ describe("formatting", () => {
 });
 
 describe("FlowQueueTerms", () => {
+  it.each([
+    { loading: false, stale: true, error: false },
+    { loading: false, stale: false, error: true },
+    { loading: false, stale: false, error: false },
+  ])("does not show healthy terms when reads are stale, failed or missing", (state) => {
+    render(<FlowQueueTermsReadState {...state} />);
+    expect(screen.queryByTestId("flow-queue-terms")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("unavailable");
+  });
+  it("does not show cached terms when a refresh fails", () => {
+    render(<FlowQueueTermsReadState quote={quote} liveness={live} loading={false} stale error />);
+    expect(screen.queryByTestId("flow-queue-terms")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("stale");
+  });
   it("shows terms, bands, keeper and no stop when open", () => {
     render(<FlowQueueTerms quote={quote} liveness={live} />);
     expect(screen.getByTestId("flow-cancel-deadline").textContent).toContain(
@@ -80,6 +94,10 @@ describe("FlowQueueTerms", () => {
     expect(screen.getByTestId("flow-ref-band").textContent).toBe("90 bps");
     expect(screen.getByTestId("flow-leg-band").textContent).toBe("100 bps");
     expect(screen.getByTestId("flow-keeper").textContent).toBe("Configured");
+    expect(screen.getByTestId("flow-fee").textContent).toBe("10 bps");
+    expect(screen.getByTestId("flow-earliest-settlement").textContent).toBe("2027-01-15 09:00 UTC");
+    expect(screen.getByTestId("flow-hold-ends").textContent).toBe("2027-01-15 10:00 UTC");
+    expect(screen.getByText(/Matched flows and net trades/)).toBeTruthy();
     expect(screen.queryByTestId("flow-stop-queue-paused")).toBeNull();
   });
   it("shows each stop with its end and the cancel deadline", () => {
@@ -96,7 +114,7 @@ describe("FlowQueueTerms", () => {
     );
     const paused = screen.getByTestId("flow-stop-queue-paused").textContent ?? "";
     expect(paused).toContain("Ends 2027-01-15 21:53 UTC");
-    expect(paused).toContain("Cancel a locked deposit until 2027-01-15 08:00 UTC");
+    expect(paused).toContain("Cancel this request until 2027-01-15 08:00 UTC");
     expect(screen.getByTestId("flow-stop-deposits-stopped").textContent).toContain(
       "No end time is set",
     );

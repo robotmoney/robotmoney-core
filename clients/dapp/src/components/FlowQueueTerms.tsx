@@ -8,6 +8,23 @@ import {
   type FlowQuote,
 } from "../lib/flowQueueTerms";
 
+/** Do not render old terms as current when either queue read is unavailable. */
+export function FlowQueueTermsReadState(props: {
+  readonly quote?: FlowQuote;
+  readonly liveness?: FlowLiveness;
+  readonly loading: boolean;
+  readonly stale: boolean;
+  readonly error: boolean;
+  readonly kind?: "deposit" | "redeem";
+}) {
+  if (props.error || props.stale) {
+    return <p role="alert">Queue terms are unavailable or stale. Refresh before continuing.</p>;
+  }
+  if (props.loading) return <p>Loading queue terms…</p>;
+  if (!props.quote || !props.liveness) return <p role="alert">Queue terms are unavailable.</p>;
+  return <FlowQueueTerms quote={props.quote} liveness={props.liveness} kind={props.kind} />;
+}
+
 /**
  * Terms of a deposit made now. It shows each deposit stop with its cause, its end and the cancel deadline,
  * the guard bands, and keeper and Safe liveness (OPS-07, FLOW-08). It shows no price: the queue quotes none.
@@ -16,10 +33,14 @@ import {
 export function FlowQueueTerms(props: {
   readonly quote: FlowQuote;
   readonly liveness: FlowLiveness;
+  readonly kind?: "deposit" | "redeem";
 }) {
   const view = resolveFlowTerms(props.quote, props.liveness);
   return (
-    <section data-testid="flow-queue-terms" aria-label="Deposit terms">
+    <section
+      data-testid="flow-queue-terms"
+      aria-label={props.kind === "redeem" ? "Redemption terms" : "Deposit terms"}
+    >
       {view.stops.map((s) => (
         <p
           key={s.kind}
@@ -30,10 +51,16 @@ export function FlowQueueTerms(props: {
         >
           {s.cause}
           {s.endsAt !== null ? ` Ends ${formatUnixUtc(s.endsAt)}.` : " No end time is set."} Cancel
-          a locked deposit until {formatUnixUtc(view.cancelDeadline)}.
+          this request until {formatUnixUtc(view.cancelDeadline)}.
         </p>
       ))}
       <dl>
+        <dt>Fee</dt>
+        <dd data-testid="flow-fee">{props.quote.feeBps.toString()} bps</dd>
+        <dt>Earliest settlement</dt>
+        <dd data-testid="flow-earliest-settlement">{formatUnixUtc(props.quote.earliestSettle)}</dd>
+        <dt>Hold ends</dt>
+        <dd data-testid="flow-hold-ends">{formatUnixUtc(props.quote.holdEnds)}</dd>
         <dt>Cancel deadline</dt>
         <dd data-testid="flow-cancel-deadline">
           {formatUnixUtc(view.cancelDeadline)} ({view.cancelBufferSecs}s before the epoch closes)
@@ -45,6 +72,7 @@ export function FlowQueueTerms(props: {
         <dt>Keeper</dt>
         <dd data-testid="flow-keeper">{view.keeperConfigured ? "Configured" : "Not configured"}</dd>
       </dl>
+      <p>Matched flows and net trades can change the composition of the fund.</p>
       {view.warnings.map((w) => (
         <p
           key={w}

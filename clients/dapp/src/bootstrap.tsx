@@ -79,6 +79,7 @@ import { VaultCards } from "./components/VaultCards";
 import { LandingPriceStrip } from "./components/LandingPriceStrip";
 import { BalancesPanel } from "./components/BalancesPanel";
 import { Tabs } from "./components/Tabs";
+import { OneVaultFlow, oneVaultConfig } from "./components/OneVaultFlow";
 import { ConsensusReceiptPanel } from "./components/ConsensusReceiptPanel";
 import { parseVaultAddressMap } from "./lib/consensusReceiptApi";
 import { makeConfig } from "./lib/wagmi";
@@ -168,6 +169,7 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
   const { address: connectedAddress } = useAccount();
+  const oneVault = oneVaultConfig(cfg.env);
 
   // Listen for navigation so the /debug route works with browser back/forward.
   useEffect(() => {
@@ -239,6 +241,9 @@ export function App({ cfg }: { readonly cfg: DappConfig }) {
             activeTabId={activeTabId}
             onTabChange={setActiveTabId}
             tabs={[
+              ...(oneVault
+                ? [{ id: "one-vault", label: "One Vault", content: <OneVaultFlow {...oneVault} /> }]
+                : []),
               {
                 id: "my-account",
                 label: "My Account",

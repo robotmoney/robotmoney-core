@@ -32,6 +32,26 @@ export const FLOW_QUEUE_TERMS_ABI = [
   },
   {
     type: "function",
+    name: "quoteRedeem",
+    stateMutability: "view",
+    inputs: [{ name: "shares", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "feeBps", type: "uint256" },
+          { name: "cancelCutoff", type: "uint64" },
+          { name: "earliestSettle", type: "uint64" },
+          { name: "holdEnds", type: "uint64" },
+          { name: "refBandBps", type: "uint16" },
+          { name: "legBandBps", type: "uint16" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
     name: "liveness",
     stateMutability: "view",
     inputs: [],
