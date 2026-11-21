@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST, VAULT_MANIFESTS, journalHashesOf, vaultsOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf, stepIssuesOf } from "./run-record.ts";
+import { FUND_MANIFEST, VAULT_MANIFESTS, journalHashesOf, vaultsOf, main, notRunOf, redactUrls, senderIssuesOf, senderTxOf, unbackedOf, stepIssuesOf, acceptedOf, reportText } from "./run-record.ts";
 
 const SHA = "84952e18";
 /** The steps the test run's release runs on the target: the one step its journal holds, plus the report and sign-off steps the report excludes. */
@@ -269,4 +269,16 @@ test("a rerun of the sign-off step is not its own issue: its earlier failed resu
   const issues = stepIssuesOf(["P10.81-report", "P10.82-signoff", "P6.93-settle"], results, "P10.82-signoff");
   expect(issues).toEqual(["P6.93-settle: fail exit 1"]);
   expect(stepIssuesOf(["P10.82-signoff"], { "P10.82-signoff": "fail exit 1" })).toEqual(["P10.82-signoff: fail exit 1"]);
+});
+
+test("an owner-accepted failure leaves the issues only when its result matches exactly, and the report lists it with the decision", () => {
+  const results = { "P3.83-v": "fail exit 30", "P9.83-v": "fail exit 30", "P5-x": "fail exit 1" };
+  const issues = stepIssuesOf(Object.keys(results), results);
+  const acc = [{ step: "P3.83-v", result: "fail exit 30", decision: "D4-21: ok" }, { step: "P5-x", result: "fail exit 30", decision: "D4-21: ok" }];
+  const split = acceptedOf(issues, results, acc);
+  expect(split.issues).toEqual(["P5-x: fail exit 1", "P9.83-v: fail exit 30"]);
+  expect(split.accepted).toEqual(["P3.83-v: fail exit 30 (accepted: D4-21: ok)"]);
+  const text = reportText({ coreSha: "s", target: "t", chainId: "1", sheetSha256: "h", tag: "g", journal: [], evidence: [], issues: [], accepted: split.accepted, skips: [], pauseReports: [] });
+  expect(text).toContain("## Issues\n\nNone.\n");
+  expect(text).toContain("## Accepted issues\n\n- P3.83-v: fail exit 30 (accepted: D4-21: ok)");
 });

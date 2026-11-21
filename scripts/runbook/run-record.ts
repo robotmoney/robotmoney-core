@@ -21,6 +21,8 @@
 //       writes D/go/signoff.json when the report exists and lists no issue, the report computed again from the run's journal, chain and release file lists no issue
 //       (a hand-edited report does not sign off) and the run matches the publish go. Exit 1 otherwise. This record, and nothing an operator or an agent says,
 //       is what "the run is complete" means.
+//   An owner-accepted failure: D/go/accepted.json is a list of {step, result, decision}. A step whose result is exactly that `result` is listed
+//       under "Accepted issues" with the decision, not under "Issues"; the sign-off record copies the list verbatim. A result that differs stays an issue.
 // A record that exists is kept when it matches and refused when it differs. Exit 1 is a refusal, exit 2 a usage error. No secret is read or written.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -85,6 +87,20 @@ export function stepIssuesOf(journaled: string[], results: Record<string, string
   // `self` (the step writing the report or the sign-off) is never its own issue: on a rerun its earlier result is still on disk while it runs again.
   const failed = Object.entries(results).filter(([id, r]) => id !== self && r !== "pass" && !/^skip( |$)/.test(r)).map(([id, r]) => `${id}: ${r || "empty result"}`);
   return [...failed, ...missing].sort();
+}
+export interface Accepted { step: string; result: string; decision: string }
+/** PURE. Splits step issues into those an owner decision accepts (the step's result is exactly the accepted one) and the rest. */
+export function acceptedOf(issues: string[], results: Record<string, string>, accepted: Accepted[]): { issues: string[]; accepted: string[] } {
+  const hit = (i: string) => accepted.find((a) => i === `${a.step}: ${a.result}` && results[a.step] === a.result);
+  return { issues: issues.filter((i) => !hit(i)), accepted: issues.filter(hit).map((i) => `${i} (accepted: ${hit(i)!.decision})`) };
+}
+/** The owner-accepted failures of a run: D/go/accepted.json, or none. */
+export function readAccepted(runDir: string): Accepted[] {
+  const p = join(runDir, "go", "accepted.json");
+  if (!existsSync(p)) return [];
+  const list = JSON.parse(readFileSync(p, "utf8")) as unknown;
+  if (!Array.isArray(list) || !list.every((a) => a && typeof a.step === "string" && typeof a.result === "string" && typeof a.decision === "string" && a.decision.trim() !== "")) throw new Refusal(`${p} is a list of {step, result, decision}`);
+  return list as Accepted[];
 }
 /** PURE. A result that no journal backs: every command the runner runs appends to <id>.out, so a `pass` with no journal file was written by hand. */
 export const unbackedOf = (results: Record<string, string>, journaled: string[]): string[] => Object.entries(results).filter(([id, r]) => r === "pass" && !journaled.includes(id)).map(([id]) => `${id}: a pass with no journal`).sort();
@@ -226,13 +242,14 @@ async function releaseVaults(release: string): Promise<string | undefined> {
 export const redactUrls = (line: string): string => line.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)]+/gi, "<url>");
 
 /** PURE. The rollout report text. */
-export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[]; skips: string[]; pauseReports: string[] }): string {
+export function reportText(r: { coreSha: string; target: string; chainId: string; sheetSha256: string; tag: string; journal: { id: string; lines: number; last: string }[]; evidence: { file: string; sha256: string }[]; issues: string[]; accepted?: string[]; skips: string[]; pauseReports: string[] }): string {
   const out = [
     `# Rollout report`, ``,
     `Written by scripts/runbook/run-record.ts from the run directory. Nothing in it is typed by hand.`, ``,
     `| Field | Value |`, `| --- | --- |`,
     `| Core sha | ${r.coreSha} |`, `| Target | ${r.target} |`, `| Chain id | ${r.chainId} |`, `| Sheet sha256 | ${r.sheetSha256} |`, `| Release tag | ${r.tag} |`, ``,
     `## Issues`, ``, ...(r.issues.length ? r.issues.map((i) => `- ${i}`) : ["None."]), ``,
+    ...(r.accepted?.length ? [`## Accepted issues`, ``, ...r.accepted.map((i) => `- ${i}`), ``] : []),
     `## Skipped steps`, ``, ...(r.skips.length ? r.skips.map((s) => `- ${s}`) : ["None."]), ``,
     `## Pause reports`, ``, ...(r.pauseReports.length ? r.pauseReports.map((f) => `- ${f} (a pause drill or a failed verify; the vault reads above decide whether it is still open)`) : ["None."]), ``,
     `## Steps (journal)`, ``, `| Step | Lines | Last line |`, `| --- | --- | --- |`,
@@ -248,7 +265,7 @@ function listFiles(dir: string, base = dir): string[] {
 }
 
 /** The report of the run as it stands: its text, and its issues. `report` writes it, and `signoff` computes it again, so a hand-edited report cannot sign off. */
-async function buildReport(f: Record<string, string>, b: ReturnType<typeof basis>, runDir: string, applicable: (release: string, target: string) => Promise<string[]>): Promise<{ text: string; issues: string[] }> {
+async function buildReport(f: Record<string, string>, b: ReturnType<typeof basis>, runDir: string, applicable: (release: string, target: string) => Promise<string[]>): Promise<{ text: string; issues: string[]; accepted: string[] }> {
   const evidenceDir = need(f, "evidence-dir");
   const journalDir = join(runDir, "journal");
   const journalFiles = listFiles(journalDir);
@@ -258,14 +275,15 @@ async function buildReport(f: Record<string, string>, b: ReturnType<typeof basis
   });
   const results = Object.fromEntries(journalFiles.filter((x) => x.endsWith(".result")).map((x) => [x.replace(/\.result$/, ""), readFileSync(join(journalDir, x), "utf8").trim()]));
   const vaults = vaultsOf(f.vaults ?? (applicable === applicableIds ? await releaseVaults(need(f, "release")) : undefined));
-  const stepIssues = stepIssuesOf(journal.map((j) => j.id), results, f.step);
+  const split = acceptedOf(stepIssuesOf(journal.map((j) => j.id), results, f.step), results, readAccepted(runDir));
+  const stepIssues = split.issues;
   const notRun = notRunOf(await applicable(need(f, "release"), b.target), results, f.step);
   const texts = journalFiles.filter((x) => x.endsWith(".out") || x.endsWith(".err")).map((x) => readFileSync(join(journalDir, x), "utf8"));
   const files = listFiles(evidenceDir);
   const names = files.map((x) => x.split("/").at(-1)!);
   const issues = [...stepIssues, ...notRun, ...unbackedOf(results, journalFiles.filter((x) => x.endsWith(".out")).map((x) => x.replace(/\.out$/, ""))), ...issuesOf(vaultReads(need(f, "manifest-dir"), need(f, "rpc"), vaults)), ...senderIssues(runDir, texts)];
-  const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues, skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
-  return { text, issues };
+  const text = reportText({ ...b, chainId: need(f, "chain-id"), tag: need(f, "tag"), journal, evidence: files.map((x) => ({ file: x, sha256: sha256(join(evidenceDir, x)) })), issues, accepted: split.accepted, skips: skipsOf(results), pauseReports: pauseReportsOf(names) });
+  return { text, issues, accepted: split.accepted };
 }
 
 /** `deps.applicable` is a test seam: the CLI never passes it, so a run is always checked against the committed release file. */
@@ -308,7 +326,7 @@ export async function main(argv: string[], deps: { applicable?: (release: string
     if (!existsSync(goFile) || !sameBasis(b)(JSON.parse(readFileSync(goFile, "utf8")))) throw new Refusal(`${goFile} is missing or names another sha, target or sheet`);
     const go = JSON.parse(readFileSync(goFile, "utf8")) as { senders?: unknown[] };
     if (!Array.isArray(go.senders) || go.senders.length === 0) throw new Refusal(`${goFile} marks no sender: the run's transactions cannot be checked, so there is no sign-off (record the go with --rpc and --sender)`);
-    writeOnce(join(runDir, "go", "signoff.json"), { kind: "signoff", ...b, rolloutReportSha256: sha256(report), recordedAt: new Date().toISOString(), by: "scripts/runbook/run-record.ts" }, sameBasis(b));
+    writeOnce(join(runDir, "go", "signoff.json"), { kind: "signoff", ...b, rolloutReportSha256: sha256(report), ...(again.accepted.length ? { acceptedIssues: again.accepted, accepted: readAccepted(runDir) } : {}), recordedAt: new Date().toISOString(), by: "scripts/runbook/run-record.ts" }, sameBasis(b));
     return 0;
   } catch (e) {
     console.error(`run-record: ${(e as Error).message}`);
