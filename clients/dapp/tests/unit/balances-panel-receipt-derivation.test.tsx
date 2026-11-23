@@ -111,6 +111,19 @@ describe("BalancesPanel derives receipt-token reads from VaultRecord (issue #134
     );
   });
 
+  it("renders a 5e24 balance as 5.00 at decimals() 24, not at 42 decimals (issue 2055)", () => {
+    const entry = TOKEN_READS[VAULT_A.toLowerCase()]!;
+    entry.decimals = 24;
+    try {
+      render(<BalancesPanel gatewayAddress={GATEWAY} />);
+      expect(screen.getByTestId(`balances-panel-row-receipt-${VAULT_A}-amount`).textContent).toBe(
+        "5.00 rmUSDC",
+      );
+    } finally {
+      entry.decimals = 6;
+    }
+  });
+
   it("still renders the plain USDC row (guards against a vacuous pass)", () => {
     render(<BalancesPanel gatewayAddress={GATEWAY} />);
     expect(screen.getByTestId("balances-panel-row-usdc-amount").textContent).toBe("1.00 USDC");

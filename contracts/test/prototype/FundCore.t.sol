@@ -11,6 +11,7 @@
 // feeds) by `integrate`; the Compound exclusion of the ledger test now excludes Moonwell, which replay always lists.
 pragma solidity ^0.8.24;
 
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -205,6 +206,17 @@ contract FundCoreTest is PrototypeHarness {
         vm.prank(address(timelock));
         vm.expectRevert(IRobotMoneyFund.AlreadySeeded.selector);
         fund.seed(SEED_USDC);
+    }
+
+    /// @dev Issue 2055: decimals() is OpenZeppelin's default (asset 6 + offset 18), and the offset changes no price.
+    function test_decimals_isOpenZeppelinDefault24() public fixtureCovered {
+        assertEq(fund.decimals(), 24, "decimals = 24");
+        assertEq(
+            uint256(fund.decimals()), uint256(IERC20Metadata(USDC).decimals()) + 18, "usdc + offset"
+        );
+        _seed(SEED_USDC);
+        assertEq(fund.convertToShares(SEED_USDC), SEED_USDC * 1e18, "convertToShares unchanged");
+        assertEq(fund.convertToAssets(SEED_USDC * 1e18), SEED_USDC, "convertToAssets unchanged");
     }
 
     function test_seed_refusesBelowMinimumAndNonAdmin() public fixtureCovered {
