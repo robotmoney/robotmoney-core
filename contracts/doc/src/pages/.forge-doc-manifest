@@ -74,6 +74,7 @@ contracts/lib/interface.IInKindVault.mdx
 contracts/lib/library.BasketAssetConfigGuard.mdx
 contracts/lib/library.BasketSwaps.mdx
 contracts/lib/library.BpsMath.mdx
+contracts/lib/library.FeeTransfer.mdx
 contracts/lib/library.FeedLib.mdx
 contracts/lib/library.FlowCheckLib.mdx
 contracts/lib/library.FlowClaimLib.mdx
@@ -162,6 +163,8 @@ contracts/test/contract.CompoundV3AdapterPositionTest.mdx
 contracts/test/contract.ConfigFilesTest.mdx
 contracts/test/contract.CustodyInvariantGuardTest.mdx
 contracts/test/contract.DelegatecallProxyAdapter.mdx
+contracts/test/contract.DelistBooks.mdx
+contracts/test/contract.DelistClaimScalingTest.mdx
 contracts/test/contract.FundPredictionHarness.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.MockAavePool.mdx
@@ -172,6 +175,8 @@ contracts/test/contract.PosConfAavePool.mdx
 contracts/test/contract.PosConfComet.mdx
 contracts/test/contract.PosConfMorphoVault.mdx
 contracts/test/contract.PredictionHarness.mdx
+contracts/test/contract.ProposerFloorTimelockExecutorFloorTest.mdx
+contracts/test/contract.ScalingToken.mdx
 contracts/test/contract.TwapTickMathHarness.mdx
 contracts/test/contract.TwapTickMathTest.mdx
 contracts/test/contract.UpgradeAuthorityPredictionTest.mdx
@@ -272,6 +277,7 @@ contracts/test/prototype/contract.AttacksTimedTest.mdx
 contracts/test/prototype/contract.BaseFixtureProbeTest.mdx
 contracts/test/prototype/contract.CustodyTest.mdx
 contracts/test/prototype/contract.EndToEndTest.mdx
+contracts/test/prototype/contract.FakeV3Pool.mdx
 contracts/test/prototype/contract.FixVenue.mdx
 contracts/test/prototype/contract.FlowLibsHarness.mdx
 contracts/test/prototype/contract.FlowLibsPinTest.mdx
@@ -310,6 +316,7 @@ contracts/test/prototype/contract.RebalancerGapsTest.mdx
 contracts/test/prototype/contract.ReviewFixesDepthTest.mdx
 contracts/test/prototype/contract.ReviewFixesQueueTest.mdx
 contracts/test/prototype/contract.ReviewFixesRebalancerTest.mdx
+contracts/test/prototype/contract.SafetyReview090Test.mdx
 contracts/test/prototype/contract.SizeGateTest.mdx
 contracts/test/prototype/contract.Step3eHostileSwapAdapter.mdx
 contracts/test/prototype/contract.Step3eNoQueueTest.mdx
@@ -335,9 +342,11 @@ contracts/test/prototype/interface.IHarnessSwapRouter02.mdx
 contracts/test/prototype/interface.IHarnessV3Pool.mdx
 contracts/test/prototype/interface.IProbeAggregator.mdx
 contracts/test/prototype/interface.IRealAggregator.mdx
+contracts/test/prototype/interface.IRouterFactory.mdx
 contracts/test/prototype/interface.ISwapRouter02.mdx
 contracts/test/prototype/interface.IUniswapV3PoolMint.mdx
 contracts/test/prototype/interface.IV3Pool.mdx
+contracts/test/prototype/interface.IWeth9.mdx
 contracts/test/prototype/library.IFlowEventsSel.mdx
 contracts/test/prototype/mocks/abstract.MechReentry.mdx
 contracts/test/prototype/mocks/contract.MechAaveAdapter.mdx

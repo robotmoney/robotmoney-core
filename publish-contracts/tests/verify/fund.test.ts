@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keccak256, pad, toHex } from "viem";
@@ -18,7 +18,10 @@ import {
 import { ERC1967_IMPLEMENTATION_SLOT, ERC1967_PROXY_ARTIFACT, verifyLinkedLibraries } from "../../src/verify/codehash.ts";
 import {
   FLOW_PARAM_FIELDS,
+  FUND_ADAPTER_PROXY_CODE_HASH_MEMBER_SLOT,
   FUND_ROLES,
+  FUND_STORAGE_SLOT,
+  adapterProxyCodeHashSlot,
   readFundActiveState,
   verifyFundSystem,
   verifyFundUpgradeSafety,
@@ -510,6 +513,24 @@ function makeFixture(sheetOver: Partial<NonNullable<VerifySheet["fund"]>> = {}) 
   return { root, manifestDir, artifactsDir, sheet, chain, opts };
 }
 
+const KEEPER_ONE_OWNER_LABEL = "keeper: a contract keeper has exactly one owner, the Safe (AGY-04)";
+const ADAPTER_PROXY_LABEL = "fund: every proxied basket adapter is marked a proxy and runs the recorded implementation (ADR-0019)";
+/** The first basket asset's adapter (defaultAssets), turned into an ADR-0019 proxy by proxyAdapter. */
+const ADAPTER_PROXY = A(0xad04), ADAPTER_IMPL = A(0xad44);
+const ADAPTER_PROXY_CODE: Hex = "0x6080aa", ADAPTER_IMPL_CODE: Hex = "0x6080bb";
+const MARKED = `0x${"1".padStart(64, "0")}` as Hex;
+/** What DeployFund.s.sol leaves: the proxy with its implementation slot, the proxy hash marked on the fund, and the two manifest keys. */
+function proxyAdapter(f: ReturnType<typeof makeFixture>, o: { marked?: boolean; manifest?: boolean } = {}): void {
+  f.chain.codes.set(lc(ADAPTER_PROXY), ADAPTER_PROXY_CODE);
+  f.chain.codes.set(lc(ADAPTER_IMPL), ADAPTER_IMPL_CODE);
+  f.chain.storage.set(`${lc(ADAPTER_PROXY)}:${lc(ERC1967_IMPLEMENTATION_SLOT)}`, wordOf(ADAPTER_IMPL));
+  if (o.marked !== false) f.chain.storage.set(`${lc(FUND)}:${lc(adapterProxyCodeHashSlot(keccak256(ADAPTER_PROXY_CODE)))}`, MARKED);
+  if (o.manifest !== false) {
+    const file = join(f.manifestDir, "fund.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), swap_adapter: ADAPTER_PROXY, swap_adapter_implementation: ADAPTER_IMPL }));
+  }
+}
+
 const failedLabels = async (opts: VerifyOptions) => (await verifyFundSystem(opts)).checks.filter((c) => !c.ok).map((c) => `${c.label}: ${c.detail}`);
 
 describe("verifyFundSystem positive coverage (Step 3f)", () => {
@@ -546,7 +567,7 @@ describe("verifyFundSystem positive coverage (Step 3f)", () => {
     const fallback = A(0x50d3);
     const { chain, opts } = makeFixture({
       keeperType: "smart-account",
-      keeperOwners: [KEEPER_OWNER],
+      keeperOwners: ["@safe"], // AGY-04: the one owner is the Safe
       keeperBotKeys: [KEEPER_BOT],
       safeModules: [mod],
       safeGuard: guard,
@@ -557,9 +578,31 @@ describe("verifyFundSystem positive coverage (Step 3f)", () => {
     chain.storage.set(`${lc(SAFE)}:${lc(SAFE_GUARD_SLOT)}`, wordOf(guard));
     chain.storage.set(`${lc(SAFE)}:${lc(SAFE_FALLBACK_SLOT)}`, wordOf(fallback));
     chain.on(KEEPER, "owners", () => { throw new Error("reverted"); });
-    chain.on(KEEPER, "getOwners", () => [KEEPER_OWNER]);
+    chain.on(KEEPER, "getOwners", () => [SAFE]);
     chain.on(KEEPER, "botKeys", () => [KEEPER_BOT]);
     expect(await failedLabels(opts)).toEqual([]);
+  });
+
+  // Safety review 0.9.0 (MISSED-09): the swap adapter behind an ADR-0019 proxy, as DeployFund.s.sol deploys it.
+  test("passes a proxied swap adapter that is allowed, marked a proxy hash, and runs the manifest's swap_adapter_implementation", async () => {
+    const f = makeFixture();
+    proxyAdapter(f);
+    const report = await verifyFundSystem(f.opts);
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.checks.find((c) => c.label === ADAPTER_PROXY_LABEL)?.detail).toBe("1 proxied basket adapter(s) marked");
+    // a manifest written before the key existed (the live Deploy 4 record): the mark is still checked, the implementation is not compared
+    const old = makeFixture();
+    proxyAdapter(old, { manifest: false });
+    expect(await failedLabels(old.opts)).toEqual([]);
+  });
+
+  test("the proxy-hash mark is read at FundState.adapterProxyCodeHash: the slot matches FundStorage.sol and the storage-layout fixture", () => {
+    expect(readFileSync(join(REPO_ROOT, "contracts", "lib", "FundStorage.sol"), "utf8")).toContain(FUND_STORAGE_SLOT);
+    const layout = JSON.parse(readFileSync(join(REPO_ROOT, "contracts", "test", "fixtures", "storage-layout", "RobotMoneyFund.json"), "utf8"));
+    const members = layout.nested["robotmoney.storage.RobotMoneyFund"]["t_struct(FundState)_storage"].members as { label: string; slot: string; type: string }[];
+    expect(members.find((m) => m.label === "adapterProxyCodeHash")).toMatchObject({ slot: String(FUND_ADAPTER_PROXY_CODE_HASH_MEMBER_SLOT), type: "t_mapping(t_bytes32,t_bool)" });
+    const h = keccak256("0x6080aa");
+    expect(adapterProxyCodeHashSlot(h)).toBe(keccak256(`0x${h.slice(2)}${(BigInt(FUND_STORAGE_SLOT) + 55n).toString(16).padStart(64, "0")}`));
   });
 });
 
@@ -600,6 +643,40 @@ describe("verifyFundSystem negative coverage (DEP-01..03, E47)", () => {
     const fAdapter = makeFixture();
     fAdapter.chain.adapterAllowed = false;
     expect((await failedLabels(fAdapter.opts)).join("\n")).toContain("fund: every active basket adapter's code hash is allowed (ADR-0019)");
+  });
+
+  test("rejects a proxied swap adapter that is not marked, runs another implementation than the manifest's, or whose marks are wrong (MISSED-09)", async () => {
+    // allowed but not marked a proxy hash: the fund would treat the proxy as a direct adapter and never vet the implementation
+    const fUnmarked = makeFixture();
+    proxyAdapter(fUnmarked, { marked: false });
+    const unmarked = (await failedLabels(fUnmarked.opts)).join("\n");
+    expect(unmarked).toContain(ADAPTER_PROXY_LABEL);
+    expect(unmarked).toContain("is a proxy but its code hash is not marked a proxy hash");
+
+    // the implementation mismatch: the proxy points at an implementation the manifest did not record
+    const fImpl = makeFixture();
+    proxyAdapter(fImpl);
+    const other = A(0xad66);
+    fImpl.chain.codes.set(lc(other), ADAPTER_IMPL_CODE);
+    fImpl.chain.storage.set(`${lc(ADAPTER_PROXY)}:${lc(ERC1967_IMPLEMENTATION_SLOT)}`, wordOf(other));
+    const mismatch = (await failedLabels(fImpl.opts)).join("\n");
+    expect(mismatch).toContain(ADAPTER_PROXY_LABEL);
+    expect(mismatch).toContain(`implementation ${other} differs from the manifest's swap_adapter_implementation ${ADAPTER_IMPL}`);
+
+    // the manifest records an implementation, but the adapter is no proxy at all
+    const fDirect = makeFixture();
+    proxyAdapter(fDirect, { marked: false });
+    fDirect.chain.storage.delete(`${lc(ADAPTER_PROXY)}:${lc(ERC1967_IMPLEMENTATION_SLOT)}`);
+    expect((await failedLabels(fDirect.opts)).join("\n")).toContain(`implementation ${ZERO} differs from the manifest's swap_adapter_implementation ${ADAPTER_IMPL}`);
+
+    // the implementation's own hash marked a proxy hash (the fund refuses it on use), and a direct adapter whose hash is marked
+    const fImplMarked = makeFixture();
+    proxyAdapter(fImplMarked);
+    fImplMarked.chain.storage.set(`${lc(FUND)}:${lc(adapterProxyCodeHashSlot(keccak256(ADAPTER_IMPL_CODE)))}`, MARKED);
+    expect((await failedLabels(fImplMarked.opts)).join("\n")).toContain(`adapter implementation ${ADAPTER_IMPL} code hash is marked a proxy hash`);
+    const fDirectMarked = makeFixture();
+    fDirectMarked.chain.storage.set(`${lc(FUND)}:${lc(adapterProxyCodeHashSlot(keccak256("0x")))}`, MARKED); // the fixture's direct adapters have no code set
+    expect((await failedLabels(fDirectMarked.opts)).join("\n")).toContain("is no proxy (no ERC-1967 implementation) but its code hash is marked a proxy hash");
   });
 
   test("rejects recursive library code mismatch, extra/missing roles, adminCount() discrepancy, and Safe anomalies", async () => {
@@ -674,6 +751,40 @@ describe("verifyFundSystem negative coverage (DEP-01..03, E47)", () => {
     const saFails = (await failedLabels(fSa.opts)).join("\n");
     expect(saFails).toContain("keeper: smart account owners equal sheet");
     expect(saFails).toContain("keeper: smart account botKeys equal sheet");
+
+    // Safety review 0.9.0 (AGY-04): the sheet names no KEEPER_TYPE and no KEEPER_OWNERS, and the keeper on chain is a contract. Before, no keeper check ran.
+    const NO_KEEPER_LINES = { keeperType: undefined, keeperOwners: undefined, keeperBotKeys: undefined };
+    const fMulti = makeFixture(NO_KEEPER_LINES);
+    fMulti.chain.codes.set(lc(KEEPER), "0x6080");
+    fMulti.chain.on(KEEPER, "owners", () => [KEEPER_OWNER, A(0x9999)]);
+    const multi = await failedLabels(fMulti.opts);
+    expect(multi).toEqual([expect.stringContaining(KEEPER_ONE_OWNER_LABEL)]); // the new check is the only one that sees it
+    expect(multi[0]).toContain(`expected exactly the Safe [${lc(SAFE)}]`);
+    // one owner that is not the Safe (a single key), and the Safe plus a second owner
+    const fKey = makeFixture(NO_KEEPER_LINES);
+    fKey.chain.codes.set(lc(KEEPER), "0x6080");
+    fKey.chain.on(KEEPER, "owners", () => [KEEPER_OWNER]);
+    expect((await failedLabels(fKey.opts)).join("\n")).toContain(KEEPER_ONE_OWNER_LABEL);
+    const fSafePlus = makeFixture(NO_KEEPER_LINES);
+    fSafePlus.chain.codes.set(lc(KEEPER), "0x6080");
+    fSafePlus.chain.on(KEEPER, "owners", () => [SAFE, KEEPER_OWNER]);
+    expect((await failedLabels(fSafePlus.opts)).join("\n")).toContain(KEEPER_ONE_OWNER_LABEL);
+    // a sheet that agrees with a multi-owner account still fails: the rule is the chain's, not the sheet's
+    const fAgree = makeFixture({ ...NO_KEEPER_LINES, keeperOwners: [KEEPER_OWNER, A(0x9999)] });
+    fAgree.chain.codes.set(lc(KEEPER), "0x6080");
+    fAgree.chain.on(KEEPER, "owners", () => [KEEPER_OWNER, A(0x9999)]);
+    expect(await failedLabels(fAgree.opts)).toEqual([expect.stringContaining(KEEPER_ONE_OWNER_LABEL)]);
+    // a contract keeper that answers no owners(): who controls it cannot be checked
+    const fOpaque = makeFixture(NO_KEEPER_LINES);
+    fOpaque.chain.codes.set(lc(KEEPER), "0x6080");
+    expect((await failedLabels(fOpaque.opts)).join("\n")).toContain("answers neither owners() nor getOwners()");
+    // the Safe as the only owner passes with no keeper line in the sheet, and so does a keeper with no code (the fixture default, Deploy 4's direct key)
+    const fSafeOwned = makeFixture(NO_KEEPER_LINES);
+    fSafeOwned.chain.codes.set(lc(KEEPER), "0x6080");
+    fSafeOwned.chain.on(KEEPER, "owners", () => [SAFE]);
+    expect(await failedLabels(fSafeOwned.opts)).toEqual([]);
+    const eoaReport = await verifyFundSystem(makeFixture(NO_KEEPER_LINES).opts);
+    expect(eoaReport.checks.find((c) => c.label === KEEPER_ONE_OWNER_LABEL)).toMatchObject({ ok: true, detail: "the keeper has no code: a direct keeper key" });
 
     const f3f = makeFixture();
     f3f.chain.on(QUEUE, "cancelBuffer", () => 123n);

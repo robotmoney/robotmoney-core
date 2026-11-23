@@ -5,7 +5,7 @@ description: "Every value-moving path of `RobotMoneyFund` except the share mint/
 
 # FundFlowsLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FundFlowsLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FundFlowsLib.sol)
 
 **Title:** FundFlowsLib
 
@@ -828,9 +828,10 @@ function _emergencyUnwindSingleSwap(
 
 <i>
 
-The floor of a sale outside a step: the larger of the feed price less `delistBandBps` and the caller's
-`minUsdcOut`. A stale feed leaves only the caller's floor, which must then be set (AGY-01). A stale price is
-never a floor, because it would trap an asset that crashed.
+The floor of a sale outside a step. A non-zero `minUsdcOut` is the floor: the timelock named it, and it
+stands even below the feed, so an asset whose feed is fresh but still shows a price from before a crash
+can be sold. With `minUsdcOut == 0` the floor is the feed price less `delistBandBps`, and a stale feed
+then reverts (AGY-01). A stale price is never a floor, because it would trap an asset that crashed.
 
 </i>
 

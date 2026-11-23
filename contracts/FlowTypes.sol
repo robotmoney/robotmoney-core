@@ -45,6 +45,9 @@ uint256 constant ENROLL_VISIT_MAX = 256;
 /// @dev A call whose enrollment visited more than this many requests ends there, and the next call books the match and
 ///      walks the sides. A light round (the usual case) still enrolls and settles in one call.
 uint256 constant ENROLL_PROCEED_MAX = 8;
+/// @dev Gas one enrollment batch may use before it ends (after at least one enrollment): an owner sync is not a
+///      fixed cost, so the count budgets above do not bound a call by themselves.
+uint256 constant ENROLL_GAS_MAX = 4_000_000;
 uint256 constant NOTICE_BUDGET = 16;
 uint32 constant MIN_CANCEL_BUFFER = 1 minutes;
 uint32 constant MAX_CANCEL_BUFFER = 6 hours;

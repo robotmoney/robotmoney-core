@@ -4,7 +4,7 @@ title: "FlowTypes Constants"
 
 # FlowTypes Constants
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/FlowTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/FlowTypes.sol)
 
 ## MIN_EPOCH_LENGTH
 
@@ -88,6 +88,19 @@ walks the sides. A light round (the usual case) still enrolls and settles in one
 
 ```solidity
 uint256 constant ENROLL_PROCEED_MAX = 8;
+```
+
+## ENROLL_GAS_MAX
+
+<i>
+
+Gas one enrollment batch may use before it ends (after at least one enrollment): an owner sync is not a
+fixed cost, so the count budgets above do not bound a call by themselves.
+
+</i>
+
+```solidity
+uint256 constant ENROLL_GAS_MAX = 4_000_000;
 ```
 
 ## NOTICE_BUDGET

@@ -5,7 +5,7 @@ description: "Proof tests for the agy safety review of 0.9.0. Each test states t
 
 # SafetyReview090Test
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/prototype/SafetyReview090.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/test/prototype/SafetyReview090.t.sol)
 
 **Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
 
@@ -379,5 +379,72 @@ Two receipts recorded in the same block both stay applicable, in either order (T
 
 ```solidity
 function test_TM17_sameBlockReceiptsBothApply() public fixtureCovered;
+```
+
+<a id="test_missed01_cancelleddepositfloodcannotbricksettle"></a>
+
+### test_MISSED01_cancelledDepositFloodCannotBrickSettle
+
+One address creates and cancels deposits in one epoch, then leaves one live deposit behind them. The
+cancelled ids stay in the epoch's list. Every settle call and every `checkSettle` must still fit under
+the per-tx gas cap, and repeated calls must reach the live deposit (MISSED-01).
+
+```solidity
+function test_MISSED01_cancelledDepositFloodCannotBrickSettle() public fixtureCovered;
+```
+
+<a id="test_missed09_frozenlendingvenuedoesnotholdtheotherlegs"></a>
+
+### test_MISSED09_frozenLendingVenueDoesNotHoldTheOtherLegs
+
+A lending venue with no liquidity is backed off, so the next step trades the plan's other legs
+instead of picking the frozen venue again (MISSED-09).
+
+```solidity
+function test_MISSED09_frozenLendingVenueDoesNotHoldTheOtherLegs() public fixtureCovered;
+```
+
+<a id="test_agy01_namedfloorstandswhenafreshfeedlagsthemarket"></a>
+
+### test_AGY01_namedFloorStandsWhenAFreshFeedLagsTheMarket
+
+A feed that is fresh but still shows the price from before a crash must not trap the asset: the floor
+the timelock names stands, even below the feed (AGY-01, chapter 05).
+
+```solidity
+function test_AGY01_namedFloorStandsWhenAFreshFeedLagsTheMarket() public fixtureCovered;
+```
+
+<a id="test_missed03_requestafterrestoreinthesameepochissettled"></a>
+
+### test_MISSED03_requestAfterRestoreInTheSameEpochIsSettled
+
+A shutdown and a restore inside one epoch: a request made after the restore, in that same epoch, is
+still enrolled and settled (MISSED-03).
+
+```solidity
+function test_MISSED03_requestAfterRestoreInTheSameEpochIsSettled() public fixtureCovered;
+```
+
+<a id="test_agy11_secondsettlementduringadelistingdoesnottripcheck6"></a>
+
+### test_AGY11_secondSettlementDuringADelistingDoesNotTripCheck6
+
+Two settlements in a row during a delisting sale of a large asset: the second must not trip the
+share-price check on the sale itself (AGY-11's neighbour).
+
+```solidity
+function test_AGY11_secondSettlementDuringADelistingDoesNotTripCheck6() public fixtureCovered;
+```
+
+<a id="test_missed01_anyonesendsanexpireddepositbacktoitsowner"></a>
+
+### test_MISSED01_anyoneSendsAnExpiredDepositBackToItsOwner
+
+An expired deposit left open holds the settle walk's start at its epoch. Anyone may send it back to its
+owner, so the walk does not depend on that owner (MISSED-01).
+
+```solidity
+function test_MISSED01_anyoneSendsAnExpiredDepositBackToItsOwner() public fixtureCovered;
 ```
 

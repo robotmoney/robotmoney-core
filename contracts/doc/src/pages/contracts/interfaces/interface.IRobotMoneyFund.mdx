@@ -5,7 +5,7 @@ description: "The one vault (`RobotMoneyFund`, share `rmFUND`): an ERC-4626 over
 
 # IRobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/afd6d0281fefc4c2ceb888f94c67a4497915dabc/contracts/interfaces/IRobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/interfaces/IRobotMoneyFund.sol)
 
 **Inherits:** [IFundEvents](/contracts/interface.IFundEvents)
 
@@ -1938,9 +1938,9 @@ function executeDelistStep(uint256 index, uint256 maxUsdcNotional)
 
 ### emergencyUnwind
 
-Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is the larger of the feed price less
-`delistBandBps` and `minUsdcOut`. With an unhealthy feed `minUsdcOut` is the only floor and must be
-non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
+Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is `minUsdcOut` when it is
+non-zero (the timelock's own floor stands, even below the feed), else the feed price less
+`delistBandBps`. With an unhealthy feed `minUsdcOut` is the only floor and must be non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
 and steps (AGY-03).
 
 ```solidity

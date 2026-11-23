@@ -5,7 +5,7 @@ description: "One epoch of a lending position's claim pool (resets cleanly whene
 
 # LendingClaimEpoch
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FundStorage.sol)
 
 One epoch of a lending position's claim pool (resets cleanly whenever all claim units clear).
 
@@ -13,6 +13,9 @@ One epoch of a lending position's claim pool (resets cleanly whenever all claim 
 struct LendingClaimEpoch {
     uint256 totalScaled;
     uint256 usdcPerScaled;
+    /// @dev Safety review 0.9.0 (MISSED-02): true when this epoch's accumulator runs on `LENDING_ACC_SCALE`. An
+    ///      epoch that had accrued before the fund was upgraded keeps `LENDING_ACC_SCALE_LEGACY`. Appended.
+    bool wide;
 }
 ```
 
@@ -22,4 +25,5 @@ struct LendingClaimEpoch {
 | ---- | ---- | ----------- |
 | totalScaled | `uint256` |  |
 | usdcPerScaled | `uint256` |  |
+| wide | `bool` |  |
 

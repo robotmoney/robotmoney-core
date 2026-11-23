@@ -165,10 +165,11 @@ struct FlowState {
     ///      enrollment resumes. Enrollment runs in bounded batches, so a flood of requests in one epoch takes more
     ///      keeper calls instead of one call over the gas cap.
     uint256 enrollPos;
-    /// @dev Longest `minHold` of a deposit enrolled in each deposit cycle (safety review 0.9.0, AGY-10). A match books
-    ///      the hold of the cycle it fills, not the all-time `maxDepositMinHold`, so lowering `minHold` shortens the
-    ///      freeze window of later matches and a freeze cannot land on shares already unlocked.
-    mapping(uint256 cycle => uint32) depCycleMaxMinHold;
+    /// @dev Longest `minHold` of a deposit enrolled in each deposit bucket (cycle, expiry epoch) (safety review 0.9.0,
+    ///      AGY-10). A match books the longest hold of the buckets it fills, not the all-time `maxDepositMinHold`, so
+    ///      after `minHold` is lowered the freeze window shortens once the older buckets leave, and a freeze cannot
+    ///      land on shares already unlocked.
+    mapping(uint256 cycle => mapping(uint64 expiryEpoch => uint32)) depBucketMaxMinHold;
 }
 
 /// @notice Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means "start a new

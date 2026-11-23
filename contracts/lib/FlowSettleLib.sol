@@ -311,8 +311,15 @@ library FlowSettleLib {
         WalkCursor memory at = s.cursors[0][k];
         idx = s.oldestEpoch;
         if (at.epoch == 0 || at.epoch > lastEpoch) return (idx, 0);
-        uint256 len = s.activeEpochs.length;
-        while (idx < len && s.activeEpochs[idx] < at.epoch) ++idx;
+        // `activeEpochs` is ascending (an epoch joins when its first request is made), so the cursor's epoch is
+        // found by bisection, not by a scan that grows with the list.
+        uint256 hi = s.activeEpochs.length;
+        uint256 len = hi;
+        while (idx < hi) {
+            uint256 mid = (idx + hi) / 2;
+            if (s.activeEpochs[mid] < at.epoch) idx = mid + 1;
+            else hi = mid;
+        }
         if (idx >= len || s.activeEpochs[idx] != at.epoch) return (s.oldestEpoch, 0);
         return (idx, at.index);
     }
@@ -325,15 +332,33 @@ library FlowSettleLib {
         (uint256 idx, uint256 i) = _walkStart(s, c.lastEpoch, k);
         pos.walked = true;
         uint64 e;
+        uint256 skips;
         while (true) {
             if (idx >= s.activeEpochs.length || (e = s.activeEpochs[idx]) > c.lastEpoch) {
                 pos.ended = true;
                 break;
             }
             if (i >= s.sideIds[k][e].length || s.sideOpen[k][e] == 0) {
+                // Epochs with nothing open on this side are stepped over under the same bound as dead ids, so the
+                // list of epochs (which only grows) cannot make one call scan them all. The cursor keeps the place.
+                if (skips == MAX_LOOK_PER_CALL) break;
+                ++skips;
                 ++idx;
                 i = 0;
                 continue;
+            }
+            {
+                // A cancelled, closed or wound-down request is passed without spending the look budget, at most
+                // `MAX_LOOK_PER_CALL` of them a side a call: a run of dead ids (one owner's create-and-cancel loop)
+                // then costs the keeper a few calls, not one call per `maxRequests` of them (safety review 0.9.0,
+                // MISSED-01).
+                Request storage r = s.requests[s.sideIds[k][e][i]];
+                if (r.closed || !r.enrolled || r.era < s.windDownEra) {
+                    if (skips == MAX_LOOK_PER_CALL) break;
+                    ++skips;
+                    ++i;
+                    continue;
+                }
             }
             if (w.budget == 0 || _roomLeft(w, kind) == 0) break;
             --w.budget;
@@ -387,7 +412,9 @@ library FlowSettleLib {
     function _rememberOldest(FlowState storage s, uint64 lastEpoch) private {
         uint256 len = s.activeEpochs.length;
         uint256 idx = s.oldestEpoch;
-        while (idx < len) {
+        // A hint: it moves at most `MAX_LOOK_PER_CALL` epochs a settlement and catches up over the next ones.
+        uint256 stop = idx + MAX_LOOK_PER_CALL;
+        while (idx < len && idx < stop) {
             uint64 e = s.activeEpochs[idx];
             if (e > lastEpoch || s.epochOpen[e] != 0) break;
             ++idx;
@@ -524,7 +551,8 @@ library FlowSettleLib {
         uint32 oldLen = s.params.epochLength;
         if (oldLen != 0 && oldLen != p.epochLength) _rebaseEpochs(s);
         s.params = p;
-        s.oldestEpoch = 0;
+        // `oldestEpoch` stays: every epoch before it has no open request, whatever the parameters are, and a closed
+        // request never reopens. Resetting it to 0 made the next settlement scan every epoch the queue ever had.
         delete s.cursors;
     }
 

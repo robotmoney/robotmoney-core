@@ -213,20 +213,22 @@ library FlowCheckLib {
         for (uint256 i; i < len && i < 256; ++i) {
             uint256 bit = 1 << i;
             if ((m.saleMask & bit) == 0) continue;
-            // No record of the asset's value at the last settlement (the first settlement after the in-place upgrade,
-            // or a slot unpriced then): the reference may hold it, so keep it on both sides rather than take it off
-            // one (safety review 0.9.0, AGY-11).
-            if ((s.lastSaleMask & bit) == 0 && s.lastAssetPerShare[i] == 0) continue;
-            if (m.prices[i].kind == PRICE_KIND_BASKET && m.prices[i].unit != 0) {
+            // The reference is the full NAV per share of the last settlement, and `lastAssetPerShare` is this asset's
+            // part of it. Take the asset off both sides: its value now off the current price, its recorded value off
+            // the reference. This holds for every settlement of the sale, not only the first: the reference of a
+            // later one still holds the asset (found by the second pass of safety review 0.9.0).
+            // With no record (the first settlement after the in-place upgrade, or a slot unpriced then) the reference
+            // may hold the asset at an unknown value, so it stays on both sides (AGY-11).
+            uint256 lastVal = s.lastAssetPerShare[i];
+            bool priced = m.prices[i].kind == PRICE_KIND_BASKET && m.prices[i].unit != 0;
+            if (lastVal == 0 && priced) continue;
+            if (priced) {
                 uint256 curValPerShare = m.held[i]
                     .mulDiv(m.prices[i].feedPerToken, m.prices[i].unit)
                     .mulDiv(PRICE_SCALE, m.supply);
                 curPx = curPx > curValPerShare ? curPx - curValPerShare : 0;
             }
-            if ((s.lastSaleMask & bit) == 0) {
-                uint256 lastVal = s.lastAssetPerShare[i];
-                ref = ref > lastVal ? ref - lastVal : 0;
-            }
+            ref = ref > lastVal ? ref - lastVal : 0;
         }
     }
 
@@ -406,7 +408,14 @@ library FlowCheckLib {
             if (!cfg[i].active || cfg[i].kind != AssetKind.Lending) continue;
             if (fund.openExclusionOf(i) != 0) continue;
             (bool rOk, uint256 rate) = lendRate(cfg[i].adapter);
-            if (!rOk) return (false, i, type(uint256).max, rates);
+            if (!rOk) {
+                // An emptied lending asset (a single-asset unwind drained it and zeroed its target) holds nothing a
+                // bad rate could misprice, so its dead venue does not stop deposits while a live plan still blocks
+                // `deactivateAsset` (safety review 0.9.0, AGY-03).
+                (uint256 units,) = fund.positionUnits(i);
+                if (units == 0) continue;
+                return (false, i, type(uint256).max, rates);
+            }
             rates[i] = rate;
             uint256 last = s.lastLendRate[i];
             if (last == 0 || rate <= last) continue;

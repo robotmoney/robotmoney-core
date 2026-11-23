@@ -122,6 +122,8 @@ EOS
 chmod +x "$WORK/cast-wrap.sh"
 export FLAGS REAL_CAST RPC_URL QUEUE
 export RPC_URL QUEUE_ADDRESS="$QUEUE" CAST_BIN="$WORK/cast-wrap.sh"
+# The keeper's owner cache lives with this run: a fresh anvil reuses the chain id and may reuse the queue address.
+export STATE_FILE="$WORK/delivery-state.json"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 send_from() {
@@ -297,6 +299,24 @@ check "a failed send delivers nothing" '[[ "$(claim_field "$c4" 7)" == "0" ]]'
 rc=$(run_keeper "$WORK/df2.err")
 check "after the fault clears the keeper delivers and exits 0" \
     '[[ "$rc" == "0" && "$(shares_of "$R4")" == "$(claim_field "$c4" 5)" ]]'
+check "the keeper keeps the owners it has read in STATE_FILE" \
+    '[[ "$(python3 -I -c '"'"'import json,sys; print(json.load(open(sys.argv[1]))["count"])'"'"' "$STATE_FILE")" == "$(call_q "requestCount()(uint256)" | awk '"'"'{print $1}'"'"')" ]]'
+
+# ─── Case 5: a deposit a match filled, with no claim written yet (safety review 0.9.0, MISSED-07) ───────────────────
+# B redeems its shares and R4 deposits in the same epoch, so the round matches them. A match fill is lazy: R4's shares
+# sit in the queue with no claim until a sync. A scan of the claim list misses them. maxDeposit counts them.
+gt() { python3 -I -c 'import sys; sys.exit(0 if int(sys.argv[1]) > int(sys.argv[2]) else 1)' "$1" "$2"; }
+R4_SHARES0="$(shares_of "$R4")"
+CLAIMS0="$(claim_count)"
+request_redeem "$B" "$(shares_of "$B")" >/dev/null
+mid=$(request_deposit "$R4" 250000000)
+wait_settleable "$mid"
+settle_now
+warp 3700
+check "the match filled R4's deposit and wrote no deposit claim for it" \
+    'gt "$(max_deposit "$R4")" 0 && [[ "$(claim_count)" == "$CLAIMS0" || "$(claim_field "$(claim_count)" 2)" != "0" || "$(claim_field "$(claim_count)" 1)" != "$R4" ]]'
+rc=$(run_keeper "$WORK/match.err")
+check "the keeper delivers a match-filled deposit" '[[ "$rc" == "0" ]] && gt "$(shares_of "$R4")" "$R4_SHARES0"'
 
 rc=$(run_keeper "$WORK/rpc.err" RPC_URL=http://127.0.0.1:1)
 check "an unreadable RPC exits 1 and emits an rpc_unreadable alert" \

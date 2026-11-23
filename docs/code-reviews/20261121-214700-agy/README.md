@@ -19,6 +19,7 @@
 | **04 — Product Alignment, In-Place Upgrade Posture, and Audit/Gate Readiness** | Product-vs-contract alignment (`AGY-15`), ERC-7201 storage layout baselines, `migrateV090` one-time migrations, upgrade runbook (`v0.9.0-onevault-upgrade.yaml`), `docs/audits.md` ledger posture, and Gates G8/G9 | [04-product-alignment-and-upgrade-posture.md](./04-product-alignment-and-upgrade-posture.md) |
 | **05 — Meta-Review and Missed Findings** | Independent adversarial meta-review of Chapters 00–04: patch correctness audit, factual/citation corrections, cross-chapter contradictions, and 9 verified missed findings (`MISSED-01`–`MISSED-09`) | [05-meta-review-and-missed-findings.md](./05-meta-review-and-missed-findings.md) |
 | **06 — Remediation Status** | What this branch fixed for each finding, with the proof test, the findings left open and why, and the behaviour changes operators must know | [06-remediation-status.md](./06-remediation-status.md) |
+| **07 — Supporting Matrices** | Loop-bound matrix, transfer-sink matrix, inherited-mutator reentrancy additions, the lending adapters' permissionless functions, and the invariant coverage map chapter 05 asked for, with the open problems found while building them | [07-supporting-matrices.md](./07-supporting-matrices.md) |
 | **Verification Notes** | Independent GPT static verification notes (evaluated and incorporated into Chapters 00–04) | [gpt-review-notes.md](./gpt-review-notes.md) |
 
 ---
@@ -29,8 +30,8 @@
 |---|---:|---|
 | **Critical** | 0 | — |
 | **High** | 3 | `AGY-01`, `AGY-02`, `AGY-03` |
-| **Medium** | 5 | `AGY-04`, `AGY-05`, `AGY-06`, `AGY-07`, `AGY-08` |
-| **Low** | 5 | `AGY-09`, `AGY-10`, `AGY-11`, `AGY-12`, `AGY-13` |
+| **Medium** | 4 | `AGY-04`, `AGY-05`, `AGY-06`, `AGY-07` |
+| **Low** | 6 | `AGY-08` (downgraded from Medium; corrected per chapter 05), `AGY-09`, `AGY-10`, `AGY-11`, `AGY-12`, `AGY-13` |
 | **Info** | 2 | `AGY-14`, `AGY-15` |
 | **Total** | **15** | `AGY-01` through `AGY-15` |
 

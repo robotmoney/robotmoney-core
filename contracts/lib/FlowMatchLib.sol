@@ -12,6 +12,7 @@ import {
     Claim,
     ENROLL_BUDGET,
     ENROLL_PROCEED_MAX,
+    ENROLL_GAS_MAX,
     ENROLL_VISIT_MAX,
     IFlowEvents,
     MAX_OWNER_OPEN_REQUESTS,
@@ -108,20 +109,28 @@ library FlowMatchLib {
         if (s.redPoolShares != 0) return true;
         if (s.depPoolUsdc != 0 && _liveDepBucket(s, cur)) return true;
         uint256 idx = s.enrollCursor;
+        // Positions before `enrollPos` in the cursor's epoch are enrolled (the pool checks above) or dead.
+        uint256 pos = s.enrollPos;
         uint256 len = s.activeEpochs.length;
+        uint256 looks;
         while (idx < len) {
             uint64 e = s.activeEpochs[idx];
             if (e > roundEpoch) break;
             if (s.sideOpen[uint8(RequestKind.Redeem)][e] != 0) return true;
             if (s.sideOpen[uint8(RequestKind.Deposit)][e] != 0) {
                 uint256[] storage ids = s.sideIds[uint8(RequestKind.Deposit)][e];
-                for (uint256 j; j < ids.length; ++j) {
+                for (uint256 j = pos; j < ids.length; ++j) {
+                    // Cancelled and expired ids stay listed, so this scan is bounded: past the bound the answer is
+                    // "work", and the bounded enrollment walk moves the cursor over them (safety review 0.9.0,
+                    // MISSED-01: one owner's create-and-cancel loop must not make every settlement scan them all).
+                    if (++looks > ENROLL_VISIT_MAX) return true;
                     Request storage r = s.requests[ids[j]];
                     if (!r.closed && r.era == s.windDownEra && cur <= r.expiryEpoch) {
                         return true;
                     }
                 }
             }
+            pos = 0;
             ++idx;
         }
         return false;
@@ -145,6 +154,24 @@ library FlowMatchLib {
             if (e >= cur && s.depBuckets[s.depCycle][e].totalNormBasis != 0) return true;
         }
         return false;
+    }
+
+    /// @dev The hold a match books: the longest hold enrolled in any bucket that still has basis in the live cycle
+    ///      (safety review 0.9.0, AGY-10). A bucket leaves within `maxRoll` epochs, so a long hold from before a
+    ///      `minHold` cut stops counting when its bucket does. A bucket with basis and no mark was enrolled before
+    ///      this mark existed (or holds zero-hold deposits): the all-time maximum then stands in, as before.
+    function _matchHold(FlowState storage s) private view returns (uint32 hold) {
+        uint256 cyc = s.depCycle;
+        bool any;
+        for (uint256 i; i < s.activeDepBuckets.length; ++i) {
+            uint64 e = s.activeDepBuckets[i];
+            if (s.depBuckets[cyc][e].totalNormBasis == 0) continue;
+            uint32 h = s.depBucketMaxMinHold[cyc][e];
+            if (h == 0) return s.maxDepositMinHold;
+            if (h > hold) hold = h;
+            any = true;
+        }
+        if (!any) hold = s.maxDepositMinHold;
     }
 
     /// @notice Evict any expired deposit bucket (`expiryEpoch < cur`) before booking a round's match.
@@ -171,7 +198,6 @@ library FlowMatchLib {
             }
             s.depTotalNormBasis = bNew;
             s.depPoolUsdc = newPool;
-            if (bNew == 0) s.depCycleMaxMinHold[cyc] = 0;
             b.evicted = true;
             b.finalUnmatchedFactor = F;
             b.endMatchId = s.depMatches.length;
@@ -198,12 +224,18 @@ library FlowMatchLib {
         uint256 len = s.activeEpochs.length;
         uint256 visits;
         uint256 enrolled;
+        uint256 gasAtStart = gasleft();
         done = true;
         while (idx < len) {
             uint64 e = s.activeEpochs[idx];
             if (e > maxEpoch) break;
             while (true) {
-                if (visits == ENROLL_VISIT_MAX || enrolled == ENROLL_BUDGET) {
+                // The batch also ends on gas: an enrollment first syncs its owner, which costs one claim write per
+                // unsynced match of each of the owner's open requests, so a count alone does not bound a call.
+                if (
+                    visits == ENROLL_VISIT_MAX || enrolled == ENROLL_BUDGET
+                        || (enrolled != 0 && gasAtStart - gasleft() > ENROLL_GAS_MAX)
+                ) {
                     done = false;
                     break;
                 }
@@ -266,7 +298,9 @@ library FlowMatchLib {
 
     function _enrollDeposit(FlowState storage s, Request storage r) private {
         uint256 cyc = s.depCycle;
-        if (r.minHold > s.depCycleMaxMinHold[cyc]) s.depCycleMaxMinHold[cyc] = r.minHold;
+        if (r.minHold > s.depBucketMaxMinHold[cyc][r.expiryEpoch]) {
+            s.depBucketMaxMinHold[cyc][r.expiryEpoch] = r.minHold;
+        }
         uint256 F = s.depCycleFactor[cyc];
         uint256 rem = r.remaining;
         uint256 nb = F == MATCH_SCALE ? rem : rem.mulDiv(MATCH_SCALE, F);
@@ -398,8 +432,7 @@ library FlowMatchLib {
             st.matchSharePrice = S;
             // The cycle's own longest hold (AGY-10). A cycle enrolled before the upgrade has none recorded: fall back
             // to the all-time mark, which is never shorter.
-            uint32 hold = s.depCycleMaxMinHold[s.depCycle];
-            st.holdEndsAt = uint64(block.timestamp) + (hold != 0 ? hold : s.maxDepositMinHold);
+            st.holdEndsAt = uint64(block.timestamp) + _matchHold(s);
         }
 
         _advanceDepositMatchIndex(s, roundEpoch, uint64(settlementId), M, matchedUsdc, D, matchDust);
@@ -810,7 +843,6 @@ library FlowMatchLib {
         s.depTotalNormBasis = newB;
         s.depPoolUsdc = newPool;
         // An empty pool holds no hold: the next deposits set the cycle's mark afresh (AGY-10).
-        if (newB == 0) s.depCycleMaxMinHold[s.depCycle] = 0;
         b.totalNormBasis = b.totalNormBasis - oldNb + newNb;
         b.remainingNormBasis = b.remainingNormBasis - oldNb + newNb;
 
@@ -1045,7 +1077,10 @@ library FlowMatchLib {
         s.redPoolShares = 0;
         s.redCycle += 1;
         s.redCycles[s.redCycle].unmatchedFactor = MATCH_SCALE;
-        s.enrollCursor = s.activeEpochs.length;
+        // The newest known epoch may still be open: a request made in it after a `restore` joins its id list, so the
+        // cursor stays on it (its older requests are skipped by era). Every earlier epoch has ended and is passed.
+        uint256 n = s.activeEpochs.length;
+        s.enrollCursor = n == 0 ? 0 : n - 1;
         s.enrollPos = 0;
     }
 

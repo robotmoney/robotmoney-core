@@ -6,7 +6,8 @@
 # compiling them with the prototype tree under coverage's unoptimised profile pushed that job past its memory
 # ceiling. So the fund system the protocol runs on had no coverage measured at all. This workflow instruments the
 # one-vault sources with the prototype suite (the only suite that exercises them) and gates their combined line
-# coverage (.github/scripts/check_onevault_coverage.py: every source instrumented, total at or above the floor).
+# coverage (.github/scripts/check_onevault_coverage.py: every source instrumented, each source at or above the
+# per-file floor, total at or above the floor).
 #
 # CLASS
 # heavy: the whole prototype suite instrumented, about 32 minutes and 8.7 GB of memory at 4 threads. Sweep-only: it
@@ -60,7 +61,7 @@ jobs:
           --skip "contracts/test/prototype/baseline/**"
 
       - name: One-vault line-coverage gate
-        run: python3 .github/scripts/check_onevault_coverage.py lcov-onevault.info --min 90
+        run: python3 .github/scripts/check_onevault_coverage.py lcov-onevault.info --min 90 --min-file 70
 
       - name: Upload the lcov report
         if: always()

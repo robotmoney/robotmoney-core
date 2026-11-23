@@ -692,10 +692,10 @@ library FundFlowsLib {
         uint256 claimTok = inSaleNow ? s.delistClaimedTokens[index] : 0;
         uint256 totalTok = fundTok + claimTok;
         if (totalTok != 0) {
-            // Floor: the larger of the feed price less `delistBandBps` (plan section 3.3) and the caller's
-            // `minUsdcOut`. A stale feed leaves only the caller's floor, which must then be set: a market sale with
-            // no floor at all could be sandwiched for the whole position (safety review 0.9.0, AGY-01). A stale price
-            // is never a floor, because it would trap an asset that crashed.
+            // Floor: the caller's `minUsdcOut` when set, else the feed price less `delistBandBps` (plan section
+            // 3.3). A stale feed leaves only the caller's floor, which must then be set: a market sale with no floor
+            // at all could be sandwiched for the whole position (safety review 0.9.0, AGY-01). A stale price is never
+            // a floor, because it would trap an asset that crashed.
             uint256 floor = _saleFloor(s, index, a.token, totalTok, minUsdcOut);
             (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, s.usdc, totalTok, floor);
             if (inSaleNow) {
@@ -716,9 +716,10 @@ library FundFlowsLib {
         }
     }
 
-    /// @dev The floor of a sale outside a step: the larger of the feed price less `delistBandBps` and the caller's
-    ///      `minUsdcOut`. A stale feed leaves only the caller's floor, which must then be set (AGY-01). A stale price is
-    ///      never a floor, because it would trap an asset that crashed.
+    /// @dev The floor of a sale outside a step. A non-zero `minUsdcOut` is the floor: the timelock named it, and it
+    ///      stands even below the feed, so an asset whose feed is fresh but still shows a price from before a crash
+    ///      can be sold. With `minUsdcOut == 0` the floor is the feed price less `delistBandBps`, and a stale feed
+    ///      then reverts (AGY-01). A stale price is never a floor, because it would trap an asset that crashed.
     function _saleFloor(
         FundState storage s,
         uint256 index,
@@ -726,15 +727,11 @@ library FundFlowsLib {
         uint256 amount,
         uint256 minUsdcOut
     ) private view returns (uint256 floor) {
-        floor = minUsdcOut;
+        if (minUsdcOut != 0) return minUsdcOut;
         (bool feedOk,, uint256 feedPx) = FundValuationLib.feedPricePerToken(s, index);
-        if (feedOk) {
-            uint256 feedFloor = amount.mulDiv(feedPx, 10 ** IERC20Metadata(token).decimals())
-                .mulDiv(BPS - s.delistBandBps, BPS);
-            if (feedFloor > floor) floor = feedFloor;
-        } else if (floor == 0) {
-            revert IRobotMoneyFund.EmergencyFloorRequired(index);
-        }
+        if (!feedOk) revert IRobotMoneyFund.EmergencyFloorRequired(index);
+        floor = amount.mulDiv(feedPx, 10 ** IERC20Metadata(token).decimals())
+            .mulDiv(BPS - s.delistBandBps, BPS);
     }
 
     /// @notice `IRobotMoneyFund.reabsorbRemovedAsset` (INV-2, LIFE-6; safety review 0.9.0, AGY-07): sell the tokens of a

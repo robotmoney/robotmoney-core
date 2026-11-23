@@ -5,7 +5,7 @@ description: "The fund's delisting books on their own: the claim units and the U
 
 # DelistBooks
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/DelistClaimScaling.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/test/DelistClaimScaling.t.sol)
 
 The fund's delisting books on their own: the claim units and the USDC pot of one in-sale asset.
 
@@ -131,4 +131,84 @@ function pay(address owner) external returns (uint256 net);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | net | `uint256` |  |
+
+<a id="claimwithfee-address-uint256-uint256"></a>
+
+### claimWithFee
+
+<i>
+
+As `claim`, with an exit fee.
+
+</i>
+
+```solidity
+function claimWithFee(address owner, uint256 tok, uint256 feeBps) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| tok | `uint256` |  |
+| feeBps | `uint256` |  |
+
+<a id="takeinkind-address"></a>
+
+### takeInKind
+
+```solidity
+function takeInKind(address owner) external returns (uint256 tokNet, uint256 tokFee);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokNet | `uint256` |  |
+| tokFee | `uint256` |  |
+
+<a id="wide"></a>
+
+### wide
+
+```solidity
+function wide() external view returns (bool);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="seedlegacybook-address-uint256-uint256"></a>
+
+### seedLegacyBook
+
+<i>
+
+The book a fund on the 1e30 accumulator scale left behind: `owner`'s `tok` tokens were all sold for
+`usdc`, and `owner` has not collected yet.
+
+</i>
+
+```solidity
+function seedLegacyBook(address owner, uint256 tok, uint256 usdc) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| tok | `uint256` |  |
+| usdc | `uint256` |  |
 

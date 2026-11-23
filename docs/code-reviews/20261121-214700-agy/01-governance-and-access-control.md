@@ -3,7 +3,7 @@
 **Base:** `dev` (`6c25fd8ce291a88ed088f71e0e015296a561ea24`), merged from `release-0.9.0` (`86747f24534a39cf19a75d4370d3f91466dcc24f`, tag `contracts-0.9.0`) via PR `#2019` (`contracts/` tree is byte-identical across both commits)
 **Review Date:** `2026-11-21T21:47:00Z` · **Reviewer:** Antigravity (`agy`)
 
-This chapter audits the governance, role hierarchy, operational account controls, adapter vetting rules, and proxy upgradeability boundaries of the `v0.9.0` One-Vault Fund System. It covers findings **AGY-02 [HIGH]**, **AGY-04 [MEDIUM]**, **AGY-08 [MEDIUM]**, and **AGY-09 [LOW]**, together with a full verification of `ConsensusRecommendationReceipt`, `RebalanceGovernance`, and `GovernedUUPS`.
+This chapter audits the governance, role hierarchy, operational account controls, adapter vetting rules, and proxy upgradeability boundaries of the `v0.9.0` One-Vault Fund System. It covers findings **AGY-02 [HIGH]**, **AGY-04 [MEDIUM]**, **AGY-08 [LOW]** (downgraded from Medium; corrected per chapter 05), and **AGY-09 [LOW]**, together with a full verification of `ConsensusRecommendationReceipt`, `RebalanceGovernance`, and `GovernedUUPS`.
 
 ---
 
@@ -58,6 +58,8 @@ flowchart TD
     FUND -->|"FundAdapterGuard.vet (gaps - AGY-09)"| ADP
 ```
 
+Note (corrected per chapter 05): the diagram and the matrix below show `KeeperAccount` as the `KEEPER_ROLE` holder. That is the optional smart-account keeper a deployment gets from `contracts/script/DeployKeeperAccount.s.sol`. The Deploy 4 rehearsal does not use it: its keeper is a direct key (`deployments/base-8453-rehearsal/deploy-4.env:25`), and its timelock delay is `900s` (`deploy-4.env:13`). Every `48h` figure in this chapter is the production delay.
+
 ### Role & Authority Matrix
 
 | Contract | Role / Authority | Post-Handover Holder | Role Admin | Last-Holder Floor? | Re-grant / Recovery if Lost? | Gated Powers |
@@ -73,9 +75,9 @@ flowchart TD
 | `RobotMoneyFund` | `FLOW_ROLE` | `FlowQueue` | `FLOW_ROLE` (self) | **No (AGY-08)** | **None** (`FlowRoleAlreadyBound` blocks rebind) | `mintInKind`, `sellForFlow*`, `ledgerCheckpoint` |
 | `FlowQueue` | `ADMIN_ROLE` | `Timelock` | `ADMIN_ROLE` (self) | **Yes** (`AdminFloorAccessControl`) | Cannot hit 0 | `setFlowParams`, `setFlowLevers`, `unpauseQueue`, `releaseSettlement`, grants |
 | `FlowQueue` | `EMERGENCY_ROLE` | Hot key | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `pauseQueue`, `freezeSettlement` |
-| `FlowQueue` | `KEEPER_ROLE` | `KeeperAccount` | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `settle` (`D20`/`E34` exclusive) |
+| `FlowQueue` | `KEEPER_ROLE` | `KeeperAccount` (keeper EOA on Deploy 4; corrected per chapter 05) | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `settle` (`D20`/`E34` exclusive) |
 | `Rebalancer` | `ADMIN_ROLE` | `Timelock` | `ADMIN_ROLE` (self) | **Yes** (`AdminFloorAccessControl`) | Cannot hit 0 | `setStepParams`, `setAssetStepParams`, `setStepDepthBps`, grants |
-| `Rebalancer` | `KEEPER_ROLE` | `KeeperAccount` | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `step`, `stepDelisted` (`D20`/`E34` exclusive) |
+| `Rebalancer` | `KEEPER_ROLE` | `KeeperAccount` (keeper EOA on Deploy 4; corrected per chapter 05) | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `step`, `stepDelisted` (`D20`/`E34` exclusive) |
 | `RebalanceGovernance` | `ADMIN_ROLE` | `Timelock` | `ADMIN_ROLE` (self) | **Yes** (`AdminFloorAccessControl`) | Cannot hit 0 | `setTarget`, `setDefaultPlanParams` |
 | `RebalanceGovernance` | `TARGET_SETTER_ROLE` | `Timelock` | `TARGET_SETTER_ROLE` (self) | **No (AGY-08)** | **None unless upgraded** (bricked if frozen) | `applyReceipt` |
 | `ConsensusRecommendationReceipt` | `DEFAULT_ADMIN_ROLE` | `Timelock` | `DEFAULT_ADMIN_ROLE` | **Yes** (`_revokeRole` override) | Cannot hit 0 | Administers `ADMIN_ROLE` |
@@ -83,7 +85,7 @@ flowchart TD
 | `ConsensusRecommendationReceipt` | `RECEIPT_SUBMITTER_ROLE` | Submitter key | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `recordReceipt` |
 | `ConsensusRecommendationReceipt` | `RECEIPT_RELEASER_ROLE` | `RebalanceGovernance` | `ADMIN_ROLE` | No | `ADMIN_ROLE` grants new holder | `releaseReceipt` |
 | All 6 ERC-1967 Proxies | `upgradeTimelock` | `Timelock` | Immutable (ERC-7201) | Immutable | One-way `freezeUpgrades` | `upgradeToAndCall`, `freezeUpgrades` |
-| `KeeperAccount` | `_owners` | Operator key(s) | `_owners` (1-of-N) | Partial (`LastOwner`, **no quorum — AGY-04**) | `ADMIN_ROLE` must replace `KEEPER_ROLE` (48h) | `addOwner`, `removeOwner`, `addBotKey`, `removeBotKey`, `execute` |
+| `KeeperAccount` | `_owners` | Operator key(s) | `_owners` (1-of-N) | Partial (`LastOwner`, **no quorum — AGY-04**) | `ADMIN_ROLE` must replace `KEEPER_ROLE` (48h in production) | `addOwner`, `removeOwner`, `addBotKey`, `removeBotKey`, `execute` |
 
 ---
 
@@ -91,7 +93,8 @@ flowchart TD
 
 ### AGY-02 [HIGH] — `ProposerFloorTimelock` lacks an `EXECUTOR_ROLE` floor under `D4-10` closed-executor policy
 
-- **Severity:** High
+- **Severity:** High (qualified; corrected per chapter 05)
+- **Threat model (corrected per chapter 05):** The trigger is a transaction of the 2-of-3 Safe, the only `EXECUTOR_ROLE` holder (`SAFE_THRESHOLD=2` with three owners on Deploy 4, `deployments/base-8453-rehearsal/deploy-4.env:22-23`). `renounceRole` must be sent by the Safe itself, and `revokeRole` must be scheduled and executed by the Safe through the timelock. So this is a Safe operational error or a Safe compromise. An unprivileged account or one Safe key cannot cause it. The rating stays High because the result cannot be undone.
 - **Category:** Governance Bricking / Access Control (`ACL-3` violation)
 - **Locations:**
   - `contracts/ProposerFloorTimelock.sol:38-85`
@@ -326,9 +329,9 @@ contract KeeperAccount is EIP712 {
 
 ---
 
-### AGY-08 [MEDIUM] — Self-administered roles bypass `AdminFloorAccessControl` with no recovery path
+### AGY-08 [LOW] — Self-administered roles bypass `AdminFloorAccessControl` with no recovery path
 
-- **Severity:** Medium
+- **Severity:** Low (downgraded from Medium; corrected per chapter 05). Losing one of these roles needs a deliberate or compromised governance action: the timelock renouncing or revoking a role it administers itself, or a bound contract's upgrade renouncing its own role. The one-shot bindings of `GOVERNANCE_ROLE`, `REBALANCER_ROLE` and `FLOW_ROLE` are intended (`RB-1`, `contracts/RobotMoneyFund.sol:50-54`: no `ADMIN_ROLE` holder can hand either role to another address). The finding that remains is an operational guard rail for `TARGET_SETTER_ROLE`.
 - **Category:** Governance Bricking / Role Administration
 - **Locations:**
   - `contracts/RebalanceGovernance.sol:61-65,120-124`
@@ -400,6 +403,7 @@ function _revokeRole(bytes32 role, address account) internal virtual override re
 2. **Floor and/or add timelock recovery for `GOVERNANCE_ROLE`, `REBALANCER_ROLE`, and `FLOW_ROLE` in `RobotMoneyFund`:**
    - First, prevent accidental renunciation/zeroing of those three roles by rejecting revocations (or tracking a simple `uint256` bitmask / counter in `FundAdminLib` if EIP-170 space in `RobotMoneyFund` is tight — `v0.9.0-in-place-upgrade-audit.md:152` notes ~382 bytes headroom).
    - Second, if replacing a frozen companion proxy (`FlowQueue`, `Rebalancer`, `RebalanceGovernance`) should remain possible while `RobotMoneyFund` is upgradeable or paused/shut down, gate `rebindFlowRole` / `rebindRebalanceRoles` behind `ADMIN_ROLE` (the 48h Safe+Timelock, never an EOA) rather than irreversible one-shot booleans — or retain `RB-1`/`E1` immutability only once all proxies are frozen together (`freezeUpgrades`).
+   - **Withdrawn (corrected per chapter 05):** item 2 is not recommended. An `ADMIN_ROLE`-gated `rebindFlowRole` / `rebindRebalanceRoles` would let the admin hand a fund role to another contract, which is what the one-shot binding exists to prevent (`RB-1`, `contracts/RobotMoneyFund.sol:50-54`). The remediation is item 1 only: a last-holder floor on `TARGET_SETTER_ROLE`.
 
 ---
 
@@ -456,7 +460,7 @@ function _twap(AssetConfig memory a, address usdc, uint256 unit)
     }
 }
 ```
-`StepFeedLib.check` is called by `Rebalancer.step()` and by `FundStepLib._stepFeeds` (`executeStep`) without vetting `a.adapter`.
+`StepFeedLib.check` is called by `Rebalancer.step()` and by `FundStepLib._stepFeeds` (`executeStep`) without vetting `a.adapter`. This gap is narrower than it reads: see the correction under "Failure Scenario & Impact" below (corrected per chapter 05).
 
 3. **`FlowCheckLib._requireFundedPoolsFixedFee` bypasses `FundAdapterGuard.vet`** (`contracts/lib/FlowCheckLib.sol:590-604`):
 ```solidity
@@ -481,6 +485,7 @@ function _requireFundedPoolsFixedFee(IRobotMoneyFundFull f) private view {
 
 - **Failure to emergency-halt a compromised direct swap adapter:** If a non-proxy swap adapter has a critical bug and governance revokes its code hash via `setAdapterCodeHashAllowed(h, false)` expecting immediate cessation across all operations (as happens for lending adapters), basket swaps (`_swap`), `mintInKind` (`_buyExact`), and `FundValuationLib.assetValue` / `usdcValue` / `tokenValue` continue executing against the revoked adapter until `setAssetAdapter` or `delistAsset` runs.
 - **Unvetted proxy implementations in `StepFeedLib` & `FlowCheckLib`:** If an adapter proxy points to a disallowed implementation, `StepFeedLib._twap` and `FlowQueue.setFlowParams` still consume `twapPrice` / `isFixedFeePool` from the unvetted implementation (`executeStep` only catches it later if a swap runs; lending-to-lending steps or `Rebalancer.step()` Check 4 reads and `setFlowParams` validation never hit `vet` at all).
+  - **Correction (corrected per chapter 05):** the claim that `Rebalancer.step()` and a lending-to-lending `executeStep` never reach `vet` is wrong. `Rebalancer._decide` calls `fund.portfolioValues()`, and `FundStepLib.executeStep` calls `FundValuationLib.portfolio`. Both value every asset through `FundValuationLib.assetValue`, which calls `FundAdapterGuard.vet` for each counted basket asset that holds a balance and is not in sale (`contracts/lib/FundValuationLib.sol:224-237`). So the `StepFeedLib._twap` gap applies only to a basket asset whose balance is 0. The `setFlowParams` path (`FlowCheckLib._requireFundedPoolsFixedFee`) did not call `vet`.
 
 #### Concrete Solidity Remediation
 

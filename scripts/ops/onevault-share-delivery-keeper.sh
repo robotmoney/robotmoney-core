@@ -11,9 +11,11 @@
 #
 # WHAT IT DOES
 # Every INTERVAL_SECS (default 300) it:
-#   1. reads every claim (id 1 to claimCount) and keeps the open deposit claims whose unlockAt has passed and whose
-#      settlement is not frozen (frozenUntil > now and unlockAt > freezeSetAt, as FlowClaimLib._deliverable),
-#   2. groups the remaining USDC cost of those claims by owner,
+#   1. reads the owner of every deposit request (requestCount and getRequest). A request's owner and kind never
+#      change, so the owners already read are kept in STATE_FILE and a tick reads only the requests made since,
+#   2. asks the queue's own maxDeposit(owner) for each of those owners: the USDC cost of the deposit claims whose
+#      unlockAt has passed and whose settlement is not frozen, and of the deposits a match filled that no sync has
+#      turned into a claim yet,
 #   3. checks the key holds MIN_GAS_WEI, and alerts low_gas and sends nothing when it does not,
 #   4. calls deposit(assets, owner) once per owner. The queue delivers the owner's shares to the owner.
 # A send that fails because the owner claimed first is not an alert: the queue refused a double delivery, and the next tick
@@ -34,6 +36,9 @@
 #   ALERT_WEBHOOK           optional. URL that receives each alert as a JSON POST. Alerts always go to stderr.
 #   INTERVAL_SECS           optional, default 300.
 #   MIN_GAS_WEI             optional, default 1000000000000000 (0.001 ETH).
+#   STATE_FILE              optional. Where the owners already read are kept between ticks. Default
+#                           ${XDG_STATE_HOME:-$HOME/.local/state}/onevault-delivery/<chain id>-<queue>.json. The file
+#                           is a cache: deleting it only makes the next tick read every request again.
 #   SLEEP_CMD               optional, default `sleep`. The self-test replaces it to move chain time.
 #   CAST_BIN                optional, default `cast`. The self-test wraps it to inject a failed send.
 #
@@ -52,6 +57,7 @@ INTERVAL_SECS="${INTERVAL_SECS:-300}"
 MIN_GAS_WEI="${MIN_GAS_WEI:-1000000000000000}"
 SLEEP_CMD="${SLEEP_CMD:-sleep}"
 CAST_BIN="${CAST_BIN:-cast}"
+STATE_FILE="${STATE_FILE:-}"
 
 ALERTS=0
 KEEPER_ADDR=""
@@ -84,10 +90,10 @@ die() {
 # alone missed those lazy match fills.
 # `cast call --json` prints a JSON array of outputs, or (cast 1.8 and later) an object whose "data" is that array.
 discover_plan() {
-    python3 -I - "$CAST_BIN" "$RPC_URL" "$QUEUE_ADDRESS" <<'PY'
-import json, subprocess, sys
+    python3 -I - "$CAST_BIN" "$RPC_URL" "$QUEUE_ADDRESS" "$STATE_FILE" <<'PY'
+import json, os, subprocess, sys
 
-cast, rpc, queue = sys.argv[1], sys.argv[2], sys.argv[3]
+cast, rpc, queue, state_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 REQUEST = ("getRequest(uint256)((address,uint8,uint64,uint256,uint256,bool,uint16,uint32,uint16,uint64,uint64,"
            "uint64,uint64,uint64,bool,uint256,uint256,uint256,uint256,uint256))")
 
@@ -107,13 +113,39 @@ def read(sig, *args):
 def num(v):
     return int(str(v).split()[0])
 
+def load_state():
+    """The owners read so far and the last request id read. A missing, unreadable or foreign file is an empty cache."""
+    try:
+        with open(state_file) as f:
+            st = json.load(f)
+        if st.get("queue", "").lower() == queue.lower():
+            return int(st["count"]), set(st["owners"])
+    except Exception:
+        pass
+    return 0, set()
+
+def save_state(count, owners):
+    try:
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        tmp = state_file + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"queue": queue, "count": count, "owners": sorted(owners)}, f)
+        os.replace(tmp, state_file)
+    except Exception as e:
+        print("onevault-share-delivery-keeper: state file not written: " + str(e), file=sys.stderr)
+
 try:
     count = num(read("requestCount()(uint256)"))
-    owners = set()
-    for rid in range(1, count + 1):
+    seen, owners = load_state()
+    if seen > count:
+        # The chain holds fewer requests than the cache (a different chain, or a reset fork): read it all again.
+        seen, owners = 0, set()
+    for rid in range(seen + 1, count + 1):
         req = read(REQUEST, rid)
         if num(req[1]) == 0:
             owners.add(req[0])
+    if count != seen:
+        save_state(count, owners)
     for owner in sorted(owners):
         assets = num(read("maxDeposit(address)(uint256)", owner))
         if assets > 0:
@@ -187,6 +219,10 @@ code=$("$CAST_BIN" code "$QUEUE_ADDRESS" --rpc-url "$RPC_URL" 2>&1) || {
     exit 1
 }
 [[ "$code" != "0x" && -n "$code" ]] || die "no contract at QUEUE_ADDRESS $QUEUE_ADDRESS"
+if [[ -z "$STATE_FILE" ]]; then
+    chain=$("$CAST_BIN" chain-id --rpc-url "$RPC_URL" 2>/dev/null) || chain=unknown
+    STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/onevault-delivery/${chain}-${QUEUE_ADDRESS,,}.json"
+fi
 KEEPER_ADDR=$("$CAST_BIN" wallet address --keystore "$KEEPER_KEYSTORE" --password-file "$KEEPER_PASSWORD_FILE" 2>&1) \
     || die "KEEPER_KEYSTORE cannot be unlocked with KEEPER_PASSWORD_FILE"
 

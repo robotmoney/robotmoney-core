@@ -636,9 +636,10 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         uint256 marker = openDepositRequest(carol, 5_000e6);
         warpToSettleable(fresh);
         refreshFeeds();
-        // Settle 2 look slots: skip expired `old` and fill `fresh`, leaving `marker` waiting behind cursor.
+        // Settle 1 look slot: the expired `old` is passed without spending one (safety review 0.9.0, MISSED-01), and
+        // `fresh` fills, leaving `marker` waiting behind the cursor.
         vm.prank(keeper);
-        queue.settle(2, type(uint256).max);
+        queue.settle(1, type(uint256).max);
         assertTrue(queue.getRequest(fresh).closed, "a fresh request settles");
         assertEq(queue.getRequest(marker).remaining, 5_000e6, "the marker waits");
 

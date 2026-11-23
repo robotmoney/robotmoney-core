@@ -5,7 +5,7 @@ description: "The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind
 
 # RobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/RobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/RobotMoneyFund.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRobotMoneyFund](/contracts/interfaces/interface.IRobotMoneyFund)
 
@@ -2459,9 +2459,9 @@ function emergencyUnwind() external;
 
 ### emergencyUnwind
 
-Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is the larger of the feed price less
-`delistBandBps` and `minUsdcOut`. With an unhealthy feed `minUsdcOut` is the only floor and must be
-non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
+Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is `minUsdcOut` when it is
+non-zero (the timelock's own floor stands, even below the feed), else the feed price less
+`delistBandBps`. With an unhealthy feed `minUsdcOut` is the only floor and must be non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
 and steps (AGY-03).
 
 ```solidity

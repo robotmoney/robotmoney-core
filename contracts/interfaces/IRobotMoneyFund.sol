@@ -787,9 +787,9 @@ interface IRobotMoneyFund is IFundEvents {
     function executeDelistStep(uint256 index, uint256 maxUsdcNotional)
         external
         returns (bool executed, uint256 tokensSold, uint256 usdcReceived);
-    /// @notice Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is the larger of the feed price less
-    ///         `delistBandBps` and `minUsdcOut`. With an unhealthy feed `minUsdcOut` is the only floor and must be
-    ///         non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
+    /// @notice Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is `minUsdcOut` when it is
+    ///         non-zero (the timelock's own floor stands, even below the feed), else the feed price less
+    ///         `delistBandBps`. With an unhealthy feed `minUsdcOut` is the only floor and must be non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
     ///         and steps (AGY-03).
     function emergencyUnwind(uint256 index, uint256 minUsdcOut)
         external

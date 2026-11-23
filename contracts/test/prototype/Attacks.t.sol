@@ -2330,6 +2330,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(ledger.claimable(id, dave), 0, "dave can claim nothing");
         assertEq(ledger.claimable(id, attacker), 0, "the fresh address can claim nothing");
         emit log_named_uint("A19: alice's claim (USDC units)", ledger.claimable(id, alice));
+
+        // Safety review 0.9.0 (MISSED-04): a holder USDC will not pay names another address for its own recovery.
+        uint256 owed = ledger.claimable(id, alice);
+        // The payee is an address the fork fixture already holds a USDC balance slot for.
+        address payee = carol;
+        uint256 payeeBefore = IERC20(USDC).balanceOf(payee);
+        vm.prank(attacker);
+        assertEq(ledger.claimTo(id, attacker), 0, "claimTo pays only the caller's own recovery");
+        vm.prank(alice);
+        assertEq(ledger.claimTo(id, payee), owed, "alice sends her recovery to another address");
+        assertEq(IERC20(USDC).balanceOf(payee) - payeeBefore, owed, "the payee holds it");
+        assertEq(ledger.claimable(id, alice), 0, "and it is claimed once");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════

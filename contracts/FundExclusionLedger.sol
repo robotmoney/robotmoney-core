@@ -109,6 +109,7 @@ contract FundExclusionLedger {
     event ExclusionSurplusReturned(uint256 amount);
 
     error OnlyVault();
+    error ZeroRecipient();
     error ExclusionNotOpen(uint256 exclusionId);
 
     modifier onlyVault() {
@@ -185,13 +186,25 @@ contract FundExclusionLedger {
     // ─── Claims ───────────────────────────────────────────────────────
 
     function claim(uint256 id, address holder) public returns (uint256 amount) {
+        return _claim(id, holder, holder);
+    }
+
+    /// @notice The caller's own recovery of exclusion `id`, paid to `to`. A holder USDC refuses to pay (a blacklist,
+    ///         a contract that cannot receive) names another address, so the recovery is not locked (safety review
+    ///         0.9.0, MISSED-04).
+    function claimTo(uint256 id, address to) external returns (uint256 amount) {
+        if (to == address(0)) revert ZeroRecipient();
+        return _claim(id, msg.sender, to);
+    }
+
+    function _claim(uint256 id, address holder, address to) private returns (uint256 amount) {
         amount = claimable(id, holder);
         if (amount == 0) return 0;
         claimed[id][holder] += amount;
         exclusions[id].claimedUsdc += amount;
         heldUsdc -= amount;
         emit ExclusionClaimed(id, holder, amount);
-        USDC.safeTransfer(holder, amount);
+        USDC.safeTransfer(to, amount);
     }
 
     function claimAll(address holder) external returns (uint256 total) {

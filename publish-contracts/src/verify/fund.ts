@@ -16,7 +16,7 @@ import { layoutExtensionProblems, type LayoutRename } from "../upgrade-rows.ts";
 import { USDC_ADDRESS, checkUsdcCode } from "../usdc.ts";
 import { FUND_PROXY_NAMES } from "./upgradeability.ts";
 import { TWIN_CHAIN_ID } from "../chains.ts";
-import { keccak256, toHex } from "viem";
+import { encodeAbiParameters, keccak256, toHex } from "viem";
 import type { Address, ChainReader, ExpectedFundAsset, Hex, VerifyOptions, VerifyReport } from "./types.ts";
 
 const HAS_ROLE = "function hasRole(bytes32 role, address account) view returns (bool)";
@@ -121,6 +121,14 @@ async function twinExclusive(
     ? { ok: false, detail: problems.slice(0, 5).join("; ") }
     : { ok: true, detail: `holders [${want.join(",")}] hold the role now; no grant to another account and no revoke of a holder in blocks ${pin + 1n}-${head} (history before the fork pin ${pin} is Base, not claimed here)` };
 }
+
+/** ERC-7201 base slot of FundState (contracts/lib/FundStorage.sol SLOT, namespace robotmoney.storage.RobotMoneyFund). */
+export const FUND_STORAGE_SLOT: Hex = "0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00";
+/** FundState.adapterProxyCodeHash is member slot 55 of the namespace (contracts/test/fixtures/storage-layout/RobotMoneyFund.json; the layout is append-only). */
+export const FUND_ADAPTER_PROXY_CODE_HASH_MEMBER_SLOT = 55n;
+/** The storage slot of `adapterProxyCodeHash[codeHash]` on the fund: keccak256(abi.encode(codeHash, base + 55)). The mapping has no getter (safety review 0.9.0, MISSED-09). */
+export const adapterProxyCodeHashSlot = (codeHash: Hex): Hex =>
+  keccak256(encodeAbiParameters([{ type: "bytes32" }, { type: "uint256" }], [codeHash, BigInt(FUND_STORAGE_SLOT) + FUND_ADAPTER_PROXY_CODE_HASH_MEMBER_SLOT]));
 
 async function readFirstAddressArray(chain: ChainReader, at: Address, signatures: readonly string[]): Promise<Address[]> {
   let lastErr: unknown;
@@ -301,7 +309,7 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
     if (f.keeperOwners !== undefined) {
       await c.run("keeper: smart account owners equal sheet", async () => {
         const got = normAddrs(await readFirstAddressArray(chain, f.keeper, ["function owners() view returns (address[])", "function getOwners() view returns (address[])"]));
-        const want = normAddrs(f.keeperOwners!);
+        const want = normAddrs(f.keeperOwners!.map((o) => (o === "@safe" ? addr.safe : o)));
         const ok = got.length === want.length && got.every((a, i) => a === want[i]);
         return { ok, detail: `owners [${got.join(",")}], expected [${want.join(",")}]` };
       });
@@ -315,6 +323,21 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
       });
     }
   }
+  // Safety review 0.9.0 (AGY-04): every KeeperAccount owner acts alone (1-of-N), so one compromised owner could remove the others and halt the keeper. Whatever the
+  // sheet says (a sheet with no KEEPER_TYPE and no KEEPER_OWNERS ran no keeper check before), a contract keeper has exactly one owner, the Safe, whose threshold is
+  // then the quorum. Read from the chain. A keeper with no code is a direct keeper key and stays allowed (Deploy 4).
+  await c.run("keeper: a contract keeper has exactly one owner, the Safe (AGY-04)", async () => {
+    if ((await chain.getCode(f.keeper)).length <= 2) return { ok: true, detail: "the keeper has no code: a direct keeper key" };
+    if (lc(f.keeper) === lc(addr.safe)) return { ok: true, detail: "the keeper is the Safe itself" };
+    let got: string[];
+    try {
+      got = normAddrs(await readFirstAddressArray(chain, f.keeper, ["function owners() view returns (address[])", "function getOwners() view returns (address[])"]));
+    } catch (e) {
+      if (isRpcFailure(e)) throw e;
+      return { ok: false, detail: `the keeper ${f.keeper} has code but answers neither owners() nor getOwners(): it is no KeeperAccount and not the Safe, so who controls it cannot be checked` };
+    }
+    return { ok: got.length === 1 && got[0] === lc(addr.safe), detail: `owners [${got.join(",")}], expected exactly the Safe [${lc(addr.safe)}]` };
+  });
 
   // ---- the handover: the timelock administers every contract exclusively, the deployer holds nothing
   const admins: [string, Address][] = [["fund", addr.fund], ["rebalancer", addr.rebalancer], ["governance", addr.governance], ["queue", addr.queue], ["receipt", addr.receipt]];
@@ -407,6 +430,34 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
       if (lc(impl) !== ZERO && !(await allowed(keccak256(await chain.getCode(impl))))) problems.push(`asset[${i}]: adapter implementation ${impl} code hash not allowed`);
     }
     return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${checked} basket adapter(s) allowed` };
+  });
+  // ADR-0019 (safety review 0.9.0, MISSED-09): an allowed proxy hash that is not MARKED a proxy hash is treated as a direct adapter, so the fund would never vet the
+  // implementation behind it. The fund has no getter for the mark (no room under EIP-170), so it is read from storage: FundState.adapterProxyCodeHash[hash]. And the
+  // implementation behind the deploy's swap adapter is the one DeployFund.s.sol recorded (manifest swap_adapter_implementation, when the manifest carries it).
+  await c.run("fund: every proxied basket adapter is marked a proxy and runs the recorded implementation (ADR-0019)", async () => {
+    const configs = (await chain.read(addr.fund, ASSET_CONFIGS_SIG)) as Record<string, any>[];
+    const problems: string[] = [];
+    const marked = async (h: Hex) => BigInt(await chain.getStorageAt(addr.fund, adapterProxyCodeHashSlot(h))) !== 0n;
+    const recordedAdapter = files.fund.swap_adapter, recordedImpl = files.fund.swap_adapter_implementation;
+    let proxied = 0;
+    for (let i = 0; i < configs.length; i++) {
+      const a = configs[i]!;
+      if (Number(a.kind) !== 1 || !Boolean(a.active)) continue;
+      const adapter = String(a.adapter) as Address;
+      const word = (await chain.getStorageAt(adapter, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
+      const impl = `0x${word.slice(24)}` as Address;
+      const isRecorded = typeof recordedAdapter === "string" && lc(adapter) === lc(recordedAdapter);
+      if (isRecorded && typeof recordedImpl === "string" && lc(impl) !== lc(recordedImpl)) problems.push(`asset[${i}]: adapter ${adapter} implementation ${impl} differs from the manifest's swap_adapter_implementation ${recordedImpl}`);
+      const adapterMarked = await marked(keccak256(await chain.getCode(adapter)));
+      if (lc(impl) === ZERO) {
+        if (adapterMarked) problems.push(`asset[${i}]: adapter ${adapter} is no proxy (no ERC-1967 implementation) but its code hash is marked a proxy hash`);
+        continue;
+      }
+      proxied++;
+      if (!adapterMarked) problems.push(`asset[${i}]: adapter ${adapter} is a proxy but its code hash is not marked a proxy hash (setAdapterProxyCodeHash): the fund would not vet its implementation`);
+      if (await marked(keccak256(await chain.getCode(impl)))) problems.push(`asset[${i}]: adapter implementation ${impl} code hash is marked a proxy hash`);
+    }
+    return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${proxied} proxied basket adapter(s) marked` };
   });
   await c.runEq("fund: minSeedUsdc() equals the sheet", async () => BigInt(await chain.read(addr.fund, "function minSeedUsdc() view returns (uint256)") as bigint).toString(), f.minSeedUsdc.toString());
   await c.runEq("fund: maxSlippageBps() equals the sheet", async () => BigInt(await chain.read(addr.fund, "function maxSlippageBps() view returns (uint256)") as bigint).toString(), f.maxSlippageBps.toString());

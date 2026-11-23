@@ -1,11 +1,11 @@
 ---
 title: "IFlowQueue"
-description: "The entry point for timed, netted, forward-priced deposits and redemptions of the one fund (E1, E2, E24-E42). Authority: - KEEPER_ROLE: `settle` (keeper-only, E34). - EMERGENCY_ROLE: self-expiring `pauseQueue` (with cooldown, E39), rate-limited `freezeSettlement` (E49). - ADMIN_ROLE (timelock): `unpauseQueue`, `setFlowParams`, `releaseSettlement`. - A request's owner: `cancel` (cutoff + stop windows), `withdrawExpired` (deposits), `giveRedemptionNotice` (redemptions > `maxRoll`), `redeem`. - Fund only: `onShutdown()` (releases active escrows on wind-down)."
+description: "The entry point for timed, netted, forward-priced deposits and redemptions of the one fund (E1, E2, E24-E42). Authority: - KEEPER_ROLE: `settle` (keeper-only, E34). - EMERGENCY_ROLE: self-expiring `pauseQueue` (with cooldown, E39), rate-limited `freezeSettlement` (E49). - ADMIN_ROLE (timelock): `unpauseQueue`, `setFlowParams`, `releaseSettlement`. - A request's owner: `cancel` (cutoff + stop windows), `giveRedemptionNotice` (redemptions > `maxRoll`), `redeem`. - Anyone: `withdrawExpired` (an expired deposit goes back to its owner). - Fund only: `onShutdown()` (releases active escrows on wind-down)."
 ---
 
 # IFlowQueue
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/interfaces/IFlowQueue.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/interfaces/IFlowQueue.sol)
 
 **Inherits:** [IFlowEvents](/contracts/interface.IFlowEvents)
 
@@ -16,8 +16,9 @@ Authority:
 - KEEPER_ROLE: `settle` (keeper-only, E34).
 - EMERGENCY_ROLE: self-expiring `pauseQueue` (with cooldown, E39), rate-limited `freezeSettlement` (E49).
 - ADMIN_ROLE (timelock): `unpauseQueue`, `setFlowParams`, `releaseSettlement`.
-- A request's owner: `cancel` (cutoff + stop windows), `withdrawExpired` (deposits), `giveRedemptionNotice`
-(redemptions > `maxRoll`), `redeem`.
+- A request's owner: `cancel` (cutoff + stop windows), `giveRedemptionNotice` (redemptions > `maxRoll`),
+`redeem`.
+- Anyone: `withdrawExpired` (an expired deposit goes back to its owner).
 - Fund only: `onShutdown()` (releases active escrows on wind-down).
 
 ## Functions
@@ -127,7 +128,9 @@ function cancel(uint256 requestId) external;
 
 ### withdrawExpired
 
-Owner withdraws escrow of an expired Deposit request (`cur > expiryEpoch`). Redemptions never expire.
+Send the escrow of an expired Deposit request (`cur > expiryEpoch`) back to its owner. Anyone may call
+it: the USDC only goes to the owner, and an expired request left open would hold the settle walk's
+start at its epoch. Redemptions never expire.
 
 ```solidity
 function withdrawExpired(uint256 requestId) external returns (uint256 amount);

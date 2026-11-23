@@ -5,7 +5,7 @@ description: "Delisting sales, delisting claim accumulators, asset admission rul
 
 # FundDelistLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FundDelistLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FundDelistLib.sol)
 
 **Title:** FundDelistLib
 
@@ -357,12 +357,13 @@ function takeDelistClaimInKind(FundState storage s, uint256 index, address owner
 | tokNet | `uint256` |  |
 | tokFee | `uint256` |  |
 
-<a id="_harvestdelist-delistclaimaccount-uint256"></a>
+<a id="_harvestdelist-delistclaimaccount-uint256-uint256"></a>
 
 ### _harvestDelist
 
 ```solidity
-function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc) private;
+function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc, uint256 scale)
+        private;
 ```
 
 **Parameters**
@@ -371,6 +372,34 @@ function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc) privat
 | ---- | ---- | ----------- |
 | accEntry | `DelistClaimAccount` |  |
 | acc | `uint256` |  |
+| scale | `uint256` |  |
+
+<a id="_accscale-fundstate-uint256"></a>
+
+### _accScale
+
+<i>
+
+The accumulator scale of asset `index`'s claim book (`FundState.delistWideScale`).
+
+</i>
+
+```solidity
+function _accScale(FundState storage s, uint256 index) private view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="createledger-address"></a>
 

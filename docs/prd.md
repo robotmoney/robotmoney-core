@@ -302,7 +302,8 @@ execute that operation unattended.
 Common edge cases:
 
 - selected destination has deposits paused, is retired, full, or unavailable
-  (this refuses a deposit only; a withdrawal is never refused for a pause);
+  (a deposit pause refuses a deposit only; a USDC redemption can be delayed
+  by a pause, and a pause ends by itself);
 - requested amount exceeds depositor, vault, allocation, or agent limits;
 - a redemption cannot settle yet (a safety check, a rate limit or a pause
   delays it; the product names the check);
@@ -508,9 +509,12 @@ pattern: each strategy is normalized behind a common interface, deposits
 spread across the active strategies toward an equal-weight target, and
 the mix is kept near that target through ordinary deposit and withdrawal
 activity rather than scheduled trading. The asymmetric pause behavior —
-new deposits can be halted for incident response while existing holders
-can always redeem, so withdrawals are never blocked — is also borrowed
-from Yearn's security design.
+new deposits can be halted for incident response — is also borrowed
+from Yearn's security design. In the one-vault fund a USDC redemption can
+be delayed by the protocol's safety checks, by a rate limit or by a pause,
+and a pause ends by itself. If the fund cannot settle, the Safe multisig
+winds it down, through the timelock, and in a wind-down every holder can
+take a pro-rata slice of the fund's assets.
 
 ### Giza and Zyfai
 
@@ -808,8 +812,11 @@ take effect. This is the same graduated-authority model used for the
 protocol's deliberate value and lifecycle actions: permissionless actions
 (foreign-token sweep, harvest trigger) need no privilege; emergency actions
 can only de-risk, never extract — new deposits can be halted for incident
-response while existing holders can always redeem, so withdrawals are never
-blocked; and governance actions (unpause deposits, restore, retire, fee-recipient and
+response; a USDC redemption can be delayed by the protocol's safety checks,
+by a rate limit or by a pause, and a pause ends by itself; if the fund
+cannot settle, the Safe multisig winds it down, through the timelock, and
+in a wind-down every holder can take a pro-rata slice of the fund's assets;
+and governance actions (unpause deposits, restore, retire, fee-recipient and
 fee-parameter changes, strategy add/allowlist/caps, quarantine set and
 recover) require multisig plus timelock. Depositor principal is moved by the
 depositor alone.

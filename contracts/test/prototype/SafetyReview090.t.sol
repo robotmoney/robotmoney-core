@@ -666,4 +666,174 @@ contract SafetyReview090Test is FlowQueueBase {
         applyReceiptViaTimelock(id2, d2, v2);
         assertTrue(receipts.isReleased(id2), "the second same-second receipt applied");
     }
+
+    // ───────────────────────────── Second pass (independent check of the fixes) ─────────────────────────────
+
+    /// @notice One address creates and cancels deposits in one epoch, then leaves one live deposit behind them. The
+    ///         cancelled ids stay in the epoch's list. Every settle call and every `checkSettle` must still fit under
+    ///         the per-tx gas cap, and repeated calls must reach the live deposit (MISSED-01).
+    function test_MISSED01_cancelledDepositFloodCannotBrickSettle() public fixtureCovered {
+        _invest();
+        uint256 minUsdc = queue.flowParams().minRequestUsdc;
+        uint256 n = 4_000;
+        fundUsdc(attacker, minUsdc * (n + 1));
+        // Start of a fresh epoch, so every cancel lands before the cancel cutoff.
+        vm.warp(queue.settleableAt(queue.currentEpoch()) - queue.flowParams().settleWindow + 1);
+        refreshFeeds();
+        vm.prank(attacker);
+        IERC20(USDC).approve(address(queue), type(uint256).max);
+        // The attack's own gas is not under test and is more than one test may meter, so it runs unmetered.
+        vm.pauseGasMetering();
+        for (uint256 k; k < n; ++k) {
+            vm.startPrank(attacker);
+            uint256 id = queue.requestDeposit(minUsdc, attacker);
+            queue.cancel(id);
+            vm.stopPrank();
+            if (k % 100 == 99) {
+                coverageCheckpoint();
+                vm.pauseGasMetering();
+            }
+        }
+        vm.resumeGasMetering();
+        vm.prank(attacker);
+        uint256 liveId = queue.requestDeposit(minUsdc, attacker);
+        coverageCheckpoint();
+
+        warpToSettleable(liveId);
+        refreshFeeds();
+        bool reached;
+        for (uint256 k; k < 64; ++k) {
+            vm.roll(block.number + 1);
+            vm.warp(block.timestamp + 2);
+            vm.prank(keeper);
+            (bool viewOk,) =
+                address(queue).staticcall{gas: TX_GAS_CAP}(abi.encodeCall(queue.checkSettle, ()));
+            assertTrue(viewOk, "checkSettle fits in one call");
+            vm.prank(keeper);
+            (bool ok, bytes memory ret) = address(queue).call{gas: TX_GAS_CAP}(
+                abi.encodeCall(queue.settle, (KEEPER_MAX_REQUESTS, type(uint256).max))
+            );
+            assertTrue(
+                ok || _selector(ret) == IFlowEvents.SettleBlocked.selector, "settle fits in one tx"
+            );
+            if (k % 4 == 3) coverageCheckpoint();
+            if (queue.pendingDepositRequest(liveId, attacker) == 0) {
+                reached = true;
+                break;
+            }
+        }
+        assertTrue(reached, "repeated keeper calls reach the live deposit");
+    }
+
+    /// @notice A lending venue with no liquidity is backed off, so the next step trades the plan's other legs
+    ///         instead of picking the frozen venue again (MISSED-09).
+    function test_MISSED09_frozenLendingVenueDoesNotHoldTheOtherLegs() public fixtureCovered {
+        investFund(assetVec(1_500, 3_500, 3_000, 2_000, 0));
+        coverageCheckpoint();
+        setTargetViaTimelock(
+            assetVec(3_500, 1_500, 2_000, 3_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
+        vm.mockCall(
+            address(moonwellAdapter),
+            abi.encodeWithSelector(ILendingRateAdapter.availableLiquidity.selector),
+            abi.encode(uint256(1))
+        );
+        vm.warp(fund.plan().endTime - 1 hours);
+        refreshFeeds();
+        (, uint256 sIdx,,) = rebalancer.previewStep();
+        assertEq(sIdx, IDX_MOONWELL, "Moonwell is the first sell leg");
+        (bool executed, SkipReason reason) = keeperStep();
+        assertFalse(executed, "the frozen venue's step is skipped");
+        assertTrue(reason == SkipReason.BelowMinStep, "as a dust skip");
+        coverageCheckpoint();
+
+        vm.roll(block.number + 1);
+        vm.warp(block.timestamp + 2);
+        refreshFeeds();
+        (, sIdx,,) = rebalancer.previewStep();
+        assertTrue(sIdx != IDX_MOONWELL, "the frozen venue is backed off");
+        (executed,) = keeperStep();
+        assertTrue(executed, "another leg trades");
+    }
+
+    /// @notice A feed that is fresh but still shows the price from before a crash must not trap the asset: the floor
+    ///         the timelock names stands, even below the feed (AGY-01, chapter 05).
+    function test_AGY01_namedFloorStandsWhenAFreshFeedLagsTheMarket() public fixtureCovered {
+        _invest();
+        setTargetViaTimelock(bucketVec(6_000, 4_000), PlanParams(1 days, COST_BUDGET_BPS));
+        uint256 held = IERC20(WETH).balanceOf(address(fund));
+        uint256 minOut = held * poolPrice8(WETH_POOL, WETH) / 1e18 / 100 * 95 / 100;
+        bytes memory feedFloor =
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, uint256(0));
+        bytes memory named =
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, minOut);
+        timelock.schedule(address(fund), 0, feedFloor, bytes32(0), bytes32("c"), TIMELOCK_DELAY);
+        timelock.schedule(address(fund), 0, named, bytes32(0), bytes32("d"), TIMELOCK_DELAY);
+        vm.warp(block.timestamp + TIMELOCK_DELAY);
+        refreshFeeds();
+        // The feed is fresh and reads twice the pool's price.
+        MockAggregator(FEED_ETH)
+            .setRound(8, feedPrice8[FEED_ETH] * 2, block.timestamp, block.timestamp);
+
+        vm.expectRevert();
+        timelock.execute(address(fund), 0, feedFloor, bytes32(0), bytes32("c"));
+        timelock.execute(address(fund), 0, named, bytes32(0), bytes32("d"));
+        assertEq(IERC20(WETH).balanceOf(address(fund)), 0, "the whole leg sold at the named floor");
+    }
+
+    /// @notice A shutdown and a restore inside one epoch: a request made after the restore, in that same epoch, is
+    ///         still enrolled and settled (MISSED-03).
+    function test_MISSED03_requestAfterRestoreInTheSameEpochIsSettled() public fixtureCovered {
+        _invest();
+        uint256 shares = _holder(bob, 20_000e6);
+        uint256 oldId = openRedeemRequest(bob, shares / 4);
+        coverageCheckpoint();
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.shutdown, ()));
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
+        refreshFeeds();
+        oldId;
+
+        uint256 want = shares / 4;
+        uint256 newId = openRedeemRequest(bob, want);
+        warpToSettleable(newId);
+        _settleNow();
+        assertLt(queue.pendingRedeemRequest(newId, bob), want, "the new request is settled");
+    }
+
+    /// @notice Two settlements in a row during a delisting sale of a large asset: the second must not trip the
+    ///         share-price check on the sale itself (AGY-11's neighbour).
+    function test_AGY11_secondSettlementDuringADelistingDoesNotTripCheck6() public fixtureCovered {
+        investFund(assetVec(1_500, 1_500, 5_000, 2_000, 0));
+        _holder(bob, 20_000e6);
+        coverageCheckpoint();
+        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_WETH)));
+        uint256 quarter = fund.balanceOf(bob) / 4;
+
+        uint256 id1 = openRedeemRequest(bob, quarter);
+        warpToSettleable(id1);
+        _settleNow();
+        coverageCheckpoint();
+
+        uint256 id2 = openRedeemRequest(bob, quarter);
+        warpToSettleable(id2);
+        refreshFeeds();
+        vm.prank(keeper);
+        (SettleCheck check, uint256 detail) = queue.checkSettle();
+        console2.log("check", uint256(check), detail);
+        assertTrue(check == SettleCheck.Ok, "the second settlement during the sale is allowed");
+    }
+
+    /// @notice An expired deposit left open holds the settle walk's start at its epoch. Anyone may send it back to its
+    ///         owner, so the walk does not depend on that owner (MISSED-01).
+    function test_MISSED01_anyoneSendsAnExpiredDepositBackToItsOwner() public fixtureCovered {
+        _invest();
+        FlowParams memory p = queue.flowParams();
+        uint256 id = openDepositRequest(alice, 5_000e6);
+        vm.warp(block.timestamp + (uint256(p.maxRoll) + 2) * p.epochLength);
+        uint256 before = IERC20(USDC).balanceOf(alice);
+        vm.prank(attacker);
+        assertEq(queue.withdrawExpired(id), 5_000e6, "a stranger returns it");
+        assertEq(IERC20(USDC).balanceOf(alice) - before, 5_000e6, "to its owner");
+        assertTrue(queue.getRequest(id).closed, "the request is closed");
+    }
 }

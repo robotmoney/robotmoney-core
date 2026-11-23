@@ -5,7 +5,7 @@ description: "Every piece of FlowQueue state outside the OpenZeppelin namespaces
 
 # FlowState
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FlowStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FlowStorage.sol)
 
 Every piece of FlowQueue state outside the OpenZeppelin namespaces, in one struct, so the queue's linked
 libraries (`Flow*Lib`) take one storage reference per call. Owned by the `queue` agent after the
@@ -138,10 +138,11 @@ struct FlowState {
     ///      enrollment resumes. Enrollment runs in bounded batches, so a flood of requests in one epoch takes more
     ///      keeper calls instead of one call over the gas cap.
     uint256 enrollPos;
-    /// @dev Longest `minHold` of a deposit enrolled in each deposit cycle (safety review 0.9.0, AGY-10). A match books
-    ///      the hold of the cycle it fills, not the all-time `maxDepositMinHold`, so lowering `minHold` shortens the
-    ///      freeze window of later matches and a freeze cannot land on shares already unlocked.
-    mapping(uint256 cycle => uint32) depCycleMaxMinHold;
+    /// @dev Longest `minHold` of a deposit enrolled in each deposit bucket (cycle, expiry epoch) (safety review 0.9.0,
+    ///      AGY-10). A match books the longest hold of the buckets it fills, not the all-time `maxDepositMinHold`, so
+    ///      after `minHold` is lowered the freeze window shortens once the older buckets leave, and a freeze cannot
+    ///      land on shares already unlocked.
+    mapping(uint256 cycle => mapping(uint64 expiryEpoch => uint32)) depBucketMaxMinHold;
 }
 ```
 
@@ -232,5 +233,5 @@ struct FlowState {
 | pendingNoticeRounds | `uint64[]` |  |
 | maxDepositMinHold | `uint32` |  |
 | enrollPos | `uint256` |  |
-| depCycleMaxMinHold | `mapping(uint256 cycle => uint32)` |  |
+| depBucketMaxMinHold | `mapping(uint256 cycle => mapping(uint64 expiryEpoch => uint32))` |  |
 

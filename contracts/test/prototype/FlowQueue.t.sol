@@ -606,13 +606,9 @@ contract FlowQueueTest is FlowQueueBase {
         {
             Request memory r = queue.getRequest(depExp);
             vm.warp((uint256(r.epoch) + p.maxRoll + 1) * p.epochLength);
-            vm.prank(dave);
-            vm.expectRevert(
-                abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, depExp, dave)
-            );
-            queue.withdrawExpired(depExp);
+            // Anyone may send it back, and it still pays only its owner (safety review 0.9.0, MISSED-01).
             uint256 erinBefore = IERC20(USDC).balanceOf(erin);
-            vm.prank(erin);
+            vm.prank(dave);
             assertEq(queue.withdrawExpired(depExp), 3_000e6, "exactly the expired deposit escrow");
             assertEq(IERC20(USDC).balanceOf(erin), erinBefore + 3_000e6, "to erin");
             assertEq(IERC20(USDC).balanceOf(dave), 0, "nobody else got USDC");
@@ -2598,12 +2594,12 @@ contract FlowQueueTest is FlowQueueBase {
         _settleNow();
         assertTrue(queue.getRequest(b).closed, "the live request fills");
         assertEq(queue.getRequest(a).remaining, 5_000e6, "the expired one does not");
+        // Anyone may send an expired deposit back: the escrow only goes to its owner (safety review 0.9.0, MISSED-01).
+        uint256 bobBefore = IERC20(USDC).balanceOf(bob);
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, a, bob));
-        queue.withdrawExpired(a);
-        vm.prank(alice);
-        assertEq(queue.withdrawExpired(a), 5_000e6, "the owner withdraws the escrow");
+        assertEq(queue.withdrawExpired(a), 5_000e6, "a stranger returns the escrow");
         assertEq(IERC20(USDC).balanceOf(alice), 5_000e6, "to the owner");
+        assertEq(IERC20(USDC).balanceOf(bob), bobBefore, "and gets none of it");
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestNotPending.selector, a));
         queue.withdrawExpired(a);

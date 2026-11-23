@@ -5,7 +5,7 @@ description: "Units per lending position (E9, RB-21), as an externally linked li
 
 # FundPositionLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundPositionLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FundPositionLib.sol)
 
 **Title:** FundPositionLib
 
@@ -758,6 +758,32 @@ function _creditLendingPot(FundState storage s, uint256 i, uint256 gotClaims) pr
 | s | `FundState` |  |
 | i | `uint256` |  |
 | gotClaims | `uint256` |  |
+
+<a id="_lendscale-lendingclaimepoch"></a>
+
+### _lendScale
+
+<i>
+
+The accumulator scale of one lending claim epoch (`LendingClaimEpoch.wide`).
+
+</i>
+
+```solidity
+function _lendScale(LendingClaimEpoch storage ep) private view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ep | `LendingClaimEpoch` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="_rolllendingepoch-fundstate-uint256"></a>
 

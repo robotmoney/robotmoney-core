@@ -43,6 +43,12 @@ notes: |
   Front-run rule (safety review 0.9.0, MISSED-09). The queue migration refuses any open request (LegacyEscrowOpen), and the schedule is public
   for the timelock delay, so one user request opened before P2.83 reverts the queue upgrade. Any future in-place queue upgrade pauses the queue
   with the emergency key before it schedules the upgrade, and checks the pause outlasts the execute; the Safe unpauses after the migration.
+  A pause stops new requests and settlement. It does not close a request that is already open, and that request's owner can still cancel it
+  or withdraw it once expired. So after the pause and before scheduling, confirm that no pending escrow remains: books() reads pendingUsdc 0
+  and escrowShares 0, and no request is open in the pools. The migration reads exactly this state: it reverts LegacyEscrowOpen unless
+  totalPendingUsdc and totalEscrowShares are both 0, QueueAlreadyActive unless no epoch is active, and LegacyRequestOpen for any request
+  left open (contracts/lib/FlowMigrateLib.sol, migrateV090 and _migrateRequest). If a request is open, wait for its owner to cancel or
+  withdraw it, then schedule.
 
   What stays the same. Every queue claim keeps the unlockAt fixed at its settlement. P0.94 snapshots the claims (claims-before.json) and P2.84,
   P6.93, P6.94, P6.99 and P9.83 read them unchanged. The fund's supply, seed shares, plan id and request count read the same after the upgrade (P2.84).

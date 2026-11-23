@@ -138,6 +138,8 @@ contract Rebalancer is
         uint256 feedIndex;
         StepPrices px;
         bool hasBasketLeg;
+        /// A lending sell leg's venue cannot pay out `minStepUsdc` now (`_size`).
+        bool illiquid;
     }
 
     // ─── Step 3e events (§5.10) ──────────────────────────────────────────────
@@ -253,6 +255,9 @@ contract Rebalancer is
             return (false, d.reason);
         }
         if (d.reason != SkipReason.None) {
+            // A venue with no liquidity is backed off like a failed step, so the next step picks other legs and one
+            // frozen venue cannot hold the plan's other moves (§5.8; safety review 0.9.0, MISSED-09).
+            if (d.illiquid) _backoff(f, d.sellIndex);
             emit RebalanceStepSkipped(p.id, d.reason, d.sellIndex, d.buyIndex, d.detail);
             return (false, d.reason);
         }
@@ -501,9 +506,10 @@ contract Rebalancer is
         //    pool, so a keeper's sandwich of it gains little (A20), as the per-call cap does for a settlement.
         //    SAFE-05 (§5.3 step 4, §5.5): dust below `minStepUsdc` is ignored except for the last dust after
         //    `endTime` when the smaller deviation fits within both legs' caps (`notional == min(over, under)`).
-        uint256 notional = _size(f, cfgs, legs);
+        (uint256 notional, bool clamped) = _size(f, cfgs, legs);
         d.notional = notional;
         if (notional < sp.minStepUsdc) {
+            d.illiquid = clamped;
             uint256 minDev = Math.min(legs.over, legs.under);
             if (block.timestamp < p.endTime || notional < minDev) {
                 d.reason = SkipReason.BelowMinStep;
@@ -560,7 +566,7 @@ contract Rebalancer is
     function _size(IRobotMoneyFund f, AssetConfig[] memory cfgs, PlanMath.Legs memory legs)
         internal
         view
-        returns (uint256 notional)
+        returns (uint256 notional, bool clamped)
     {
         notional = Math.min(legs.over, legs.under);
         if (legs.sellIndex != IDLE_INDEX) {
@@ -571,7 +577,10 @@ contract Rebalancer is
                 try ILendingRateAdapter(cfgs[legs.sellIndex].adapter).availableLiquidity() returns (
                     uint256 avail
                 ) {
-                    if (avail < notional) notional = avail;
+                    if (avail < notional) {
+                        notional = avail;
+                        clamped = true;
+                    }
                 } catch {}
             }
         }

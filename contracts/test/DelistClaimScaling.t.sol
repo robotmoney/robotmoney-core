@@ -62,6 +62,30 @@ contract DelistBooks {
     function pay(address owner) external returns (uint256 net) {
         (net,,) = FundDelistLib.consumeDelistClaim(s, 0, owner);
     }
+
+    /// @dev As `claim`, with an exit fee.
+    function claimWithFee(address owner, uint256 tok, uint256 feeBps) external {
+        FundDelistLib.recordDelistClaim(s, 0, owner, tok, feeBps);
+    }
+
+    function takeInKind(address owner) external returns (uint256 tokNet, uint256 tokFee) {
+        return FundDelistLib.takeDelistClaimInKind(s, 0, owner);
+    }
+
+    function wide() external view returns (bool) {
+        return s.delistWideScale[0];
+    }
+
+    /// @dev The book a fund on the 1e30 accumulator scale left behind: `owner`'s `tok` tokens were all sold for
+    ///      `usdc`, and `owner` has not collected yet.
+    function seedLegacyBook(address owner, uint256 tok, uint256 usdc) external {
+        uint256 units = tok * 1e12;
+        s.delistTotalScaled[0] = units;
+        s.delistClaims[0][owner].scaled = units;
+        s.delistUsdcPerScaled[0] = usdc * 1e30 / units;
+        s.delistUsdcPot[0] = usdc;
+        s.reservedClaimUsdc = usdc;
+    }
 }
 
 /// @title DelistClaimScalingTest
@@ -98,5 +122,37 @@ contract DelistClaimScalingTest is Test {
             assertGe(got + 100, fair - fair / 10_000, "every claimer gets its share, to 0.01 %");
         }
         emit log_named_uint("worst claimer share of fair (bps)", worstBps);
+    }
+
+    /// @notice An upgrade must not rescale a claim that is still open: a book written on the old 1e30 scale pays out
+    ///         on that scale, and the book moves to the wide scale only once it is empty.
+    function test_MISSED02_openLegacyBookKeepsItsScaleAcrossTheUpgrade() public {
+        ScalingToken t = new ScalingToken();
+        DelistBooks b = new DelistBooks(t, 10e18);
+        address old = address(0xA11CE);
+        b.seedLegacyBook(old, 1e18, PRICE);
+        assertFalse(b.wide(), "the open book is on the old scale");
+        assertEq(b.pay(old), PRICE, "the old claim is paid in full");
+
+        address next = address(0xB0B);
+        b.claim(next, 1e18);
+        assertTrue(b.wide(), "the emptied book restarts on the wide scale");
+        b.sell(b.fundTokens() + b.claimed(), (b.fundTokens() + b.claimed()) * PRICE / 1e18);
+        assertApproxEqAbs(b.pay(next), PRICE, 1, "the new claim is paid on the wide scale");
+    }
+
+    /// @notice Every claimer leaving in kind empties the book: no token unit stays set aside with no claim behind it.
+    function test_MISSED08_inKindExitsLeaveNoOrphanTokens() public {
+        ScalingToken t = new ScalingToken();
+        DelistBooks b = new DelistBooks(t, 10e18);
+        b.claimWithFee(address(0xA1), 1_000_000_000_000_000_007, 37);
+        b.claimWithFee(address(0xA2), 333_333_333_333_333_331, 37);
+        b.claimWithFee(address(0xA3), 7, 37);
+        uint256 before = b.claimed();
+        (uint256 n1, uint256 f1) = b.takeInKind(address(0xA1));
+        (uint256 n2, uint256 f2) = b.takeInKind(address(0xA2));
+        (uint256 n3, uint256 f3) = b.takeInKind(address(0xA3));
+        assertEq(n1 + f1 + n2 + f2 + n3 + f3, before, "the claimers take every claimed token");
+        assertEq(b.claimed(), 0, "nothing stays set aside");
     }
 }

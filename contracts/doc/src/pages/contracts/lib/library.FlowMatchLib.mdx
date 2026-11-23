@@ -5,7 +5,7 @@ description: "Linked library holding Step 3f's O(1) whole-match booking, running
 
 # FlowMatchLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FlowMatchLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FlowMatchLib.sol)
 
 **Title:** FlowMatchLib
 
@@ -173,6 +173,35 @@ function _liveDepBucket(FlowState storage s, uint64 cur) private view returns (b
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bool` |  |
+
+<a id="_matchhold-flowstate"></a>
+
+### _matchHold
+
+<i>
+
+The hold a match books: the longest hold enrolled in any bucket that still has basis in the live cycle
+(safety review 0.9.0, AGY-10). A bucket leaves within `maxRoll` epochs, so a long hold from before a
+`minHold` cut stops counting when its bucket does. A bucket with basis and no mark was enrolled before
+this mark existed (or holds zero-hold deposits): the all-time maximum then stands in, as before.
+
+</i>
+
+```solidity
+function _matchHold(FlowState storage s) private view returns (uint32 hold);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hold | `uint32` |  |
 
 <a id="evictexpireddepbuckets-flowstate-uint64"></a>
 

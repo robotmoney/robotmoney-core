@@ -5,9 +5,10 @@ The forge coverage job skips these sources to stay under its memory ceiling (sui
 one-vault coverage job instruments them with the prototype suite instead, and this script reads its lcov report.
 
 It fails when any listed source is absent from the report (an instrumented file that disappears is a silent zero),
-or when the combined line coverage of the listed sources falls below the floor. It prints every file's numbers.
+when one listed source falls below the per-file floor, or when the combined line coverage of the listed sources falls
+below the total floor. It prints every file's numbers.
 
-Usage: check_onevault_coverage.py <lcov.info> [--min PERCENT]
+Usage: check_onevault_coverage.py <lcov.info> [--min PERCENT] [--min-file PERCENT]
 """
 
 from __future__ import annotations
@@ -25,12 +26,19 @@ SOURCES = [
     "contracts/FundExclusionLedger.sol",
     "contracts/KeeperAccount.sol",
     "contracts/PlanMath.sol",
+    "contracts/adapters/AaveV3RateAdapter.sol",
+    "contracts/adapters/AerodromeExactOutSwapAdapter.sol",
+    "contracts/adapters/CompoundV3RateAdapter.sol",
+    "contracts/adapters/MorphoRateAdapter.sol",
+    "contracts/adapters/UniswapV3ExactOutSwapAdapter.sol",
+    "contracts/lib/FeeTransfer.sol",
     "contracts/lib/FeedLib.sol",
     "contracts/lib/FlowCheckLib.sol",
     "contracts/lib/FlowClaimLib.sol",
     "contracts/lib/FlowMatchLib.sol",
     "contracts/lib/FlowMigrateLib.sol",
     "contracts/lib/FlowSettleLib.sol",
+    "contracts/lib/FlowStorage.sol",
     "contracts/lib/FundAdapterGuard.sol",
     "contracts/lib/FundAdminLib.sol",
     "contracts/lib/FundDelistLib.sol",
@@ -44,6 +52,8 @@ SOURCES = [
 ]
 
 DEFAULT_MIN = 90.0
+# No single source may hide behind the total: each one has its own, lower floor.
+DEFAULT_MIN_FILE = 0.0
 
 
 def parse(path: Path) -> dict[str, tuple[int, int]]:
@@ -68,6 +78,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("lcov", type=Path)
     ap.add_argument("--min", type=float, default=DEFAULT_MIN)
+    ap.add_argument("--min-file", type=float, default=DEFAULT_MIN_FILE)
     a = ap.parse_args(argv)
     if not a.lcov.is_file():
         print(f"FAIL: no lcov report at {a.lcov}")
@@ -84,6 +95,14 @@ def main(argv: list[str]) -> int:
     print(f"{total:6.2f}%  {hit:5d}/{found:<5d}  one-vault total (floor {a.min:.2f}%)")
     if missing:
         print("FAIL: not instrumented: " + ", ".join(missing))
+        return 1
+    low = [
+        f"{s} ({100.0 * data[s][0] / data[s][1]:.2f}%)"
+        for s in SOURCES
+        if s in data and data[s][1] and 100.0 * data[s][0] / data[s][1] < a.min_file
+    ]
+    if low:
+        print(f"FAIL: below the per-file floor {a.min_file:.2f}%: " + ", ".join(low))
         return 1
     if total < a.min:
         print(f"FAIL: one-vault line coverage {total:.2f}% is below the floor {a.min:.2f}%")
