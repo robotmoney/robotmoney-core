@@ -1,0 +1,62 @@
+---
+title: "DelistClaimScalingTest"
+description: "MISSED-02 claimed that claim units inflate across partial sales until a claimer's USDC rounds to zero. A long sale (1 000 steps of 5 % each) with a new claim before every step must still pay each claimer its fair share: its tokens at the sale price."
+---
+
+# DelistClaimScalingTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/test/DelistClaimScaling.t.sol)
+
+**Inherits:** Test
+
+**Title:** DelistClaimScalingTest
+
+MISSED-02 claimed that claim units inflate across partial sales until a claimer's USDC rounds to zero. A
+long sale (1 000 steps of 5 % each) with a new claim before every step must still pay each claimer its fair
+share: its tokens at the sale price.
+
+## Constants
+
+### PRICE
+
+```solidity
+uint256 internal constant PRICE = 3_000e6;
+```
+
+### STEPS
+
+```solidity
+uint256 internal constant STEPS = 1000;
+```
+
+## Functions
+
+<a id="test_missed02_longsalepayseveryclaimeritsshare"></a>
+
+### test_MISSED02_longSalePaysEveryClaimerItsShare
+
+```solidity
+function test_MISSED02_longSalePaysEveryClaimerItsShare() public;
+```
+
+<a id="test_missed02_openlegacybookkeepsitsscaleacrosstheupgrade"></a>
+
+### test_MISSED02_openLegacyBookKeepsItsScaleAcrossTheUpgrade
+
+An upgrade must not rescale a claim that is still open: a book written on the old 1e30 scale pays out
+on that scale, and the book moves to the wide scale only once it is empty.
+
+```solidity
+function test_MISSED02_openLegacyBookKeepsItsScaleAcrossTheUpgrade() public;
+```
+
+<a id="test_missed08_inkindexitsleavenoorphantokens"></a>
+
+### test_MISSED08_inKindExitsLeaveNoOrphanTokens
+
+Every claimer leaving in kind empties the book: no token unit stays set aside with no claim behind it.
+
+```solidity
+function test_MISSED08_inKindExitsLeaveNoOrphanTokens() public;
+```
+

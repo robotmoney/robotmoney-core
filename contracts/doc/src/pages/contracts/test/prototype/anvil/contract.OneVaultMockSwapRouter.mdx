@@ -5,7 +5,7 @@ description: "Test-only swap router with the two entry points the basket swap ad
 
 # OneVaultMockSwapRouter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/afd6d0281fefc4c2ceb888f94c67a4497915dabc/contracts/test/prototype/anvil/OneVaultKeeperAnvil.s.sol)
 
 Test-only swap router with the two entry points the basket swap adapter calls: exact input (the fund's sale
 and buy legs through the adapter's inherited `swap`) and exact output. It fills at one for one and pays USDC
@@ -27,6 +27,15 @@ address public immutable OWNER;
 bool public closed;
 ```
 
+### getPool
+
+The router is its own factory: the adapter accepts only a pool its router's factory made (AGY-13).
+
+```solidity
+mapping(address token0 => mapping(address token1 => mapping(uint24 fee => address))) public
+        getPool;
+```
+
 ## Functions
 
 <a id="constructor"></a>
@@ -36,6 +45,37 @@ bool public closed;
 ```solidity
 constructor();
 ```
+
+<a id="factory"></a>
+
+### factory
+
+```solidity
+function factory() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
+<a id="setpool-address-uint24"></a>
+
+### setPool
+
+Register `pool` as the factory's pool of its own tokens and `fee`.
+
+```solidity
+function setPool(address pool, uint24 fee) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| fee | `uint24` |  |
 
 <a id="setclosed-bool"></a>
 

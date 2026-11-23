@@ -160,6 +160,16 @@ struct FlowState {
     /// @dev Longest `minHold` stored on any deposit request created so far (E41). Settlement hold end uses it, not
     ///      the live `params.minHold`, so a later param change never shortens a hold a request was promised.
     uint32 maxDepositMinHold;
+    // ── Safety review 0.9.0 (agy MISSED-01) ──
+    /// @dev Position inside `activeEpochs[enrollCursor]` (deposit ids, then redemption ids) where a round's
+    ///      enrollment resumes. Enrollment runs in bounded batches, so a flood of requests in one epoch takes more
+    ///      keeper calls instead of one call over the gas cap.
+    uint256 enrollPos;
+    /// @dev Longest `minHold` of a deposit enrolled in each deposit bucket (cycle, expiry epoch) (safety review 0.9.0,
+    ///      AGY-10). A match books the longest hold of the buckets it fills, not the all-time `maxDepositMinHold`, so
+    ///      after `minHold` is lowered the freeze window shortens once the older buckets leave, and a freeze cannot
+    ///      land on shares already unlocked.
+    mapping(uint256 cycle => mapping(uint64 expiryEpoch => uint32)) depBucketMaxMinHold;
 }
 
 /// @notice Where a settle walk continues on one side (step 3 finish plan §3.1 item 2). `epoch == 0` means "start a new

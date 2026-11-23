@@ -5,7 +5,7 @@ description: "RB-9: a target vector names every active asset exactly once and su
 
 # TargetVectorTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/TargetVector.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/prototype/TargetVector.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -220,8 +220,8 @@ function test_deactivate_targetedAsset_reverts() public fixtureCovered;
 <i>
 
 `addAsset` refuses a second active entry with the same asset id, for a Basket token and a Lending
-adapter. After deactivation the same token may be re-added (with its feed, E15), and a vector naming it
-maps to the new index.
+adapter. After deactivation the same token may be re-added (with its feed, E15). Nothing is left open on
+its old slot, so it takes that slot back (safety review 0.9.0, AGY-07) and a vector naming it maps there.
 
 </i>
 

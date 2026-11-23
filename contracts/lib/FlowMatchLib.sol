@@ -10,13 +10,20 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BPS, PRICE_SCALE} from "../FundTypes.sol";
 import {
     Claim,
+    ENROLL_BUDGET,
+    ENROLL_PROCEED_MAX,
+    ENROLL_GAS_MAX,
+    ENROLL_VISIT_MAX,
     IFlowEvents,
+    MAX_OWNER_OPEN_REQUESTS,
+    NOTICE_BUDGET,
     Request,
     RequestKind,
     Settlement,
     SettleContext
 } from "../FlowTypes.sol";
 import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
+import {FeeTransfer} from "./FeeTransfer.sol";
 import {
     DepBucket,
     DepMatchRecord,
@@ -73,12 +80,20 @@ library FlowMatchLib {
             s.epochSeen[epoch] = true;
             s.activeEpochs.push(epoch);
         }
-        if (kind == RequestKind.Deposit) {
-            s.ownerActiveDepReqs[owner].push(requestId);
-        } else {
-            s.ownerActiveRedReqs[owner].push(requestId);
-            s.ownerUnenrolledRedShares[owner] += amount;
+        // Per-owner cap on open requests (safety review 0.9.0, MISSED-01). The list can still hold requests that closed
+        // since the owner's last sync, so a full list is synced (ledger checkpoint first, RB-22) before it refuses.
+        bool dep = kind == RequestKind.Deposit;
+        uint256[] storage open = dep ? s.ownerActiveDepReqs[owner] : s.ownerActiveRedReqs[owner];
+        if (open.length >= MAX_OWNER_OPEN_REQUESTS) {
+            IRobotMoneyFundFull(s.fund).ledgerCheckpoint(owner);
+            if (dep) syncOwnerDeposits(s, owner);
+            else syncOwnerRedeems(s, owner);
+            if (open.length >= MAX_OWNER_OPEN_REQUESTS) {
+                revert IFlowEvents.TooManyOpenRequests(owner);
+            }
         }
+        open.push(requestId);
+        if (kind == RequestKind.Redeem) s.ownerUnenrolledRedShares[owner] += amount;
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -92,26 +107,30 @@ library FlowMatchLib {
         returns (bool)
     {
         if (s.redPoolShares != 0) return true;
-        if (s.depPoolUsdc != 0) {
-            for (uint256 i; i < s.activeDepBuckets.length; ++i) {
-                if (s.activeDepBuckets[i] >= cur) return true;
-            }
-        }
+        if (s.depPoolUsdc != 0 && _liveDepBucket(s, cur)) return true;
         uint256 idx = s.enrollCursor;
+        // Positions before `enrollPos` in the cursor's epoch are enrolled (the pool checks above) or dead.
+        uint256 pos = s.enrollPos;
         uint256 len = s.activeEpochs.length;
+        uint256 looks;
         while (idx < len) {
             uint64 e = s.activeEpochs[idx];
             if (e > roundEpoch) break;
             if (s.sideOpen[uint8(RequestKind.Redeem)][e] != 0) return true;
             if (s.sideOpen[uint8(RequestKind.Deposit)][e] != 0) {
                 uint256[] storage ids = s.sideIds[uint8(RequestKind.Deposit)][e];
-                for (uint256 j; j < ids.length; ++j) {
+                for (uint256 j = pos; j < ids.length; ++j) {
+                    // Cancelled and expired ids stay listed, so this scan is bounded: past the bound the answer is
+                    // "work", and the bounded enrollment walk moves the cursor over them (safety review 0.9.0,
+                    // MISSED-01: one owner's create-and-cancel loop must not make every settlement scan them all).
+                    if (++looks > ENROLL_VISIT_MAX) return true;
                     Request storage r = s.requests[ids[j]];
                     if (!r.closed && r.era == s.windDownEra && cur <= r.expiryEpoch) {
                         return true;
                     }
                 }
             }
+            pos = 0;
             ++idx;
         }
         return false;
@@ -124,14 +143,35 @@ library FlowMatchLib {
         returns (bool hasRed, bool hasDep)
     {
         hasRed = s.redPoolShares != 0;
-        if (depositsOpen && s.depPoolUsdc != 0) {
-            for (uint256 i; i < s.activeDepBuckets.length; ++i) {
-                if (s.activeDepBuckets[i] >= cur) {
-                    hasDep = true;
-                    break;
-                }
-            }
+        hasDep = depositsOpen && s.depPoolUsdc != 0 && _liveDepBucket(s, cur);
+    }
+
+    /// @dev A deposit bucket that has not expired and still holds basis. A bucket emptied by cancels or full
+    ///      consumption stays listed until it expires; it is not work (safety review 0.9.0, AGY-12).
+    function _liveDepBucket(FlowState storage s, uint64 cur) private view returns (bool) {
+        for (uint256 i; i < s.activeDepBuckets.length; ++i) {
+            uint64 e = s.activeDepBuckets[i];
+            if (e >= cur && s.depBuckets[s.depCycle][e].totalNormBasis != 0) return true;
         }
+        return false;
+    }
+
+    /// @dev The hold a match books: the longest hold enrolled in any bucket that still has basis in the live cycle
+    ///      (safety review 0.9.0, AGY-10). A bucket leaves within `maxRoll` epochs, so a long hold from before a
+    ///      `minHold` cut stops counting when its bucket does. A bucket with basis and no mark was enrolled before
+    ///      this mark existed (or holds zero-hold deposits): the all-time maximum then stands in, as before.
+    function _matchHold(FlowState storage s) private view returns (uint32 hold) {
+        uint256 cyc = s.depCycle;
+        bool any;
+        for (uint256 i; i < s.activeDepBuckets.length; ++i) {
+            uint64 e = s.activeDepBuckets[i];
+            if (s.depBuckets[cyc][e].totalNormBasis == 0) continue;
+            uint32 h = s.depBucketMaxMinHold[cyc][e];
+            if (h == 0) return s.maxDepositMinHold;
+            if (h > hold) hold = h;
+            any = true;
+        }
+        if (!any) hold = s.maxDepositMinHold;
     }
 
     /// @notice Evict any expired deposit bucket (`expiryEpoch < cur`) before booking a round's match.
@@ -170,46 +210,97 @@ library FlowMatchLib {
         }
     }
 
-    /// @notice Enroll all closed epochs `<= maxEpoch` once. Checkpoints owners on the exclusion ledger first (RB-22).
-    function enrollEpochs(FlowState storage s, uint64 maxEpoch, uint64 cur) public {
+    /// @notice Enroll closed epochs `<= maxEpoch`, at most `ENROLL_BUDGET` enrollments and `ENROLL_VISIT_MAX` visits
+    ///         per call (safety review 0.9.0, MISSED-01). Resumes at `(enrollCursor, enrollPos)`. Returns true once
+    ///         every epoch in range is enrolled and this call enrolled at most `ENROLL_PROCEED_MAX` requests.
+    ///         Checkpoints owners on the exclusion ledger first (RB-22).
+    function enrollEpochs(FlowState storage s, uint64 maxEpoch, uint64 cur)
+        public
+        returns (bool done)
+    {
         ensureInitialized(s);
         uint256 idx = s.enrollCursor;
+        uint256 pos = s.enrollPos;
         uint256 len = s.activeEpochs.length;
-        IRobotMoneyFundFull fund = IRobotMoneyFundFull(s.fund);
+        uint256 visits;
+        uint256 enrolled;
+        uint256 gasAtStart = gasleft();
+        done = true;
         while (idx < len) {
             uint64 e = s.activeEpochs[idx];
             if (e > maxEpoch) break;
-
-            // Deposits in epoch e
-            uint256[] storage depIds = s.sideIds[uint8(RequestKind.Deposit)][e];
-            for (uint256 j; j < depIds.length; ++j) {
-                uint256 rId = depIds[j];
-                Request storage r = s.requests[rId];
-                if (r.closed || r.enrolled || r.era < s.windDownEra || cur > r.expiryEpoch) {
-                    continue;
+            while (true) {
+                // The batch also ends on gas: an enrollment first syncs its owner, which costs one claim write per
+                // unsynced match of each of the owner's open requests, so a count alone does not bound a call.
+                if (
+                    visits == ENROLL_VISIT_MAX || enrolled == ENROLL_BUDGET
+                        || (enrolled != 0 && gasAtStart - gasleft() > ENROLL_GAS_MAX)
+                ) {
+                    done = false;
+                    break;
                 }
-                fund.ledgerCheckpoint(r.owner);
-                syncOwnerDeposits(s, r.owner);
-                _enrollDeposit(s, r);
+                (bool visited, bool did) = _enrollAt(s, e, pos, cur);
+                if (!visited) break;
+                ++visits;
+                ++pos;
+                if (did) ++enrolled;
             }
-
-            // Redemptions in epoch e (never expire, E40)
-            uint256[] storage redIds = s.sideIds[uint8(RequestKind.Redeem)][e];
-            for (uint256 j; j < redIds.length; ++j) {
-                uint256 rId = redIds[j];
-                Request storage r = s.requests[rId];
-                if (r.closed || r.enrolled || r.era < s.windDownEra) continue;
-                fund.ledgerCheckpoint(r.owner);
-                syncOwnerRedeems(s, r.owner);
-                _enrollRedeem(s, r);
-            }
+            if (!done) break;
+            pos = 0;
             ++idx;
         }
         s.enrollCursor = idx;
+        s.enrollPos = pos;
+        // A heavy enrollment ends the call, so the booking and the side walk get a call of their own.
+        if (enrolled > ENROLL_PROCEED_MAX) done = false;
+    }
+
+    /// @dev Position `pos` of epoch `e`: its deposit ids, then its redemption ids (which never expire, E40). Returns
+    ///      `visited` false past the end of the epoch.
+    function _enrollAt(FlowState storage s, uint64 e, uint256 pos, uint64 cur)
+        private
+        returns (bool visited, bool did)
+    {
+        uint256[] storage depIds = s.sideIds[uint8(RequestKind.Deposit)][e];
+        uint256 nDep = depIds.length;
+        if (pos < nDep) return (true, _enrollOne(s, depIds[pos], true, cur));
+        uint256[] storage redIds = s.sideIds[uint8(RequestKind.Redeem)][e];
+        if (pos - nDep < redIds.length) {
+            return (true, _enrollOne(s, redIds[pos - nDep], false, cur));
+        }
+        return (false, false);
+    }
+
+    function _enrollOne(FlowState storage s, uint256 rId, bool isDep, uint64 cur)
+        private
+        returns (bool)
+    {
+        Request storage r = s.requests[rId];
+        if (r.closed || r.enrolled || r.era < s.windDownEra || (isDep && cur > r.expiryEpoch)) {
+            return false;
+        }
+        IRobotMoneyFundFull(s.fund).ledgerCheckpoint(r.owner);
+        if (isDep) {
+            syncOwnerDeposits(s, r.owner);
+            _enrollDeposit(s, r);
+        } else {
+            syncOwnerRedeems(s, r.owner);
+            // A shutdown starts a new cycle with the owner's basis of the old one still unmatched (a full match
+            // would have zeroed it in the sync above). Release that wind-down escrow first, so the new enrollment
+            // does not fold the old basis into the new cycle and count it twice once released (safety review 0.9.0,
+            // MISSED-03).
+            OwnerRedState storage ors = s.ownerRedStates[r.owner];
+            if (ors.normBasis != 0 && ors.matchCycle < s.redCycle) releaseWindDown(s, r.owner);
+            _enrollRedeem(s, r);
+        }
+        return true;
     }
 
     function _enrollDeposit(FlowState storage s, Request storage r) private {
         uint256 cyc = s.depCycle;
+        if (r.minHold > s.depBucketMaxMinHold[cyc][r.expiryEpoch]) {
+            s.depBucketMaxMinHold[cyc][r.expiryEpoch] = r.minHold;
+        }
         uint256 F = s.depCycleFactor[cyc];
         uint256 rem = r.remaining;
         uint256 nb = F == MATCH_SCALE ? rem : rem.mulDiv(MATCH_SCALE, F);
@@ -339,7 +430,9 @@ library FlowMatchLib {
             st.matchedShares = M;
             st.matchedUsdc = matchedUsdc;
             st.matchSharePrice = S;
-            st.holdEndsAt = uint64(block.timestamp) + s.maxDepositMinHold;
+            // The cycle's own longest hold (AGY-10). A cycle enrolled before the upgrade has none recorded: fall back
+            // to the all-time mark, which is never shorter.
+            st.holdEndsAt = uint64(block.timestamp) + _matchHold(s);
         }
 
         _advanceDepositMatchIndex(s, roundEpoch, uint64(settlementId), M, matchedUsdc, D, matchDust);
@@ -464,7 +557,11 @@ library FlowMatchLib {
         uint256 grossDust = matchedUsdc - totalFee - totalNet;
         if (grossDust != 0) s.dustUsdc += grossDust;
         s.totalOwedUsdc += totalNet;
-        if (totalFee != 0) IERC20(s.usdc).safeTransfer(feeRecipient, totalFee);
+        // A refused fee joins the dust (swept to the fund) and cannot block the match (MISSED-04).
+        if (!FeeTransfer.tryPay(s.usdc, feeRecipient, totalFee)) {
+            s.dustUsdc += totalFee;
+            emit IFlowEvents.FeeNotPaid(feeRecipient, totalFee);
+        }
 
         if (M == R) {
             rc.unmatchedFactor = 0;
@@ -651,6 +748,21 @@ library FlowMatchLib {
         }
     }
 
+    /// @notice Return the sub-minimum remainder of deposit request `rId` to its owner's USDC credit, as a cancel
+    ///         would (safety review 0.9.0, MISSED-06). The settle walk calls it for an enrolled remainder below
+    ///         `minRequestUsdc`, which never net-settles (RB-14).
+    function refundDepositRemainder(FlowState storage s, uint256 rId) public {
+        Request storage r = s.requests[rId];
+        IRobotMoneyFundFull(s.fund).ledgerCheckpoint(r.owner);
+        syncOwnerDeposits(s, r.owner);
+        uint256 rem = r.remaining;
+        if (r.closed || rem == 0) return;
+        consumeDeposit(s, rId, rem, false);
+        s.usdcCredit[r.owner] += rem;
+        s.totalCreditUsdc += rem;
+        emit IFlowEvents.CreditAdded(r.owner, rem, 0);
+    }
+
     /// @notice Consume `consumed` USDC of deposit request `rId` (from net fill, cancel, expiry, or wind-down).
     ///         Assumes `syncOwnerDeposits(s, r.owner)` ALREADY ran immediately prior!
     function consumeDeposit(FlowState storage s, uint256 rId, uint256 consumed, bool keepLeftover)
@@ -730,6 +842,7 @@ library FlowMatchLib {
         s.totalPendingUsdc -= consumed;
         s.depTotalNormBasis = newB;
         s.depPoolUsdc = newPool;
+        // An empty pool holds no hold: the next deposits set the cycle's mark afresh (AGY-10).
         b.totalNormBasis = b.totalNormBasis - oldNb + newNb;
         b.remainingNormBasis = b.remainingNormBasis - oldNb + newNb;
 
@@ -893,7 +1006,10 @@ library FlowMatchLib {
     }
 
     /// @notice Process all ended notice rounds. Safe to run in `settle()` or `withdrawCredit()`.
+    /// @dev Returns at most `NOTICE_BUDGET` noticed redemptions per call (safety review 0.9.0, MISSED-01). The rest
+    ///      wait for the next call, or their owners take them with `claimNoticeReturn`.
     function finalizeEndedNotices(FlowState storage s) public {
+        uint256 budget = NOTICE_BUDGET;
         uint256 i;
         while (i < s.pendingNoticeRounds.length) {
             uint64 rEpoch = s.pendingNoticeRounds[i];
@@ -902,10 +1018,13 @@ library FlowMatchLib {
                 continue;
             }
             uint256[] storage reqIds = s.noticeRequestsByRound[rEpoch];
-            for (uint256 j; j < reqIds.length; ++j) {
-                _returnNoticedRequest(s, reqIds[j]);
+            while (reqIds.length != 0) {
+                if (budget == 0) return;
+                --budget;
+                uint256 rId = reqIds[reqIds.length - 1];
+                reqIds.pop();
+                _returnNoticedRequest(s, rId);
             }
-            delete s.noticeRequestsByRound[rEpoch];
             uint256 last = s.pendingNoticeRounds.length - 1;
             if (i != last) s.pendingNoticeRounds[i] = s.pendingNoticeRounds[last];
             s.pendingNoticeRounds.pop();
@@ -958,7 +1077,11 @@ library FlowMatchLib {
         s.redPoolShares = 0;
         s.redCycle += 1;
         s.redCycles[s.redCycle].unmatchedFactor = MATCH_SCALE;
-        s.enrollCursor = s.activeEpochs.length;
+        // The newest known epoch may still be open: a request made in it after a `restore` joins its id list, so the
+        // cursor stays on it (its older requests are skipped by era). Every earlier epoch has ended and is passed.
+        uint256 n = s.activeEpochs.length;
+        s.enrollCursor = n == 0 ? 0 : n - 1;
+        s.enrollPos = 0;
     }
 
     /// @notice Checkpoint `owner` on the exclusion ledger first (E52), sync matched fills, and release any

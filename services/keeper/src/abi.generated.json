@@ -549,6 +549,17 @@
   },
   {
    "type": "error",
+   "name": "AssetNotRemoved",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
    "name": "AssetStillHeld",
    "inputs": [
     {
@@ -935,6 +946,17 @@
     },
     {
      "name": "max",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "EmergencyFloorRequired",
+   "inputs": [
+    {
+     "name": "index",
      "type": "uint256",
      "internalType": "uint256"
     }
@@ -1965,6 +1987,17 @@
      "name": "sum",
      "type": "uint256",
      "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "TooManyOpenRequests",
+   "inputs": [
+    {
+     "name": "owner",
+     "type": "address",
+     "internalType": "address"
     }
    ]
   },

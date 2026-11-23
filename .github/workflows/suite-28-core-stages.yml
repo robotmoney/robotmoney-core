@@ -97,6 +97,10 @@ jobs:
         working-directory: publish-contracts
         run: bun src/ci/require-tests.ts --suite systems --min 4
       # Issue 1912, ADR-0017: the retire-vault row, its evidence entry and the verifier after it each run on their own with a positive count, so a removed or emptied file is red.
+      # Safety review 0.9.0 (MISSED-09): the one-vault fund system's deploy runner, verifier (with the ADR-0019 adapter check), role scan, evidence and migrations.
+      - name: Require the fund-system cases (runner, verifier, role scan, evidence, migrations)
+        working-directory: publish-contracts
+        run: bun src/ci/require-tests.ts --suite fund --min 2
       - name: Require the retire-vault cases (govern row, evidence, verifier after the retirement, the 1e15 pool floor)
         working-directory: publish-contracts
         run: bun src/ci/require-tests.ts --suite retire --min 4

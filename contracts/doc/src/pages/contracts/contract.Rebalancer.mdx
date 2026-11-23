@@ -5,7 +5,7 @@ description: "Step selection for the one vault (§5). It holds no funds, grants 
 
 # Rebalancer
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/Rebalancer.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/Rebalancer.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalancer](/contracts/interfaces/interface.IRebalancer)
 
@@ -548,7 +548,7 @@ function _eligible(IRobotMoneyFund f, AssetConfig[] memory cfgs, uint256 minStep
 function _size(IRobotMoneyFund f, AssetConfig[] memory cfgs, PlanMath.Legs memory legs)
         internal
         view
-        returns (uint256 notional);
+        returns (uint256 notional, bool clamped);
 ```
 
 **Parameters**
@@ -564,6 +564,7 @@ function _size(IRobotMoneyFund f, AssetConfig[] memory cfgs, PlanMath.Legs memor
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | notional | `uint256` |  |
+| clamped | `bool` |  |
 
 <a id="_stepcap-irobotmoneyfund-assetconfig-uint256"></a>
 
@@ -1068,6 +1069,8 @@ struct Decision {
         uint256 feedIndex;
         StepPrices px;
         bool hasBasketLeg;
+        /// A lending sell leg's venue cannot pay out `minStepUsdc` now (`_size`).
+        bool illiquid;
     }
 ```
 
@@ -1085,6 +1088,7 @@ struct Decision {
 | feedIndex | `uint256` |  |
 | px | `StepPrices` |  |
 | hasBasketLeg | `bool` |  |
+| illiquid | `bool` |  |
 
 ### Mask
 

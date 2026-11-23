@@ -5,7 +5,7 @@ description: "OpenZeppelin `TimelockController` with a \"last-proposer floor\": 
 
 # ProposerFloorTimelock
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/ProposerFloorTimelock.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/ProposerFloorTimelock.sol)
 
 **Inherits:** TimelockController
 
@@ -38,6 +38,12 @@ The constructor's grants to `proposers` go through the same override,
 so the count is right from birth. `proposerCount()` is what the govern
 tool reads before it builds `timelock-revoke-role PROPOSER_ROLE`.
 
+Executor floor (safety review 0.9.0, AGY-02). The fund system closes execution to the Safe alone
+(decision D4-10), so the Safe is the only `EXECUTOR_ROLE` holder. Dropping it would leave operations that
+can be scheduled but never executed: the same permanent loss of every `ADMIN_ROLE` function. The same
+counter floor applies to `EXECUTOR_ROLE`. An open executor (`address(0)` holds the role) counts as one
+holder, so it cannot be dropped to zero either.
+
 ## State Variables
 
 ### proposerCount
@@ -53,6 +59,14 @@ after the `TimelockController` constructor and reset the count.
 
 ```solidity
 uint256 public proposerCount;
+```
+
+### executorCount
+
+Number of accounts currently holding `EXECUTOR_ROLE` (`address(0)` included when execution is open).
+
+```solidity
+uint256 public executorCount;
 ```
 
 ## Functions
@@ -153,5 +167,22 @@ A timelock born with no proposer could never schedule anything.
 
 ```solidity
 error NoProposer();
+```
+
+### LastExecutorFloor
+
+Revoking or renouncing the sole `EXECUTOR_ROLE` holder is forbidden: nothing scheduled could ever be
+executed again (AGY-02).
+
+```solidity
+error LastExecutorFloor();
+```
+
+### NoExecutor
+
+A timelock born with no executor could never execute anything.
+
+```solidity
+error NoExecutor();
 ```
 

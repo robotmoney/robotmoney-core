@@ -14,7 +14,7 @@ import { getStageTable, peekStageState, restoreStageState, useStageTable } from 
 import { loadStageTable, manifestBase } from "../src/stage-table.ts";
 import { APPLY_ROW, GOVERNANCE_APPLY_ABI, applyRecordKey } from "../src/apply-receipt.ts";
 import { EXIT_CODES, PublishError } from "../src/errors.ts";
-import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
+import { GOVERN_ROWS, govRowRefusal, SAFE_ADMIN_ABI, SAFE_ADMIN_ROWS, SELF_ADMIN_ROWS, TIMELOCK_ADMIN_ROWS, assertNotLastExecutor, assertNotLastProposer, buildSelfAdminCall, parseSafeAdminArgs, refuseSafeConfigChange, resumeCommand, safeAdminEffect, safeRuleProblem, selfAdminRecordKey, sheetRosterProblems, RECEIPT_ABI, RECEIPT_ROW, TWIN_ONLY_ROWS, UNPAUSE_ROWS, VAULT_ABI, roundKey, buildReleaseCall, buildStepCalls, governRowNames, governSalt, loadGovernAddrs, releaseRecordKey, resolveGovernRow, runGovern, stageRows, type GovernRowName } from "../src/govern.ts";
 import { beginPauseEntry, loadRunManifest, newManifest, nextManifestSeq, reserveManifestSeq, saveRunManifest, updatePauseEntry } from "../src/runner.ts";
 import { parseSheet } from "../src/sheet.ts";
 import { stageByName } from "../src/stages.ts";
@@ -1559,6 +1559,76 @@ describe("issue 1645: Safe and timelock self-administration rows (Twin-only by d
     await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: "CANCELLER_ROLE", account: A.safe } });
     expect(tl.s.events).toEqual(["schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
     expect(tl.s.roles.has(`${roleHash}:${A.safe.toLowerCase()}`)).toBe(true);
+  });
+
+  // Safety review 0.9.0 (AGY-02): the last-executor floor. The live Base timelock (old code) has no executorCount and no floor on chain, so the tool is the only refusal.
+  const EXEC = "EXECUTOR_ROLE", execHash = keccak256(toBytes(EXEC)), ZERO_ADDR = addr(0);
+  const execKey = (who: Address) => `${execHash}:${who.toLowerCase()}`;
+  const rdOf = (tl: ReturnType<typeof fakeTimelock>) => (async (address: Address, abi: readonly unknown[], functionName: string, args: unknown[] = []) => tl.handle.client.readContract({ address, abi, functionName, args })) as never;
+
+  test("timelock-revoke-role EXECUTOR_ROLE for the last holder (the Safe, closed executor, old timelock code) is refused with GOVERN before anything is scheduled", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.roles.add(execKey(A.safe));
+    const manifest = newManifest(ctx, addr(0xa001));
+    const err = await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: EXEC, account: A.safe } }).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("no other executor is proven");
+    expect(err.message).toContain("timelock-grant-role");
+    expect(tl.s.events).toEqual([]);
+    expect(tl.s.roles.has(execKey(A.safe))).toBe(true);
+    expect(Object.keys(manifest.govern ?? {})).toEqual([]);
+  });
+
+  test("the open executor (address 0) counts as a holder: revoking it alone is refused, and with the Safe granted first it goes through, after which the Safe is floored", async () => {
+    const { ctx, sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    tl.s.roles.add(execKey(ZERO_ADDR));
+    const manifest = newManifest(ctx, addr(0xa001));
+    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: EXEC, account: ZERO_ADDR } })).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(tl.s.events).toEqual([]);
+    // the D4-10 switch: grant the Safe, then close the open executor
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-grant-role", selfAdmin: { role: EXEC, account: A.safe } });
+    await run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: EXEC, account: ZERO_ADDR } });
+    expect(tl.s.roles.has(execKey(ZERO_ADDR))).toBe(false);
+    expect(tl.s.roles.has(execKey(A.safe))).toBe(true);
+    expect(tl.s.events).toEqual(["schedule:timelock-grant-role", "execute:timelock-grant-role", "schedule:timelock-revoke-role", "execute:timelock-revoke-role"]);
+    await expect(run(ctx, manifest, sheet, tl, { warp: warpTo(tl), row: "timelock-revoke-role", selfAdmin: { role: EXEC, account: A.safe } })).rejects.toMatchObject({ kind: "GOVERN" });
+    expect(tl.s.events.length).toBe(4);
+  });
+
+  test("on old timelock code a third executor is not proof: the Safe's revoke is refused unless the open executor or the Safe itself remains", async () => {
+    const { sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const rd = rdOf(tl);
+    tl.s.roles.add(execKey(A.safe)); tl.s.roles.add(execKey(NEW));
+    // NEW leaves: the Safe remains, proven by a read
+    await expect(assertNotLastExecutor(rd, A.timelock, A.safe, execHash, NEW)).resolves.toBeUndefined();
+    // the Safe leaves: NEW would remain, but the tool cannot enumerate an old timelock, so it refuses (the conservative side)
+    await expect(assertNotLastExecutor(rd, A.timelock, A.safe, execHash, A.safe)).rejects.toMatchObject({ kind: "GOVERN" });
+  });
+
+  test("a timelock that answers executorCount() is believed: one holder is refused as the last executor, two pass", async () => {
+    const { sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const rd = rdOf(tl);
+    tl.s.roles.add(execKey(A.safe)); tl.s.roles.add(execKey(NEW));
+    tl.s.reads.executorCount = 2n;
+    await expect(assertNotLastExecutor(rd, A.timelock, A.safe, execHash, A.safe)).resolves.toBeUndefined();
+    tl.s.roles.delete(execKey(NEW));
+    tl.s.reads.executorCount = 1n;
+    const err = await assertNotLastExecutor(rd, A.timelock, A.safe, execHash, A.safe).then(() => { throw new Error("expected a rejection"); }, (e) => e as PublishError);
+    expect(err.kind).toBe("GOVERN");
+    expect(err.message).toContain("last executor");
+    expect(err.message).toContain("LastExecutorFloor");
+  });
+
+  test("the executor floor is EXECUTOR_ROLE only, and only for a holder", async () => {
+    const { sheet } = setup(ALL);
+    const tl = fakeTimelock(sheet, DELAY);
+    const rd = rdOf(tl);
+    await expect(assertNotLastExecutor(rd, A.timelock, A.safe, roleHash, A.safe)).resolves.toBeUndefined();
+    await expect(assertNotLastExecutor(rd, A.timelock, A.safe, execHash, A.safe)).resolves.toBeUndefined(); // the Safe holds no EXECUTOR_ROLE here: the chain decides
   });
 });
 

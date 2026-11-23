@@ -135,7 +135,8 @@ export interface VerifySheet {
     safeGuard?: Address;
     safeFallbackHandler?: Address;
     keeperType?: "eoa" | "smart-account";
-    keeperOwners?: Address[];
+    /** The KeeperAccount owners the sheet names. "@safe" is the fund system's Safe (safety review 0.9.0, AGY-04: the one owner is the Safe). */
+    keeperOwners?: (Address | "@safe")[];
     keeperBotKeys?: Address[];
   };
 }

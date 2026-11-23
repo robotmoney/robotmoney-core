@@ -5,7 +5,7 @@ description: "The entry point for timed, netted, forward-priced deposits and red
 
 # FlowQueue
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/FlowQueue.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/FlowQueue.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IFlowQueue](/contracts/interfaces/interface.IFlowQueue)
 
@@ -190,7 +190,9 @@ function cancel(uint256 requestId) external nonReentrant;
 
 ### withdrawExpired
 
-Owner withdraws escrow of an expired Deposit request (`cur > expiryEpoch`). Redemptions never expire.
+Send the escrow of an expired Deposit request (`cur > expiryEpoch`) back to its owner. Anyone may call
+it: the USDC only goes to the owner, and an expired request left open would hold the settle walk's
+start at its epoch. Redemptions never expire.
 
 ```solidity
 function withdrawExpired(uint256 requestId) external nonReentrant returns (uint256);

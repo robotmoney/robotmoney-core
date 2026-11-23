@@ -93,7 +93,51 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
         if (feePips == 0 || feePips >= 1_000_000) return false;
         (bool okSlot0, bytes memory slot0Data) =
             pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.slot0.selector));
-        return okSlot0 && slot0Data.length == 224;
+        return okSlot0 && slot0Data.length == 224 && _isCanonicalPool(pool, feePips);
+    }
+
+    /// @dev Uniswap V3's pool init code hash (the same pool bytecode on every chain the factory runs on, Base included).
+    bytes32 internal constant POOL_INIT_CODE_HASH =
+        0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54;
+
+    /// @dev True when `pool` is the router's factory's pool for its own tokens and fee: its CREATE2 address from the
+    ///      factory, or else the factory's own `getPool` answer. A contract that only answers `fee()` and `slot0()` like
+    ///      a pool is refused (safety review 0.9.0, AGY-13). The CREATE2 test reads no factory storage.
+    function _isCanonicalPool(address pool, uint256 feePips) internal view returns (bool) {
+        (bool ok0, bytes memory d0) =
+            pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.token0.selector));
+        (bool ok1, bytes memory d1) =
+            pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.token1.selector));
+        (bool okF, bytes memory df) =
+            address(ROUTER).staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok0 || !ok1 || !okF || d0.length != 32 || d1.length != 32 || df.length != 32) {
+            return false;
+        }
+        bytes32 salt = keccak256(
+            abi.encode(abi.decode(d0, (address)), abi.decode(d1, (address)), uint24(feePips))
+        );
+        address predicted = address(
+            uint160(
+                uint256(
+                    keccak256(
+                        abi.encodePacked(
+                            hex"ff", abi.decode(df, (address)), salt, POOL_INIT_CODE_HASH
+                        )
+                    )
+                )
+            )
+        );
+        if (predicted == pool) return true;
+        (bool okG, bytes memory dg) = abi.decode(df, (address))
+            .staticcall(
+                abi.encodeWithSignature(
+                    "getPool(address,address,uint24)",
+                    abi.decode(d0, (address)),
+                    abi.decode(d1, (address)),
+                    uint24(feePips)
+                )
+            );
+        return okG && dg.length == 32 && abi.decode(dg, (address)) == pool;
     }
 
     /// @inheritdoc IExactOutSwapAdapter

@@ -45,7 +45,7 @@ describe("the real runner on tiny files", () => {
 
 describe("the suites", () => {
   test("the eleven core suites exist and name only test files that exist", async () => {
-    expect(Object.keys(SUITES).sort()).toEqual(["chain-id", "counts", "evidence", "gates", "parity", "retire", "safe", "sheet", "stages", "systems", "verify"]);
+    expect(Object.keys(SUITES).sort()).toEqual(["chain-id", "counts", "evidence", "fund", "gates", "parity", "retire", "safe", "sheet", "stages", "systems", "verify"]);
     const { existsSync } = await import("node:fs");
     const root = join(import.meta.dir, "..");
     for (const files of Object.values(SUITES)) for (const f of files) expect(existsSync(join(root, f))).toBe(true);

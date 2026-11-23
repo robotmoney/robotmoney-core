@@ -854,15 +854,22 @@ receipt release role (issue 1831). A release alone would burn the receipt:
 never be applied. The evidence check still parses historical
 `receipt_releases` entries.
 
-**Apply order (issue 1831).** `RouterGovernance` stores
+**Apply order (issue 1831).** The governance contract stores
 `lastAppliedRecordedAt`, the `recordedAt` of the last receipt it applied.
-`applyReceipt` reverts `ReceiptNotNewerThanApplied` unless the receipt was
-recorded strictly later. The timelock's executor role is open, so anyone can
+`applyReceipt` reverts `ReceiptNotNewerThanApplied` for a receipt recorded
+strictly earlier than that. A receipt with the same `recordedAt` is allowed
+(`contracts/RebalanceGovernance.sol`, `_checkAndRelease`: the check is
+`r.recordedAt < last`), so two receipts recorded in the same second both
+stay applicable. A receipt is released once, so neither can be applied
+twice. The `RouterGovernance` of release 0.8.0 and earlier refused an equal
+`recordedAt` too (`r.recordedAt <= last`). The timelock's executor role is
+open in the Vaults system, so anyone can
 execute two ready apply operations in either order. Executing an older one
 after a newer one therefore reverts, the older receipt stays unreleased, and
 the newer vector stays active. The `apply-receipt` row reads
 `lastAppliedRecordedAt` and refuses with USAGE before it schedules a receipt
-that is not newer. No EOA can release a receipt after handover.
+that is not newer. The row is stricter than `RebalanceGovernance`: it also
+refuses an equal `recordedAt` (`publish-contracts/src/apply-receipt.ts:116`). No EOA can release a receipt after handover.
 
 **Signalling-only enforcement (INV-4).** No payable `receive`/`fallback`,
 no ERC-20 surface, no call into any vault, `PortfolioRouter`, or

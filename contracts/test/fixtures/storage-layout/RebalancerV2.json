@@ -83,7 +83,8 @@
       "mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingClaims;",
       "mapping(uint256 index => mapping(address owner => LendingClaimAccount)) lendingFeeLinked;",
       "address rebalancer;",
-      "mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;"
+      "mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;",
+      "mapping(uint256 index => bool) delistWideScale;"
     ],
     "robotmoney.storage.RobotMoneyVaultExclusions": [
       "ExclusionLedger ledger;",
@@ -321,7 +322,7 @@
       },
       "t_struct(FundState)_storage": {
         "arrayElement": false,
-        "bytes": 1792,
+        "bytes": 1824,
         "members": [
           {
             "label": "assets",
@@ -682,6 +683,12 @@
             "offset": 0,
             "slot": "55",
             "type": "t_mapping(t_bytes32,t_bool)"
+          },
+          {
+            "label": "delistWideScale",
+            "offset": 0,
+            "slot": "56",
+            "type": "t_mapping(t_uint256,t_bool)"
           }
         ]
       },
@@ -717,7 +724,7 @@
       },
       "t_struct(LendingClaimEpoch)_storage": {
         "arrayElement": false,
-        "bytes": 64,
+        "bytes": 96,
         "members": [
           {
             "label": "totalScaled",
@@ -730,6 +737,12 @@
             "offset": 0,
             "slot": "1",
             "type": "t_uint256"
+          },
+          {
+            "label": "wide",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_bool"
           }
         ]
       },

@@ -703,6 +703,12 @@ abstract contract PrototypeHarness is BaseFixture {
         return openRedeemRequest(user, shares);
     }
 
+    /// @notice A distinct owner for flood request `k`: one owner holds at most `MAX_OWNER_OPEN_REQUESTS` open
+    ///         requests a side (safety review 0.9.0, MISSED-01), so a flood spreads over owners.
+    function _floodOwner(uint256 k) internal pure returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode("flood-owner", k)))));
+    }
+
     /// @notice Warp to the end of request `id`'s settlement window (no-op if that time has passed).
     function warpToSettleable(uint256 id) internal {
         Request memory r = queue.getRequest(id);
@@ -906,7 +912,7 @@ abstract contract PrototypeHarness is BaseFixture {
         internal
         returns (uint256 planId)
     {
-        (address[] memory assets, uint256[] memory weights) = assetArrays(v);
+        (address[] memory assets, uint256[] memory weights) = activeAssetArrays(v);
         timelockExecute(
             address(governance), abi.encodeCall(governance.setTarget, (assets, weights, params))
         );
@@ -941,6 +947,30 @@ abstract contract PrototypeHarness is BaseFixture {
         for (uint256 i; i < n; ++i) {
             ids[i] = assetIdOf(i);
             w[i] = v[i];
+        }
+    }
+
+    /// @notice `assetArrays` without the inactive assets at weight 0: a target may only name active assets, and an
+    ///         asset the fund deactivated itself (an emptied single-asset unwind, safety review 0.9.0 AGY-03) cannot
+    ///         be named again.
+    function activeAssetArrays(uint16[5] memory v)
+        internal
+        view
+        returns (address[] memory ids, uint256[] memory w)
+    {
+        (address[] memory all, uint256[] memory allW) = assetArrays(v);
+        uint256 m;
+        for (uint256 i; i < all.length; ++i) {
+            if (allW[i] != 0 || fund.assetConfig(i).active) ++m;
+        }
+        ids = new address[](m);
+        w = new uint256[](m);
+        uint256 k;
+        for (uint256 i; i < all.length; ++i) {
+            if (allW[i] == 0 && !fund.assetConfig(i).active) continue;
+            ids[k] = all[i];
+            w[k] = allW[i];
+            ++k;
         }
     }
 

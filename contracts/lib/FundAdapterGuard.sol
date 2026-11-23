@@ -39,8 +39,19 @@ library FundAdapterGuard {
     /// @notice Admission rule (`addAsset`, `setAssetAdapter`): the adapter's own code hash must be allowed, then the
     ///         proxy rule above applies.
     function requireAdmissible(FundState storage s, address adapter) internal view {
+        vetNew(s, adapter);
+    }
+
+    /// @notice The rule for a use that adds exposure through `adapter` (a rebalance step, a `mintInKind` purchase):
+    ///         the admission rule on every use, so a direct adapter whose code hash the timelock revoked stops opening
+    ///         new positions (safety review 0.9.0, AGY-09). Valuation and exits keep `vet`, so revoking a direct
+    ///         adapter's hash never blocks `totalAssets`, an unwind or a delisting sale. A proxied adapter is
+    ///         different by design (ADR-0019): `vet` checks its proxy hash and its implementation hash on every use,
+    ///         so revoking either one stops valuation and exits through it until the hash is allowed again or the
+    ///         asset's adapter is replaced.
+    function vetNew(FundState storage s, address adapter) internal view returns (address) {
         bytes32 h = adapter.codehash;
         if (!s.codeHashAllowed[h]) revert IRobotMoneyFund.AdapterCodeHashNotAllowed(adapter, h);
-        vet(s, adapter);
+        return vet(s, adapter);
     }
 }

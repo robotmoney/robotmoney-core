@@ -4,7 +4,7 @@ title: "FundState"
 
 # FundState
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FundStorage.sol)
 
 **Note:**
 
@@ -89,6 +89,11 @@ struct FundState {
     ///      here is vetted on every use by the code hash of the implementation it reports (`FundAdapterGuard`).
     ///      Appended (v0.9.0): the storage layout is append-only.
     mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;
+
+    /// @dev Safety review 0.9.0 (MISSED-02): true once asset `index`'s delisting claim book runs on
+    ///      `DELIST_ACC_SCALE`. A book that was open when the fund was upgraded keeps `DELIST_ACC_SCALE_LEGACY`,
+    ///      the scale its accumulator and its owners' snapshots were written in, until it empties. Appended.
+    mapping(uint256 index => bool) delistWideScale;
 }
 ```
 
@@ -156,4 +161,5 @@ struct FundState {
 | lendingFeeLinked | `mapping(uint256 index => mapping(address owner => LendingClaimAccount))` |  |
 | rebalancer | `address` |  |
 | adapterProxyCodeHash | `mapping(bytes32 codeHash => bool isProxy)` |  |
+| delistWideScale | `mapping(uint256 index => bool)` |  |
 

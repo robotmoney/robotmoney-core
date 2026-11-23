@@ -5,7 +5,7 @@ description: "Delisting sales, delisting claim accumulators, asset admission rul
 
 # FundDelistLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundDelistLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FundDelistLib.sol)
 
 **Title:** FundDelistLib
 
@@ -328,12 +328,42 @@ function consumeDelistClaim(FundState storage s, uint256 index, address owner)
 | feeUsdc | `uint256` |  |
 | hasClaim | `bool` |  |
 
-<a id="_harvestdelist-delistclaimaccount-uint256"></a>
+<a id="takedelistclaiminkind-fundstate-uint256-address"></a>
+
+### takeDelistClaimInKind
+
+After `shutdown` no sale step runs, so a delisting claim would never turn into USDC. Its holder takes
+their slice of the tokens still set aside, in kind (safety review 0.9.0, MISSED-08). Run after
+`consumeDelistClaim`, which pays the USDC already earned. Returns the net and fee-linked token amounts.
+
+```solidity
+function takeDelistClaimInKind(FundState storage s, uint256 index, address owner)
+        public
+        returns (uint256 tokNet, uint256 tokFee);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| tokNet | `uint256` |  |
+| tokFee | `uint256` |  |
+
+<a id="_harvestdelist-delistclaimaccount-uint256-uint256"></a>
 
 ### _harvestDelist
 
 ```solidity
-function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc) private;
+function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc, uint256 scale)
+        private;
 ```
 
 **Parameters**
@@ -342,6 +372,34 @@ function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc) privat
 | ---- | ---- | ----------- |
 | accEntry | `DelistClaimAccount` |  |
 | acc | `uint256` |  |
+| scale | `uint256` |  |
+
+<a id="_accscale-fundstate-uint256"></a>
+
+### _accScale
+
+<i>
+
+The accumulator scale of asset `index`'s claim book (`FundState.delistWideScale`).
+
+</i>
+
+```solidity
+function _accScale(FundState storage s, uint256 index) private view returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="createledger-address"></a>
 

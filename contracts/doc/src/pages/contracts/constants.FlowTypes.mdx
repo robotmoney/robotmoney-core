@@ -4,7 +4,7 @@ title: "FlowTypes Constants"
 
 # FlowTypes Constants
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/FlowTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/FlowTypes.sol)
 
 ## MIN_EPOCH_LENGTH
 
@@ -40,6 +40,73 @@ uint32 constant MIN_HOLD = 1 hours;
 
 ```solidity
 uint32 constant MAX_HOLD = 7 days;
+```
+
+## MAX_OWNER_OPEN_REQUESTS
+
+<i>
+
+Safety review 0.9.0 (agy MISSED-01): open requests one owner may hold per side. Every lazy owner sync walks
+the owner's open list, so an unbounded list made one owner's sync, and the round enrollment that runs it per
+request, quadratic in the list length.
+
+</i>
+
+```solidity
+uint256 constant MAX_OWNER_OPEN_REQUESTS = 16;
+```
+
+## ENROLL_BUDGET
+
+<i>
+
+Safety review 0.9.0 (agy MISSED-01): requests a round's enrollment enrolls per `settle` call (each checkpoints
+the exclusion ledger and syncs its owner), requests it visits per call (a skip of a closed or expired request
+is cheap), and noticed redemptions one call returns. A larger round takes more keeper calls, each under the
+per-tx gas cap.
+
+</i>
+
+```solidity
+uint256 constant ENROLL_BUDGET = 32;
+```
+
+## ENROLL_VISIT_MAX
+
+```solidity
+uint256 constant ENROLL_VISIT_MAX = 256;
+```
+
+## ENROLL_PROCEED_MAX
+
+<i>
+
+A call whose enrollment visited more than this many requests ends there, and the next call books the match and
+walks the sides. A light round (the usual case) still enrolls and settles in one call.
+
+</i>
+
+```solidity
+uint256 constant ENROLL_PROCEED_MAX = 8;
+```
+
+## ENROLL_GAS_MAX
+
+<i>
+
+Gas one enrollment batch may use before it ends (after at least one enrollment): an owner sync is not a
+fixed cost, so the count budgets above do not bound a call by themselves.
+
+</i>
+
+```solidity
+uint256 constant ENROLL_GAS_MAX = 4_000_000;
+```
+
+## NOTICE_BUDGET
+
+```solidity
+uint256 constant NOTICE_BUDGET = 16;
 ```
 
 ## MIN_CANCEL_BUFFER

@@ -5,7 +5,7 @@ description: "The single home of the glide-path and weight math. Both `RobotMone
 
 # PlanMath
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/PlanMath.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/PlanMath.sol)
 
 **Title:** PlanMath
 
@@ -15,8 +15,11 @@ picking, sizing, convergence) call it, so the two can never disagree on what
 `pathTarget(now)` is.
 
 Units. Weights are basis points of fund NAV (10 000 = 100%). Values are USDC base units
-(6 decimals) at TWAP. "Idle" is the fund's own USDC balance; its target is always 0 and
-its path glides from the plan's `startIdleBps` to 0.
+(6 decimals) at TWAP. "Idle" is the fund's own USDC balance; its end target is
+`10 000 - Σ endBps` (`idleEndBps`), 0 for every plan as opened, and its path glides from the
+plan's `startIdleBps` to it. A delisting or a single-asset unwind zeroes one asset's end weight
+during a live plan; that weight then waits in idle USDC until the Safe sets a new target
+(safety review 0.9.0, AGY-05). Nothing reinvests it on its own.
 
 Rounding. Path targets round toward the plan's START weight, so the path never runs
 ahead of the linear schedule and the rebalancer never moves past `pathTarget(now)`
@@ -351,6 +354,29 @@ function pathTargetsBps(Plan memory p, uint256 t)
 | bps | `uint256[]` |  |
 | idleBps | `uint256` |  |
 
+<a id="idleendbps-uint16"></a>
+
+### idleEndBps
+
+Idle USDC's end target in bps: `10 000 - Σ endBps` (AGY-05). 0 for every plan as opened; the end
+weight of an asset delisted or unwound during the plan.
+
+```solidity
+function idleEndBps(uint16[] memory endBps) internal pure returns (uint256 idle);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| endBps | `uint16[]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| idle | `uint256` |  |
+
 <a id="pathtargetvalue-plan-uint256-uint256-uint256"></a>
 
 ### pathTargetValue
@@ -518,9 +544,9 @@ function _consider(Legs memory legs, uint256 i, uint256 value, uint256 targetVal
 ### withinTolerance
 
 True when every asset and idle sit within `toleranceBps` of NAV of their END
-target: `|value_i − end_i × nav / 10 000| ≤ toleranceBps × nav / 10 000`, and
-`idle ≤ toleranceBps × nav / 10 000`. Callers also require `now ≥ endTime` before
-marking a plan Converged. A zero NAV is converged.
+target: `|value_i − end_i × nav / 10 000| ≤ toleranceBps × nav / 10 000`, and the same
+for idle against `idleEndBps(endBps)` (AGY-05). Callers also require `now ≥ endTime`
+before marking a plan Converged. A zero NAV is converged.
 
 ```solidity
 function withinTolerance(

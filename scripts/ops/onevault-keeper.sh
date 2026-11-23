@@ -50,7 +50,8 @@
 #   ALERT_WEBHOOK           optional. URL that receives each alert as a JSON POST. Alerts always go to stderr.
 #   INTERVAL_SECS           optional, default 300.
 #   MIN_GAS_WEI             optional, default 1000000000000000 (0.001 ETH).
-#   MAX_REQUESTS            optional, default 100. The settle() cap on requests looked at per call.
+#   MAX_REQUESTS            optional, default 16. The settle() cap on requests looked at per call.
+#   MAX_SETTLE_CALLS        optional, default 16. The settle() calls one tick may send while checkSettle() reads Ok.
 #   MAX_USDC                optional, default 2^256-1 (no USDC cap). The settle() cap on USDC per call.
 #   SLEEP_CMD               optional, default `sleep`. Used between ticks of the loop only: --once never sleeps.
 #
@@ -69,7 +70,13 @@ KEEPER_PASSWORD_FILE="${KEEPER_PASSWORD_FILE:-}"
 ALERT_WEBHOOK="${ALERT_WEBHOOK:-}"
 INTERVAL_SECS="${INTERVAL_SECS:-300}"
 MIN_GAS_WEI="${MIN_GAS_WEI:-1000000000000000}"
-MAX_REQUESTS="${MAX_REQUESTS:-100}"
+# settle() reserves gas for every request it fills in one call (FlowSettleLib.sideGas: about 450,000 a fill on top of a
+# base). 16 fills fit under a 2^24 per-transaction gas cap with room to spare. A larger round is cleared by more calls
+# in the same tick (MAX_SETTLE_CALLS), not by a larger call (safety review 0.9.0, MISSED-01).
+MAX_REQUESTS="${MAX_REQUESTS:-16}"
+# settle() calls one tick may send. A round with many requests enrolls them in batches, and a call that only enrolls
+# records no settlement, so the keeper calls again while checkSettle() still reads Ok.
+MAX_SETTLE_CALLS="${MAX_SETTLE_CALLS:-16}"
 MAX_USDC="${MAX_USDC:-115792089237316195423570985008687907853269984665640564039457584007913129639935}"
 SLEEP_CMD="${SLEEP_CMD:-sleep}"
 
@@ -237,6 +244,11 @@ tick() {
         else
             alert "step_failed" "simulated step() reverted: ${sim:0:300}"
         fi
+    elif [[ "${L[0]}" == "7" ]]; then
+        # SkipReason.Concluded: the plan converged or expired, and only a step() call records it. Until then the plan
+        # stays Open, which blocks deactivateAsset and the next plan (safety review 0.9.0, MISSED-07).
+        echo "onevault-keeper: plan due to conclude; step() records it" >&2
+        step_due=1
     else
         echo "onevault-keeper: step not due, SkipReason ${L[0]}" >&2
     fi
@@ -270,7 +282,18 @@ tick() {
     fi
 
     if (( settle_due )); then
-        forward settle_failed "$QUEUE_ADDRESS" "settle(uint256,uint256)" "$MAX_REQUESTS" "$MAX_USDC" || true
+        local sent=0
+        while :; do
+            forward settle_failed "$QUEUE_ADDRESS" "settle(uint256,uint256)" "$MAX_REQUESTS" "$MAX_USDC" || break
+            sent=$((sent + 1))
+            (( sent >= MAX_SETTLE_CALLS )) && break
+            # More work in the same round (a batch of enrollments, or requests past MAX_REQUESTS): call again now
+            # instead of waiting a whole interval.
+            read_call "$QUEUE_ADDRESS" "checkSettle()(uint8,uint256)" --from "$CALLER" || break
+            mapfile -t L <<<"$READ_OUT"
+            [[ ${#L[@]} -eq 2 && "${L[0]}" == "0" ]] || break
+        done
+        (( sent > 1 )) && echo "onevault-keeper: settle() sent $sent times this tick" >&2
     fi
     if (( step_due )); then
         forward step_failed "$REBALANCER_ADDRESS" "step()" || true

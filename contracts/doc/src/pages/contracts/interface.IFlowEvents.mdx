@@ -5,7 +5,7 @@ description: "Events and errors of the FlowQueue. `IFlowQueue` inherits this, so
 
 # IFlowEvents
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/FlowTypes.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/FlowTypes.sol)
 
 **Title:** IFlowEvents
 
@@ -447,6 +447,22 @@ event Swept(address indexed caller, uint256 usdc, uint256 shares);
 | usdc | `uint256` |  |
 | shares | `uint256` |  |
 
+### FeeNotPaid
+
+USDC refused a fee of `amount` to `to` (safety review 0.9.0, MISSED-04). The fee joined `dustUsdc`, which
+`sweep` sends to the fund.
+
+```solidity
+event FeeNotPaid(address indexed to, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
 ### FlowLeversSet
 
 ```solidity
@@ -487,6 +503,20 @@ error BelowMinRequest(uint256 valueUsdc, uint256 minRequestUsdc);
 | ---- | ---- | ----------- |
 | valueUsdc | `uint256` |  |
 | minRequestUsdc | `uint256` |  |
+
+### TooManyOpenRequests
+
+`owner` already holds `MAX_OWNER_OPEN_REQUESTS` open requests on this side.
+
+```solidity
+error TooManyOpenRequests(address owner);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
 
 ### AbovePerDepositCap
 

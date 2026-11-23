@@ -63,6 +63,9 @@ struct DelistClaimAccount {
 struct LendingClaimEpoch {
     uint256 totalScaled;
     uint256 usdcPerScaled;
+    /// @dev Safety review 0.9.0 (MISSED-02): true when this epoch's accumulator runs on `LENDING_ACC_SCALE`. An
+    ///      epoch that had accrued before the fund was upgraded keeps `LENDING_ACC_SCALE_LEGACY`. Appended.
+    bool wide;
 }
 
 /// @notice Accumulator state for one claim owner (or linked fee share) on a lending position.
@@ -152,6 +155,11 @@ struct FundState {
     ///      here is vetted on every use by the code hash of the implementation it reports (`FundAdapterGuard`).
     ///      Appended (v0.9.0): the storage layout is append-only.
     mapping(bytes32 codeHash => bool isProxy) adapterProxyCodeHash;
+
+    /// @dev Safety review 0.9.0 (MISSED-02): true once asset `index`'s delisting claim book runs on
+    ///      `DELIST_ACC_SCALE`. A book that was open when the fund was upgraded keeps `DELIST_ACC_SCALE_LEGACY`,
+    ///      the scale its accumulator and its owners' snapshots were written in, until it empties. Appended.
+    mapping(uint256 index => bool) delistWideScale;
 }
 
 /// @title FundStorage
@@ -180,9 +188,13 @@ library FundStorage {
     uint16 internal constant DEFAULT_MAX_BASKET_BPS = 10_000;
     uint32 internal constant DEFAULT_MAX_PAUSE = 72 hours;
     uint256 internal constant DELIST_UNIT_SCALE = 1e12;
-    uint256 internal constant DELIST_ACC_SCALE = 1e30;
+    uint256 internal constant DELIST_ACC_SCALE = 1e48;
+    /// @dev The accumulator scale of a claim book opened before the safety review 0.9.0 change (`delistWideScale`).
+    uint256 internal constant DELIST_ACC_SCALE_LEGACY = 1e30;
     uint256 internal constant LENDING_ACC_NORM = 1e24;
-    uint256 internal constant LENDING_ACC_SCALE = 1e36;
+    uint256 internal constant LENDING_ACC_SCALE = 1e54;
+    /// @dev The accumulator scale of a lending claim epoch opened before the safety review 0.9.0 change.
+    uint256 internal constant LENDING_ACC_SCALE_LEGACY = 1e36;
 
     /// @dev The fund's state.
     function layout() internal pure returns (FundState storage $) {

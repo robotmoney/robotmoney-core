@@ -157,6 +157,19 @@ abstract contract FlowQueueBase is PrototypeHarness {
         return _keeperSettle();
     }
 
+    /// @notice `settle` as the keeper, one call a block, until a settlement is recorded (at most 8 calls). A round
+    ///         with more than `ENROLL_PROCEED_MAX` requests takes calls that only enroll before the one that books the
+    ///         match and walks the sides (safety review 0.9.0, MISSED-01). Returns the settlement id (0 if none).
+    function _keeperSettleRound() internal returns (uint256 id) {
+        for (uint256 k; k < 8 && id == 0; ++k) {
+            if (k != 0) {
+                vm.roll(block.number + 1);
+                vm.warp(block.timestamp + 2);
+            }
+            id = _keeperSettle();
+        }
+    }
+
     /// @notice A low-level `settle` by `caller`, so a test can read the revert data.
     function _trySettle(address caller, uint256 maxRequests, uint256 maxUsdc)
         internal
@@ -423,10 +436,15 @@ abstract contract FlowQueueBase is PrototypeHarness {
         revert("pushPool: the pool did not move far enough");
     }
 
-    /// @notice Place a `MechSwapAdapter` (honest mode) over the harness's exact-output swap adapter. The basket
-    ///         assets are counted whatever their adapter's code hash, so nothing else changes.
+    /// @notice Place a `MechSwapAdapter` (honest mode) over the harness's exact-output swap adapter, after allowlisting
+    ///         its code hash through the timelock: a purchase opens exposure only through allowed code (safety review
+    ///         0.9.0, AGY-09). Warps `TIMELOCK_DELAY`.
     function _etchSwapMech() internal returns (MechSwapAdapter m) {
         MechSwapAdapter impl = new MechSwapAdapter(ROUTER);
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+        );
         vm.etch(address(swapAdapter), address(impl).code);
         m = MechSwapAdapter(address(swapAdapter));
     }
@@ -588,13 +606,9 @@ contract FlowQueueTest is FlowQueueBase {
         {
             Request memory r = queue.getRequest(depExp);
             vm.warp((uint256(r.epoch) + p.maxRoll + 1) * p.epochLength);
-            vm.prank(dave);
-            vm.expectRevert(
-                abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, depExp, dave)
-            );
-            queue.withdrawExpired(depExp);
+            // Anyone may send it back, and it still pays only its owner (safety review 0.9.0, MISSED-01).
             uint256 erinBefore = IERC20(USDC).balanceOf(erin);
-            vm.prank(erin);
+            vm.prank(dave);
             assertEq(queue.withdrawExpired(depExp), 3_000e6, "exactly the expired deposit escrow");
             assertEq(IERC20(USDC).balanceOf(erin), erinBefore + 3_000e6, "to erin");
             assertEq(IERC20(USDC).balanceOf(dave), 0, "nobody else got USDC");
@@ -968,11 +982,13 @@ contract FlowQueueTest is FlowQueueBase {
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
-    //  RB-14 (Step 3f: forward-priced requests without limits, sub-minimum dust stays pending)
+    //  RB-14 (Step 3f: forward-priced requests without limits, sub-minimum dust returns as credit)
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice RB-14: requests carry no price limits in Step 3f (E25), so a sub-minimum deposit remainder left after
-    ///         a partial match waits harmlessly while subsequent requests settle at forward prices.
+    /// @notice RB-14: requests carry no price limits in Step 3f (E25). A sub-minimum deposit remainder left after a
+    ///         partial match is never sent to the fund as a tiny net deposit. It returns to its owner as USDC credit
+    ///         (safety review 0.9.0, MISSED-06: left pending it was work the keeper saw but could never do), while
+    ///         subsequent requests settle at forward prices.
     function test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending() public fixtureCovered {
         investFund(bucketVec(6_500, 3_500));
         uint256 minReq = queue.flowParams().minRequestUsdc;
@@ -987,10 +1003,13 @@ contract FlowQueueTest is FlowQueueBase {
         uint256 dep = openDepositRequest(alice, redValUsdc + (minReq / 2), type(uint256).max);
         warpToSettleable(dep);
         refreshFeeds();
+        (uint256 credit0,) = queue.creditOf(alice);
         uint256 sid = _keeperSettle();
         assertEq(queue.pendingRedeemRequest(red, bob), 0, "redemption matched in full");
-        uint256 rem = queue.pendingDepositRequest(dep, alice);
-        assertGt(rem, 0, "sub-min remainder stays pending");
+        assertEq(queue.pendingDepositRequest(dep, alice), 0, "no sub-min remainder left pending");
+        (uint256 credit1,) = queue.creditOf(alice);
+        uint256 rem = credit1 - credit0;
+        assertGt(rem, 0, "the sub-min remainder returned as credit");
         assertLt(rem, minReq, "smaller than minRequestUsdc");
         assertEq(queue.getSettlement(sid).sharesMinted, 0, "sub-min dust not pushed to mintInKind");
 
@@ -2175,7 +2194,7 @@ contract FlowQueueTest is FlowQueueBase {
         vm.startPrank(flooder);
         IERC20(USDC).approve(address(queue), n * 100e6);
         for (uint256 k; k < n; ++k) {
-            queue.requestDeposit(100e6, flooder);
+            queue.requestDeposit(100e6, _floodOwner(k));
         }
         vm.stopPrank();
         FlowParams memory p = queue.flowParams();
@@ -2190,11 +2209,15 @@ contract FlowQueueTest is FlowQueueBase {
         uint256 g1 = gasleft();
         assertEq(first, 0, "the first call only skipped");
         assertEq(queue.getRequest(honest).remaining, 5_000e6, "not reached yet");
-        _keeperSettle();
+        // Enrollment visits at most 256 requests a call (MISSED-01), so the walk past the flood may take one more.
+        for (uint256 k; k < 2 && !queue.getRequest(honest).closed; ++k) {
+            vm.roll(block.number + 1);
+            _keeperSettle();
+        }
         uint256 g2 = gasleft();
-        assertTrue(queue.getRequest(honest).closed, "the next call fills the honest request");
+        assertTrue(queue.getRequest(honest).closed, "the next calls fill the honest request");
         emit log_named_uint("gas, call 1 (256 skipped)", g0 - g1);
-        emit log_named_uint("gas, call 2 (4 skipped, 1 filled)", g1 - g2);
+        emit log_named_uint("gas, calls 2-3 (4 skipped, walk, 1 filled)", g1 - g2);
         assertEq(queue.getRequest(1).remaining, 100e6, "the flood is untouched");
     }
 
@@ -2571,12 +2594,12 @@ contract FlowQueueTest is FlowQueueBase {
         _settleNow();
         assertTrue(queue.getRequest(b).closed, "the live request fills");
         assertEq(queue.getRequest(a).remaining, 5_000e6, "the expired one does not");
+        // Anyone may send an expired deposit back: the escrow only goes to its owner (safety review 0.9.0, MISSED-01).
+        uint256 bobBefore = IERC20(USDC).balanceOf(bob);
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(IFlowEvents.NotRequestOwner.selector, a, bob));
-        queue.withdrawExpired(a);
-        vm.prank(alice);
-        assertEq(queue.withdrawExpired(a), 5_000e6, "the owner withdraws the escrow");
+        assertEq(queue.withdrawExpired(a), 5_000e6, "a stranger returns the escrow");
         assertEq(IERC20(USDC).balanceOf(alice), 5_000e6, "to the owner");
+        assertEq(IERC20(USDC).balanceOf(bob), bobBefore, "and gets none of it");
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(IFlowEvents.RequestNotPending.selector, a));
         queue.withdrawExpired(a);
@@ -2870,7 +2893,7 @@ contract FlowQueueTest is FlowQueueBase {
         refreshFeeds();
         FundSnap memory f0 = _fundSnap();
         uint256 claims0 = queue.claimCount();
-        uint256 sid = _keeperSettle();
+        uint256 sid = _keeperSettleRound();
         _assertBatchRounding(sid, claims0, true);
         _assertPerShareNotLower(f0, "min-size deposits");
         coverageCheckpoint();
@@ -2888,7 +2911,7 @@ contract FlowQueueTest is FlowQueueBase {
         refreshFeeds();
         f0 = _fundSnap();
         claims0 = queue.claimCount();
-        sid = _keeperSettle();
+        sid = _keeperSettleRound();
         _assertBatchRounding(sid, claims0, false);
         _assertPerShareNotLower(f0, "min-size redemptions");
         _assertBooks("rounding");

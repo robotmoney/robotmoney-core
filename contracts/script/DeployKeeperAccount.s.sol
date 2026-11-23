@@ -16,8 +16,12 @@ import {FundSystemBase} from "./FundSystemBase.sol";
 ///         without broadcasting. The deploy stages check that KEEPER_ADDRESS holds KEEPER_ROLE, and the wiring stage
 ///         records the account's type, owners and bot keys in its manifest. The verifier compares them with the sheet.
 ///
-///         Required env vars: KEEPER_OWNERS, KEEPER_BOT_KEYS (comma lists; KEEPER_BOT_KEYS may be `none`), KEEPER_SALT
-///         (a bytes32), DEPLOYMENT_OUT. Optional: KEEPER_ADDRESS (must equal the predicted address), PREDICT_ONLY.
+///         Safety review 0.9.0 (AGY-04): KEEPER_OWNERS is exactly one address, the team Safe, and it must have code
+///         when the account deploys (a prediction may run before the Safe exists).
+///
+///         Required env vars: KEEPER_OWNERS (one address, the Safe), KEEPER_BOT_KEYS (a comma list, or `none`),
+///         KEEPER_SALT (a bytes32), DEPLOYMENT_OUT. Optional: KEEPER_ADDRESS (must equal the predicted address),
+///         PREDICT_ONLY.
 contract DeployKeeperAccount is FundSystemBase {
     /// @notice Manifest file name the operator gives DEPLOYMENT_OUT.
     string public constant MANIFEST_FILE = "keeper-account.json";
@@ -25,6 +29,12 @@ contract DeployKeeperAccount is FundSystemBase {
     function run() external returns (address account) {
         _requireExpectedChain("");
         address[] memory owners = vm.envAddress("KEEPER_OWNERS", ",");
+        // Safety review 0.9.0 (AGY-04): every KeeperAccount owner acts alone (1-of-N), so the account has one owner,
+        // the team Safe, whose threshold is then the quorum.
+        require(
+            owners.length == 1,
+            "KEEPER_OWNERS must name exactly one owner, the team Safe: a KeeperAccount owner acts alone"
+        );
         address[] memory bots = _botKeys();
         bytes32 salt = vm.envBytes32("KEEPER_SALT");
         bytes memory initCode =
@@ -38,6 +48,12 @@ contract DeployKeeperAccount is FundSystemBase {
             );
         }
         if (vm.envOr("PREDICT_ONLY", false)) return predicted;
+        // AGY-04: a key is no quorum. The owner is a contract (the Safe) by the time the account deploys. A
+        // prediction may run before the Safe exists, so it is not checked above.
+        require(
+            owners[0].code.length > 0,
+            "KEEPER_OWNERS: the one owner has no code, so it is a single key and not the team Safe"
+        );
         _envStringRequired("DEPLOYMENT_OUT");
 
         if (predicted.code.length == 0) {

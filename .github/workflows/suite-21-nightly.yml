@@ -100,6 +100,7 @@ jobs:
             fusion-cross-repo-drift.yml
             config-check.yml
             suite-30-check-sha-green.yml
+            onevault-coverage.yml
           )
           FAILED_LIST=()
           for workflow in "${SUITES[@]}"; do

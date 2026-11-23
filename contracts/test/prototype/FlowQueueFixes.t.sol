@@ -484,7 +484,7 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         IERC20(USDC).approve(address(queue), n * 100e6);
         for (uint256 k; k < n; ++k) {
             vm.prank(flooder);
-            queue.requestDeposit(100e6, flooder);
+            queue.requestDeposit(100e6, _floodOwner(k));
         }
         uint256 red = openRedeemRequest(bob, bobShares / 2, 0);
         coverageCheckpoint();
@@ -492,9 +492,17 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         fund.pauseDeposits();
         warpToSettleable(red);
         refreshFeeds();
-        vm.prank(keeper);
-        queue.settle(cap, type(uint256).max);
-        assertTrue(queue.getRequest(red).closed, "fix 2: the redemption fills in the first call");
+        // The round's 41 requests enroll over bounded calls first (MISSED-01). The first call that walks fills the
+        // redemption.
+        uint256 sid;
+        for (uint256 k; k < 4 && sid == 0; ++k) {
+            vm.roll(block.number + 1);
+            vm.prank(keeper);
+            sid = queue.settle(cap, type(uint256).max);
+        }
+        assertTrue(
+            queue.getRequest(red).closed, "fix 2: the redemption fills in the first walking call"
+        );
         assertEq(
             queue.getRequest(1 + queue.requestCount() - n - 1).remaining, 100e6, "the flood waits"
         );
@@ -628,9 +636,10 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         uint256 marker = openDepositRequest(carol, 5_000e6);
         warpToSettleable(fresh);
         refreshFeeds();
-        // Settle 2 look slots: skip expired `old` and fill `fresh`, leaving `marker` waiting behind cursor.
+        // Settle 1 look slot: the expired `old` is passed without spending one (safety review 0.9.0, MISSED-01), and
+        // `fresh` fills, leaving `marker` waiting behind the cursor.
         vm.prank(keeper);
-        queue.settle(2, type(uint256).max);
+        queue.settle(1, type(uint256).max);
         assertTrue(queue.getRequest(fresh).closed, "a fresh request settles");
         assertEq(queue.getRequest(marker).remaining, 5_000e6, "the marker waits");
 
@@ -782,9 +791,15 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
         refreshFeeds();
         uint256 claims0 = queue.claimCount();
         vm.recordLogs();
-        uint256 g0 = gasleft();
-        uint256 sid = _keeperSettle();
-        uint256 used = g0 - gasleft();
+        // 48 requests enroll over bounded calls first (MISSED-01); the gas logged is the call that walks.
+        uint256 sid;
+        uint256 used;
+        for (uint256 k; k < 4 && sid == 0; ++k) {
+            vm.roll(block.number + 1);
+            uint256 g0 = gasleft();
+            sid = _keeperSettle();
+            used = g0 - gasleft();
+        }
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(
             _sideFailures(logs, RequestKind.Redeem) + _sideFailures(logs, RequestKind.Deposit),

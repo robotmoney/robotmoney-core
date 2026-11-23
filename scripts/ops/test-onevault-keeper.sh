@@ -349,6 +349,33 @@ RC=$(run_keeper_once "$WORK/delistok.err")
 check "a due stepDelisted is sent through KeeperAccount.execute and the asset leaves sale" \
     'grep -q "sent stepDelisted(uint256) to" "$WORK/delistok.err" && [[ "$RC" == "0" && "$(in_sale)" == "false" ]]'
 
+# ─── Concluded: a plan past its end is only recorded by a step() call (safety review 0.9.0, MISSED-07) ───────────────
+# A fresh one-day plan on the lending asset (the basket asset left the fund in the sale above). Nine days on it is past
+# its end and its 7 day overrun, so previewStep() reads Concluded (7). The tick must send the step() that records it.
+preview_reason() { cast call "$REBALANCER" "previewStep()(uint8,uint256,uint256,uint256)" --rpc-url "$RPC_URL" | head -1 | awk '{print $1}'; }
+refresh_feeds
+send_from "$DEPLOYER" "$FUND" "setTargetAndOpenPlan(address[],uint256[],(uint64,uint16),bytes32)" \
+    "[$LENDING_ADAPTER]" "[10000]" "(86400,30)" "0x0000000000000000000000000000000000000000000000000000000000000000"
+warp 777600
+refresh_feeds
+check "a plan past its end and overrun reads Concluded" '[[ "$(preview_reason)" == "7" ]]'
+RC=$(run_keeper_once "$WORK/conclude.err")
+check "the keeper sends the step() that concludes the plan" \
+    'grep -q "plan due to conclude" "$WORK/conclude.err" && grep -q "sent step()" "$WORK/conclude.err" && [[ "$(preview_reason)" != "7" ]]'
+
+# ─── A round with more requests than one settle() call enrolls (safety review 0.9.0, MISSED-01) ─────────────────────
+# Ten requests in one epoch: the first settle() only enrolls them and records nothing. The same tick must call again.
+for _ in 1 2 3 4 5 6 7 8 9 10; do request_deposit; done
+wait_for_round
+refresh_feeds
+# shellcheck disable=SC2034 # read by the check strings
+MULTI_BEFORE="$(call_q "settlementCount()(uint256)")"
+RC=$(run_keeper_once "$WORK/multi.err")
+# shellcheck disable=SC2034 # read by the check strings
+MULTI_AFTER="$(call_q "settlementCount()(uint256)")"
+check "a round of ten requests is settled within one tick, by more than one settle() call" \
+    '[[ "$RC" == "0" && "$MULTI_AFTER" -gt "$MULTI_BEFORE" ]] && grep -q "settle() sent [0-9]* times this tick" "$WORK/multi.err"'
+
 # ─── Direct-key mode (core issue 2048): KEEPER_ACCOUNT_ADDRESS unset, the key itself holds KEEPER_ROLE ──────────────
 # The anvil queue admin is the deployer, so it grants the role straight to keys here.
 RC=$(run_keeper_once "$WORK/direct-norole.err" KEEPER_ACCOUNT_ADDRESS= KEEPER_KEYSTORE="$STRANGER_KEYSTORE")

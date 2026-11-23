@@ -162,7 +162,11 @@ library FundDelistLib {
         uint256 totalScaledBefore = s.delistTotalScaled[index];
         s.delistClaimedTokens[index] = claimedBefore + claimTok;
 
-        uint256 addScaled = claimedBefore == 0
+        // An empty book (no units outstanding) starts on the wide accumulator scale. A book with units keeps the
+        // scale it was written in, so an upgrade never rescales an open claim (safety review 0.9.0, MISSED-02).
+        if (totalScaledBefore == 0 && !s.delistWideScale[index]) s.delistWideScale[index] = true;
+        uint256 scale = _accScale(s, index);
+        uint256 addScaled = claimedBefore == 0 || totalScaledBefore == 0
             ? claimTok * FundStorage.DELIST_UNIT_SCALE
             : claimTok.mulDiv(totalScaledBefore, claimedBefore);
         uint256 feeScaled = addScaled.mulDiv(feeBps, BPS);
@@ -171,12 +175,12 @@ library FundDelistLib {
         uint256 acc = s.delistUsdcPerScaled[index];
         if (netScaled != 0) {
             DelistClaimAccount storage c = s.delistClaims[index][owner];
-            _harvestDelist(c, acc);
+            _harvestDelist(c, acc, scale);
             c.scaled += netScaled;
         }
         if (feeScaled != 0) {
             DelistClaimAccount storage f = s.delistFeeLinked[index][owner];
-            _harvestDelist(f, acc);
+            _harvestDelist(f, acc, scale);
             f.scaled += feeScaled;
         }
         s.delistTotalScaled[index] = totalScaledBefore + addScaled;
@@ -213,9 +217,14 @@ library FundDelistLib {
         if (!ok) revert IRobotMoneyFund.FeedUnhealthy(index, st);
         s.saleFallbackPrice[index] = feedPx;
         s.lastGoodAssetPrice[index] = feedPx;
+        uint256 tokenUnit = 10 ** IERC20Metadata(s.assets[index].token).decimals();
+        // A sale opened with no price at all has a zero loss budget, so every step would revert
+        // `DelistBudgetExceeded`. The first priced step sets the start value (safety review 0.9.0, MISSED-08).
+        if (s.saleStartValue[index] == 0) {
+            s.saleStartValue[index] = totalTokens.mulDiv(feedPx, tokenUnit);
+        }
 
         if (maxUsdcNotional == 0) return (false, 0, 0, 0, fundTokensBefore, claimedBefore);
-        uint256 tokenUnit = 10 ** IERC20Metadata(s.assets[index].token).decimals();
         uint256 maxTokens = maxUsdcNotional.mulDiv(tokenUnit, feedPx);
         tokensToSell = maxTokens < totalTokens ? maxTokens : totalTokens;
         if (tokensToSell == 0) return (false, 0, 0, 0, fundTokensBefore, claimedBefore);
@@ -291,9 +300,7 @@ library FundDelistLib {
         if (usdcClaim != 0 && totalScaled != 0) {
             s.delistUsdcPot[index] += usdcClaim;
             s.reservedClaimUsdc += usdcClaim;
-            s.delistUsdcPerScaled[
-                index
-            ] += usdcClaim.mulDiv(FundStorage.DELIST_ACC_SCALE, totalScaled);
+            s.delistUsdcPerScaled[index] += usdcClaim.mulDiv(_accScale(s, index), totalScaled);
         }
     }
 
@@ -319,8 +326,9 @@ library FundDelistLib {
         uint256 acc = s.delistUsdcPerScaled[index];
         DelistClaimAccount storage c = s.delistClaims[index][owner];
         DelistClaimAccount storage f = s.delistFeeLinked[index][owner];
-        _harvestDelist(c, acc);
-        _harvestDelist(f, acc);
+        uint256 scale = _accScale(s, index);
+        _harvestDelist(c, acc, scale);
+        _harvestDelist(f, acc, scale);
 
         if (c.scaled == 0 && c.pendingUsdc == 0 && f.scaled == 0 && f.pendingUsdc == 0) {
             return (0, 0, false);
@@ -354,14 +362,48 @@ library FundDelistLib {
         }
     }
 
-    function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc) private {
+    /// @notice After `shutdown` no sale step runs, so a delisting claim would never turn into USDC. Its holder takes
+    ///         their slice of the tokens still set aside, in kind (safety review 0.9.0, MISSED-08). Run after
+    ///         `consumeDelistClaim`, which pays the USDC already earned. Returns the net and fee-linked token amounts.
+    function takeDelistClaimInKind(FundState storage s, uint256 index, address owner)
+        public
+        returns (uint256 tokNet, uint256 tokFee)
+    {
+        DelistClaimAccount storage c = s.delistClaims[index][owner];
+        DelistClaimAccount storage f = s.delistFeeLinked[index][owner];
+        uint256 total = s.delistTotalScaled[index];
+        uint256 claimed = s.delistClaimedTokens[index];
+        if (total == 0 || claimed == 0) return (0, 0);
+        tokFee = claimed.mulDiv(f.scaled, total);
+        // The last claimer takes the whole remainder: two floors would leave a token unit set aside with no units
+        // behind it, and a later claim on this book would then be recorded against nothing.
+        tokNet = c.scaled + f.scaled == total ? claimed - tokFee : claimed.mulDiv(c.scaled, total);
+        s.delistClaimedTokens[index] = claimed - tokNet - tokFee;
+        total -= c.scaled + f.scaled;
+        s.delistTotalScaled[index] = total;
+        c.scaled = 0;
+        f.scaled = 0;
+        if (total == 0 && s.delistUsdcPot[index] != 0) {
+            s.reservedClaimUsdc -= s.delistUsdcPot[index];
+            s.delistUsdcPot[index] = 0;
+        }
+    }
+
+    function _harvestDelist(DelistClaimAccount storage accEntry, uint256 acc, uint256 scale)
+        private
+    {
         if (accEntry.scaled != 0) {
             uint256 delta = acc - accEntry.usdcDebt;
-            if (delta != 0) {
-                accEntry.pendingUsdc += accEntry.scaled.mulDiv(delta, FundStorage.DELIST_ACC_SCALE);
-            }
+            if (delta != 0) accEntry.pendingUsdc += accEntry.scaled.mulDiv(delta, scale);
         }
         accEntry.usdcDebt = acc;
+    }
+
+    /// @dev The accumulator scale of asset `index`'s claim book (`FundState.delistWideScale`).
+    function _accScale(FundState storage s, uint256 index) private view returns (uint256) {
+        return s.delistWideScale[index]
+            ? FundStorage.DELIST_ACC_SCALE
+            : FundStorage.DELIST_ACC_SCALE_LEGACY;
     }
 
     // ═════════════════════════════════════════════════════════════════════════

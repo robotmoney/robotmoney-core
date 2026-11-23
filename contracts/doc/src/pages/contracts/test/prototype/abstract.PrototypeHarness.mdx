@@ -5,7 +5,7 @@ description: "One-vault experiment, step 3d (timed flows). Deploys the full prot
 
 # PrototypeHarness
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/PrototypeHarness.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/prototype/PrototypeHarness.sol)
 
 **Inherits:** [BaseFixture](/contracts/test/prototype/abstract.BaseFixture)
 
@@ -1080,6 +1080,29 @@ function openRedeemRequest(
 | ---- | ---- | ----------- |
 | id | `uint256` |  |
 
+<a id="_floodowner-uint256"></a>
+
+### _floodOwner
+
+A distinct owner for flood request `k`: one owner holds at most `MAX_OWNER_OPEN_REQUESTS` open
+requests a side (safety review 0.9.0, MISSED-01), so a flood spreads over owners.
+
+```solidity
+function _floodOwner(uint256 k) internal pure returns (address);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
 <a id="warptosettleable-uint256"></a>
 
 ### warpToSettleable
@@ -1435,6 +1458,34 @@ listed, `v[IDX_COMET]` must be 0.
 
 ```solidity
 function assetArrays(uint16[5] memory v)
+        internal
+        view
+        returns (address[] memory ids, uint256[] memory w);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| v | `uint16[5]` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| ids | `address[]` |  |
+| w | `uint256[]` |  |
+
+<a id="activeassetarrays-uint16-5"></a>
+
+### activeAssetArrays
+
+`assetArrays` without the inactive assets at weight 0: a target may only name active assets, and an
+asset the fund deactivated itself (an emptied single-asset unwind, safety review 0.9.0 AGY-03) cannot
+be named again.
+
+```solidity
+function activeAssetArrays(uint16[5] memory v)
         internal
         view
         returns (address[] memory ids, uint256[] memory w);

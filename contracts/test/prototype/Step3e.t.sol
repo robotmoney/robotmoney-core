@@ -5,7 +5,7 @@
 // Experiment prototype only (contracts/test/prototype/). Not a production test.
 pragma solidity ^0.8.24;
 
-import {Vm} from "forge-std/Vm.sol";
+import {Vm, VmSafe} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -660,6 +660,8 @@ contract Step3eTest is PrototypeHarness {
         emit log_named_uint("buy leg", o.buyIndex);
         emit log_named_uint("gas of one basket-to-basket step (keeper call)", g);
         emit log_named_uint("STEP_GAS_FLOOR", rebalancer.STEP_GAS_FLOOR());
+        // A coverage build is unoptimised and instrumented, so its gas is not the gas of the deployed code.
+        if (vm.isContext(VmSafe.ForgeContext.Coverage)) return;
         assertLt(g, rebalancer.STEP_GAS_FLOOR() / 2, "under half of STEP_GAS_FLOOR");
     }
 
@@ -824,6 +826,12 @@ contract Step3eTest is PrototypeHarness {
         UniswapV3ExactOutSwapAdapter real = new UniswapV3ExactOutSwapAdapter(ROUTER);
         Step3eHostileSwapAdapter h =
             new Step3eHostileSwapAdapter(ROUTER, address(real), CBBTC, gift, reenterFund, shares);
+        // A step opens exposure only through allowed code (safety review 0.9.0, AGY-09): allow the hostile code, so the
+        // test reaches the fund's own guard.
+        timelockExecute(
+            address(fund),
+            abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(h).codehash, true))
+        );
         vm.etch(address(swapAdapter), address(h).code);
     }
 
@@ -1082,7 +1090,8 @@ contract Step3eTest is PrototypeHarness {
             if (fund.planStatus() == PlanStatus.Halted && z.haltedAtCall == 0) {
                 z.haltedAtCall = z.calls;
             }
-            if (z.calls % 16 == 0) coverageCheckpoint();
+            // Every 4 calls: an instrumented (coverage) build records more per step than one checkpoint can hold.
+            if (z.calls % 4 == 0) coverageCheckpoint();
         }
         _noiseReport(id, z);
         assertEq(fund.plan().costSpent, z.booked, "costSpent = the sum of the booked step costs");

@@ -1,6 +1,9 @@
 # One-vault experiment: staged PRD amendments
 
-Status: draft, 2026-11-11, extended 2026-11-13 (§5). Not applied. `docs/prd.md` describes the live
+Status: applied to `docs/prd.md` on 2026-11-23 in the step 3f form (§5, §5.1), except §3 (D2, direct vault selection)
+and the open D8 caveat of amendment 7, which stay with the owner (agy safety review 0.9.0, AGY-15). History below.
+
+Earlier status: draft, 2026-11-11, extended 2026-11-13 (§5). Not applied. `docs/prd.md` describes the live
 three-vault product and stays as it is while the experiment runs
 (`one-vault-rebalancer-proposal.md`, status line). This file lists what the
 PRD would have to say if the one-vault design goes to production. It exists

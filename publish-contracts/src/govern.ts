@@ -31,6 +31,8 @@
 // The Safe's own timelock role is given up by timelock-revoke-role, which waits the delay. The tool never builds renounceRole (owner question 1, default (b)), and it refuses
 // timelock-revoke-role PROPOSER_ROLE for the last holder before anything is sent (assertNotLastProposer): the deployed timelock is a ProposerFloorTimelock, which reverts that
 // revoke (and a renounce) with LastProposerFloor, so the governed contracts can never be left with no proposer (QA plan v1 B3, CS-3). Grant a second proposer first.
+// Safety review 0.9.0 (AGY-02): the same refusal for the last EXECUTOR_ROLE holder (assertNotLastExecutor; the open executor address(0) counts as one). The live Base
+// timelock has no executor floor on chain, so there the tool is the only check.
 //   release-receipt              ConsensusRecommendationReceipt.releaseReceipt(receiptId), one round per receipt id (--receipt-id)
 // The receipt contract's ADMIN_ROLE is held by the TimelockController after the timelock stage (INV-3), so the release is the same Safe ->
 // Timelock round as every other row. It runs on the Twin chain AND on 8453 (issue 1611): on 8453 it is a standalone post-launch action, its own
@@ -287,6 +289,33 @@ export async function assertNotLastProposer(rd: Rd, timelock: Address, role: Hex
   if (count === 1n) {
     throw new PublishError("GOVERN", `--row timelock-revoke-role PROPOSER_ROLE ${account}: it is the last proposer, and the timelock (ProposerFloorTimelock) reverts the revoke with LastProposerFloor at execute. Nothing is scheduled. Grant PROPOSER_ROLE to another account first (--row timelock-grant-role), then revoke this one`, { row: "timelock-revoke-role", account, proposer_count: 1 });
   }
+}
+
+/** ProposerFloorTimelock since the safety review 0.9.0 (AGY-02) also counts EXECUTOR_ROLE holders. A timelock deployed before it (the live Base one) does not answer this. */
+const EXECUTOR_FLOOR_ABI = parseAbi(["function executorCount() view returns (uint256)"]);
+const OPEN_EXECUTOR: Address = "0x0000000000000000000000000000000000000000";
+/**
+ * Safety review 0.9.0 (AGY-02): the timelock never loses its last EXECUTOR_ROLE holder. With no executor nothing scheduled can run, so no upgrade, no shutdown and no way
+ * to grant the role back. New timelock code floors it (LastExecutorFloor); the live Base timelock keeps its old code with no floor, so the tool is the only check there.
+ * The open executor (address(0)) counts as a holder. A timelock that answers executorCount() is believed. One that does not (old code, not enumerable) passes only when
+ * another holder is proven by a read: the open executor or the Safe. Any other role, and any account that does not hold EXECUTOR_ROLE, passes through.
+ */
+export async function assertNotLastExecutor(rd: Rd, timelock: Address, safe: Address, role: Hex, account: Address): Promise<void> {
+  if (role.toLowerCase() !== roleId("EXECUTOR_ROLE").toLowerCase()) return;
+  if (!(await rd<boolean>(timelock, ROLE_ABI, "hasRole", [role, account]))) return;
+  let count: bigint | undefined;
+  try { count = await rd<bigint>(timelock, EXECUTOR_FLOOR_ABI, "executorCount"); } catch { /* a timelock without the executor floor: fall back to the two known holders */ }
+  if (count !== undefined) {
+    if (count > 1n) return;
+  } else {
+    for (const other of [OPEN_EXECUTOR, safe]) {
+      if (other.toLowerCase() !== account.toLowerCase() && await rd<boolean>(timelock, ROLE_ABI, "hasRole", [role, other])) return;
+    }
+  }
+  const why = count !== undefined
+    ? "it is the last executor, and the timelock reverts the revoke with LastExecutorFloor at execute"
+    : "no other executor is proven (neither the open executor address(0) nor the Safe holds EXECUTOR_ROLE), and this timelock has no executor floor on chain: the revoke would execute and leave nothing able to run a scheduled operation, for good";
+  throw new PublishError("GOVERN", `--row timelock-revoke-role EXECUTOR_ROLE ${account}: ${why}. Nothing is scheduled. Grant EXECUTOR_ROLE to another account first (--row timelock-grant-role), then revoke this one`, { row: "timelock-revoke-role", account, ...(count !== undefined ? { executor_count: Number(count) } : {}) });
 }
 
 const need = (v: string | undefined, row: string, flag: string): string => {
@@ -2002,6 +2031,8 @@ export async function runGovern(ctx: RunContext, row: StageRow, manifest: RunMan
       }
       // The chain would refuse it too (ProposerFloorTimelock.LastProposerFloor), at execute, after a Safe transaction and a delay: refuse before anything is sent (QA plan v1 B3).
       if (selfAdminRow === "timelock-revoke-role") await assertNotLastProposer(rd, a.timelock, role, account);
+      // Safety review 0.9.0 (AGY-02): the last executor. The live Base timelock has no executor floor on chain, so this refusal is the only one.
+      if (selfAdminRow === "timelock-revoke-role") await assertNotLastExecutor(rd, a.timelock, a.safe, role, account);
       const nonce = await handle.nonce();
       name = selfAdminRecordKey(selfAdminRow, c.data, nonce);
       // saved before the schedule is sent: a crash between the send and the phase record still finds this key, so the resume adopts the operation (same salt) instead of scheduling a second one

@@ -5,7 +5,7 @@ description: "Port of `RouterGovernance`: turns a recorded consensus receipt int
 
 # IRebalanceGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/interfaces/IRebalanceGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/interfaces/IRebalanceGovernance.sol)
 
 **Title:** IRebalanceGovernance
 
@@ -32,7 +32,7 @@ Release `receiptId` and open a plan to its per-asset vector, in one call (§5.1 
 TARGET_SETTER_ROLE only (the timelock: RB-1). `nonReentrant`.
 Checks in order (RouterGovernance.applyReceipt, unchanged):
 recorded (`ReceiptNotRecorded`), not released (`ReceiptAlreadyReleased`), stored digest
-== `payloadDigest` (`PayloadDigestMismatch`), `recordedAt > lastAppliedRecordedAt`
+== `payloadDigest` (`PayloadDigestMismatch`), `recordedAt >= lastAppliedRecordedAt`
 (`ReceiptNotNewerThanApplied`). Effects: `lastAppliedRecordedAt = recordedAt`,
 `receipts.releaseReceipt(receiptId)`, then
 `fund.setTargetAndOpenPlan(assets, bps, defaultPlanParams, receiptId)`, which runs

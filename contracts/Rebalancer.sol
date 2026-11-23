@@ -43,6 +43,7 @@ import {IRebalancer} from "./interfaces/IRebalancer.sol";
 import {StepFeedLib} from "./lib/StepFeedLib.sol";
 import {FundValuationLib} from "./lib/FundValuationLib.sol";
 import {IFlowQueue} from "./interfaces/IFlowQueue.sol";
+import {ILendingRateAdapter} from "./interfaces/IFlowAdapters.sol";
 
 /// @title Rebalancer
 /// @notice Step selection for the one vault (§5). It holds no funds, grants no token approvals and
@@ -137,6 +138,8 @@ contract Rebalancer is
         uint256 feedIndex;
         StepPrices px;
         bool hasBasketLeg;
+        /// A lending sell leg's venue cannot pay out `minStepUsdc` now (`_size`).
+        bool illiquid;
     }
 
     // ─── Step 3e events (§5.10) ──────────────────────────────────────────────
@@ -252,6 +255,9 @@ contract Rebalancer is
             return (false, d.reason);
         }
         if (d.reason != SkipReason.None) {
+            // A venue with no liquidity is backed off like a failed step, so the next step picks other legs and one
+            // frozen venue cannot hold the plan's other moves (§5.8; safety review 0.9.0, MISSED-09).
+            if (d.illiquid) _backoff(f, d.sellIndex);
             emit RebalanceStepSkipped(p.id, d.reason, d.sellIndex, d.buyIndex, d.detail);
             return (false, d.reason);
         }
@@ -395,11 +401,12 @@ contract Rebalancer is
         returns (uint256 sellPath, uint256 buyPath)
     {
         (uint256 e, uint256 dur) = PlanMath.progress(p.startTime, p.endTime, block.timestamp);
+        uint256 idleEnd = PlanMath.idleEndBps(p.endBps);
         sellPath = sellIndex == IDLE_INDEX
-            ? PlanMath.pathBps(p.startIdleBps, 0, e, dur)
+            ? PlanMath.pathBps(p.startIdleBps, idleEnd, e, dur)
             : PlanMath.pathBps(p.startBps[sellIndex], p.endBps[sellIndex], e, dur);
         buyPath = buyIndex == IDLE_INDEX
-            ? PlanMath.pathBps(p.startIdleBps, 0, e, dur)
+            ? PlanMath.pathBps(p.startIdleBps, idleEnd, e, dur)
             : PlanMath.pathBps(p.startBps[buyIndex], p.endBps[buyIndex], e, dur);
     }
 
@@ -449,6 +456,12 @@ contract Rebalancer is
         // `executeStep`. Any failure skips the whole step: the TWAP of every basket asset feeds the NAV the path
         // targets are computed from. Nothing backs off.
         AssetConfig[] memory cfgs = f.assetConfigs();
+        // An in-sale asset is never a leg (`_eligible`), and the fund's own step masks it out of the feed check
+        // (`FundStepLib._stepFeeds`). Mask it here too, so its dead feed cannot block the healthy assets (safety
+        // review 0.9.0, MISSED-05).
+        for (uint256 i; i < cfgs.length; ++i) {
+            if (f.isAssetInSale(i)) cfgs[i].active = false;
+        }
         (d.feedCheck, d.feedIndex, d.detail, d.px) =
             StepFeedLib.check(cfgs, IERC4626(address(f)).asset(), f.flowQueue());
         if (d.feedCheck != StepFeedCheck.Ok) {
@@ -493,9 +506,10 @@ contract Rebalancer is
         //    pool, so a keeper's sandwich of it gains little (A20), as the per-call cap does for a settlement.
         //    SAFE-05 (§5.3 step 4, §5.5): dust below `minStepUsdc` is ignored except for the last dust after
         //    `endTime` when the smaller deviation fits within both legs' caps (`notional == min(over, under)`).
-        uint256 notional = _size(f, cfgs, legs);
+        (uint256 notional, bool clamped) = _size(f, cfgs, legs);
         d.notional = notional;
         if (notional < sp.minStepUsdc) {
+            d.illiquid = clamped;
             uint256 minDev = Math.min(legs.over, legs.under);
             if (block.timestamp < p.endTime || notional < minDev) {
                 d.reason = SkipReason.BelowMinStep;
@@ -552,11 +566,23 @@ contract Rebalancer is
     function _size(IRobotMoneyFund f, AssetConfig[] memory cfgs, PlanMath.Legs memory legs)
         internal
         view
-        returns (uint256 notional)
+        returns (uint256 notional, bool clamped)
     {
         notional = Math.min(legs.over, legs.under);
         if (legs.sellIndex != IDLE_INDEX) {
             notional = Math.min(notional, _stepCap(f, cfgs, legs.sellIndex));
+            // A lending sell takes no more than the venue can pay out now, so a busy venue makes the step smaller
+            // (or a `BelowMinStep` skip) instead of a fund revert (safety review 0.9.0, MISSED-09).
+            if (cfgs[legs.sellIndex].kind == AssetKind.Lending) {
+                try ILendingRateAdapter(cfgs[legs.sellIndex].adapter).availableLiquidity() returns (
+                    uint256 avail
+                ) {
+                    if (avail < notional) {
+                        notional = avail;
+                        clamped = true;
+                    }
+                } catch {}
+            }
         }
         if (legs.buyIndex != IDLE_INDEX) {
             notional = Math.min(notional, _stepCap(f, cfgs, legs.buyIndex));

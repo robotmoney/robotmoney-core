@@ -81,7 +81,9 @@ library FlowClaimLib {
             (uint256 nav,) = fund.lastGoodNav();
             uint256 supply = fund.totalSupply();
             uint256 value = supply == 0 ? 0 : shares.mulDiv(nav, supply);
-            if (value < minUsdc && shares != fund.balanceOf(msg.sender)) {
+            // The whole-balance exception is for a holder's own exit only (safety review 0.9.0, MISSED-01): a request
+            // that names another owner meets the minimum, so dust cannot fill that owner's open-request slots.
+            if (value < minUsdc && (shares != fund.balanceOf(msg.sender) || owner != msg.sender)) {
                 revert IFlowEvents.BelowMinRequest(value, minUsdc);
             }
         }
@@ -144,7 +146,11 @@ library FlowClaimLib {
         public
         returns (uint256 amount)
     {
-        Request storage r = _owned(s, requestId);
+        // Anyone may send an expired deposit back to its owner: the USDC only ever goes to `r.owner`. A request left
+        // open holds the settle walk's start at its epoch, so it must not depend on its owner to close.
+        Request storage r = s.requests[requestId];
+        if (r.owner == address(0)) revert IFlowEvents.UnknownRequest(requestId);
+        if (r.closed || r.remaining == 0) revert IFlowEvents.RequestNotPending(requestId);
         if (r.kind != RequestKind.Deposit) revert IFlowEvents.WrongRequestKind(requestId);
         if (!_isDepositExpired(s, r)) revert IFlowEvents.RequestNotExpired(requestId);
 

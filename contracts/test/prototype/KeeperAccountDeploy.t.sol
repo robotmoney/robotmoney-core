@@ -20,7 +20,7 @@ contract KeeperAccountDeployTest is Test {
 
     function _env(string memory out) internal {
         vm.setEnv("EXPECTED_CHAIN_ID", vm.toString(block.chainid));
-        vm.setEnv("KEEPER_OWNERS", string.concat(vm.toString(ownerA), ",", vm.toString(ownerB)));
+        vm.setEnv("KEEPER_OWNERS", vm.toString(ownerA));
         vm.setEnv("KEEPER_BOT_KEYS", vm.toString(bot1));
         vm.setEnv("KEEPER_SALT", vm.toString(bytes32(uint256(0xbeef))));
         vm.setEnv("DEPLOYMENT_OUT", out);
@@ -35,22 +35,40 @@ contract KeeperAccountDeployTest is Test {
         _env(out);
         DeployKeeperAccount s = new DeployKeeperAccount();
 
+        // Safety review 0.9.0 (AGY-04): every owner acts alone, so the account takes one owner, a contract (the Safe).
+        vm.setEnv("KEEPER_OWNERS", string.concat(vm.toString(ownerA), ",", vm.toString(ownerB)));
+        vm.expectRevert(
+            bytes(
+                "KEEPER_OWNERS must name exactly one owner, the team Safe: a KeeperAccount owner acts alone"
+            )
+        );
+        s.run();
+        vm.setEnv("KEEPER_OWNERS", vm.toString(ownerA));
+
         vm.setEnv("PREDICT_ONLY", "true");
         address predicted = s.run();
         assertEq(predicted.code.length, 0, "predicting deploys nothing");
 
         vm.setEnv("PREDICT_ONLY", "false");
         vm.setEnv("KEEPER_ADDRESS", vm.toString(predicted));
+        vm.expectRevert(
+            bytes(
+                "KEEPER_OWNERS: the one owner has no code, so it is a single key and not the team Safe"
+            )
+        );
+        s.run();
+        vm.etch(ownerA, hex"00");
         address account = s.run();
         assertEq(account, predicted, "deployed at the predicted address");
         assertGt(account.code.length, 0, "the account has code");
         address[] memory o = KeeperAccount(account).owners();
-        assertEq(o.length, 2, "two owners");
+        assertEq(o.length, 1, "one owner");
+        assertEq(o[0], ownerA, "the owner");
         assertEq(KeeperAccount(account).botKeys()[0], bot1, "the bot key");
 
         string memory json = vm.readFile(OUT);
         assertEq(vm.parseJsonAddress(json, ".keeper_account"), account, "manifest: account");
-        assertEq(vm.parseJsonAddressArray(json, ".owners").length, 2, "manifest: owners");
+        assertEq(vm.parseJsonAddressArray(json, ".owners").length, 1, "manifest: owners");
         assertEq(vm.parseJsonAddressArray(json, ".bot_keys")[0], bot1, "manifest: bot keys");
 
         // A rerun finds the account and changes nothing.

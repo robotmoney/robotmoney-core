@@ -2330,6 +2330,18 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         assertEq(ledger.claimable(id, dave), 0, "dave can claim nothing");
         assertEq(ledger.claimable(id, attacker), 0, "the fresh address can claim nothing");
         emit log_named_uint("A19: alice's claim (USDC units)", ledger.claimable(id, alice));
+
+        // Safety review 0.9.0 (MISSED-04): a holder USDC will not pay names another address for its own recovery.
+        uint256 owed = ledger.claimable(id, alice);
+        // The payee is an address the fork fixture already holds a USDC balance slot for.
+        address payee = carol;
+        uint256 payeeBefore = IERC20(USDC).balanceOf(payee);
+        vm.prank(attacker);
+        assertEq(ledger.claimTo(id, attacker), 0, "claimTo pays only the caller's own recovery");
+        vm.prank(alice);
+        assertEq(ledger.claimTo(id, payee), owed, "alice sends her recovery to another address");
+        assertEq(IERC20(USDC).balanceOf(payee) - payeeBefore, owed, "the payee holds it");
+        assertEq(ledger.claimable(id, alice), 0, "and it is claimed once");
     }
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -2963,7 +2975,7 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         vm.expectPartialRevert(0xe2517d3f);
         fund.emergencyUnwind();
         vm.expectPartialRevert(0xe2517d3f);
-        fund.emergencyUnwind(IDX_WETH);
+        fund.emergencyUnwind(IDX_WETH, 0);
 
         // Self-expiring pauses and mandatory cooldowns.
         queue.pauseQueue();
@@ -3169,12 +3181,14 @@ contract AttacksTimedTest is PrototypeHarness, AttackBook {
         uint256 unwindWeth = IERC20(WETH).balanceOf(address(fund));
         uint256 unwindIdle = fund.idleUsdc();
         timelockExecute(
-            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+            address(fund),
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, uint256(0))
         );
         uint256 unwindRef = unwindWeth.mulDiv(refWeth, 1e18);
         uint256 unwindGot = fund.idleUsdc() - unwindIdle;
         uint256 unwindCost = unwindRef > unwindGot ? unwindRef - unwindGot : 0;
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.deactivateAsset, (IDX_WETH)));
+        // The emptied basket asset is deactivated by the unwind itself (safety review 0.9.0, AGY-03).
+        assertFalse(fund.assetConfig(IDX_WETH).active, "the unwind deactivated wETH");
         refreshFeeds();
 
         mech.setFixedFeePool(false);

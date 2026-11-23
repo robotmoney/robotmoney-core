@@ -25,8 +25,9 @@ import {
 ///         - KEEPER_ROLE: `settle` (keeper-only, E34).
 ///         - EMERGENCY_ROLE: self-expiring `pauseQueue` (with cooldown, E39), rate-limited `freezeSettlement` (E49).
 ///         - ADMIN_ROLE (timelock): `unpauseQueue`, `setFlowParams`, `releaseSettlement`.
-///         - A request's owner: `cancel` (cutoff + stop windows), `withdrawExpired` (deposits), `giveRedemptionNotice`
-///           (redemptions > `maxRoll`), `redeem`.
+///         - A request's owner: `cancel` (cutoff + stop windows), `giveRedemptionNotice` (redemptions > `maxRoll`),
+///           `redeem`.
+///         - Anyone: `withdrawExpired` (an expired deposit goes back to its owner).
 ///         - Fund only: `onShutdown()` (releases active escrows on wind-down).
 interface IFlowQueue is IFlowEvents {
     // ═════════════════════════════════════════════════════════════════════════
@@ -57,7 +58,9 @@ interface IFlowQueue is IFlowEvents {
     ///         or during wind-down. Credited to `withdrawCredit`.
     function cancel(uint256 requestId) external;
 
-    /// @notice Owner withdraws escrow of an expired Deposit request (`cur > expiryEpoch`). Redemptions never expire.
+    /// @notice Send the escrow of an expired Deposit request (`cur > expiryEpoch`) back to its owner. Anyone may call
+    ///         it: the USDC only goes to the owner, and an expired request left open would hold the settle walk's
+    ///         start at its epoch. Redemptions never expire.
     function withdrawExpired(uint256 requestId) external returns (uint256 amount);
 
     /// @notice Owner gives post-`maxRoll` redemption notice (`E40`). Returns unfilled shares after `noticeRound` ends.

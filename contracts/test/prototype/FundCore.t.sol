@@ -622,9 +622,11 @@ contract FundCoreTest is PrototypeHarness {
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.closePlan, ()));
         AssetConfig memory wethCfg = fund.assetConfig(IDX_WETH);
         timelockExecute(
-            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+            address(fund),
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, uint256(0))
         );
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.deactivateAsset, (IDX_WETH)));
+        // The emptied basket asset is deactivated by the unwind itself (safety review 0.9.0, AGY-03).
+        assertFalse(fund.assetConfig(IDX_WETH).active, "the unwind deactivated wETH");
         refreshFeeds();
 
         mocked.setFixedFeePool(false);
@@ -651,7 +653,8 @@ contract FundCoreTest is PrototypeHarness {
         // E50: single-asset unwind on Aave recovers into idle and zeroes only Aave's target; fund stays live.
         // Snapshot immediately after the timelock warp so accrued lending interest during wait is not misread.
         bytes32 salt = keccak256("step3f-unwind-aave");
-        bytes memory unwindData = abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_AAVE);
+        bytes memory unwindData =
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_AAVE, uint256(0));
         timelock.schedule(address(fund), 0, unwindData, bytes32(0), salt, TIMELOCK_DELAY);
         vm.warp(block.timestamp + TIMELOCK_DELAY);
         refreshFeeds();
@@ -673,7 +676,8 @@ contract FundCoreTest is PrototypeHarness {
         // Single-asset unwind on wETH Basket leg.
         uint256 idleMid = fund.idleUsdc();
         timelockExecute(
-            address(fund), abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH)
+            address(fund),
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, uint256(0))
         );
         assertEq(fund.assetValue(IDX_WETH), 0, "weth unwound");
         assertEq(fund.targetBps()[IDX_WETH], 0, "weth target zeroed");
@@ -716,7 +720,8 @@ contract FundCoreTest is PrototypeHarness {
         uint256 pool8 = poolPrice8(WETH_POOL, WETH);
         // Feed 10% above the pool: the pool pays about 9% under the feed, past the 3% band.
         setFeedPrice(IDX_WETH, pool8 * 110 / 100);
-        bytes memory data = abi.encodeWithSignature("emergencyUnwind(uint256)", IDX_WETH);
+        bytes memory data =
+            abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, uint256(0));
         bytes32 salt = keccak256("floor-unwind");
         timelock.schedule(address(fund), 0, data, bytes32(0), salt, TIMELOCK_DELAY);
         vm.warp(block.timestamp + TIMELOCK_DELAY);

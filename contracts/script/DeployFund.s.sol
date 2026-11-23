@@ -12,7 +12,9 @@ import {RobotMoneyFund} from "../RobotMoneyFund.sol";
 import {AaveV3RateAdapter} from "../adapters/AaveV3RateAdapter.sol";
 import {CompoundV3RateAdapter} from "../adapters/CompoundV3RateAdapter.sol";
 import {MorphoRateAdapter} from "../adapters/MorphoRateAdapter.sol";
-import {UniswapV3ExactOutSwapAdapter} from "../adapters/UniswapV3ExactOutSwapAdapter.sol";
+import {
+    UniswapV3ExactOutSwapAdapterUpgradeable
+} from "../adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol";
 import {AssetConfig, AssetKind, FundInitParams, Venue, Roles} from "../FundTypes.sol";
 import {FundSystemBase} from "./FundSystemBase.sol";
 
@@ -66,6 +68,7 @@ contract DeployFund is FundSystemBase {
         address cometAdapter;
         address moonwellAdapter;
         address swapAdapter;
+        address swapAdapterImplementation;
         uint256 seedShares;
         uint256 assetCount;
         UpgradeConfig upgrade;
@@ -140,11 +143,21 @@ contract DeployFund is FundSystemBase {
         d.aaveAdapter = address(new AaveV3RateAdapter(AAVE_POOL, BASE_USDC, AAVE_A_USDC, d.fund));
         d.cometAdapter = address(new CompoundV3RateAdapter(COMET, BASE_USDC, d.fund));
         d.moonwellAdapter = address(new MorphoRateAdapter(MOONWELL, BASE_USDC, d.fund));
-        d.swapAdapter = address(new UniswapV3ExactOutSwapAdapter(i.swapRouter));
+        // ADR-0019: the swap adapter is a governed UUPS proxy, upgraded only by the fund timelock. The fund allows
+        // both the proxy and the implementation code hashes and marks the proxy hash, so it vets the implementation
+        // on every use (safety review 0.9.0, MISSED-09).
+        d.swapAdapterImplementation =
+            address(new UniswapV3ExactOutSwapAdapterUpgradeable(i.swapRouter));
+        d.swapAdapter = _deployProxy(
+            d.swapAdapterImplementation,
+            abi.encodeCall(UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (u.timelock))
+        );
 
         f.setAdapterCodeHashAllowed(d.aaveAdapter.codehash, true);
         f.setAdapterCodeHashAllowed(d.moonwellAdapter.codehash, true);
         f.setAdapterCodeHashAllowed(d.swapAdapter.codehash, true);
+        f.setAdapterCodeHashAllowed(d.swapAdapterImplementation.codehash, true);
+        f.setAdapterProxyCodeHash(d.swapAdapter.codehash, true);
         f.setAdapterCodeHashAllowed(d.cometAdapter.codehash, true);
 
         // §4.5: three lending venues and two basket tokens; addAsset refuses an unhealthy feed (E15).
@@ -238,6 +251,7 @@ contract DeployFund is FundSystemBase {
         vm.serializeAddress(obj, "compound_adapter", d.cometAdapter);
         vm.serializeAddress(obj, "moonwell_adapter", d.moonwellAdapter);
         vm.serializeAddress(obj, "swap_adapter", d.swapAdapter);
+        vm.serializeAddress(obj, "swap_adapter_implementation", d.swapAdapterImplementation);
         vm.serializeAddress(obj, "emergency", i.emergency);
         vm.serializeAddress(obj, "fee_recipient", i.feeRecipient);
         vm.serializeUint(obj, "asset_count", d.assetCount);

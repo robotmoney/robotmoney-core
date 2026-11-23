@@ -1,0 +1,72 @@
+# Canonical: docs/code-reviews/20261121-214700-agy/05-meta-review-and-missed-findings.md (MISSED-09),
+#            docs/code-reviews/20261121-214700-agy/06-remediation-status.md
+#
+# WHY THIS WORKFLOW EXISTS
+# The forge coverage gate (suite-01-02-forge-tests.yml, job forge-coverage-gate) skips the one-vault fund sources:
+# compiling them with the prototype tree under coverage's unoptimised profile pushed that job past its memory
+# ceiling. So the fund system the protocol runs on had no coverage measured at all. This workflow instruments the
+# one-vault sources with the prototype suite (the only suite that exercises them) and gates their combined line
+# coverage (.github/scripts/check_onevault_coverage.py: every source instrumented, each source at or above the
+# per-file floor, total at or above the floor).
+#
+# CLASS
+# heavy: the whole prototype suite instrumented, about 32 minutes and 8.7 GB of memory at 4 threads. Sweep-only: it
+# runs after every merge to dev and in the nightly full suite (suite-21-nightly.yml dispatches it), never on a pull
+# request (CI taxonomy). The prototype suite itself runs uninstrumented on every PR (forge-prototype-tests).
+
+name: onevault-coverage
+
+env:
+  CI_CLASS: heavy
+
+on:
+  push:
+    branches: ["dev"]
+    paths-ignore: ["**.md", "**.txt"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: onevault-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: forge-onevault-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+
+      - name: forge coverage (one-vault sources, prototype suite)
+        # The SizeGate suite asserts EIP-170 on deployed bytecode, which coverage instrumentation inflates. The
+        # baseline tree holds the pre-3f copies of the contracts and is not the code under test. The memory guard
+        # runs with a higher ceiling than the PR gate's: this job gates no pull request.
+        env:
+          COVERAGE_MEM_CEILING_PCT: "85"
+        run: >-
+          python3 .github/scripts/run_coverage_memory_guard.py
+          forge coverage --report summary --report lcov --report-file lcov-onevault.info
+          --match-path "contracts/test/prototype/*.t.sol"
+          --no-match-contract "SizeGate"
+          --skip "contracts/test/prototype/baseline/**"
+
+      - name: One-vault line-coverage gate
+        run: python3 .github/scripts/check_onevault_coverage.py lcov-onevault.info --min 90 --min-file 70
+
+      - name: Upload the lcov report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-onevault
+          path: lcov-onevault.info
+          if-no-files-found: ignore

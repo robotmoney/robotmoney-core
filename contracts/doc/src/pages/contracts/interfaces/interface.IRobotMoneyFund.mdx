@@ -5,7 +5,7 @@ description: "The one vault (`RobotMoneyFund`, share `rmFUND`): an ERC-4626 over
 
 # IRobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/interfaces/IRobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/interfaces/IRobotMoneyFund.sol)
 
 **Inherits:** [IFundEvents](/contracts/interface.IFundEvents)
 
@@ -1934,12 +1934,19 @@ function executeDelistStep(uint256 index, uint256 maxUsdcNotional)
 | tokensSold | `uint256` |  |
 | usdcReceived | `uint256` |  |
 
-<a id="emergencyunwind-uint256"></a>
+<a id="emergencyunwind-uint256-uint256"></a>
 
 ### emergencyUnwind
 
+Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is `minUsdcOut` when it is
+non-zero (the timelock's own floor stands, even below the feed), else the feed price less
+`delistBandBps`. With an unhealthy feed `minUsdcOut` is the only floor and must be non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
+and steps (AGY-03).
+
 ```solidity
-function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc);
+function emergencyUnwind(uint256 index, uint256 minUsdcOut)
+        external
+        returns (uint256 recoveredUsdc);
 ```
 
 **Parameters**
@@ -1947,12 +1954,37 @@ function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | recoveredUsdc | `uint256` |  |
+
+<a id="reabsorbremovedasset-uint256-uint256"></a>
+
+### reabsorbRemovedAsset
+
+Sell the reappeared tokens of removed basket asset `index` into idle USDC (ADMIN_ROLE; INV-2, LIFE-6).
+Same floor rule as `emergencyUnwind(index, minUsdcOut)`. Returns the USDC received.
+
+```solidity
+function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external returns (uint256 usdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdc | `uint256` |  |
 
 <a id="settleclaim-uint256-address"></a>
 
@@ -2101,6 +2133,58 @@ event EmergencyUnwound(uint256 usdcRecovered);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | usdcRecovered | `uint256` |  |
+
+### FeeNotPaid
+
+`token` refused a fee of `amount` to `to` (safety review 0.9.0, MISSED-04). The fee stayed in the fund.
+
+```solidity
+event FeeNotPaid(address indexed token, address indexed to, uint256 amount);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+### RemovedAssetReabsorbed
+
+`amount` tokens of removed asset `index` were sold into idle USDC for `usdc` (AGY-07).
+
+```solidity
+event RemovedAssetReabsorbed(uint256 indexed index, uint256 amount, uint256 usdc);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| amount | `uint256` |  |
+| usdc | `uint256` |  |
+
+### DelistClaimTakenInKind
+
+After shutdown, `owner` took `tokens` of in-sale asset `index` in kind for their delisting claim, and
+`feeTokens` went to the fee recipient (MISSED-08).
+
+```solidity
+event DelistClaimTakenInKind(
+        uint256 indexed index, address indexed owner, uint256 tokens, uint256 feeTokens
+    );
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| owner | `address` |  |
+| tokens | `uint256` |  |
+| feeTokens | `uint256` |  |
 
 ### RedeemedInKind
 
@@ -3145,6 +3229,36 @@ error AssetInSale(uint256 index);
 
 ```solidity
 error AssetNotInSale(uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+### EmergencyFloorRequired
+
+A single-asset emergency unwind with no usable floor: the asset's feed is unhealthy and the caller set
+no `minUsdcOut` (safety review 0.9.0, AGY-01).
+
+```solidity
+error EmergencyFloorRequired(uint256 index);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+
+### AssetNotRemoved
+
+`reabsorbRemovedAsset` on an asset that is not a removed basket asset, or whose token another slot
+still holds as an active or in-sale asset (AGY-07).
+
+```solidity
+error AssetNotRemoved(uint256 index);
 ```
 
 **Parameters**

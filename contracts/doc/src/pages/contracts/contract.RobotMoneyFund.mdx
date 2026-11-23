@@ -5,7 +5,7 @@ description: "The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind
 
 # RobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9362075c383ceca56e2c885e2aa4e5fb76d7bd97/contracts/RobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/4d1f5dfa31a06ae19503b0c798eefef2c31a1ed7/contracts/RobotMoneyFund.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRobotMoneyFund](/contracts/interfaces/interface.IRobotMoneyFund)
 
@@ -2441,12 +2441,19 @@ Pause deposits, move every holding to idle USDC (`FundFlowsLib.flowAction`), and
 function emergencyUnwind() external;
 ```
 
-<a id="emergencyunwind-uint256"></a>
+<a id="emergencyunwind-uint256-uint256"></a>
 
 ### emergencyUnwind
 
+Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is `minUsdcOut` when it is
+non-zero (the timelock's own floor stands, even below the feed), else the feed price less
+`delistBandBps`. With an unhealthy feed `minUsdcOut` is the only floor and must be non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
+and steps (AGY-03).
+
 ```solidity
-function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc);
+function emergencyUnwind(uint256 index, uint256 minUsdcOut)
+        external
+        returns (uint256 recoveredUsdc);
 ```
 
 **Parameters**
@@ -2454,12 +2461,65 @@ function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
 
 **Returns**
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | recoveredUsdc | `uint256` |  |
+
+<a id="reabsorbremovedasset-uint256-uint256"></a>
+
+### reabsorbRemovedAsset
+
+Sell the reappeared tokens of removed basket asset `index` into idle USDC (ADMIN_ROLE; INV-2, LIFE-6).
+Same floor rule as `emergencyUnwind(index, minUsdcOut)`. Returns the USDC received.
+
+```solidity
+function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_floored-uint8-uint256-uint256"></a>
+
+### _floored
+
+<i>
+
+`minUsdcOut` rides in the address argument (EIP-170 headroom). It must fit 160 bits.
+
+</i>
+
+```solidity
+function _floored(uint8 op, uint256 index, uint256 minUsdcOut) private returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| op | `uint8` |  |
+| index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="delistasset-uint256"></a>
 

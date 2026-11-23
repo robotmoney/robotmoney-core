@@ -32,6 +32,23 @@ uint32 constant MAX_SETTLE_WINDOW = 1 days;
 // manipulations the hold guards against cannot be sustained for an hour on assets with large pools.
 uint32 constant MIN_HOLD = 1 hours;
 uint32 constant MAX_HOLD = 7 days;
+/// @dev Safety review 0.9.0 (agy MISSED-01): open requests one owner may hold per side. Every lazy owner sync walks
+///      the owner's open list, so an unbounded list made one owner's sync, and the round enrollment that runs it per
+///      request, quadratic in the list length.
+uint256 constant MAX_OWNER_OPEN_REQUESTS = 16;
+/// @dev Safety review 0.9.0 (agy MISSED-01): requests a round's enrollment enrolls per `settle` call (each checkpoints
+///      the exclusion ledger and syncs its owner), requests it visits per call (a skip of a closed or expired request
+///      is cheap), and noticed redemptions one call returns. A larger round takes more keeper calls, each under the
+///      per-tx gas cap.
+uint256 constant ENROLL_BUDGET = 32;
+uint256 constant ENROLL_VISIT_MAX = 256;
+/// @dev A call whose enrollment visited more than this many requests ends there, and the next call books the match and
+///      walks the sides. A light round (the usual case) still enrolls and settles in one call.
+uint256 constant ENROLL_PROCEED_MAX = 8;
+/// @dev Gas one enrollment batch may use before it ends (after at least one enrollment): an owner sync is not a
+///      fixed cost, so the count budgets above do not bound a call by themselves.
+uint256 constant ENROLL_GAS_MAX = 4_000_000;
+uint256 constant NOTICE_BUDGET = 16;
 uint32 constant MIN_CANCEL_BUFFER = 1 minutes;
 uint32 constant MAX_CANCEL_BUFFER = 6 hours;
 uint32 constant DEFAULT_CANCEL_BUFFER = 15 minutes;
@@ -470,6 +487,8 @@ interface IFlowEvents {
     error ZeroAmount();
     /// @notice A request below `minRequestUsdc` (a redemption valued at `lastGoodNav`), not a whole balance (E11).
     error BelowMinRequest(uint256 valueUsdc, uint256 minRequestUsdc);
+    /// @notice `owner` already holds `MAX_OWNER_OPEN_REQUESTS` open requests on this side.
+    error TooManyOpenRequests(address owner);
     /// @notice A deposit request above the fund's per-deposit cap (E11).
     error AbovePerDepositCap(uint256 usdc, uint256 cap);
     error NotRequestOwner(uint256 requestId, address caller);
@@ -522,6 +541,9 @@ interface IFlowEvents {
 
     // ── Appended by `fix-queue` (2026-11-12) ──
     event Swept(address indexed caller, uint256 usdc, uint256 shares);
+    /// @notice USDC refused a fee of `amount` to `to` (safety review 0.9.0, MISSED-04). The fee joined `dustUsdc`, which
+    ///         `sweep` sends to the fund.
+    event FeeNotPaid(address indexed to, uint256 amount);
 
     // ── Appended by `levers` (2026-11-12, step 3 finish plan §3.2) ──
     event FlowLeversSet(FlowLevers levers);

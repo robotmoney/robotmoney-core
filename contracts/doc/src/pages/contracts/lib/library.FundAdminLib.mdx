@@ -5,7 +5,7 @@ description: "Asset configuration, ADP-2 exclusion sync, plan opening, admin set
 
 # FundAdminLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundAdminLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aa1bf37040e7f06b2c1cc38ea05a04ac2c71b799/contracts/lib/FundAdminLib.sol)
 
 **Title:** FundAdminLib
 
@@ -200,9 +200,47 @@ function addAsset(FundState storage s, AssetConfig memory c) public returns (uin
 | ---- | ---- | ----------- |
 | index | `uint256` |  |
 
+<a id="_reusableslot-fundstate-assetconfig"></a>
+
+### _reusableSlot
+
+<i>
+
+The inactive slot of the same asset that is clean enough to reuse (nothing owed, nothing in sale, no claim
+pot, no open exclusion), else `type(uint256).max`.
+
+</i>
+
+```solidity
+function _reusableSlot(FundState storage s, AssetConfig memory c)
+        private
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| c | `AssetConfig` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
 <a id="_rejectduplicate-fundstate-assetconfig"></a>
 
 ### _rejectDuplicate
+
+<i>
+
+Reverts `DuplicateAsset` for an active entry of the same asset, and for an inactive lending entry whose
+position claims are still open.
+
+</i>
 
 ```solidity
 function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view;

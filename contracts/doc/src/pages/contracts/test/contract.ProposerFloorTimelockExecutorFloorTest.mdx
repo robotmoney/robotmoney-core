@@ -1,0 +1,78 @@
+---
+title: "ProposerFloorTimelockExecutorFloorTest"
+description: "The executor floor of `ProposerFloorTimelock` (safety review 0.9.0, AGY-02): under the fund system's Safe-only execution (D4-10) the Safe is the only executor, and dropping it would leave nothing executable."
+---
+
+# ProposerFloorTimelockExecutorFloorTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/fde5b947db3f5695f61954da2e921a62063a2a90/contracts/test/ProposerFloorTimelockExecutorFloor.t.sol)
+
+**Inherits:** Test
+
+The executor floor of `ProposerFloorTimelock` (safety review 0.9.0, AGY-02): under the fund system's
+Safe-only execution (D4-10) the Safe is the only executor, and dropping it would leave nothing executable.
+
+## State Variables
+
+### member
+
+```solidity
+address internal member = makeAddr("proposerExecutor");
+```
+
+### timelock
+
+```solidity
+ProposerFloorTimelock internal timelock;
+```
+
+## Functions
+
+<a id="setup"></a>
+
+### setUp
+
+```solidity
+function setUp() public;
+```
+
+<a id="test_lastexecutorcannotrenounce"></a>
+
+### test_lastExecutorCannotRenounce
+
+```solidity
+function test_lastExecutorCannotRenounce() public;
+```
+
+<a id="test_lastexecutorcannotberevoked"></a>
+
+### test_lastExecutorCannotBeRevoked
+
+```solidity
+function test_lastExecutorCannotBeRevoked() public;
+```
+
+<a id="test_asecondexecutorletsthefirstgo"></a>
+
+### test_aSecondExecutorLetsTheFirstGo
+
+```solidity
+function test_aSecondExecutorLetsTheFirstGo() public;
+```
+
+<a id="test_openexecutorcountsasoneholder"></a>
+
+### test_openExecutorCountsAsOneHolder
+
+```solidity
+function test_openExecutorCountsAsOneHolder() public;
+```
+
+<a id="test_bornwithnoexecutorreverts"></a>
+
+### test_bornWithNoExecutorReverts
+
+```solidity
+function test_bornWithNoExecutorReverts() public;
+```
+

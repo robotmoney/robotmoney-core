@@ -5,7 +5,7 @@ description: "Eng plan §4.2, bullet by bullet, against the wired harness. Each 
 
 # FlowQueueTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/FlowQueue.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/prototype/FlowQueue.t.sol)
 
 **Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
 
@@ -151,8 +151,10 @@ function test_RB13_aFlowRoleCallerThatSkipsItsChecksCannotBreakTheProportion()
 
 ### test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending
 
-RB-14: requests carry no price limits in Step 3f (E25), so a sub-minimum deposit remainder left after
-a partial match waits harmlessly while subsequent requests settle at forward prices.
+RB-14: requests carry no price limits in Step 3f (E25). A sub-minimum deposit remainder left after a
+partial match is never sent to the fund as a tiny net deposit. It returns to its owner as USDC credit
+(safety review 0.9.0, MISSED-06: left pending it was work the keeper saw but could never do), while
+subsequent requests settle at forward prices.
 
 ```solidity
 function test_RB14_aRequestOutsideTheBoundIsSkippedAndStaysPending() public fixtureCovered;

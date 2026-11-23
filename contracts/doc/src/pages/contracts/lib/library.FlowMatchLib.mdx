@@ -5,7 +5,7 @@ description: "Linked library holding Step 3f's O(1) whole-match booking, running
 
 # FlowMatchLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowMatchLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/lib/FlowMatchLib.sol)
 
 **Title:** FlowMatchLib
 
@@ -146,6 +146,63 @@ function hasUnfilledInPool(FlowState storage s, bool depositsOpen, uint64 cur)
 | hasRed | `bool` |  |
 | hasDep | `bool` |  |
 
+<a id="_livedepbucket-flowstate-uint64"></a>
+
+### _liveDepBucket
+
+<i>
+
+A deposit bucket that has not expired and still holds basis. A bucket emptied by cancels or full
+consumption stays listed until it expires; it is not work (safety review 0.9.0, AGY-12).
+
+</i>
+
+```solidity
+function _liveDepBucket(FlowState storage s, uint64 cur) private view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_matchhold-flowstate"></a>
+
+### _matchHold
+
+<i>
+
+The hold a match books: the longest hold enrolled in any bucket that still has basis in the live cycle
+(safety review 0.9.0, AGY-10). A bucket leaves within `maxRoll` epochs, so a long hold from before a
+`minHold` cut stops counting when its bucket does. A bucket with basis and no mark was enrolled before
+this mark existed (or holds zero-hold deposits): the all-time maximum then stands in, as before.
+
+</i>
+
+```solidity
+function _matchHold(FlowState storage s) private view returns (uint32 hold);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| hold | `uint32` |  |
+
 <a id="evictexpireddepbuckets-flowstate-uint64"></a>
 
 ### evictExpiredDepBuckets
@@ -167,10 +224,15 @@ function evictExpiredDepBuckets(FlowState storage s, uint64 cur) public;
 
 ### enrollEpochs
 
-Enroll all closed epochs `&lt;= maxEpoch` once. Checkpoints owners on the exclusion ledger first (RB-22).
+Enroll closed epochs `&lt;= maxEpoch`, at most `ENROLL_BUDGET` enrollments and `ENROLL_VISIT_MAX` visits
+per call (safety review 0.9.0, MISSED-01). Resumes at `(enrollCursor, enrollPos)`. Returns true once
+every epoch in range is enrolled and this call enrolled at most `ENROLL_PROCEED_MAX` requests.
+Checkpoints owners on the exclusion ledger first (RB-22).
 
 ```solidity
-function enrollEpochs(FlowState storage s, uint64 maxEpoch, uint64 cur) public;
+function enrollEpochs(FlowState storage s, uint64 maxEpoch, uint64 cur)
+        public
+        returns (bool done);
 ```
 
 **Parameters**
@@ -180,6 +242,70 @@ function enrollEpochs(FlowState storage s, uint64 maxEpoch, uint64 cur) public;
 | s | `FlowState` |  |
 | maxEpoch | `uint64` |  |
 | cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| done | `bool` |  |
+
+<a id="_enrollat-flowstate-uint64-uint256-uint64"></a>
+
+### _enrollAt
+
+<i>
+
+Position `pos` of epoch `e`: its deposit ids, then its redemption ids (which never expire, E40). Returns
+`visited` false past the end of the epoch.
+
+</i>
+
+```solidity
+function _enrollAt(FlowState storage s, uint64 e, uint256 pos, uint64 cur)
+        private
+        returns (bool visited, bool did);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| e | `uint64` |  |
+| pos | `uint256` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| visited | `bool` |  |
+| did | `bool` |  |
+
+<a id="_enrollone-flowstate-uint256-bool-uint64"></a>
+
+### _enrollOne
+
+```solidity
+function _enrollOne(FlowState storage s, uint256 rId, bool isDep, uint64 cur)
+        private
+        returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rId | `uint256` |  |
+| isDep | `bool` |  |
+| cur | `uint64` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
 
 <a id="_enrolldeposit-flowstate-request"></a>
 
@@ -424,6 +550,25 @@ function syncOwnerRedeems(FlowState storage s, address owner) public;
 | ---- | ---- | ----------- |
 | s | `FlowState` |  |
 | owner | `address` |  |
+
+<a id="refunddepositremainder-flowstate-uint256"></a>
+
+### refundDepositRemainder
+
+Return the sub-minimum remainder of deposit request `rId` to its owner's USDC credit, as a cancel
+would (safety review 0.9.0, MISSED-06). The settle walk calls it for an enrolled remainder below
+`minRequestUsdc`, which never net-settles (RB-14).
+
+```solidity
+function refundDepositRemainder(FlowState storage s, uint256 rId) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
+| rId | `uint256` |  |
 
 <a id="consumedeposit-flowstate-uint256-uint256-bool"></a>
 
@@ -690,6 +835,13 @@ function isNoticeRoundEnded(FlowState storage s, uint64 roundEpoch) public view 
 ### finalizeEndedNotices
 
 Process all ended notice rounds. Safe to run in `settle()` or `withdrawCredit()`.
+
+<i>
+
+Returns at most `NOTICE_BUDGET` noticed redemptions per call (safety review 0.9.0, MISSED-01). The rest
+wait for the next call, or their owners take them with `claimNoticeReturn`.
+
+</i>
 
 ```solidity
 function finalizeEndedNotices(FlowState storage s) public;

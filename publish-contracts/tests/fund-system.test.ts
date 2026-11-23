@@ -190,14 +190,30 @@ describe("Step 3f fund sheet fields and buildFundVerifySheet", () => {
     expect(eoa.fund!.keeperBotKeys).toEqual([]);
     expect(eoa.fund!.receiptSubmitters).toEqual([]);
 
+    // AGY-04: a KeeperAccount owner acts alone, so the account has one owner (the team Safe).
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_OWNERS: `${A1},${A2}`, KEEPER_BOT_KEYS: A3 }))).toThrow("KEEPER_OWNERS lists 2 owners");
+    // the bypass: the same two owners with no KEEPER_TYPE line passed before. The rule holds whenever KEEPER_OWNERS is given.
+    expect(() => fundSheet(withExtras({ KEEPER_OWNERS: `${A1},${A2}` }))).toThrow("KEEPER_OWNERS lists 2 owners");
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "eoa", KEEPER_OWNERS: `${A1},${A2}` }))).toThrow("KEEPER_OWNERS lists 2 owners");
+    expect(() => fundSheet(withExtras({ KEEPER_OWNERS: `@safe,${A1}` }))).toThrow("KEEPER_OWNERS");
+    // the one owner is the Safe. The sheet holds no Safe address, so it is written @safe; a key the sheet knows is not the Safe is refused.
+    const SIGNER = "0xa5dAD878b268bCf5c31E61b3bd665AEF61feA5CE", DEPLOYER_KEY = "0xf3F582464De7BD2cBf9d2ad40429e31D0F4724A3", KEEPER_KEY = fundSheet(SHEET).fund!.keeper;
+    expect(() => fundSheet(withExtras({ KEEPER_OWNERS: SIGNER }))).toThrow("is one of SAFE_OWNERS, a single key");
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_OWNERS: DEPLOYER_KEY, KEEPER_BOT_KEYS: "none" }))).toThrow("is ADMIN_ADDRESS, a single key");
+    expect(() => fundSheet(withExtras({ KEEPER_OWNERS: KEEPER_KEY }))).toThrow("is the keeper account itself");
+    expect(fundSheet(withExtras({ KEEPER_OWNERS: "@safe" })).fund!.keeperOwners).toEqual(["@safe"]);
+    const safeOwned = fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_OWNERS: "@safe", KEEPER_BOT_KEYS: A3 }));
+    expect(safeOwned.fund!.keeperOwners).toEqual(["@safe"]);
+    expect(safeOwned.values.KEEPER_OWNERS).toBe("@safe");
+    expect(buildFundVerifySheet({ sheet: safeOwned, chainId: 8453 }).fund!.keeperOwners).toEqual(["@safe"]);
     const sa = fundSheet(withExtras({
       KEEPER_TYPE: "smart-account",
-      KEEPER_OWNERS: `${A1},${A2}`,
+      KEEPER_OWNERS: A1,
       KEEPER_BOT_KEYS: A3,
       RECEIPT_SUBMITTERS: `${A1},${A3}`,
     }));
     expect(sa.fund!.keeperType).toBe("smart-account");
-    expect(sa.fund!.keeperOwners).toEqual([A1, A2]);
+    expect(sa.fund!.keeperOwners).toEqual([A1]);
     expect(sa.fund!.keeperBotKeys).toEqual([A3]);
     expect(sa.fund!.receiptSubmitters).toEqual([A1, A3]);
   });

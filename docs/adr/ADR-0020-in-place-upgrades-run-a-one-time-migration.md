@@ -51,10 +51,10 @@ The audit of 2026-11-20 found 13 hazards. Owner, 2026-11-20: fix everything in t
 - The simulation overrides the Rebalancer proxy's implementation slot for the fund leg, because one `eth_call` cannot carry the earlier upgrade's effect. It proves each leg, not the three as one transaction sequence. The Twin run proves the sequence.
 - The release tooling accepts only a proxy's own `migrateV090` as non-empty fund upgrade data, records the decoded migration, and the verifier reads `fund.rebalancer()`, the new ledger and the Rebalancer's step parameters (commit `a2075f3f6`). The verifier is the single post-state check.
 - A rollback after a migration is not assumed safe: the 0.8.0 code cannot read the migrated structs (runbook 4.12).
+- Audit hazard 12 is closed in code (safety review 0.9.0, AGY-11). A delisting before the first 0.9.0 settlement no longer trips the share-price breaker: Check 6 keeps an in-sale asset on both sides when no value was recorded for it (`_breakerValues` in `contracts/lib/FlowCheckLib.sol`: `if (lastVal == 0 && priced) continue;`), and `_recordReferences` in `contracts/lib/FlowSettleLib.sol` clears the record of a slot it could not price. The rule to settle once first is no longer needed. The test is `SafetyReview090.t.sol::test_AGY11_delistBeforeFirstRecordedValueDoesNotTripCheck6`, on synthetic state.
 
 Still open:
 
 - A recorded real-state upgrade test in CI. Today only the Twin run exercises the migrations on Deploy 4's real state.
-- Audit hazard 12: a delisting before the first 0.9.0 settlement can trip the share-price breaker. No code refuses it. The rule is to settle once first.
 - The keeper self-test flake (issue 2045).
 - The verifier's log-scan backoff (issue 2044). Commit `7d57d35e5` implemented the window and retry options for chains other than the Twin. The issue is still open.

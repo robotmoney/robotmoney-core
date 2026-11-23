@@ -7,6 +7,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {FeeTransfer} from "./FeeTransfer.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
@@ -543,6 +544,10 @@ library FundPositionLib {
 
         LendingClaimEpoch storage ep = s.lendingEpochs[i][s.lendingClaimEpoch[i]];
         uint256 totalScaledBefore = ep.totalScaled;
+        // An epoch with nothing accrued starts on the wide accumulator scale. Claim units grow each time claims are
+        // partly paid out, and on the old scale a long run of partial payouts rounded later credits to nothing
+        // (safety review 0.9.0, MISSED-02). An epoch that already accrued keeps the scale it was written in.
+        if (totalScaledBefore == 0 && ep.usdcPerScaled == 0) ep.wide = true;
         if (totalScaledBefore == 0) {
             addScaled = claimTotalBefore == 0 ? FundStorage.LENDING_ACC_NORM : units;
             if (claimTotalBefore != 0) ep.totalScaled = claimTotalBefore;
@@ -577,7 +582,7 @@ library FundPositionLib {
             LendingClaimEpoch storage ep = s.lendingEpochs[i][entry.epoch];
             uint256 delta = ep.usdcPerScaled - entry.usdcDebt;
             if (delta != 0) {
-                entry.pendingUsdc += entry.scaled.mulDiv(delta, FundStorage.LENDING_ACC_SCALE);
+                entry.pendingUsdc += entry.scaled.mulDiv(delta, _lendScale(ep));
             }
             if (entry.epoch != cur) {
                 entry.scaled = 0;
@@ -613,9 +618,14 @@ library FundPositionLib {
             if (s.positionClaimTotal[i] == 0) return;
             ep.totalScaled = s.positionClaimTotal[i];
         }
-        ep.usdcPerScaled += gotClaims.mulDiv(FundStorage.LENDING_ACC_SCALE, ep.totalScaled);
+        ep.usdcPerScaled += gotClaims.mulDiv(_lendScale(ep), ep.totalScaled);
         s.lendingUsdcPot[i] += gotClaims;
         s.reservedClaimUsdc += gotClaims;
+    }
+
+    /// @dev The accumulator scale of one lending claim epoch (`LendingClaimEpoch.wide`).
+    function _lendScale(LendingClaimEpoch storage ep) private view returns (uint256) {
+        return ep.wide ? FundStorage.LENDING_ACC_SCALE : FundStorage.LENDING_ACC_SCALE_LEGACY;
     }
 
     function _rollLendingEpoch(FundState storage s, uint256 i) private {
@@ -635,7 +645,7 @@ library FundPositionLib {
             LendingClaimEpoch storage ep = s.lendingEpochs[i][entry.epoch];
             uint256 delta = ep.usdcPerScaled - entry.usdcDebt;
             if (delta != 0) {
-                pending += entry.scaled.mulDiv(delta, FundStorage.LENDING_ACC_SCALE);
+                pending += entry.scaled.mulDiv(delta, _lendScale(ep));
             }
             if (entry.epoch == cur && c0 != 0 && ep.totalScaled != 0) {
                 units = entry.scaled.mulDiv(c0, ep.totalScaled);
@@ -754,7 +764,10 @@ library FundPositionLib {
         ownerEntry.pendingUsdc = 0;
         feeEntry.pendingUsdc = 0;
 
-        if (feeUsdc != 0) IERC20(s.usdc).safeTransfer(s.feeRecipient, feeUsdc);
+        // A refused fee stays with the holders and cannot block the claim (MISSED-04).
+        if (!FeeTransfer.tryPay(s.usdc, s.feeRecipient, feeUsdc)) {
+            emit IRobotMoneyFund.FeeNotPaid(s.usdc, s.feeRecipient, feeUsdc);
+        }
         if (netUsdc != 0) IERC20(s.usdc).safeTransfer(owner, netUsdc);
         if (netUsdc != 0 || feeUsdc != 0) {
             emit IRobotMoneyFund.ClaimSettled(i, owner, netUsdc, feeUsdc);

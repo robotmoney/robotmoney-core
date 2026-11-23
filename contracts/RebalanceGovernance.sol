@@ -123,6 +123,16 @@ contract RebalanceGovernance is
         _grantRole(TARGET_SETTER_ROLE, admin_);
     }
 
+    /// @dev Last-holder floor for the self-administered `TARGET_SETTER_ROLE` (`ADMIN_ROLE` is covered by
+    ///      `AdminFloorAccessControl`). No `ADMIN_ROLE` holder can grant it, so with zero holders no target or plan
+    ///      could ever be set again (safety review 0.9.0, AGY-08). Both `revokeRole` and `renounceRole` route here.
+    function _revokeRole(bytes32 role, address account) internal virtual override returns (bool) {
+        if (role == TARGET_SETTER_ROLE && hasRole(role, account) && getRoleMemberCount(role) == 1) {
+            revert LastAdminFloor();
+        }
+        return super._revokeRole(role, account);
+    }
+
     // ─── Target setter: apply a consensus receipt (§5.1 steps 2-3) ───────────
 
     /// @inheritdoc IRebalanceGovernance
@@ -154,7 +164,9 @@ contract RebalanceGovernance is
             revert PayloadDigestMismatch(receiptId, r.payloadDigest, payloadDigest);
         }
         uint64 last = lastAppliedRecordedAt;
-        if (r.recordedAt <= last) revert ReceiptNotNewerThanApplied(receiptId, r.recordedAt, last);
+        // Equal is allowed: two receipts recorded in one block both stay applicable (TestMachine #17). A receipt is
+        // released once, so neither can be applied twice; an older one is still refused.
+        if (r.recordedAt < last) revert ReceiptNotNewerThanApplied(receiptId, r.recordedAt, last);
 
         lastAppliedRecordedAt = r.recordedAt;
         receipts.releaseReceipt(receiptId);
