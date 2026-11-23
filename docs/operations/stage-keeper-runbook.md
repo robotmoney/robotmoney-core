@@ -10,7 +10,7 @@ Pending forever. This page runs `scripts/ops/onevault-keeper.sh` for Deploy 4 on
 | Host | `rm-core-stage-1` (ssh alias), user `root` |
 | Directory | `~/onevault-keeper/` (mode 700) |
 | Script | `onevault-keeper.sh` (copy of `scripts/ops/onevault-keeper.sh`, direct-key mode) |
-| Launcher | `start-keeper.sh` (copy of `scripts/ops/start-stage-keeper.sh`; reads the password on stdin) |
+| Launcher | `start-keeper.sh` (copy of `scripts/ops/start-stage-keeper.sh`; reads the password on stdin; self-test `scripts/ops/test-start-stage-keeper.sh`) |
 | Keystore | `KEEPER.keystore` (encrypted, 0600), key `0x75E3f84949d5e0aB621EEb06537A1a944274768B` |
 | Log | `~/onevault-keeper/keeper.log` |
 | RPC | `https://mainnet.base.org` |
@@ -21,6 +21,20 @@ Pending forever. This page runs `scripts/ops/onevault-keeper.sh` for Deploy 4 on
 
 Deploy 4 grants `KEEPER_ROLE` straight to the key, not to a KeeperAccount. So `KEEPER_ACCOUNT_ADDRESS` is left unset,
 and the script sends each call directly from the key.
+
+## Install
+
+The keeper script needs the direct-key mode and `KEEPER_PASSWORD` support from the keeper fix (2048). Copy both files
+from a checkout that has it:
+
+```bash
+ssh rm-core-stage-1 'mkdir -p ~/onevault-keeper && chmod 700 ~/onevault-keeper'
+scp scripts/ops/onevault-keeper.sh rm-core-stage-1:onevault-keeper/onevault-keeper.sh
+scp scripts/ops/start-stage-keeper.sh rm-core-stage-1:onevault-keeper/start-keeper.sh
+scp -p ~/robotmoney-keys/base-mainnet-test/KEEPER rm-core-stage-1:onevault-keeper/KEEPER.keystore
+```
+
+Foundry must be in `~/.foundry/bin` on the host. The launcher adds it to `PATH`.
 
 ## The password
 
