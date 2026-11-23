@@ -113,3 +113,7 @@ jobs:
 
       - name: One-vault keeper self-test
         run: bash scripts/ops/test-onevault-keeper.sh
+
+      # Core 2049: the stage keeper launcher against a stub keeper (no chain, no key).
+      - name: Stage keeper launcher self-test
+        run: bash scripts/ops/test-start-stage-keeper.sh

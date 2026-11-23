@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical: docs/operations/contract-release-runbooks.md ("One-vault keeper");
 #            docs/technical/one-vault-rebalancer-proposal.md §5.3 and §5.4
-# Self-test for scripts/ops/onevault-keeper.sh (core issue 2033).
+# Self-test for scripts/ops/onevault-keeper.sh (core issues 2033 and 2048).
 #
 # Cases that need only anvil run first: the config exit codes, an unreadable queue (rpc_unreadable, exit 1), and the
 # webhook receiving that alert. Then the test deploys KeeperAccount, the one-vault fund and queue
@@ -348,6 +348,41 @@ refresh_feeds
 RC=$(run_keeper_once "$WORK/delistok.err")
 check "a due stepDelisted is sent through KeeperAccount.execute and the asset leaves sale" \
     'grep -q "sent stepDelisted(uint256) to" "$WORK/delistok.err" && [[ "$RC" == "0" && "$(in_sale)" == "false" ]]'
+
+# ─── Direct-key mode (core issue 2048): KEEPER_ACCOUNT_ADDRESS unset, the key itself holds KEEPER_ROLE ──────────────
+# The anvil queue admin is the deployer, so it grants the role straight to keys here.
+RC=$(run_keeper_once "$WORK/direct-norole.err" KEEPER_ACCOUNT_ADDRESS= KEEPER_KEYSTORE="$STRANGER_KEYSTORE")
+check "direct mode: a key without KEEPER_ROLE alerts keeper_unconfigured and exits 1" \
+    'grep -q "\"alert\":\"keeper_unconfigured\".*direct mode" "$WORK/direct-norole.err" && [[ "$RC" == "1" ]]'
+
+ROLE="$(call_q "KEEPER_ROLE()(bytes32)")"
+send_from "$DEPLOYER" "$QUEUE" "grantRole(bytes32,address)" "$ROLE" "$BOT_ADDR"
+send_from "$DEPLOYER" "$REBALANCER" "grantRole(bytes32,address)" \
+    "$(cast call "$REBALANCER" "KEEPER_ROLE()(bytes32)" --rpc-url "$RPC_URL" | awk '{print $1}')" "$BOT_ADDR"
+request_deposit
+wait_for_round
+refresh_feeds
+# shellcheck disable=SC2034 # read by the check strings
+SETTLED_BEFORE="$(call_q "settlementCount()(uint256)")"
+RC=$(run_keeper_once "$WORK/direct.err" KEEPER_ACCOUNT_ADDRESS=)
+# shellcheck disable=SC2034 # read by the check strings
+SETTLED_AFTER="$(call_q "settlementCount()(uint256)")"
+check "direct mode: a due settle is sent straight from the key and exits 0" \
+    '[[ "$RC" == "0" && "$SETTLED_AFTER" -gt "$SETTLED_BEFORE" ]] && grep -q "sent settle(uint256,uint256) to $QUEUE" "$WORK/direct.err"'
+
+# ─── KEEPER_PASSWORD: the password from the environment, held only in a RAM file that is removed on exit ────────────
+# shellcheck disable=SC2034 # read by the check strings
+SHM_BEFORE="$(find /dev/shm -maxdepth 1 -name 'onevault-keeper.*' 2>/dev/null | wc -l)"
+RC=$(run_keeper_once "$WORK/envpw.err" KEEPER_ACCOUNT_ADDRESS= KEEPER_PASSWORD_FILE= \
+    KEEPER_PASSWORD="$(cat "$WORK/pw")" ETH_PASSWORD="$WORK/no-such-file")
+# shellcheck disable=SC2034 # read by the check strings
+SHM_AFTER="$(find /dev/shm -maxdepth 1 -name 'onevault-keeper.*' 2>/dev/null | wc -l)"
+check "KEEPER_PASSWORD opens the keystore (ETH_PASSWORD ignored) and the tick exits 0" \
+    '[[ "$RC" == "0" ]] && grep -q "nothing due" "$WORK/envpw.err"'
+check "KEEPER_PASSWORD leaves no password file in /dev/shm" '[[ "$SHM_AFTER" == "$SHM_BEFORE" ]]'
+check "KEEPER_PASSWORD never appears in the keeper output" '! grep -qF "$(cat "$WORK/pw")" "$WORK/envpw.err"'
+RC=$(run_keeper_once "$WORK/nopw.err" KEEPER_PASSWORD_FILE= KEEPER_PASSWORD=)
+check "no password file and no KEEPER_PASSWORD exits 2" '[[ "$RC" == "2" ]]'
 
 echo "passed=$PASS failed=$FAIL"
 [[ $PASS -gt 0 && $FAIL -eq 0 ]]

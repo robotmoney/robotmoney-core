@@ -38,9 +38,15 @@
 #   RPC_URL                 required. JSON-RPC endpoint of the chain holding the one-vault contracts.
 #   QUEUE_ADDRESS           required. The one-vault FlowQueue proxy.
 #   REBALANCER_ADDRESS      required. The one-vault Rebalancer.
-#   KEEPER_ACCOUNT_ADDRESS  required. The KeeperAccount that holds KEEPER_ROLE. Its execute() forwards each call.
+#   KEEPER_ACCOUNT_ADDRESS  optional. The KeeperAccount that holds KEEPER_ROLE. Its execute() forwards each call.
+#                           Unset: direct mode. The key itself holds KEEPER_ROLE and sends each call straight to its
+#                           target (the rehearsal deploys, such as Deploy 4, grant the role to a plain key).
 #   KEEPER_KEYSTORE         required. Encrypted keystore of the bot key (gas only, a bot key of the account).
-#   KEEPER_PASSWORD_FILE    required. 0600 file holding the keystore password.
+#   KEEPER_PASSWORD_FILE    0600 file holding the keystore password. Required unless KEEPER_PASSWORD is set.
+#   KEEPER_PASSWORD         optional. The keystore password, passed in the environment. Used when KEEPER_PASSWORD_FILE
+#                           is unset. Cast only reads a password from a regular file, so the script writes it to a 0600
+#                           file in RAM (/dev/shm), removes it on exit, and drops the variable from child environments.
+#                           (Cast's ETH_PASSWORD is a file path, not a password, so it is not used.)
 #   ALERT_WEBHOOK           optional. URL that receives each alert as a JSON POST. Alerts always go to stderr.
 #   INTERVAL_SECS           optional, default 300.
 #   MIN_GAS_WEI             optional, default 1000000000000000 (0.001 ETH).
@@ -69,6 +75,7 @@ SLEEP_CMD="${SLEEP_CMD:-sleep}"
 
 ALERTS=0
 KEEPER_ADDR=""
+CALLER=""   # the address that holds KEEPER_ROLE: the KeeperAccount, or in direct mode the key itself
 UINT_MAX=115792089237316195423570985008687907853269984665640564039457584007913129639935
 
 die() {
@@ -113,14 +120,17 @@ read_balance() {
     READ_OUT=$(printf '%s\n' "$raw" | awk '{print $1}')
 }
 
-# Sends KeeperAccount.execute(target, calldata) as the bot key. Returns 1 and alerts `kind` when the send fails.
+# Sends the call as the bot key: through KeeperAccount.execute(target, calldata), or straight to target in direct mode.
+# Returns 1 and alerts `kind` when the send fails.
 forward() {
     local kind="$1" target="$2" sig="$3"
     shift 3
     local calldata out
     calldata=$(cast calldata "$sig" "$@") || { alert "$kind" "cast calldata $sig failed"; return 1; }
-    out=$(cast send "$KEEPER_ACCOUNT_ADDRESS" "execute(address,bytes)" "$target" "$calldata" --rpc-url "$RPC_URL" \
-        --keystore "$KEEPER_KEYSTORE" --password-file "$KEEPER_PASSWORD_FILE" 2>&1) || {
+    local -a send=("$KEEPER_ACCOUNT_ADDRESS" "execute(address,bytes)" "$target" "$calldata")
+    [[ -z "$KEEPER_ACCOUNT_ADDRESS" ]] && send=("$target" "$calldata")
+    out=$(cast send "${send[@]}" --rpc-url "$RPC_URL" \
+        --keystore "$KEEPER_KEYSTORE" --password-file "$PASS_FILE" 2>&1) || {
         alert "$kind" "execute($sig) on $target failed: ${out:0:300}"
         return 1
     }
@@ -138,7 +148,7 @@ forward() {
 #     Rebalancer's interval or cap, so an interval skip, logged, no alert.
 delist_gate() {
     local fund="$1" idx="$2" sim now
-    if ! sim=$(cast call "$REBALANCER_ADDRESS" "stepDelisted(uint256)(bool)" "$idx" --from "$KEEPER_ACCOUNT_ADDRESS" \
+    if ! sim=$(cast call "$REBALANCER_ADDRESS" "stepDelisted(uint256)(bool)" "$idx" --from "$CALLER" \
         --rpc-url "$RPC_URL" 2>&1); then
         alert "delist_step_failed" "simulated stepDelisted($idx) reverted: ${sim:0:300}"
         return 1
@@ -177,10 +187,19 @@ tick() {
         alert "keeper_unconfigured" "queue $QUEUE_ADDRESS has no KEEPER_ROLE holder"
         configured=0
     fi
-    read_call "$KEEPER_ACCOUNT_ADDRESS" "isBotKey(address)(bool)" "$KEEPER_ADDR" || return 1
-    if [[ "$READ_OUT" != "true" ]]; then
-        alert "keeper_unconfigured" "key $KEEPER_ADDR is not a bot key of $KEEPER_ACCOUNT_ADDRESS"
-        configured=0
+    if [[ -n "$KEEPER_ACCOUNT_ADDRESS" ]]; then
+        read_call "$KEEPER_ACCOUNT_ADDRESS" "isBotKey(address)(bool)" "$KEEPER_ADDR" || return 1
+        if [[ "$READ_OUT" != "true" ]]; then
+            alert "keeper_unconfigured" "key $KEEPER_ADDR is not a bot key of $KEEPER_ACCOUNT_ADDRESS"
+            configured=0
+        fi
+    else
+        read_call "$QUEUE_ADDRESS" "KEEPER_ROLE()(bytes32)" || return 1
+        read_call "$QUEUE_ADDRESS" "hasRole(bytes32,address)(bool)" "$READ_OUT" "$KEEPER_ADDR" || return 1
+        if [[ "$READ_OUT" != "true" ]]; then
+            alert "keeper_unconfigured" "direct mode: key $KEEPER_ADDR does not hold KEEPER_ROLE on $QUEUE_ADDRESS"
+            configured=0
+        fi
     fi
     (( configured )) || return 1
 
@@ -188,7 +207,7 @@ tick() {
         alert "queue_paused" "queue $QUEUE_ADDRESS is paused; settle() skipped"
     else
         # checkSettle reads msg.sender (check 1 is the keeper caller). The settle call runs as KeeperAccount, so read as it.
-        read_call "$QUEUE_ADDRESS" "checkSettle()(uint8,uint256)" --from "$KEEPER_ACCOUNT_ADDRESS" || return 1
+        read_call "$QUEUE_ADDRESS" "checkSettle()(uint8,uint256)" --from "$CALLER" || return 1
         mapfile -t L <<<"$READ_OUT"
         [[ ${#L[@]} -eq 2 ]] || { alert "rpc_unreadable" "checkSettle() returned ${#L[@]} values"; return 1; }
         if [[ "${L[0]}" == "0" ]]; then
@@ -205,7 +224,7 @@ tick() {
         # previewStep does not run the fund's step, so a step that would fail (the fund reverts, and step() returns
         # StepFailed) still reads None. Simulate step() as the KeeperAccount, the caller it needs, before any send.
         local sim
-        if sim=$(cast call "$REBALANCER_ADDRESS" "step()(bool,uint8)" --from "$KEEPER_ACCOUNT_ADDRESS" --rpc-url "$RPC_URL" 2>&1); then
+        if sim=$(cast call "$REBALANCER_ADDRESS" "step()(bool,uint8)" --from "$CALLER" --rpc-url "$RPC_URL" 2>&1); then
             local sim_reason
             sim_reason=$(printf '%s\n' "$sim" | sed -n 2p | awk '{print $1}')
             if [[ "$sim_reason" == "0" ]]; then
@@ -269,20 +288,37 @@ tick() {
     [[ $ALERTS -eq 0 ]]
 }
 
-for v in RPC_URL QUEUE_ADDRESS REBALANCER_ADDRESS KEEPER_ACCOUNT_ADDRESS KEEPER_KEYSTORE KEEPER_PASSWORD_FILE; do
+for v in RPC_URL QUEUE_ADDRESS REBALANCER_ADDRESS KEEPER_KEYSTORE; do
     [[ -n "${!v}" ]] || die "$v is not set"
 done
 for v in QUEUE_ADDRESS REBALANCER_ADDRESS KEEPER_ACCOUNT_ADDRESS; do
+    [[ -z "${!v}" && "$v" == KEEPER_ACCOUNT_ADDRESS ]] && continue
     [[ "${!v}" =~ ^0x[0-9a-fA-F]{40}$ ]] || die "$v is not an address"
 done
 [[ -f "$KEEPER_KEYSTORE" ]] || die "KEEPER_KEYSTORE is not a file"
-[[ -f "$KEEPER_PASSWORD_FILE" ]] || die "KEEPER_PASSWORD_FILE is not a file"
+unset ETH_PASSWORD
+KEEPER_PASSWORD="${KEEPER_PASSWORD:-}"
+export -n KEEPER_PASSWORD   # keep it out of child environments
+if [[ -n "$KEEPER_PASSWORD_FILE" ]]; then
+    [[ -f "$KEEPER_PASSWORD_FILE" ]] || die "KEEPER_PASSWORD_FILE is not a file"
+    PASS_FILE="$KEEPER_PASSWORD_FILE"
+else
+    [[ -n "$KEEPER_PASSWORD" ]] || die "set KEEPER_PASSWORD_FILE or KEEPER_PASSWORD"
+    PASS_DIR=/dev/shm; [[ -d "$PASS_DIR" && -w "$PASS_DIR" ]] || PASS_DIR="${XDG_RUNTIME_DIR:-}"
+    [[ -n "$PASS_DIR" ]] || die "no RAM directory (/dev/shm or XDG_RUNTIME_DIR) for the password file"
+    PASS_FILE="$(umask 077; mktemp "$PASS_DIR/onevault-keeper.XXXXXX")" || die "could not create the password file"
+    trap 'rm -f "$PASS_FILE"' EXIT
+    trap 'exit 143' TERM INT
+    printf '%s' "$KEEPER_PASSWORD" >"$PASS_FILE"
+    unset KEEPER_PASSWORD
+fi
 command -v cast >/dev/null || die "cast (foundry) is not installed"
 command -v curl >/dev/null || die "curl is not installed"
 command -v python3 >/dev/null || die "python3 is not installed"
 
-KEEPER_ADDR="$(cast wallet address --keystore "$KEEPER_KEYSTORE" --password-file "$KEEPER_PASSWORD_FILE")" \
+KEEPER_ADDR="$(cast wallet address --keystore "$KEEPER_KEYSTORE" --password-file "$PASS_FILE")" \
     || die "KEEPER_KEYSTORE could not be opened with KEEPER_PASSWORD_FILE"
+CALLER="${KEEPER_ACCOUNT_ADDRESS:-$KEEPER_ADDR}"
 
 if [[ "${1:-}" == "--once" ]]; then
     tick && exit 0 || exit 1

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Canonical: docs/operations/stage-keeper-runbook.md
+# Starts the Deploy 4 keeper on the stage host (core issue 2049). Install: copy this file to
+# ~/onevault-keeper/start-keeper.sh and scripts/ops/onevault-keeper.sh to ~/onevault-keeper/onevault-keeper.sh.
+# Reads the keystore password from stdin and hands it to the keeper as KEEPER_PASSWORD. It is never written to disk here.
+# KEEPER_DIR overrides the install directory (the self-test uses it).
+set -u
+cd "${KEEPER_DIR:-$HOME/onevault-keeper}" || exit 1
+pkill -f '^bash onevault-keeper\.sh' || true
+IFS= read -r KEEPER_PASSWORD || [[ -n "${KEEPER_PASSWORD:-}" ]] || { echo "no password on stdin" >&2; exit 1; }
+export KEEPER_PASSWORD PATH="$HOME/.foundry/bin:$PATH" \
+  RPC_URL=https://mainnet.base.org \
+  QUEUE_ADDRESS=0xbB414D1536Fef6c240e984a24F777ca0958e5439 \
+  REBALANCER_ADDRESS=0x13c1169Da48Bb06E327286971eB3E56c0411A65B \
+  KEEPER_KEYSTORE="$HOME/onevault-keeper/KEEPER.keystore" \
+  MIN_GAS_WEI=200000000000000 INTERVAL_SECS=300
+setsid nohup bash onevault-keeper.sh >>keeper.log 2>&1 </dev/null &
+echo "started pid $!"
