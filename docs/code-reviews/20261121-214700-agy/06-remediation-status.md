@@ -32,7 +32,7 @@ internal review: the one-vault contracts still need an external audit before the
 | Freeze hold mark (AGY-10) | A match's hold end is the longest hold enrolled in its own deposit cycle, reset when the pool empties. | `test_AGY10_*` |
 | First settlement after an upgrade (AGY-11) | An in-sale asset with no recorded value stays on both sides of Check 6. An unpriced slot clears its record. | `test_AGY11_*` |
 | Empty deposit bucket (AGY-12) | A deposit bucket with no basis is not work. | `test_AGY12_*` |
-| Canonical pool (AGY-13) | `isFixedFeePool` requires the factory's CREATE2 pool address for the pool's own tokens and fee. | `test_AGY13_*` |
+| Canonical pool (AGY-13) | `isFixedFeePool` requires the router's factory to have made the pool: its CREATE2 address for the pool's own tokens and fee, or the factory's `getPool` answer. | `test_AGY13_*` |
 
 ## Off-chain, CI and documentation findings
 

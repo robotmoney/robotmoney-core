@@ -5,7 +5,7 @@ description: "Asset configuration, ADP-2 exclusion sync, plan opening, admin set
 
 # FundAdminLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FundAdminLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/aa1bf37040e7f06b2c1cc38ea05a04ac2c71b799/contracts/lib/FundAdminLib.sol)
 
 **Title:** FundAdminLib
 
@@ -200,23 +200,22 @@ function addAsset(FundState storage s, AssetConfig memory c) public returns (uin
 | ---- | ---- | ----------- |
 | index | `uint256` |  |
 
-<a id="_rejectduplicate-fundstate-assetconfig"></a>
+<a id="_reusableslot-fundstate-assetconfig"></a>
 
-### _rejectDuplicate
+### _reusableSlot
 
 <i>
 
-Reverts `DuplicateAsset` for an active entry of the same asset, and for an inactive lending entry whose
-position claims are still open. Returns the inactive slot of the same asset that is clean enough to reuse
-(nothing owed, nothing in sale, no claim pot), else `type(uint256).max`.
+The inactive slot of the same asset that is clean enough to reuse (nothing owed, nothing in sale, no claim
+pot, no open exclusion), else `type(uint256).max`.
 
 </i>
 
 ```solidity
-function _rejectDuplicate(FundState storage s, AssetConfig memory c)
+function _reusableSlot(FundState storage s, AssetConfig memory c)
         private
         view
-        returns (uint256 reuse);
+        returns (uint256);
 ```
 
 **Parameters**
@@ -230,7 +229,29 @@ function _rejectDuplicate(FundState storage s, AssetConfig memory c)
 
 | Name | Type | Description |
 | ---- | ---- | ----------- |
-| reuse | `uint256` |  |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="_rejectduplicate-fundstate-assetconfig"></a>
+
+### _rejectDuplicate
+
+<i>
+
+Reverts `DuplicateAsset` for an active entry of the same asset, and for an inactive lending entry whose
+position claims are still open.
+
+</i>
+
+```solidity
+function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| c | `AssetConfig` |  |
 
 <a id="_checklending-fundstate-assetconfig"></a>
 

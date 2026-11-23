@@ -101,8 +101,8 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
         0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54;
 
     /// @dev True when `pool` is the router's factory's pool for its own tokens and fee: its CREATE2 address from the
-    ///      factory. A contract that only answers `fee()` and `slot0()` like a pool is refused (safety review 0.9.0,
-    ///      AGY-13). Reads the tokens from the pool and the factory from the router, no factory storage.
+    ///      factory, or else the factory's own `getPool` answer. A contract that only answers `fee()` and `slot0()` like
+    ///      a pool is refused (safety review 0.9.0, AGY-13). The CREATE2 test reads no factory storage.
     function _isCanonicalPool(address pool, uint256 feePips) internal view returns (bool) {
         (bool ok0, bytes memory d0) =
             pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.token0.selector));
@@ -124,7 +124,16 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
                 )
             )
         );
-        return predicted == pool;
+        if (predicted == pool) return true;
+        (bool okG, bytes memory dg) = abi.decode(df, (address)).staticcall(
+            abi.encodeWithSignature(
+                "getPool(address,address,uint24)",
+                abi.decode(d0, (address)),
+                abi.decode(d1, (address)),
+                uint24(feePips)
+            )
+        );
+        return okG && dg.length == 32 && abi.decode(dg, (address)) == pool;
     }
 
     /// @inheritdoc IExactOutSwapAdapter

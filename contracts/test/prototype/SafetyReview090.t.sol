@@ -16,6 +16,10 @@ import {BPS, PlanParams, PlanStatus, Roles, SkipReason} from "../../FundTypes.so
 import {AdminFloorAccessControl} from "../../lib/AdminFloorAccessControl.sol";
 
 /// @notice A contract that answers like a Uniswap V3 pool but was not made by the factory (AGY-13).
+interface IRouterFactory {
+    function factory() external view returns (address);
+}
+
 interface IWeth9 {
     function deposit() external payable;
 }
@@ -432,6 +436,14 @@ contract SafetyReview090Test is FlowQueueBase {
     function test_AGY13_adapterRefusesANonCanonicalPool() public fixtureCovered {
         assertTrue(swapAdapter.isFixedFeePool(WETH_POOL), "the real wETH / USDC pool passes");
         FakeV3Pool fake = new FakeV3Pool(WETH, USDC);
+        // The factory's own answer for the look-alike's tokens and fee is the real pool (mocked: the fixture holds
+        // no factory storage).
+        address factory = IRouterFactory(ROUTER).factory();
+        vm.mockCall(
+            factory,
+            abi.encodeWithSignature("getPool(address,address,uint24)", fake.token0(), fake.token1(), uint24(500)),
+            abi.encode(WETH_POOL)
+        );
         assertFalse(swapAdapter.isFixedFeePool(address(fake)), "a look-alike pool fails");
     }
 

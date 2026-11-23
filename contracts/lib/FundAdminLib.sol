@@ -113,7 +113,7 @@ library FundAdminLib {
         FundAdapterGuard.requireAdmissible(s, c.adapter);
         // Re-listing a removed asset reuses its slot when nothing is left open on it, so the same asset never
         // spends a second of the `MAX_FUND_ASSETS` slots (safety review 0.9.0, AGY-07).
-        uint256 reuse = _rejectDuplicate(s, c);
+        uint256 reuse = _reusableSlot(s, c);
         index = reuse != type(uint256).max ? reuse : s.assets.length;
         if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.kind == AssetKind.Lending) {
@@ -121,6 +121,7 @@ library FundAdminLib {
         } else {
             _checkBasket(s, c, index);
         }
+        _rejectDuplicate(s, c);
         c.active = true;
         if (index == s.assets.length) {
             s.assets.push(c);
@@ -136,15 +137,31 @@ library FundAdminLib {
         emit IRobotMoneyFund.AssetAdded(index, c);
     }
 
-    /// @dev Reverts `DuplicateAsset` for an active entry of the same asset, and for an inactive lending entry whose
-    ///      position claims are still open. Returns the inactive slot of the same asset that is clean enough to reuse
-    ///      (nothing owed, nothing in sale, no claim pot), else `type(uint256).max`.
-    function _rejectDuplicate(FundState storage s, AssetConfig memory c)
+    /// @dev The inactive slot of the same asset that is clean enough to reuse (nothing owed, nothing in sale, no claim
+    ///      pot, no open exclusion), else `type(uint256).max`.
+    function _reusableSlot(FundState storage s, AssetConfig memory c)
         private
         view
-        returns (uint256 reuse)
+        returns (uint256)
     {
-        reuse = type(uint256).max;
+        uint256 n = s.assets.length;
+        address id = PlanMath.assetId(c);
+        for (uint256 i; i < n; ++i) {
+            AssetConfig memory e = s.assets[i];
+            if (
+                PlanMath.assetId(e) == id && !e.active && e.kind == c.kind && !s.inSale[i]
+                    && s.deferredTotal[i] == 0 && s.delistClaimedTokens[i] == 0
+                    && s.delistTotalScaled[i] == 0 && s.delistUsdcPot[i] == 0
+                    && s.positionClaimTotal[i] == 0
+                    && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0
+            ) return i;
+        }
+        return type(uint256).max;
+    }
+
+    /// @dev Reverts `DuplicateAsset` for an active entry of the same asset, and for an inactive lending entry whose
+    ///      position claims are still open.
+    function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view {
         uint256 n = s.assets.length;
         address id = PlanMath.assetId(c);
         for (uint256 i; i < n; ++i) {
@@ -157,12 +174,6 @@ library FundAdminLib {
             if (e.kind == AssetKind.Lending && s.positionClaimTotal[i] != 0) {
                 revert IRobotMoneyFund.DuplicateAsset(i);
             }
-            if (
-                reuse == type(uint256).max && e.kind == c.kind && !s.inSale[i]
-                    && s.deferredTotal[i] == 0 && s.delistClaimedTokens[i] == 0
-                    && s.delistTotalScaled[i] == 0 && s.delistUsdcPot[i] == 0
-                    && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0
-            ) reuse = i;
         }
     }
 

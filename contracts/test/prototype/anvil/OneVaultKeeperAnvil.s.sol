@@ -161,6 +161,19 @@ contract OneVaultMockSwapRouter {
         OWNER = msg.sender;
     }
 
+    /// @notice The router is its own factory: the adapter accepts only a pool its router's factory made (AGY-13).
+    mapping(address token0 => mapping(address token1 => mapping(uint24 fee => address))) public getPool;
+
+    function factory() external view returns (address) {
+        return address(this);
+    }
+
+    /// @notice Register `pool` as the factory's pool of its own tokens and `fee`.
+    function setPool(address pool, uint24 fee) external {
+        require(msg.sender == OWNER, "OneVaultMockSwapRouter: not owner");
+        getPool[OneVaultMockV3Pool(pool).token0()][OneVaultMockV3Pool(pool).token1()][fee] = pool;
+    }
+
     /// @notice Closes the venue: every fill reverts, the way a closed router refuses a swap.
     function setClosed(bool c) external {
         require(msg.sender == OWNER, "OneVaultMockSwapRouter: not owner");
@@ -346,6 +359,7 @@ contract OneVaultKeeperAnvil is Script {
         MockAggregator basketFeed = new MockAggregator();
         basketFeed.setRound(8, 1e8, block.timestamp, block.timestamp);
         OneVaultMockSwapRouter swapRouter = new OneVaultMockSwapRouter();
+        swapRouter.setPool(address(basketPool), 500);
         TestERC20(usdc).mint(address(swapRouter), 1_000_000e6);
         UniswapV3ExactOutSwapAdapter swap = new UniswapV3ExactOutSwapAdapter(address(swapRouter));
         IRobotMoneyFundFull(fund).setAdapterCodeHashAllowed(address(swap).codehash, true);
