@@ -4,7 +4,7 @@
 **Worktree:** `/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-core/adhoc-20261122-233507-safety-review-090` (`adhoc/20261122-233507-safety-review-090`)
 **Timestamp:** `2026-11-21T21:47:00Z`
 **Reviewer:** Antigravity (`agy`)
-**Deliverable Scope:** Complete 6-document analysis-only review covering governance/access control, economic manipulation/asset safety, reentrancy/accounting, and product/upgrade alignment. No Solidity source files, tests, or canonical documents were modified.
+**Deliverable Scope:** Complete 7-document analysis-only review covering governance/access control, economic manipulation/asset safety, reentrancy/accounting, and product/upgrade alignment. No Solidity source files, tests, or canonical documents were modified.
 
 ---
 
@@ -17,6 +17,7 @@
 | **02 — Economic Manipulation, Slippage Guards, and Asset Safety** | Uncapped single-asset unwinds, feed liveness deadlocks, delist convergence math, net-flow ramp/TWAP extraction, `INV-2` custody / slot reuse, and Uniswap V3 / lending adapter checks (`AGY-01`, `AGY-03`, `AGY-05`, `AGY-06`, `AGY-07`, `AGY-13`) | [02-economic-manipulation-and-asset-safety.md](./02-economic-manipulation-and-asset-safety.md) |
 | **03 — Reentrancy, Flow State Machines, and Accounting Verification** | Settlement freeze hold-mark (`AGY-10`), post-upgrade delisting Check 6 (`AGY-11`), unpruned `activeDepBuckets` (`AGY-12`), and exhaustive reentrancy, CEI, approval hygiene, ray-index conservation, and Check 10 verification (`AGY-14`) | [03-reentrancy-flows-and-accounting.md](./03-reentrancy-flows-and-accounting.md) |
 | **04 — Product Alignment, In-Place Upgrade Posture, and Audit/Gate Readiness** | Product-vs-contract alignment (`AGY-15`), ERC-7201 storage layout baselines, `migrateV090` one-time migrations, upgrade runbook (`v0.9.0-onevault-upgrade.yaml`), `docs/audits.md` ledger posture, and Gates G8/G9 | [04-product-alignment-and-upgrade-posture.md](./04-product-alignment-and-upgrade-posture.md) |
+| **05 — Meta-Review and Missed Findings** | Independent adversarial meta-review of Chapters 00–04: patch correctness audit, factual/citation corrections, cross-chapter contradictions, and 9 verified missed findings (`MISSED-01`–`MISSED-09`) | [05-meta-review-and-missed-findings.md](./05-meta-review-and-missed-findings.md) |
 
 ---
 
