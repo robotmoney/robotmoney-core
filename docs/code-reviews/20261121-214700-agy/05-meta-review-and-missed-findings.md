@@ -63,7 +63,7 @@ Nine of the review's proposed fixes contain critical implementation bugs, design
 - **Defect in Proposed Remediation:** Recommends switching from default `LEG_PRICE_STRICTER` to `LEG_PRICE_FEED_ONLY` to mitigate `A10`/`A2` net-flow extraction, and suggests matching at `navFeed`.
 - **Why It Is Backwards / Already Rejected:**
   - `LEG_PRICE_STRICTER` computes `min(feed, twap)` for buys (fewer shares minted / higher buy price) and `max(feed, twap)` for sells (more conservative sell bound). Therefore **`LEG_PRICE_FEED_ONLY` is strictly looser**, not tighter, whenever TWAP moves against the attacker.
-  - `LEG_PRICE_FEED_ONLY` was already benchmarked as scenarios `L4`/`L9` in `contracts/test/.../Attacks.t.sol:3938,3948` and explicitly rejected in `OwnerDefaults.t.sol:35`.
+  - `LEG_PRICE_FEED_ONLY` was already benchmarked as scenarios `L4`/`L9` in `contracts/test/prototype/Attacks.t.sol:3927-3952` (`_lever`) and explicitly rejected in `OwnerDefaults.t.sol:31` (`test_defaults_queueStartsWithTheFiveBpsCallCap`).
   - Matching at `navFeed` was already explicitly rejected by the product owner in `docs/technical/one-vault-rebalancer-proposal.md:3218-3222`.
 - **Required Fix:** Remove both `LEG_PRICE_FEED_ONLY` and `navFeed` matching suggestions. Frame `AGY-06` accurately around the actual open Gate G8 trade-off documented in `one-vault-rebalancer-proposal.md`: tightening `refBandBps` vs liveness/availability (or adding an explicit fee/spread floor on net-flow imbalance).
 

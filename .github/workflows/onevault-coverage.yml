@@ -9,9 +9,9 @@
 # coverage (.github/scripts/check_onevault_coverage.py: every source instrumented, total at or above the floor).
 #
 # CLASS
-# heavy: the whole prototype suite instrumented, about 25 minutes and up to 10 GB of memory. Sweep-only: it runs
-# after every merge to dev and nightly, never on a pull request (CI taxonomy). The prototype suite itself runs
-# uninstrumented on every PR (forge-prototype-tests).
+# heavy: the whole prototype suite instrumented, about 32 minutes and 8.7 GB of memory at 4 threads. Sweep-only: it
+# runs after every merge to dev and in the nightly full suite (suite-21-nightly.yml dispatches it), never on a pull
+# request (CI taxonomy). The prototype suite itself runs uninstrumented on every PR (forge-prototype-tests).
 
 name: onevault-coverage
 
@@ -22,8 +22,6 @@ on:
   push:
     branches: ["dev"]
     paths-ignore: ["**.md", "**.txt"]
-  schedule:
-    - cron: "30 3 * * *" # 03:30 UTC, after the nightly full suite
   workflow_dispatch:
 
 permissions:
