@@ -569,6 +569,14 @@ mod tests {
     }
 
     #[test]
+    fn share_price_one_to_one_with_twenty_four_decimals() {
+        // Issue 2055: the fund reports decimals() 24. 1 USDC (1e6) backs 1e24 raw shares, so the price is 10^24 * 1e6 / 1e24.
+        let supply = U256::from(10u64).pow(U256::from(24u64));
+        let p = compute_share_price(U256::from(1_000_000u64), supply, 24).unwrap();
+        assert_eq!(p, "1000000");
+    }
+
+    #[test]
     fn share_price_premium_above_par() {
         // total_assets = 2_000_000, supply = 1_000_000, decimals = 6
         // → 2 * 10^6 = 2000000
