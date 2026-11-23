@@ -1986,9 +1986,13 @@ floor doubled, capped at the block gas limit. A second revert alerts.
   supported.
 - **State.** A small JSON file in the state directory: last tick, sends not
   yet confirmed, alert dedupe. It is rebuilt from the chain when missing.
-- **Supervision.** A systemd unit with `Restart=on-failure`, or the same
-  launcher shape as the stage runbook. The password reaches the unit through
-  `LoadCredential=`, never the unit file.
+- **Supervision.** No systemd unit. A small launcher,
+  `services/keeper/scripts/start-stage.sh`, reads the password on ssh stdin,
+  holds it only in its own memory, and pipes it to the service on stdin. It
+  restarts the service on any exit except 2 (bad config). The password never
+  reaches a disk, a unit file or a command line. A host reboot stops the
+  keeper until an operator runs the launcher again. `epoch_overdue` and the
+  Watchdog's liveness check catch that.
 
 #### 8.1.6 Configuration
 

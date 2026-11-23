@@ -8,10 +8,10 @@ chainId = 8453
 queue = "0x0000000000000000000000000000000000000001"                  # FlowQueue proxy
 rebalancer = "0x0000000000000000000000000000000000000002"             # Rebalancer
 # keeperAccount = "0x..."   # account mode; leave unset for direct mode (the key itself holds KEEPER_ROLE)
-# manifest = "/etc/robotmoney-keeper/deployment.json"   # optional: the addresses are checked against it at start
-keystore = "/etc/robotmoney-keeper/keeper.keystore"   # under systemd, KEEPER_KEYSTORE points at the LoadCredential copy
-# passwordFile: the systemd unit sets KEEPER_PASSWORD_FILE to its LoadCredential path. Never put the password here.
-stateDir = "/var/lib/robotmoney-keeper"
+# manifest = "/root/robotmoney-keeper/deployment.json"   # optional: the addresses are checked against it at start
+keystore = "/root/robotmoney-keeper/keeper.keystore"
+# The password arrives on stdin from scripts/start-stage.sh. Never put it here.
+stateDir = "/root/robotmoney-keeper/state"
 
 intervalSecs = 300
 fastPollSecs = 30
