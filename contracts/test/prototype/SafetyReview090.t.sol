@@ -6,7 +6,13 @@ pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {FlowParams, IFlowEvents, MAX_OWNER_OPEN_REQUESTS, Settlement, SettleCheck} from "../../FlowTypes.sol";
+import {
+    FlowParams,
+    IFlowEvents,
+    MAX_OWNER_OPEN_REQUESTS,
+    Settlement,
+    SettleCheck
+} from "../../FlowTypes.sol";
 import {FlowQueueBase} from "./FlowQueue.t.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {AssetConfig} from "../../FundTypes.sol";
@@ -93,7 +99,9 @@ contract SafetyReview090Test is FlowQueueBase {
             uint256 used = g - gasleft();
             if (used > worst) worst = used;
             console2.log("settle call", k, used, ok);
-            assertTrue(ok || _selector(ret) == IFlowEvents.SettleBlocked.selector, "settle fits in one tx");
+            assertTrue(
+                ok || _selector(ret) == IFlowEvents.SettleBlocked.selector, "settle fits in one tx"
+            );
             vm.prank(keeper);
             (SettleCheck check,) = queue.checkSettle();
             if (k % 2 == 1) coverageCheckpoint();
@@ -139,7 +147,9 @@ contract SafetyReview090Test is FlowQueueBase {
         investFund(assetVec(1_500, 1_500, 5_000, 2_000, 0));
         coverageCheckpoint();
         // A live plan with work: move 10 % from Moonwell to Aave.
-        setTargetViaTimelock(assetVec(2_500, 500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(2_500, 500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_CBBTC)));
         assertTrue(fund.isAssetInSale(IDX_CBBTC), "cbBTC is in sale");
 
@@ -150,7 +160,9 @@ contract SafetyReview090Test is FlowQueueBase {
         MockAggregator(FEED_CBBTC).setRound(8, feedPrice8[FEED_CBBTC], old, old);
 
         (SkipReason reason,,,) = rebalancer.previewStep();
-        assertTrue(reason != SkipReason.FeedCheck, "the in-sale asset's dead feed does not block the step");
+        assertTrue(
+            reason != SkipReason.FeedCheck, "the in-sale asset's dead feed does not block the step"
+        );
     }
 
     // ───────────────────────────── AGY-01, AGY-03 ─────────────────────────────
@@ -177,7 +189,9 @@ contract SafetyReview090Test is FlowQueueBase {
         uint256 old = block.timestamp - 1 days;
         MockAggregator(FEED_ETH).setRound(8, feedPrice8[FEED_ETH], old, old);
 
-        vm.expectRevert(abi.encodeWithSelector(IRobotMoneyFund.EmergencyFloorRequired.selector, IDX_WETH));
+        vm.expectRevert(
+            abi.encodeWithSelector(IRobotMoneyFund.EmergencyFloorRequired.selector, IDX_WETH)
+        );
         timelock.execute(address(fund), 0, noFloor, bytes32(0), bytes32("a"));
         assertEq(IERC20(WETH).balanceOf(address(fund)), held, "no floor: nothing sold");
 
@@ -250,7 +264,9 @@ contract SafetyReview090Test is FlowQueueBase {
     function test_AGY05_planConvergesAfterAnAssetLeavesIt() public fixtureCovered {
         investFund(assetVec(1_500, 1_500, 5_000, 2_000, 0));
         coverageCheckpoint();
-        setTargetViaTimelock(assetVec(2_500, 500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(2_500, 500, 5_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         timelockExecute(
             address(fund),
             abi.encodeWithSignature("emergencyUnwind(uint256,uint256)", IDX_WETH, uint256(0))
@@ -326,7 +342,9 @@ contract SafetyReview090Test is FlowQueueBase {
         alignFeedsToPools();
         settleAll();
         assertLt(200e6 - 150e6, minUsdc, "the remainder is below the minimum");
-        assertTrue(queue.getRequest(dep).closed, "the sub-minimum remainder left the pool in the round");
+        assertTrue(
+            queue.getRequest(dep).closed, "the sub-minimum remainder left the pool in the round"
+        );
         (uint256 credit,) = queue.creditOf(alice);
         assertGt(credit, 0, "it returned to Alice as USDC credit");
         assertLt(credit, minUsdc, "and it is the sub-minimum remainder");
@@ -343,10 +361,14 @@ contract SafetyReview090Test is FlowQueueBase {
         investFund(assetVec(1_500, 1_500, 5_000, 2_000, 0));
         coverageCheckpoint();
         bytes32 h = address(swapAdapter).codehash;
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (h, false)));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.setAdapterCodeHashAllowed, (h, false))
+        );
 
         // A plan that buys wETH: the step through the revoked adapter fails.
-        setTargetViaTimelock(assetVec(500, 500, 7_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(500, 500, 7_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         bool sawWethLeg;
         for (uint256 k; k < 8 && !sawWethLeg; ++k) {
             vm.warp(block.timestamp + rebalancer.effectiveStepInterval());
@@ -422,7 +444,9 @@ contract SafetyReview090Test is FlowQueueBase {
         settleAll();
         assertTrue(queue.getRequest(id).closed, "the deposit filled");
         // Rounding dust in the pool (FlowState.depPoolUsdc, member slot DEP_POOL_SLOT).
-        vm.store(address(queue), bytes32(uint256(FLOW_STATE_BASE) + DEP_POOL_SLOT), bytes32(uint256(1)));
+        vm.store(
+            address(queue), bytes32(uint256(FLOW_STATE_BASE) + DEP_POOL_SLOT), bytes32(uint256(1))
+        );
         vm.warp(block.timestamp + queue.flowParams().epochLength);
         refreshFeeds();
         vm.prank(keeper);
@@ -441,7 +465,9 @@ contract SafetyReview090Test is FlowQueueBase {
         address factory = IRouterFactory(ROUTER).factory();
         vm.mockCall(
             factory,
-            abi.encodeWithSignature("getPool(address,address,uint24)", fake.token0(), fake.token1(), uint24(500)),
+            abi.encodeWithSignature(
+                "getPool(address,address,uint24)", fake.token0(), fake.token1(), uint24(500)
+            ),
             abi.encode(WETH_POOL)
         );
         assertFalse(swapAdapter.isFixedFeePool(address(fake)), "a look-alike pool fails");
@@ -509,7 +535,9 @@ contract SafetyReview090Test is FlowQueueBase {
 
         refreshFeeds();
         uint256 idle0 = fund.idleUsdc();
-        timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.reabsorbRemovedAsset, (IDX_WETH, 0)));
+        timelockExecute(
+            address(fund), abi.encodeCall(IRobotMoneyFund.reabsorbRemovedAsset, (IDX_WETH, 0))
+        );
         assertEq(IERC20(WETH).balanceOf(address(fund)), 0, "the stray wETH was sold");
         assertGt(fund.idleUsdc(), idle0, "into idle USDC, so NAV holds it");
 
@@ -549,7 +577,8 @@ contract SafetyReview090Test is FlowQueueBase {
     function test_MISSED08_zeroStartValueSaleStillSells() public fixtureCovered {
         investFund(assetVec(1_500, 1_500, 5_000, 2_000, 0));
         timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.delistAsset, (IDX_WETH)));
-        bytes32 slot = keccak256(abi.encode(IDX_WETH, uint256(FUND_STATE_BASE) + SALE_START_VALUE_SLOT));
+        bytes32 slot =
+            keccak256(abi.encode(IDX_WETH, uint256(FUND_STATE_BASE) + SALE_START_VALUE_SLOT));
         vm.store(address(fund), slot, bytes32(0));
         uint256 wethBefore = IERC20(WETH).balanceOf(address(fund));
         vm.warp(block.timestamp + rebalancer.effectiveStepInterval() + 2);
@@ -583,7 +612,9 @@ contract SafetyReview090Test is FlowQueueBase {
     function test_MISSED09_lendingSellLegIsClampedToVenueLiquidity() public fixtureCovered {
         investFund(assetVec(1_500, 3_500, 3_000, 2_000, 0));
         coverageCheckpoint();
-        setTargetViaTimelock(assetVec(3_500, 1_500, 3_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS));
+        setTargetViaTimelock(
+            assetVec(3_500, 1_500, 3_000, 2_000, 0), PlanParams(1 days, COST_BUDGET_BPS)
+        );
         vm.mockCall(
             address(moonwellAdapter),
             abi.encodeWithSelector(ILendingRateAdapter.availableLiquidity.selector),
@@ -625,7 +656,11 @@ contract SafetyReview090Test is FlowQueueBase {
         bytes32 d2 = keccak256("same-second payload");
         vm.prank(submitter);
         receipts.recordReceipt(id2, d2, "https://example.invalid/receipts/same-second");
-        assertEq(receipts.getReceiptById(id2).recordedAt, receipts.getReceiptById(id1).recordedAt, "same second");
+        assertEq(
+            receipts.getReceiptById(id2).recordedAt,
+            receipts.getReceiptById(id1).recordedAt,
+            "same second"
+        );
 
         applyReceiptViaTimelock(id1, d1, v1);
         applyReceiptViaTimelock(id2, d2, v2);

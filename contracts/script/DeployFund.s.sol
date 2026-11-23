@@ -146,7 +146,8 @@ contract DeployFund is FundSystemBase {
         // ADR-0019: the swap adapter is a governed UUPS proxy, upgraded only by the fund timelock. The fund allows
         // both the proxy and the implementation code hashes and marks the proxy hash, so it vets the implementation
         // on every use (safety review 0.9.0, MISSED-09).
-        d.swapAdapterImplementation = address(new UniswapV3ExactOutSwapAdapterUpgradeable(i.swapRouter));
+        d.swapAdapterImplementation =
+            address(new UniswapV3ExactOutSwapAdapterUpgradeable(i.swapRouter));
         d.swapAdapter = _deployProxy(
             d.swapAdapterImplementation,
             abi.encodeCall(UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (u.timelock))

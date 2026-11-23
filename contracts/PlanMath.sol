@@ -347,8 +347,7 @@ library PlanMath {
         if (nav == 0) return true;
         uint256 band = Math.mulDiv(nav, toleranceBps, BPS);
         {
-            (uint256 io, uint256 iu) =
-                deviation(idle, Math.mulDiv(nav, idleEndBps(endBps), BPS));
+            (uint256 io, uint256 iu) = deviation(idle, Math.mulDiv(nav, idleEndBps(endBps), BPS));
             if (io > band || iu > band) return false;
         }
         for (uint256 i; i < values.length; ++i) {

@@ -108,8 +108,11 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
             pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.token0.selector));
         (bool ok1, bytes memory d1) =
             pool.staticcall(abi.encodeWithSelector(IUniswapV3Pool.token1.selector));
-        (bool okF, bytes memory df) = address(ROUTER).staticcall(abi.encodeWithSignature("factory()"));
-        if (!ok0 || !ok1 || !okF || d0.length != 32 || d1.length != 32 || df.length != 32) return false;
+        (bool okF, bytes memory df) =
+            address(ROUTER).staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok0 || !ok1 || !okF || d0.length != 32 || d1.length != 32 || df.length != 32) {
+            return false;
+        }
         bytes32 salt = keccak256(
             abi.encode(abi.decode(d0, (address)), abi.decode(d1, (address)), uint24(feePips))
         );
@@ -125,14 +128,15 @@ contract UniswapV3ExactOutSwapAdapter is UniswapV3SwapAdapter, IExactOutSwapAdap
             )
         );
         if (predicted == pool) return true;
-        (bool okG, bytes memory dg) = abi.decode(df, (address)).staticcall(
-            abi.encodeWithSignature(
-                "getPool(address,address,uint24)",
-                abi.decode(d0, (address)),
-                abi.decode(d1, (address)),
-                uint24(feePips)
-            )
-        );
+        (bool okG, bytes memory dg) = abi.decode(df, (address))
+            .staticcall(
+                abi.encodeWithSignature(
+                    "getPool(address,address,uint24)",
+                    abi.decode(d0, (address)),
+                    abi.decode(d1, (address)),
+                    uint24(feePips)
+                )
+            );
         return okG && dg.length == 32 && abi.decode(dg, (address)) == pool;
     }
 

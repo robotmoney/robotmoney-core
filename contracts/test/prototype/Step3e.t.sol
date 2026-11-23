@@ -827,7 +827,8 @@ contract Step3eTest is PrototypeHarness {
         // A step opens exposure only through allowed code (safety review 0.9.0, AGY-09): allow the hostile code, so the
         // test reaches the fund's own guard.
         timelockExecute(
-            address(fund), abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(h).codehash, true))
+            address(fund),
+            abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(h).codehash, true))
         );
         vm.etch(address(swapAdapter), address(h).code);
     }

@@ -64,7 +64,9 @@ interface IRobotMoneyFund is IFundEvents {
     event RemovedAssetReabsorbed(uint256 indexed index, uint256 amount, uint256 usdc);
     /// @notice After shutdown, `owner` took `tokens` of in-sale asset `index` in kind for their delisting claim, and
     ///         `feeTokens` went to the fee recipient (MISSED-08).
-    event DelistClaimTakenInKind(uint256 indexed index, address indexed owner, uint256 tokens, uint256 feeTokens);
+    event DelistClaimTakenInKind(
+        uint256 indexed index, address indexed owner, uint256 tokens, uint256 feeTokens
+    );
     event RedeemedInKind(address indexed owner, address indexed receiver, uint256 shares);
     event ExitFeeCharged(address indexed owner, uint256 grossAssets, uint256 fee);
     event ForeignTokenSwept(address indexed token, uint256 amount);

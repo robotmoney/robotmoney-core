@@ -940,7 +940,8 @@ contract RobotMoneyFund is
     {
         if (
             op == FundFlowsLib.FLOW_EMERGENCY_UNWIND
-                || op == FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET || op == FundFlowsLib.FLOW_REABSORB
+                || op == FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET
+                || op == FundFlowsLib.FLOW_REABSORB
         ) {
             _checkRole(ADMIN_ROLE);
         }

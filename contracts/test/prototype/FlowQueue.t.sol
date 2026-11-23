@@ -442,7 +442,8 @@ abstract contract FlowQueueBase is PrototypeHarness {
     function _etchSwapMech() internal returns (MechSwapAdapter m) {
         MechSwapAdapter impl = new MechSwapAdapter(ROUTER);
         timelockExecute(
-            address(fund), abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+            address(fund),
+            abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
         );
         vm.etch(address(swapAdapter), address(impl).code);
         m = MechSwapAdapter(address(swapAdapter));

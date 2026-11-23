@@ -500,7 +500,9 @@ contract FlowQueueFixesTest is FlowQueueFixesBase {
             vm.prank(keeper);
             sid = queue.settle(cap, type(uint256).max);
         }
-        assertTrue(queue.getRequest(red).closed, "fix 2: the redemption fills in the first walking call");
+        assertTrue(
+            queue.getRequest(red).closed, "fix 2: the redemption fills in the first walking call"
+        );
         assertEq(
             queue.getRequest(1 + queue.requestCount() - n - 1).remaining, 100e6, "the flood waits"
         );

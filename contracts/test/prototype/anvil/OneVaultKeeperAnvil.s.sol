@@ -162,7 +162,8 @@ contract OneVaultMockSwapRouter {
     }
 
     /// @notice The router is its own factory: the adapter accepts only a pool its router's factory made (AGY-13).
-    mapping(address token0 => mapping(address token1 => mapping(uint24 fee => address))) public getPool;
+    mapping(address token0 => mapping(address token1 => mapping(uint24 fee => address))) public
+        getPool;
 
     function factory() external view returns (address) {
         return address(this);

@@ -138,11 +138,15 @@ library FundStepLib {
         AssetConfig[] memory cfg = new AssetConfig[](n);
         for (uint256 i; i < n; ++i) {
             cfg[i] = s.assets[i];
-            if (s.inSale[i]) cfg[i].active = false;
+            if (s.inSale[i]) {
+                cfg[i].active = false;
+            }
             // StepFeedLib reads the TWAP of every active basket asset, an empty one included, through its adapter.
             // It runs for the rebalancer too and cannot read the fund's allow list, so the fund vets here, outside
             // that library's try, so a revoked adapter reverts with its own error (safety review 0.9.0, AGY-09).
-            else if (cfg[i].active && cfg[i].kind == AssetKind.Basket) FundAdapterGuard.vet(s, cfg[i].adapter);
+            else if (cfg[i].active && cfg[i].kind == AssetKind.Basket) {
+                FundAdapterGuard.vet(s, cfg[i].adapter);
+            }
         }
         StepFeedCheck c;
         uint256 index;

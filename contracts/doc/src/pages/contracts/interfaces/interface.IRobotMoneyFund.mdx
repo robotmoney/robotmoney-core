@@ -5,7 +5,7 @@ description: "The one vault (`RobotMoneyFund`, share `rmFUND`): an ERC-4626 over
 
 # IRobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/interfaces/IRobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/afd6d0281fefc4c2ceb888f94c67a4497915dabc/contracts/interfaces/IRobotMoneyFund.sol)
 
 **Inherits:** [IFundEvents](/contracts/interface.IFundEvents)
 
@@ -2172,7 +2172,9 @@ After shutdown, `owner` took `tokens` of in-sale asset `index` in kind for their
 `feeTokens` went to the fee recipient (MISSED-08).
 
 ```solidity
-event DelistClaimTakenInKind(uint256 indexed index, address indexed owner, uint256 tokens, uint256 feeTokens);
+event DelistClaimTakenInKind(
+        uint256 indexed index, address indexed owner, uint256 tokens, uint256 feeTokens
+    );
 ```
 
 **Parameters**
