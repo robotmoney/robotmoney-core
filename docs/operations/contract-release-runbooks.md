@@ -29,6 +29,11 @@ specifically about the step where a release's scope is carried onto a release
 branch, rehearsed on a QA branch, cut as a release candidate and cut over into
 a real chain deployment — Robot Money Devnet or Base mainnet.
 
+The governance assurance checks (Safe transactions, timelock operations, role
+changes, upgrades), their deploy-time versus run-time split and their RPC cost
+are specified in [`governance-assurance-checks.md`](governance-assurance-checks.md)
+(issue 2047).
+
 ## 1. Scope and authority
 
 Every deployment of a numbered contract release must be planned, rehearsed,
