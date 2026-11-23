@@ -824,6 +824,11 @@ contract Step3eTest is PrototypeHarness {
         UniswapV3ExactOutSwapAdapter real = new UniswapV3ExactOutSwapAdapter(ROUTER);
         Step3eHostileSwapAdapter h =
             new Step3eHostileSwapAdapter(ROUTER, address(real), CBBTC, gift, reenterFund, shares);
+        // A step opens exposure only through allowed code (safety review 0.9.0, AGY-09): allow the hostile code, so the
+        // test reaches the fund's own guard.
+        timelockExecute(
+            address(fund), abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(h).codehash, true))
+        );
         vm.etch(address(swapAdapter), address(h).code);
     }
 

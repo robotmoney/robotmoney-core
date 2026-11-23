@@ -436,10 +436,14 @@ abstract contract FlowQueueBase is PrototypeHarness {
         revert("pushPool: the pool did not move far enough");
     }
 
-    /// @notice Place a `MechSwapAdapter` (honest mode) over the harness's exact-output swap adapter. The basket
-    ///         assets are counted whatever their adapter's code hash, so nothing else changes.
+    /// @notice Place a `MechSwapAdapter` (honest mode) over the harness's exact-output swap adapter, after allowlisting
+    ///         its code hash through the timelock: a purchase opens exposure only through allowed code (safety review
+    ///         0.9.0, AGY-09). Warps `TIMELOCK_DELAY`.
     function _etchSwapMech() internal returns (MechSwapAdapter m) {
         MechSwapAdapter impl = new MechSwapAdapter(ROUTER);
+        timelockExecute(
+            address(fund), abi.encodeCall(fund.setAdapterCodeHashAllowed, (address(impl).codehash, true))
+        );
         vm.etch(address(swapAdapter), address(impl).code);
         m = MechSwapAdapter(address(swapAdapter));
     }

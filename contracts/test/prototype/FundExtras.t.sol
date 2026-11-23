@@ -593,7 +593,8 @@ contract FundExtrasTest is BaseFixture {
         uint256 idlePart = idle0.mulDiv(shares, supply0);
         assertEq(
             IERC20(USDC).balanceOf(alice) - usdcBefore,
-            idlePart - idlePart.mulDiv(EXIT_FEE_BPS, BPS),
+            // The exit fee rounds up (TestMachine #16, safety review 0.9.0).
+            idlePart - idlePart.mulDiv(EXIT_FEE_BPS, BPS, Math.Rounding.Ceil),
             "only idle"
         );
         for (uint256 k; k < N_LENDING; ++k) {

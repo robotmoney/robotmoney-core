@@ -640,7 +640,8 @@ contract AdversarialTest is PrototypeHarness {
 
         // Conservation: the cbBTC leg is owed in full, the tokens never moved, the stayers keep exactly theirs.
         uint256 owedTotal = frozenHeld * shares / supply;
-        uint256 feeShare = owedTotal * EXIT_FEE_BPS / BPS;
+        // The exit fee rounds up (TestMachine #16, safety review 0.9.0).
+        uint256 feeShare = (owedTotal * EXIT_FEE_BPS + BPS - 1) / BPS;
         assertEq(
             fund.deferredOf(IDX_CBBTC, alice),
             owedTotal - feeShare,
