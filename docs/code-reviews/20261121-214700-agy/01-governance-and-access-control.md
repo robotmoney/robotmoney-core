@@ -9,7 +9,7 @@ This chapter audits the governance, role hierarchy, operational account controls
 
 ## 1. Governance & Role Topology
 
-The Fund System deploys six ERC-1967 proxies (`GovernedUUPS`) governed by a dedicated `ProposerFloorTimelock` (`48 hours` production floor in `CoreTimelockHandover.MIN_PRODUCTION_DELAY = 172_800`, `900s` in Deploy 4 rehearsal) controlled by a 2-of-3 Gnosis Safe (`SAFE_THRESHOLD >= 2`, `SAFE_OWNERS.length >= 2`), alongside a non-upgradeable `KeeperAccount` and `FundExclusionLedger`. Under owner decision `D4-10` (`FundTimelockPolicy.sol`), the Fund System departs from the Vaults System's open executor (`ADR-0004`): the Safe is the sole `PROPOSER_ROLE`, `CANCELLER_ROLE`, and `EXECUTOR_ROLE` holder on `ProposerFloorTimelock`.
+The Fund System deploys six ERC-1967 proxies (`GovernedUUPS`) governed by a dedicated `ProposerFloorTimelock` (`48 hours` production floor in `CoreTimelockHandover.MIN_PRODUCTION_DELAY = 172_800`, `900s` / 15 minutes in Deploy 4 rehearsal) controlled by a 2-of-3 Gnosis Safe (`SAFE_THRESHOLD >= 2`, `SAFE_OWNERS.length >= 2`), alongside an optional non-upgradeable `KeeperAccount` (whereas Deploy 4's actual runbook wiring in `docs/runbooks/contract-qa/releases/v0.9.0-onevault-upgrade.yaml:1663` and `deployments/base-8453-rehearsal/deploy-4.env:25` uses a direct `KEEPER_ADDRESS` EOA signer and a `900s` rehearsal timelock delay) and `FundExclusionLedger`. Under owner decision `D4-10` (`FundTimelockPolicy.sol`), the Fund System departs from the Vaults System's open executor (`ADR-0004`): the Safe is the sole `PROPOSER_ROLE`, `CANCELLER_ROLE`, and `EXECUTOR_ROLE` holder on `ProposerFloorTimelock`.
 
 ```mermaid
 flowchart TD
@@ -257,18 +257,18 @@ function removeOwner(address who) external onlyOwner {
 }
 ```
 
-Meanwhile, `DeployKeeperAccount.s.sol` reads `KEEPER_OWNERS` (`address[]`) and deploys `KeeperAccount` without requiring either a Safe multisig owner or an M-of-N owner threshold (unlike `CoreTimelockHandover._requireRealSafe`, which strictly enforces `threshold >= 2` and `owners.length >= 2`).
+Meanwhile, `DeployKeeperAccount.s.sol` reads `KEEPER_OWNERS` (`address[]`) and deploys `KeeperAccount` without requiring either a Safe multisig owner or an M-of-N owner threshold (unlike `CoreTimelockHandover._requireRealSafe`, which strictly enforces `threshold >= 2` and `owners.length >= 2`). Note that `KeeperAccount` is an optional multi-EOA architecture: Deploy 4's actual runbook wiring (`docs/runbooks/contract-qa/releases/v0.9.0-onevault-upgrade.yaml:1663`, `deployments/base-8453-rehearsal/deploy-4.env:25`) uses a direct `KEEPER_ADDRESS` EOA signer and a 15-minute (`900s`) rehearsal timelock delay rather than `KeeperAccount`.
 
 #### Attack / Failure Scenario
 
 1. Suppose `KEEPER_OWNERS` lists multiple team EOAs (e.g., the 3 Safe owner keys `[O1, O2, O3]`).
 2. An attacker compromises **just 1-of-3** owner key `O1` (which is insufficient to pass the 2-of-3 Safe threshold).
-3. In a single transaction, `O1` calls:
+3. In a single transaction, `O1` calls (removing itself **last**, because calling `removeOwner(O1)` before removing `O2`/`O3` would immediately revert `NotOwner()`):
    - `keeperAccount.addOwner(attacker)`
-   - `keeperAccount.removeOwner(O1)`
    - `keeperAccount.removeOwner(O2)`
    - `keeperAccount.removeOwner(O3)`
    - `keeperAccount.removeBotKey(bot1)`
+   - `keeperAccount.removeOwner(O1)`
 4. `_owners.length == 1` (`LastOwner`) never triggers because `attacker` was added first. The remaining owners are permanently locked out of `KeeperAccount`, and `KeeperAccount.execute` accepts calls from `attacker` (as sole owner) while rejecting the team's bot keys.
 5. Even without malice, a single compromised or rogue owner key can unilaterally remove all bot keys or halt calls.
 
@@ -524,7 +524,7 @@ Verified against `INV-3`, `INV-4`, and `RS-1019-14`:
 Verified against `RB-1`, `RB-8`, and `RB-9`:
 
 - **Authorization & separation (`:135-184`):** `applyReceipt` requires `TARGET_SETTER_ROLE`; `setTarget` and `setDefaultPlanParams` require `ADMIN_ROLE` (both held by `ProposerFloorTimelock`). Subject to **AGY-08** on `TARGET_SETTER_ROLE`.
-- **Digest binding & replay/ordering protection (`:149-161`):** `_checkAndRelease` verifies `isRecorded(receiptId)`, `!r.released`, exact `r.payloadDigest == payloadDigest`, and strict monotonicity `r.recordedAt > lastAppliedRecordedAt` before writing `lastAppliedRecordedAt = r.recordedAt` and calling `receipts.releaseReceipt(receiptId)` (under `nonReentrant`). If `fund.setTargetAndOpenPlan(...)` rejects the vector (`TargetAssetNotActive`, `TargetAssetDuplicate`, `TargetAssetMissing`, `TargetSumInvalid`, `TargetExceedsCap`, `BasketCapExceeded`, `PoolShareExceeded`, `PoolNotFixedFee`, `PoolFeeMarginTooSmall`), the entire transaction reverts cleanly without releasing the receipt or updating `lastAppliedRecordedAt`.
+- **Digest check & replay/ordering protection (`:149-161`):** `_checkAndRelease` verifies `isRecorded(receiptId)`, `!r.released`, exact `r.payloadDigest == payloadDigest`, and strict monotonicity `r.recordedAt > lastAppliedRecordedAt` before writing `lastAppliedRecordedAt = r.recordedAt` and calling `receipts.releaseReceipt(receiptId)` (under `nonReentrant`). However, `applyReceipt` (`RebalanceGovernance.sol:135-161`) forwards `(assets, bps)` independently to `fund.setTargetAndOpenPlan(...)` without hashing or verifying `(assets, bps)` against `payloadDigest` on-chain (`D8` / `OPS-06` remains open in `docs/technical/one-vault-rebalancer-proposal.md:3592`). If `fund.setTargetAndOpenPlan(...)` rejects the vector (`TargetAssetNotActive`, `TargetAssetDuplicate`, `TargetAssetMissing`, `TargetSumInvalid`, `TargetExceedsCap`, `BasketCapExceeded`, `PoolShareExceeded`, `PoolNotFixedFee`, `PoolFeeMarginTooSmall`), the entire transaction reverts cleanly without releasing the receipt or updating `lastAppliedRecordedAt`.
 - **Plan parameter bounds (`:203-208`):** `_checkPlanParams` enforces `[MIN_PLAN_DURATION, MAX_PLAN_DURATION]` (`1 days` to `90 days`) and `costBudgetBps` in `[1, MAX_COST_BUDGET_BPS]` (`1` to `500`), re-checked by `FundAdminLib.openPlan`.
 
 ### 3.3 `GovernedUUPS` & `GovernedUpgrade` (`contracts/lib/GovernedUUPS.sol`)

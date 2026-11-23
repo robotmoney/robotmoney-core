@@ -18,6 +18,7 @@
 | **03 — Reentrancy, Flow State Machines, and Accounting Verification** | Settlement freeze hold-mark (`AGY-10`), post-upgrade delisting Check 6 (`AGY-11`), unpruned `activeDepBuckets` (`AGY-12`), and exhaustive reentrancy, CEI, approval hygiene, ray-index conservation, and Check 10 verification (`AGY-14`) | [03-reentrancy-flows-and-accounting.md](./03-reentrancy-flows-and-accounting.md) |
 | **04 — Product Alignment, In-Place Upgrade Posture, and Audit/Gate Readiness** | Product-vs-contract alignment (`AGY-15`), ERC-7201 storage layout baselines, `migrateV090` one-time migrations, upgrade runbook (`v0.9.0-onevault-upgrade.yaml`), `docs/audits.md` ledger posture, and Gates G8/G9 | [04-product-alignment-and-upgrade-posture.md](./04-product-alignment-and-upgrade-posture.md) |
 | **05 — Meta-Review and Missed Findings** | Independent adversarial meta-review of Chapters 00–04: patch correctness audit, factual/citation corrections, cross-chapter contradictions, and 9 verified missed findings (`MISSED-01`–`MISSED-09`) | [05-meta-review-and-missed-findings.md](./05-meta-review-and-missed-findings.md) |
+| **Verification Notes** | Independent GPT static verification notes (evaluated and incorporated into Chapters 00–04) | [gpt-review-notes.md](./gpt-review-notes.md) |
 
 ---
 

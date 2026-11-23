@@ -111,6 +111,9 @@ Additionally, chunk oversized emergency exits using `Rebalancer.stepDepthBps()` 
 - [FundValuationLib.sol#L264-L277](../../../contracts/lib/FundValuationLib.sol#L264-L277) (`requireFeedsHealthy`)
 - [FlowCheckLib.sol#L275-L334](../../../contracts/lib/FlowCheckLib.sol#L275-L334) (`market` Checks 2–4)
 - [StepFeedLib.sol#L51-L143](../../../contracts/lib/StepFeedLib.sol#L51-L143) (`check`, `_isBasket`)
+- [FundStepLib.sol#L139-L142](../../../contracts/lib/FundStepLib.sol#L139-L142) (`_stepFeeds`)
+- [Rebalancer.sol#L448-L457](../../../contracts/Rebalancer.sol#L448-L457) (`_decide`)
+- [FundDelistLib.sol#L112-L121,L207-L210,L257-L259](../../../contracts/lib/FundDelistLib.sol#L112-L121) (`delistAsset`, `prepareDelistSale`, `finalizeDelistSale`)
 - [FundAdminLib.sol#L549-L587](../../../contracts/lib/FundAdminLib.sol#L549-L587) (`_deactivateAsset`)
 
 ### Description
@@ -154,10 +157,10 @@ Every critical market health gate filters exclusively by `a.active && a.kind == 
         }
 ```
 
-If a rebalance plan is `Open`, `Halted`, or `Paused` when `emergencyUnwind(index)` runs (note `emergencyUnwind(index)` explicitly leaves a live plan open/paused rather than closing it, unlike `delistAsset` + `stepDelisted` which self-closes via `closeDelistSale`), `deactivateAsset(index)` reverts `PlanLive(p.id)`! Compounded with **AGY-05** (where zeroing `p.endBps[index]` also blocks plan convergence), the fund cannot settle flows (`FlowQueue.settle()`), cannot read `totalAssets()`, and cannot execute rebalance steps (`Rebalancer.step()`) until the plan either expires (`endTime + maxOverrun`, 7–30 days) or is manually closed via another 48-hour timelock `closePlan()` transaction.
+If a rebalance plan is `Open`, `Halted`, or `Paused` when `emergencyUnwind(index)` runs (note `emergencyUnwind(index)` explicitly leaves a live plan open/paused rather than closing it), `deactivateAsset(index)` reverts `PlanLive(p.id)`! By contrast, governance **can** still call `delistAsset(index)` during a live plan (`FundDelistLib.sol:112-121`), and a zero-balance delisting sale **can** close via `stepDelisted` -> `closeDelistSale` (`FundDelistLib.sol:207-210,257-259`) without a healthy feed—which closes the *delisting sale* and deactivates the asset, without closing the rebalance plan. However, separately in `Rebalancer._decide` (`Rebalancer.sol:448-457`), ordinary rebalancing (`Rebalancer.step()`) is *still* blocked by the failed feed of an `inSale` asset because `Rebalancer._decide` passes raw `f.assetConfigs()` to `StepFeedLib.check` without masking `isAssetInSale(i)` (unlike `FundStepLib._stepFeeds` at `FundStepLib.sol:139-142`, which sets `cfg[i].active = false` when `s.inSale[i]`). Compounded with **AGY-05** (where zeroing `p.endBps[index]` also blocks plan convergence), an unwound non-`inSale` asset with `active = true` bricks `FlowQueue.settle()`, `totalAssets()`, and `Rebalancer.step()` until the plan either expires (`endTime + maxOverrun`, 7–30 days) or is manually closed via another 48-hour timelock `closePlan()` transaction.
 
 ### Impact
-Emergency-unwinding a broken non-`inSale` basket asset during any live rebalance plan leaves the vault with `active = true` and `heldBalance = 0` on that broken feed, immediately DoS'ing `totalAssets()`, `FlowQueue.settle()`, and `Rebalancer.step()` until governance waits out another 48-hour timelock delay to close the plan and call `deactivateAsset(index)`.
+Emergency-unwinding a broken non-`inSale` basket asset during any live rebalance plan leaves the vault with `active = true` and `heldBalance = 0` on that broken feed, immediately DoS'ing `totalAssets()`, `FlowQueue.settle()`, and `Rebalancer.step()` until governance waits out another 48-hour timelock delay to close the plan and call `deactivateAsset(index)`. Separately, even when an asset is marked `inSale` via `delistAsset(index)`, `Rebalancer._decide` (`Rebalancer.sol:448-457`) fails to mask `isAssetInSale(i)` before calling `StepFeedLib.check`, so ordinary `Rebalancer.step()` calls remain blocked by the `inSale` asset's failed feed until its delisting sale closes.
 
 ### Remediation
 Inside `_emergencyUnwindSingleSwap`, when `!inSaleNow && FundValuationLib.heldBalance(s, index) == 0 && s.deferredTotal[index] == 0`, deactivate the asset immediately (and record `lastStateStopEndedAt` if applicable), matching `closeDelistSale`:
@@ -270,7 +273,7 @@ Computing `endIdleTargetBps(p.endBps)` dynamically from `p.endBps` also avoids c
 
 ---
 
-## AGY-06 [MEDIUM]: Slow Pool Ramp (`A10`) and Held TWAP (`A2`) Arbitrage Inside `refBandBps = 90` bps Following Match Band Skips
+## AGY-06 [MEDIUM]: Slow Pool Ramp (`A10`) and Held TWAP (`A2`) Arbitrage Inside `refBandBps = 90` bps (Plus `MatchSkipped` in `(10, 90]` bps)
 
 ### Location
 - [FlowTypes.sol#L48](../../../contracts/FlowTypes.sol#L48) (`DEFAULT_MATCH_BAND_BPS = 10`)
@@ -312,19 +315,20 @@ When `|navTwap - navFeed| / navFeed > 10` bps, `bookMatch` skips internal nettin
         ap.sellPerToken = high.mulDiv(BPS - p.legBandBps, BPS);
 ```
 
-Because `matchBandBps` only skips matching while leaving `refBandBps = 90` bps unchanged, an attacker ramping pool prices gradually (`A10`) or holding a manipulated TWAP push inside `refBandBps` (`A2`) still passes Check 4 (`TwapVsFeed`) and captures profitable arbitrage against the fund's net swaps—especially when `dev in (10, 90]` bps triggers `MatchSkipped` and pushes both opposing sides into the skewed pool.
+Because `matchBandBps` only skips matching while leaving `refBandBps = 90` bps unchanged, an attacker ramping pool prices gradually (`A10`) or holding a manipulated TWAP push inside `refBandBps` (`A2`) still passes Check 4 (`TwapVsFeed`) and captures profitable arbitrage against the fund's net swaps. Separately, when `dev in (10, 90]` bps triggers `MatchSkipped`, both opposing sides are pushed into gross pool execution rather than netting internally—a distinct structural concern, rather than the measured cause of `A10`/`A2` (which are unchanged from Step 3e and independent of matching).
 
 ### Measured Gate G8 & Gate G9 Evidence (`contracts-0.9.0` Docs & Tests)
-Recorded in [one-vault-rebalancer-proposal.md#L2338-L2370](../../technical/one-vault-rebalancer-proposal.md#L2338-L2370) and [one-vault-release-090-gate-options.md](../../technical/one-vault-release-090-gate-options.md#L9-L16):
+Recorded in [one-vault-rebalancer-proposal.md#L2338-L2370](../../technical/one-vault-rebalancer-proposal.md#L2338-L2370) (specifically line 2345) and [one-vault-release-090-gate-options.md](../../technical/one-vault-release-090-gate-options.md#L9-L16):
 - **A10 (slow ramp inside `refBandBps = 90` bps):**
   - Deterministic (`Attacks.t.sol`): **+156.64 USDC** attacker profit (`+156.62` / `+110.1` after flash fee in initial scoring, `+156.64` in Step 3f).
   - Stochastic Monte Carlo sim (`AttackSim.t.sol`, `PROTO_SIM_ATTACKS=1`, 4 seeds): strict max **+61.76 USDC** (best mean +16.04 USDC).
-- **A2 (held TWAP push):** sim strict max **+0.35 USDC** (best mean +0.16 USDC).
-- **A6 (hedge run):** sim strict max **+467.55 USDC** in 1 of 8 runs (best mean 0 USDC; holders and pending users lose 0—gain arises from the simulated hedge in external market).
+  - Reported at `one-vault-rebalancer-proposal.md:2345` as **unchanged from Step 3e and independent of matching**.
+- **A2 (held TWAP push):** sim strict max **+0.35 USDC** (best mean +0.16 USDC), likewise reported at `one-vault-rebalancer-proposal.md:2345` as **unchanged from Step 3e and independent of matching**.
+- **A6 (hedge run):** sim strict max **+467.55 USDC** in 1 of 8 runs (best mean 0 USDC; **zero** holder or pending-user loss—gain arises from the simulated hedge in the external market).
 - **Gate G9 vs Gate G8 tension:** lowering `refBandBps` below ~`35` bps to eliminate `A10` causes Gate G9 availability to collapse (at `refBandBps = 50` bps, first-call settlement drops to **84.02%**, failing the 95% Gate G9 requirement; at `refBandBps = 90`, `matchBandBps = 10`, Gate G9 passes at **99.40%** first-call on 500/503 rounds, `0.22` bps median / `16.94` bps max flow cost, `3.57h` median / `6.55h` p95 wait).
 
 ### Impact
-Gate **G8 remains failed** on `contracts-0.9.0`: profitable MEV/arbitrage extraction remains open inside `refBandBps = 90` bps via slow multi-slot pool ramps (`A10`), and skipped internal matches in the `(10, 90]` bps band force full two-sided AMM execution through the skewed pool.
+Gate **G8 remains failed** on `contracts-0.9.0`: profitable MEV/arbitrage extraction remains open inside `refBandBps = 90` bps via slow multi-slot pool ramps (`A10`) and held TWAP pushes (`A2`)—both unchanged from Step 3e and independent of matching—while `MatchSkipped` in the `(10, 90]` bps band is a separate structural concern that forces two-sided AMM execution through the pool when TWAP deviates from feed by more than `10` bps.
 
 ### Remediation
 1. **Per-asset `refBandBps` and feed-anchored swap bounds:** configure tighter `refBandBps` on correlated/liquid pairs where Chainlink cadence is fast, and test `LEG_PRICE_FEED_ONLY` (`ap.buyPerToken` / `ap.sellPerToken` anchored strictly to `feedPrice`, eliminating TWAP drag from swap limits while leaving `TwapVsFeed` only for spot-vs-TWAP defense).
