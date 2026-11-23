@@ -302,6 +302,7 @@ export const sidebar = [
             { text: "DelegatecallProxyAdapter", link: "/contracts/test/contract.DelegatecallProxyAdapter" },
             { text: "DelistBooks", link: "/contracts/test/contract.DelistBooks" },
             { text: "DelistClaimScalingTest", link: "/contracts/test/contract.DelistClaimScalingTest" },
+            { text: "FundDecimalsForkTest", link: "/contracts/test/contract.FundDecimalsForkTest" },
             { text: "FundPredictionHarness", link: "/contracts/test/contract.FundPredictionHarness" },
             { text: "GuardHarness", link: "/contracts/test/contract.GuardHarness" },
             { text: "MockAavePool", link: "/contracts/test/contract.MockAavePool" },

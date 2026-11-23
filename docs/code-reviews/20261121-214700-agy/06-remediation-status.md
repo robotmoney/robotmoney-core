@@ -126,7 +126,7 @@ Each line names what is still open and why.
 
 | Contract | Runtime bytes | Headroom under EIP-170 |
 |---|---:|---:|
-| `RobotMoneyFund` | 24,484 | 92 |
+| `RobotMoneyFund` | 24,559 | 17 |
 | `Rebalancer` | 23,816 | 760 |
 | `FlowQueue` | 22,380 | 2,196 |
 

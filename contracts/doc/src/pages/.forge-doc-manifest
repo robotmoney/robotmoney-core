@@ -165,6 +165,7 @@ contracts/test/contract.CustodyInvariantGuardTest.mdx
 contracts/test/contract.DelegatecallProxyAdapter.mdx
 contracts/test/contract.DelistBooks.mdx
 contracts/test/contract.DelistClaimScalingTest.mdx
+contracts/test/contract.FundDecimalsForkTest.mdx
 contracts/test/contract.FundPredictionHarness.mdx
 contracts/test/contract.GuardHarness.mdx
 contracts/test/contract.MockAavePool.mdx

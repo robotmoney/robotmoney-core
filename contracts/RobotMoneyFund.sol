@@ -129,12 +129,9 @@ contract RobotMoneyFund is
     //  ERC-4626 share scale and NAV (§4.2)
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice 6, as both vault families (the 10^18 virtual offset makes raw share counts large).
-    function decimals() public pure override(ERC4626Upgradeable) returns (uint8) {
-        return 6;
-    }
-
-    /// @dev 18: the vault families' inflation-attack offset (security-model.md).
+    /// @dev `decimals()` is OpenZeppelin's own: the asset's decimals (6, stored at `initialize`) plus
+    ///      `_decimalsOffset()`, so it reports 24 and one USDC is 1e24 raw shares (audits.md FS-VLT-27, fixed).
+    ///      18: the inflation-attack offset (security-model.md).
     function _decimalsOffset() internal pure override returns (uint8) {
         return 18;
     }

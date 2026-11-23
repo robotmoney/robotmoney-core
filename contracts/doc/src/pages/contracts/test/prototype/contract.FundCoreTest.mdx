@@ -4,7 +4,7 @@ title: "FundCoreTest"
 
 # FundCoreTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/FundCore.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/4d1f5dfa31a06ae19503b0c798eefef2c31a1ed7/contracts/test/prototype/FundCore.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -352,6 +352,20 @@ function _assertPerShareNotLower(
 
 ```solidity
 function test_seed_mintsAtTheShareScaleToTheFundOnce() public fixtureCovered;
+```
+
+<a id="test_decimals_isopenzeppelindefault24"></a>
+
+### test_decimals_isOpenZeppelinDefault24
+
+<i>
+
+Issue 2055: decimals() is OpenZeppelin's default (asset 6 + offset 18), and the offset changes no price.
+
+</i>
+
+```solidity
+function test_decimals_isOpenZeppelinDefault24() public fixtureCovered;
 ```
 
 <a id="test_seed_refusesbelowminimumandnonadmin"></a>

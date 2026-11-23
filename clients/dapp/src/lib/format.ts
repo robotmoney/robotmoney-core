@@ -42,9 +42,12 @@ export const RM_DECIMALS = 18;
 export const VIRTUAL_SHARE_OFFSET = 18;
 export const SHARE_DECIMALS = USDC_DECIMALS + VIRTUAL_SHARE_OFFSET;
 
-/** Display scale of a vault's raw shares, from the vault's own `decimals()` read. */
+/**
+ * Display scale of a vault's raw shares, from the vault's own `decimals()` read. The legacy vaults report 6 (the
+ * offset is added); the one-vault fund reports OpenZeppelin's 24, which already includes the offset.
+ */
 export const shareDisplayDecimals = (vaultDecimals: number): number =>
-  vaultDecimals + VIRTUAL_SHARE_OFFSET;
+  vaultDecimals >= SHARE_DECIMALS ? vaultDecimals : vaultDecimals + VIRTUAL_SHARE_OFFSET;
 
 const UINT256_MAX = 2n ** 256n - 1n;
 
