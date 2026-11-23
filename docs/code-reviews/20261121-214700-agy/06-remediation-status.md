@@ -39,7 +39,7 @@ internal review: the one-vault contracts still need an external audit before the
 | Finding | What changed |
 |---|---|
 | Keeper scripts (MISSED-07) | Share delivery takes owners from every deposit request and asks the queue's `maxDeposit`, which counts unsynced match fills. The old parser read `claimCount` with a second `[0]` ("10" became "1") and failed on the `cast` 1.8 JSON envelope. The keeper sends `step()` when `previewStep` reads `Concluded`. Both anvil self-tests pass. |
-| Coverage skip (MISSED-09) | The forge coverage job skips the one-vault sources to stay under its memory ceiling. A separate one-vault coverage job now instruments them with the prototype suite (`.github/workflows/suite-01-02-forge-tests.yml`, job `forge-onevault-coverage`). |
+| Coverage skip (MISSED-09) | The forge coverage job skips the one-vault sources to stay under its memory ceiling. A separate one-vault coverage job now instruments them with the prototype suite and gates line coverage at 90 % (`.github/workflows/onevault-coverage.yml`, job `forge-onevault-coverage`, run after every merge to dev and nightly). |
 | Non-proxied swap adapter (MISSED-09) | `DeployFund.s.sol` deploys the swap adapter as an ADR-0019 proxy, allows both code hashes and marks the proxy. The fund verifier checks every active basket adapter's code hash, and a proxy's implementation. |
 | Unwired fund checks (MISSED-09) | `require-tests.ts` has a `fund` suite (runner, verifier, role scan, evidence, migrations), required in `core-stages`. |
 | Upgrade front-run (MISSED-09) | The v0.9.0 upgrade runbook states the rule for any future in-place queue upgrade: pause the queue before scheduling it. |
