@@ -5,7 +5,7 @@ description: "The executor floor of `ProposerFloorTimelock` (safety review 0.9.0
 
 # ProposerFloorTimelockExecutorFloorTest
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/ProposerFloorTimelockExecutorFloor.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/fde5b947db3f5695f61954da2e921a62063a2a90/contracts/test/ProposerFloorTimelockExecutorFloor.t.sol)
 
 **Inherits:** Test
 
@@ -14,10 +14,10 @@ Safe-only execution (D4-10) the Safe is the only executor, and dropping it would
 
 ## State Variables
 
-### safe
+### member
 
 ```solidity
-address internal safe = makeAddr("safe");
+address internal member = makeAddr("proposerExecutor");
 ```
 
 ### timelock
