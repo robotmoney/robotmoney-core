@@ -299,6 +299,7 @@ export const sidebar = [
             { text: "ConfigFilesTest", link: "/contracts/test/contract.ConfigFilesTest" },
             { text: "CustodyInvariantGuardTest", link: "/contracts/test/contract.CustodyInvariantGuardTest" },
             { text: "DelegatecallProxyAdapter", link: "/contracts/test/contract.DelegatecallProxyAdapter" },
+            { text: "FundDecimalsForkTest", link: "/contracts/test/contract.FundDecimalsForkTest" },
             { text: "FundPredictionHarness", link: "/contracts/test/contract.FundPredictionHarness" },
             { text: "GuardHarness", link: "/contracts/test/contract.GuardHarness" },
             { text: "MockAavePool", link: "/contracts/test/contract.MockAavePool" },
