@@ -5,7 +5,7 @@ description: "The one vault (§4): an ERC-4626 over USDC, share `rmFUND`, behind
 
 # RobotMoneyFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/RobotMoneyFund.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/9362075c383ceca56e2c885e2aa4e5fb76d7bd97/contracts/RobotMoneyFund.sol)
 
 **Inherits:** ERC4626Upgradeable, [AdminFloorAccessControlCounter](/contracts/lib/abstract.AdminFloorAccessControlCounter), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRobotMoneyFund](/contracts/interfaces/interface.IRobotMoneyFund)
 
@@ -124,29 +124,15 @@ function migrateV090(address rebalancer_) external;
 | ---- | ---- | ----------- |
 | rebalancer_ | `address` |  |
 
-<a id="decimals"></a>
-
-### decimals
-
-6, as both vault families (the 10^18 virtual offset makes raw share counts large).
-
-```solidity
-function decimals() public pure override(ERC4626Upgradeable) returns (uint8);
-```
-
-**Returns**
-
-| Name | Type | Description |
-| ---- | ---- | ----------- |
-| &lt;none&gt; | `uint8` |  |
-
 <a id="_decimalsoffset"></a>
 
 ### _decimalsOffset
 
 <i>
 
-18: the vault families' inflation-attack offset (security-model.md).
+`decimals()` is OpenZeppelin's own: the asset's decimals (6, stored at `initialize`) plus
+`_decimalsOffset()`, so it reports 24 and one USDC is 1e24 raw shares (audits.md FS-VLT-27, fixed).
+18: the inflation-attack offset (security-model.md).
 
 </i>
 

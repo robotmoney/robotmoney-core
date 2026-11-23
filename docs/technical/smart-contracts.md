@@ -507,7 +507,7 @@ With this offset the economic cost of a donation-based first-depositor inflation
 
 ### 8.2 Raw-share scale (for integrators)
 
-The vault's share token reports `decimals() == 6` (matching USDC). The internal raw-share count is inflated by the `10^18` virtual factor:
+The legacy vault's share token reports `decimals() == 6` (matching USDC). The one-vault fund (`RobotMoneyFund`) uses OpenZeppelin's default and reports `decimals() == 24` (asset 6 + offset 18), so wallets show 1 share per USDC (issue 2055). The internal raw-share count is inflated by the `10^18` virtual factor:
 
 | Operation | Fresh vault (no prior deposits) | Steady-state (balanced TVL) |
 |---|---|---|
@@ -516,7 +516,7 @@ The vault's share token reports `decimals() == 6` (matching USDC). The internal 
 | `previewRedeem(1e24)` | `1e6` USDC (minus exit fee) | ≈ `1e6` USDC (minus exit fee) |
 | `previewWithdraw(1e6)` | ≈ `1e24` raw shares | ≈ `1e24` raw shares |
 
-**Integrators must not assume raw share amounts equal asset amounts.** Always use `convertToShares` / `convertToAssets` for on-chain math. For display, divide `balanceOf(user)` by `10 ** vault.decimals()` (i.e. by `1e6`).
+**Integrators must not assume raw share amounts equal asset amounts.** Always use `convertToShares` / `convertToAssets` for on-chain math. For display, divide `balanceOf(user)` by `10 ** fund.decimals()` (`1e24`) for the fund, or by `1e24` (decimals 6 plus the offset) for a legacy vault.
 
 **`convertToAssets` ignores exit costs** (core 1795). It is the gross share of NAV: it leaves out the exit fee on both vault families and the `maxSlippageBps` floor a BasketVault applies to the swaps of a redeem. To show what a position is worth at exit, use `previewRedeem(shares)`, which a redeem pays at least. A 1 USDC round trip through rmAGENT on Deploy 2 read `convertToAssets` 0.055767, `previewRedeem` 0.052978, and the redeem paid 0.054092. The dapp position card and the explorer's `positions[].usdc_value` use `previewRedeem` (QA plan X8).
 

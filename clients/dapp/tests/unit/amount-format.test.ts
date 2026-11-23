@@ -28,6 +28,7 @@ describe("scales", () => {
     expect(RM_DECIMALS).toBe(18);
     expect(SHARE_DECIMALS).toBe(24);
     expect(shareDisplayDecimals(6)).toBe(24);
+    expect(shareDisplayDecimals(24)).toBe(24);
   });
 });
 
@@ -67,6 +68,7 @@ describe("formatShares (24 decimals)", () => {
   });
   it("derives the scale from a vault's own decimals()", () => {
     expect(formatShares(5n * 10n ** 24n, "rmUSDC", shareDisplayDecimals(6))).toBe("5.00 rmUSDC");
+    expect(formatShares(5n * 10n ** 24n, "rmFUND", shareDisplayDecimals(24))).toBe("5.00 rmFUND");
   });
   it("max uint256 does not overflow or lose digits", () => {
     expect(formatShares(UINT256_MAX)).toBe(
