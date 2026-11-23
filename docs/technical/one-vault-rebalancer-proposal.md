@@ -1852,6 +1852,7 @@ invariants change their wording:
   Step 3f removes `allow-settlement-return` (§5.11.5).
 - **Keeper.** A new small service. It calls `step()` and settles each epoch
   (§5.9.2). It needs a key with `KEEPER_ROLE` only, a runbook, and monitoring.
+  §8.1 specifies it.
 
 **Step 3f delta** (design review 0.8.0, ARCH-02, FLOW-08). The dApp drops the
 quote's price and shows the terms: the fee, the cancel cutoff, the earliest
@@ -1868,6 +1869,151 @@ The dApp has a tested `FlowQueueTerms` component, but no one-vault request
 screen or queue reads to supply it. It is not mounted in the existing
 multi-vault deposit flow: that flow does not submit to this queue. Building
 the one-vault client and mounting the terms there remain open under G6.
+
+### 8.1 The keeper service
+
+The keeper is a TypeScript service, `services/keeper`. It replaces the
+interim script `scripts/ops/onevault-keeper.sh`. The script stays until the
+service has run one full week on stage without a missed epoch.
+
+**Why a service, not a script.** Deploy 4 showed two faults the script
+cannot fix cleanly (2026-11-23):
+
+- A settle reverted on chain with `SettleSideOutOfGas(Deposit)`
+  (tx `0xb8a1e8ea…29d5`, Base 8453). The script logged it as sent and raised
+  no alert. `cast send` exits 0 on a mined revert, and the script reads only
+  the exit code.
+- The gas limit came from `eth_estimateGas`. `settle` checks `gasleft()`
+  against a per-side budget before each side (`FlowSettleLib._runSide`). An
+  estimate is a single point. It does not leave the margin the guard needs.
+
+A script also restarts slowly (it waits out its `sleep`), cannot hold a
+nonce across ticks, and has no structured state, metrics or tests beyond a
+stub harness.
+
+**Stack.** Bun and TypeScript, with viem for chain access, the same as
+`publish-contracts`. The contract ABIs come from the release artifacts in
+`out/`, checked at build time against the deployment manifest. No Foundry
+binary at run time.
+
+#### 8.1.1 Duties
+
+The keeper only chooses timing (§5.4). It never chooses amounts, assets,
+floors or recipients. Each tick it does, in this order:
+
+| # | Duty | Due when | Call |
+|---|------|----------|------|
+| K1 | Settle the queue | `checkSettle()` reads `Ok` | `FlowQueue.settle(maxRequests, maxUsdc)` |
+| K2 | Continue a round | the last settle returned a cursor that is not idle | `settle` again, same tick, up to `maxCallsPerTick` |
+| K3 | Step the plan | `previewStep()` reads `None` and a simulated `step()` reads `None` | `Rebalancer.step()` |
+| K4 | Sell a delisted asset | `fund.isAssetInSale(i)` and simulated `stepDelisted(i)` returns true | `Rebalancer.stepDelisted(i)` |
+
+A check that is not `Ok` and is not an alert (window, sequencer, feed) is
+logged as a skip with its code. A failed duty does not stop the other duties.
+
+#### 8.1.2 Sending a transaction
+
+Every send follows one path:
+
+1. **Simulate** the exact call as the sender (`eth_call` at `latest`). A
+   revert is decoded against the ABI errors. The duty is skipped and alerts.
+2. **Gas limit.** For `settle`, the limit is the larger of the estimate times
+   `gasMultiplier` (default 1.5) and a floor from the contract's own budget:
+   `2 × sideGas(assets, maxRequests) + overhead`, capped at the block gas
+   limit. The constants are read from the ABI-tagged config, not guessed.
+   Other calls use the estimate times `gasMultiplier`.
+3. **Fees.** EIP-1559. `maxFeePerGas` is capped by `maxFeeGwei`. Above the
+   cap the duty waits and logs `gas_price_high`.
+4. **Nonce.** The service holds the nonce in memory. It reads the pending
+   nonce at start and after any error.
+5. **Send and wait** for the receipt up to `receiptTimeoutSecs`.
+6. **Check the receipt.** `status` 0 is a failure. The service replays the
+   call at the block before it to decode the revert reason. It alerts
+   `<duty>_reverted` with the hash, gas used, gas limit and reason.
+7. **Stuck.** No receipt in time: resend the same nonce with fees bumped by
+   12.5 %, at most `maxReplacements` times, then alert `tx_stuck`.
+8. **Record** hash, block, gas used, effective price, L1 fee and total fee.
+
+A revert of `SettleSideOutOfGas` retries once in the same tick with the gas
+floor doubled, capped at the block gas limit. A second revert alerts.
+
+#### 8.1.3 Modes and keys
+
+- **Account mode.** `KEEPER_ROLE` is held by the `KeeperAccount` (E56). The
+  bot key sends `execute(target, calldata)`. At start the service checks the
+  key is a bot key of the account.
+- **Direct mode.** The key itself holds `KEEPER_ROLE` (rehearsal deploys,
+  such as Deploy 4). At start the service checks `hasRole` on the queue and
+  the rebalancer.
+- **Key.** An encrypted JSON keystore. The password arrives on stdin or from
+  a file of mode 0600. It is never read from an argument or logged. The
+  decrypted key lives only in process memory. An environment variable is
+  cleared after it is read.
+- A start-up check that fails exits with code 2 and alerts
+  `keeper_unconfigured`. The service never sends while unconfigured.
+
+#### 8.1.4 Health, alerts and metrics
+
+- **Alerts.** One JSON line on stderr per alert, and a POST to
+  `alertWebhook` when it is set. Kinds: `keeper_unconfigured`,
+  `queue_paused`, `low_gas`, `gas_price_high`, `settle_reverted`,
+  `step_reverted`, `delist_step_reverted`, `send_failed`, `tx_stuck`,
+  `rpc_unreadable`, `epoch_overdue`. The same kind for the same cause alerts
+  once, then again every `realertSecs`, and once on recovery.
+- **`epoch_overdue`.** A settleable epoch is still unsettled
+  `overdueSecs` (default 900) past its `settleableAt`. This is the one alert
+  a tester's check in the Deploy 4 guide also detects by hand.
+- **`low_gas`.** Balance below `minGasWei`, or below the cost of
+  `runwaySettles` settles at the current price (default 10). It alerts even
+  when nothing is due, so a top-up comes before the need.
+- **Health endpoint.** `GET /healthz` on localhost. It returns 200 when the
+  last tick finished within `2 × intervalSecs` and no start-up check failed.
+  The body holds the last tick time, balance, nonce, and the last send.
+- **Metrics.** `GET /metrics` in Prometheus text: ticks, skips by code,
+  sends and reverts by duty, gas used, fees paid, balance, and seconds since
+  the last settle. The Watchdog's keeper liveness check (§8) reads these.
+- **Log.** One JSON line per tick and per send. No secret ever reaches it.
+
+#### 8.1.5 Run, stop and restart
+
+- **Loop.** One tick every `intervalSecs` (default 300). A tick that finds
+  settle due near the window end may shorten the next wait to `fastPollSecs`
+  (default 30) until the epoch settles.
+- **Stop.** SIGTERM and SIGINT end the wait at once. A send in flight waits
+  for its receipt up to `receiptTimeoutSecs`, then the process exits 0.
+- **One instance.** A lock file in the state directory holds the pid. A
+  second instance on the same key exits 2. Two hosts on one key are not
+  supported.
+- **State.** A small JSON file in the state directory: last tick, sends not
+  yet confirmed, alert dedupe. It is rebuilt from the chain when missing.
+- **Supervision.** A systemd unit with `Restart=on-failure`, or the same
+  launcher shape as the stage runbook. The password reaches the unit through
+  `LoadCredential=`, never the unit file.
+
+#### 8.1.6 Configuration
+
+One JSON or TOML file, plus environment overrides for each field: `rpcUrl`
+(and an optional `rpcFallbackUrls` list), `chainId`, `queue`, `rebalancer`,
+`keeperAccount` (absent: direct mode), `keystore`, `stateDir`,
+`intervalSecs`, `fastPollSecs`, `maxRequests`, `maxUsdc`,
+`maxCallsPerTick`, `gasMultiplier`, `maxFeeGwei`, `minGasWei`,
+`runwaySettles`, `receiptTimeoutSecs`, `maxReplacements`, `overdueSecs`,
+`realertSecs`, `alertWebhook`, `healthPort`. The service checks `chainId`
+against the RPC and the addresses against the deployment manifest when one is
+given. A mismatch exits 2.
+
+#### 8.1.7 Acceptance
+
+- Unit tests for the gas floor, the receipt check, the stuck-replacement
+  path, alert dedupe and config parsing.
+- An anvil test runs the service against the one-vault deploy script. It
+  settles a deposit and a redemption, steps a plan, and sells a delisted
+  asset, in both account and direct mode.
+- An anvil test forces a mined revert (a settle sent with too little gas)
+  and checks for `settle_reverted` with the decoded reason.
+- A test stops the service with SIGTERM mid-wait. It exits within 2 s.
+- No test or log line contains the keystore password.
+- One week on stage (Deploy 4) with no missed epoch and no unalerted revert.
 
 ## 9. Migration
 
