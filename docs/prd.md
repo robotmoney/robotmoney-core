@@ -1,5 +1,11 @@
 # Product Requirements Document
 
+Status (2026-11-23): the one-vault fund (contracts 0.9.0) is the product on trunk. The staged amendments of
+`docs/technical/one-vault-prd-amendments.md` are applied here, in their step 3f form (§5 and §5.1 of that file), as the
+agy safety review of 0.9.0 asked (AGY-15). Two points stay open for the owner and keep their earlier text: whether a
+stable-only vault stays beside the fund (D2, the direct vault selection of §1), and who writes the per-asset weights
+of a receipt (D8).
+
 ## 1. Problem Statement
 
 Robot Money helps autonomous agents, machine-operated businesses, and
@@ -47,10 +53,10 @@ Robot Money is two separate systems (owner decision, 2026-10-19).
   on-chain write (owner decision, 2026-10-19). `rmpc`'s other uses are
   off-chain: signing, keystores, the committee-identity Ed25519 signer,
   config export, and reads. The one on-chain write is an agent deposit
-  into an allowed vault. The gateway decides whether an agent may deposit,
-  how much, until when, for which depositor and share receiver, and into
-  which allowed vault. It then forwards the permitted deposit to that
-  vault.
+  request into the fund's queue. The gateway decides whether an agent may
+  deposit, how much, until when, and for which depositor and share
+  receiver. It then forwards the permitted deposit request, owned by the
+  depositor, to the queue.
 
 The gateway system is a client of the vaults system. It calls the same
 public vault deposit surface a human wallet uses. The vaults system
@@ -66,21 +72,27 @@ open question for the gateway's own release.
 - Depositors can deposit USDC into a selected vault or a Portfolio
   Router allocation with a clear preview of destination, fees, expected
   receipts, and unavailable legs.
-- Depositors can withdraw synchronously from eligible vaults and
-  Portfolio Router paths.
+- Depositors redeem the fund by timed request: a redemption to USDC
+  settles from the next settlement after its window, and can be cancelled
+  until its period closes. If the fund is wound down, every holder can take
+  a pro-rata slice of its assets.
 - Autonomous depositors can authorize an agent to deposit into a vault
   with user-defined limits, allowed vaults, share receiver (always the
   owner), and expiration.
 - The Safe multisig, through the TimelockController, is the only body
-  that changes Portfolio Router target weights: the weight setter applies
-  the Investment Committee's consensus receipt as one timelock operation.
-  There is no voting by token holders or anyone else.
+  that changes the fund's target weights. Applying the Investment
+  Committee's consensus receipt sets the targets and opens a rebalance
+  plan, as one timelock operation. There is no voting by token holders or
+  anyone else.
 - Any user can inspect vault availability, allocation weights,
   performance, fees, governance state, and execution results.
 - Product failures are explicit: users receive a product-level reason
   when an operation cannot proceed or only partially succeeds.
 - Consensus sessions publish one subject-scoped receipt with a
-  deterministic four-bucket bps mean, judge-authored prose, and the analysts'
+  deterministic four-bucket bps mean and one target weight per listed
+  asset (the asset weights of a bucket sum to that bucket; a bucket with
+  no listed asset carries 0 bps; who writes the asset weights is open,
+  decision D8), judge-authored prose, and the analysts'
   off-chain Ed25519 signatures, committed on-chain by one submitter the Safe
   authorized through the timelock. Any user can inspect each receipt, its
   verification state, and whether the Safe applied it.
@@ -88,8 +100,12 @@ open question for the gateway's own release.
 Success is measured by:
 
 - successful deposit and withdrawal completion rate;
-- percentage of attempted operations that provide a preview before user
+- percentage of attempted operations that show their terms before user
   approval;
+- median and 95th percentile time from a redemption request to claimable
+  USDC;
+- share of settlements that complete at the keeper's first call;
+- execution cost of a flow against its feed value, before the exit fee;
 - percentage of failed operations that return a clear product reason;
 - autonomous-agent activity that remains within depositor-defined limits;
 - consensus receipts recorded, and the share the Safe applies to router
@@ -159,10 +175,9 @@ Access expectations:
 - As a human depositor, I want to choose a vault or Portfolio Router
   allocation and preview the result before approving so that I
   understand where my funds go and what I receive.
-- As a human depositor, I want to get funds out in a single transaction
-  with no queue — withdrawing a chosen amount from the stable-yield
-  product, or redeeming my shares for their current value from a basket
-  product — so that funds are available when needed.
+- As a human depositor, I want to redeem by a request whose cancel
+  cutoff and earliest settlement time I see before I approve, so that I
+  know when my funds are available.
 - As a Safe signer, I want to apply the Investment Committee's consensus
   receipt to the Portfolio Router target weights as one timelock
   operation, so that every rebalance is a scheduled, delayed and
@@ -198,10 +213,10 @@ Access expectations:
 2. The product previews source, amount, fees, net amount, recipient, and
    any limitations.
 3. The depositor approves the withdrawal.
-4. The product settles the withdrawal in a single transaction with no
-   queue — a chosen amount for the stable-yield product, or shares
-   redeemed for their current value for a basket product — and reports
-   the result.
+4. The product settles the redemption request from the next settlement
+   after its window, at the price set at that settlement (a rate limit can
+   spread a large request over several settlements), and reports the
+   result.
 
 ### Autonomous Treasury Sweep
 
@@ -289,7 +304,8 @@ Common edge cases:
 - selected destination has deposits paused, is retired, full, or unavailable
   (this refuses a deposit only; a withdrawal is never refused for a pause);
 - requested amount exceeds depositor, vault, allocation, or agent limits;
-- withdrawal path cannot meet synchronous settlement requirements;
+- a redemption cannot settle yet (a safety check, a rate limit or a pause
+  delays it; the product names the check);
 - a Portfolio Router allocation leg is unavailable, causing the whole deposit to revert;
 - account balance or approval is insufficient;
 - agent permission is expired, revoked, or scoped to a different
@@ -301,7 +317,10 @@ Common edge cases:
 ## 6. Entity Lifecycle
 
 - **Vault.** Proposed -> active -> deposits paused -> active; active -> retired;
-  retired -> redeemable archive when redemptions remain available. A retired
+  retired -> redeemable archive when redemptions remain available. Holders of
+  the one-vault fund redeem by timed request, and in kind only in a wind-down;
+  a holder who moves from a retired vault into the fund accepts those terms,
+  and the product states them before the move. A retired
   vault remains withdraw-only: existing depositors keep standard ERC-4626
   redemption at any time, the router routes no new deposits into it, and the
   protocol performs no forced or assisted on-chain migration of depositor funds.
@@ -319,8 +338,12 @@ Common edge cases:
   expired when its validity window ends. There is no paused state. The
   owner or the agent itself revokes; no admin can (owner decision
   2026-10-20).
-- **Agent deposit.** Requested -> previewed -> approved -> settled into
-  one allowed vault; requested or previewed -> refused.
+- **Agent deposit.** Requested (a deposit request into the fund's queue,
+  owned by the depositor) -> settled -> delivered to the depositor after
+  the hold; requested -> refused, cancelled in its open period, or expired.
+  Revoking an agent's policy stops its new requests at once. A request it
+  already made stays locked until it fills, expires, or is cancelled in its
+  open period.
 - **Consensus receipt.** Recorded -> scheduled on the timelock ->
   released and applied in one operation, or cancelled before execution.
 - **Receipt submitter.** Granted by the Safe through the timelock ->
@@ -329,8 +352,14 @@ Common edge cases:
 - **Fee schedule.** Proposed -> published -> active -> superseded.
 - **Incident control.** Normal -> deposits paused -> normal; normal or
   deposits paused -> shutdown. New deposits can be halted for incident
-  response while existing holders can always redeem. Withdrawals are never
-  blocked, by anyone.
+  response. A USDC redemption can be delayed by the protocol's safety
+  checks, by a rate limit or by a pause, and a pause ends by itself. While
+  the fund runs there is no other exit. If the fund cannot settle, the Safe
+  multisig winds it down, through the timelock. In a wind-down every holder
+  can take a pro-rata slice of the fund's assets, and only the Safe can end
+  it. Shares from a deposit are held for at least one hour before they are
+  delivered. An emergency freeze of held shares ends by itself, after 7 days
+  by default and never after more than 14.
 
 ## 7. Integration Needs
 
@@ -371,31 +400,46 @@ Common edge cases:
   control over governance changes, router weights, or funds.
 - On-chain committee voting or on-chain committee tilts. The committee's
   only on-chain output is the consensus receipt.
-- Token-based governance of any kind. Governance never covers vault
-  internals, per-vault asset selection, strategy selection, fees, or
-  individual agent permissions.
+- Token-based governance of any kind. No token vote covers fund
+  internals, asset selection, fees, or individual agent permissions. Asset
+  weights are set only by the Safe through the timelock: by an applied
+  consensus receipt, or by a direct target for bootstrap.
 - Hosted custody or hosted signing services.
 - Vault categories whose legal, liquidity, valuation, and disclosure
   requirements are not specified.
 
 ## 9. Constraints
 
-- Deposits and withdrawals must provide a preview before user approval.
-- Withdrawals must settle in a single transaction with no queue: the
-  stable-yield product lets a holder withdraw a chosen amount, and basket
-  products let a holder redeem shares for their current value.
-- Product surfaces must expose fees, net amounts, destinations,
-  recipients, limits, and refusal reasons in user-facing language.
+- Deposits and redemptions must show their terms before user approval:
+  the fee, the time until which the request can be cancelled, the earliest
+  settlement time, the end of the hold, and the last known share value
+  marked as an indication. The price is set at settlement and is the same
+  for every request of that settlement.
+- A redemption to USDC is a request. It can be cancelled until the end of
+  the period in which it was made. It settles from the next settlement
+  after its window. A rate limit can spread a large request over several
+  settlements. After a fixed number of periods (48 hours at the defaults)
+  the owner of an unfilled redemption can ask for the unfilled shares back,
+  and gets them at the end of the settlement round then under way. The fund
+  does not offer a withdrawal of a chosen USDC amount, and it does not offer
+  an exit in kind while it runs. If the fund is wound down, every holder can
+  take a pro-rata slice of its assets.
+- Product surfaces must expose fees, limits, settlement times, destinations,
+  recipients and refusal reasons before approval, in user-facing language,
+  and net amounts once a request has settled.
 - **NAV disclosure in UIs:** Whenever NAV is displayed (position value, preview estimates, performance metrics), the surface must include the disclaimer: "NAV is the protocol's system-level valuation, used for growth limits and guards. Your share value = market price of underlying assets. See help for details."
-- Product surfaces must itemize fees and slippage in user-facing language where preview estimates diverge from market-adjusted outcomes.
+- Surfaces show before approval the fee, the bands that bound the price, the cancel cutoff and the earliest settlement time. Once a request has settled they show the executed amounts, with the fee and the slippage itemized.
 - Autonomous-agent access must remain bounded by depositor-defined
-  amount limits, allowed vaults, share receiver (always the owner), and
-  expiration. An agent's only on-chain action is a deposit into a vault.
+  amount limits, share receiver (always the owner), and expiration. An
+  agent's only on-chain action is a deposit request into the fund's queue,
+  with the depositor as the request's owner. Shares are delivered to the
+  owner, and anyone may trigger that delivery. An agent cannot cancel or
+  redeem.
 - A depositor must remain the authority over their own agent policy.
 - Product-wide safety controls must not grant operators authority to
   redirect user funds or expand an individual agent's permissions.
-- The Portfolio Router must expose target weights, active weights,
-  governance state, and historical outcomes.
+- The fund must expose target weights, current weights, the rebalance
+  plan's progress and cost, governance state, and historical outcomes.
 - Receipt submissions must go directly to the receipt contract of the
   vaults system, never through the gateway. A recorded receipt is
   signalling-only and must not move funds or set router weights directly.
@@ -404,14 +448,20 @@ Common edge cases:
   analysts' Ed25519 signatures verified off-chain.
 - The vaults system must not depend on the rmpc gateway system. Deposits,
   withdrawals, receipt submission and rebalancing must work with no gateway
-  deployed. The gateway may call only a vault's public deposit surface.
+  deployed. The gateway may call only the public deposit-request function
+  of the fund's queue.
 - Vault and Portfolio Router fee structures are limited to three
   classes: management fee, swap-fee share, and exit fee. Each fee
   class, its rate, and its recipient must be disclosed before user
   approval. In the current phase only exit fees are implemented (the live rmUSDC vault charges 25 bps);
   management fee and swap-fee share are deferred to a future phase.
 - Vaults must disclose risk labels, fees, caps, availability, and
-  retirement or pause state.
+  retirement or pause state. The fund discloses one risk label for its
+  widest permitted mix, the cap on each asset's weight, and the current
+  plan.
+- The fund lists a real-world asset only if it has an independent price
+  feed that is live at all hours. No tokenized equity meets this today, so
+  the real-world-asset bucket carries 0 bps until one does.
 - Proxy-backed contracts must disclose their current implementation
   and whether upgrades remain possible. A final mainnet release must offer a
   freeze-at-deploy choice or an explicitly governed, time-bounded proving
@@ -733,8 +783,10 @@ trigger is recovering non-whitelisted, already-quarantined tokens from a
 fixed quarantine address, and only through multisig-plus-offline
 governance.
 
-**INV-2 — No stranded assets.** Every protocol or depositor asset is always
-redeemable by holders or absorbed into the product's value: donated assets
+**INV-2 — No stranded assets.** Every protocol or depositor asset is
+redeemable by its holder, or absorbed into the product's value. In the fund a
+redemption is a timed request that settles, and after a wind-down it is in
+kind; no role can keep a holder from redeeming for good: donated assets
 accrue pro-rata to all holders (assets a product holds are always reflected
 in its value, and the accounting is protected against share-inflation
 manipulation); underlying-strategy emissions are harvested into the product;

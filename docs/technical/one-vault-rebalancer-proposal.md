@@ -211,7 +211,11 @@ and `setTarget(assets, bps, params)` check only the vector itself:
   ceiling on one venue, not an allocation choice;
 - a basket asset's target is inside its pool-share limit (§4.5, rule 3).
 
-Idle USDC carries no target. It absorbs rounding, as before.
+Idle USDC carries no target. It absorbs rounding, as before. One exception:
+when a delisting or a single-asset `emergencyUnwind` zeroes an asset's end
+weight during a live plan, that weight becomes idle's end target for the rest
+of the plan. The proceeds wait in USDC until the Safe sets a new target, and
+the plan can still converge (safety review 0.9.0, AGY-05).
 
 **Off-chain tools own the semantic layer.** The dapp, rmpc, explorer and
 reports group assets by the receipt's labels. They can slice the same assets
@@ -344,7 +348,9 @@ carries more weight, so it is tightened.
    position's value when the sale opened. A sale that would break either
    stops, and the Safe decides. If the feed is dead there is no price to
    bound a sale, and the Safe sells the asset with `emergencyUnwind` for
-   that one asset.
+   that one asset, naming the least USDC it accepts (`minUsdcOut`). The
+   emptied asset is deactivated, so its dead feed blocks nothing after the
+   sale (safety review 0.9.0, AGY-01 and AGY-03).
 
    **While the sale lasts** deposits and the match stop (§5.11.4).
    Redemptions still settle. A redemption does not sell its slice of the
