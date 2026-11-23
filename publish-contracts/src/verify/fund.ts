@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Collector } from "./collector.ts";
-import { ERC1967_PROXY_ARTIFACT, compareCode, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact, verifyLinkedLibraries } from "./codehash.ts";
+import { ERC1967_IMPLEMENTATION_SLOT, ERC1967_PROXY_ARTIFACT, compareCode, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact, verifyLinkedLibraries } from "./codehash.ts";
 import { ADMIN_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT, SAFE_GUARD_SLOT, SAFE_SENTINEL, SIG_ROLE_GRANTED, Z32, ZERO } from "./constants.ts";
 import { scanLogs, topicToAddress } from "./logs.ts";
 import { isAddress, lc } from "./manifests.ts";
@@ -388,6 +388,25 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
     const configs = (await chain.read(addr.fund, ASSET_CONFIGS_SIG)) as Record<string, any>[];
     if (configs.length !== expectedAssetCount) return { ok: false, detail: `assetConfigs length ${configs.length} != expected ${expectedAssetCount}` };
     return checkFundAssets(configs, f.assets);
+  });
+  // ADR-0019 (safety review 0.9.0, MISSED-09): every active basket asset's swap adapter runs code the fund allows, and an adapter behind an ERC-1967
+  // proxy has an allowed implementation too. A direct adapter the fund no longer allows can value and exit but never open a position.
+  await c.run("fund: every active basket adapter's code hash is allowed (ADR-0019)", async () => {
+    const configs = (await chain.read(addr.fund, ASSET_CONFIGS_SIG)) as Record<string, any>[];
+    const problems: string[] = [];
+    const allowed = async (h: Hex) => Boolean(await chain.read(addr.fund, "function adapterCodeHashAllowed(bytes32) view returns (bool)", [h]));
+    let checked = 0;
+    for (let i = 0; i < configs.length; i++) {
+      const a = configs[i]!;
+      if (Number(a.kind) !== 1 || !Boolean(a.active)) continue;
+      const adapter = String(a.adapter) as Address;
+      checked++;
+      if (!(await allowed(keccak256(await chain.getCode(adapter))))) problems.push(`asset[${i}]: adapter ${adapter} code hash not allowed`);
+      const word = (await chain.getStorageAt(adapter, ERC1967_IMPLEMENTATION_SLOT)).replace(/^0x/, "").padStart(64, "0");
+      const impl = `0x${word.slice(24)}` as Address;
+      if (lc(impl) !== ZERO && !(await allowed(keccak256(await chain.getCode(impl))))) problems.push(`asset[${i}]: adapter implementation ${impl} code hash not allowed`);
+    }
+    return { ok: problems.length === 0, detail: problems.length ? problems.join("; ") : `${checked} basket adapter(s) allowed` };
   });
   await c.runEq("fund: minSeedUsdc() equals the sheet", async () => BigInt(await chain.read(addr.fund, "function minSeedUsdc() view returns (uint256)") as bigint).toString(), f.minSeedUsdc.toString());
   await c.runEq("fund: maxSlippageBps() equals the sheet", async () => BigInt(await chain.read(addr.fund, "function maxSlippageBps() view returns (uint256)") as bigint).toString(), f.maxSlippageBps.toString());

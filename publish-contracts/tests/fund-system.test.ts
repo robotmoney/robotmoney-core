@@ -190,14 +190,16 @@ describe("Step 3f fund sheet fields and buildFundVerifySheet", () => {
     expect(eoa.fund!.keeperBotKeys).toEqual([]);
     expect(eoa.fund!.receiptSubmitters).toEqual([]);
 
+    // AGY-04: a KeeperAccount owner acts alone, so the account has one owner (the team Safe).
+    expect(() => fundSheet(withExtras({ KEEPER_TYPE: "smart-account", KEEPER_OWNERS: `${A1},${A2}`, KEEPER_BOT_KEYS: A3 }))).toThrow("KEEPER_OWNERS lists 2 owners");
     const sa = fundSheet(withExtras({
       KEEPER_TYPE: "smart-account",
-      KEEPER_OWNERS: `${A1},${A2}`,
+      KEEPER_OWNERS: A1,
       KEEPER_BOT_KEYS: A3,
       RECEIPT_SUBMITTERS: `${A1},${A3}`,
     }));
     expect(sa.fund!.keeperType).toBe("smart-account");
-    expect(sa.fund!.keeperOwners).toEqual([A1, A2]);
+    expect(sa.fund!.keeperOwners).toEqual([A1]);
     expect(sa.fund!.keeperBotKeys).toEqual([A3]);
     expect(sa.fund!.receiptSubmitters).toEqual([A1, A3]);
   });

@@ -218,6 +218,11 @@ tick() {
         else
             alert "step_failed" "simulated step() reverted: ${sim:0:300}"
         fi
+    elif [[ "${L[0]}" == "7" ]]; then
+        # SkipReason.Concluded: the plan converged or expired, and only a step() call records it. Until then the plan
+        # stays Open, which blocks deactivateAsset and the next plan (safety review 0.9.0, MISSED-07).
+        echo "onevault-keeper: plan due to conclude; step() records it" >&2
+        step_due=1
     else
         echo "onevault-keeper: step not due, SkipReason ${L[0]}" >&2
     fi

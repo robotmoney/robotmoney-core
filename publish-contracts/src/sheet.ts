@@ -657,6 +657,9 @@ function fundSheet(v: Record<string, string>, opts: ParseSheetOpts): Sheet {
     if (keeperOwners === undefined || keeperOwners.length === 0) throw err("KEEPER_TYPE smart-account needs KEEPER_OWNERS: the verifier compares the account's owners() with them", { name: "KEEPER_OWNERS" });
     if (keeperBotKeys === undefined) throw err("KEEPER_TYPE smart-account needs KEEPER_BOT_KEYS (a list, or the word none): the verifier compares the account's botKeys() with it", { name: "KEEPER_BOT_KEYS" });
     for (const o of keeperOwners) if (lc(o) === lc(keeper)) throw err(`KEEPER_OWNERS ${o} is the keeper account itself`, { name: "KEEPER_OWNERS" });
+    // Safety review 0.9.0 (AGY-04): every KeeperAccount owner acts alone (1-of-N), so one compromised owner could remove the others and
+    // halt the keeper. The account has one owner, the team Safe, whose own threshold is then the quorum.
+    if (keeperOwners.length !== 1) throw err(`KEEPER_OWNERS lists ${keeperOwners.length} owners: a KeeperAccount owner acts alone, so its one owner is the team Safe`, { name: "KEEPER_OWNERS" });
   }
   const receiptSubmitters = v.RECEIPT_SUBMITTERS !== undefined ? (v.RECEIPT_SUBMITTERS === "none" ? [] : asList("RECEIPT_SUBMITTERS", v.RECEIPT_SUBMITTERS)) : undefined;
   if (params.FLOW_SETTLE_WINDOW! >= params.FLOW_EPOCH_LENGTH!) throw err("FLOW_SETTLE_WINDOW must be shorter than FLOW_EPOCH_LENGTH", { name: "FLOW_SETTLE_WINDOW" });

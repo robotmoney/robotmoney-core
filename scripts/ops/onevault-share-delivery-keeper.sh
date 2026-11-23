@@ -77,16 +77,19 @@ die() {
     exit 2
 }
 
-# Discovery and grouping. Prints "PLAN <owner> <assets>" per owner with deliverable deposit USDC, or exits 3 with an
-# "ERROR <detail>" line when a read fails. Claim and settlement fields follow FlowTypes.Claim and FlowTypes.Settlement.
-# Arithmetic is exact (Python integers): usdc - ceil(usdc * claimed / shares) is the cost of the claim's undelivered shares.
+# Discovery. Prints "PLAN <owner> <assets>" per owner with deliverable deposit USDC, or exits 3 with an "ERROR <detail>"
+# line when a read fails. The owners are those of every deposit request (FlowTypes.Request), and the amount is the queue's
+# own `maxDeposit(owner)`: it counts the synced claims after their hold and outside a freeze (RB-18), and the deposits a
+# whole match filled that no sync has turned into a claim yet (safety review 0.9.0, MISSED-07). A scan of the claim list
+# alone missed those lazy match fills.
+# `cast call --json` prints a JSON array of outputs, or (cast 1.8 and later) an object whose "data" is that array.
 discover_plan() {
     python3 -I - "$CAST_BIN" "$RPC_URL" "$QUEUE_ADDRESS" <<'PY'
 import json, subprocess, sys
 
 cast, rpc, queue = sys.argv[1], sys.argv[2], sys.argv[3]
-CLAIM = "getClaim(uint256)((uint256,address,uint8,uint64,uint64,uint256,uint256,uint256,uint256))"
-SETTLEMENT = "getSettlement(uint256)((uint64,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint64,uint64,uint64))"
+REQUEST = ("getRequest(uint256)((address,uint8,uint64,uint256,uint256,bool,uint16,uint32,uint16,uint64,uint64,"
+           "uint64,uint64,uint64,bool,uint256,uint256,uint256,uint256,uint256))")
 
 def run(args):
     r = subprocess.run([cast] + args + ["--rpc-url", rpc], capture_output=True, text=True)
@@ -95,29 +98,26 @@ def run(args):
     return r.stdout
 
 def read(sig, *args):
-    return json.loads(run(["call", queue, sig, *[str(a) for a in args], "--json"]))[0]
+    """The first output of a view call."""
+    out = json.loads(run(["call", queue, sig, *[str(a) for a in args], "--json"]))
+    if isinstance(out, dict):
+        out = out["data"]
+    return out[0]
+
+def num(v):
+    return int(str(v).split()[0])
 
 try:
-    now = int(run(["block", "latest", "-f", "timestamp"]).split()[0])
-    count = int(read("claimCount()(uint256)")[0])
-    frozen = {}
-    owners = {}
-    for cid in range(1, count + 1):
-        (_req, owner, kind, sid, unlock_at, shares, usdc, claimed, _sc) = read(CLAIM, cid)
-        kind, sid, unlock_at, shares, usdc, claimed = map(int, (kind, sid, unlock_at, shares, usdc, claimed))
-        if kind != 0 or claimed >= shares or now < unlock_at:
-            continue
-        if sid not in frozen:
-            s = read(SETTLEMENT, sid)
-            frozen[sid] = (int(s[9]), int(s[10]))
-        frozen_until, freeze_set_at = frozen[sid]
-        if frozen_until > now and unlock_at > freeze_set_at:
-            continue
-        cost_before = -(-usdc * claimed // shares)
-        owners[owner] = owners.get(owner, 0) + (usdc - cost_before)
+    count = num(read("requestCount()(uint256)"))
+    owners = set()
+    for rid in range(1, count + 1):
+        req = read(REQUEST, rid)
+        if num(req[1]) == 0:
+            owners.add(req[0])
     for owner in sorted(owners):
-        if owners[owner] > 0:
-            print("PLAN", owner, owners[owner])
+        assets = num(read("maxDeposit(address)(uint256)", owner))
+        if assets > 0:
+            print("PLAN", owner, assets)
 except Exception as e:
     print("ERROR", str(e).replace("\n", " "))
     sys.exit(3)

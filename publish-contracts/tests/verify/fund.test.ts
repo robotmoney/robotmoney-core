@@ -276,6 +276,8 @@ class FakeFundChain implements ChainReader {
   claimBodies: Record<string, unknown>[] = [{ owner: A(0x71), shares: 3n, usdc: 4n, claimed: 0n }];
   /** Set false to model a build before Step 3f: the new getters revert. */
   step3fGetters = true;
+  /** `fund.adapterCodeHashAllowed(hash)` for every hash (ADR-0019 check). */
+  adapterAllowed = true;
 
   constructor(private readonly sheet: VerifySheet) {
     this.codes.set(lc(USDC_ADDRESS), USDC_CODE);
@@ -412,6 +414,7 @@ class FakeFundChain implements ChainReader {
         return [f.tvlCap, f.perDepositCap, f.exitFeeBps, feeRec];
       }
       if (fn === "assetConfigs") return f.assets ?? defaultAssets();
+      if (fn === "adapterCodeHashAllowed") return this.adapterAllowed;
       if (fn === "minSeedUsdc") return f.minSeedUsdc;
       if (fn === "maxSlippageBps") return f.maxSlippageBps;
       if (fn === "navDeviationGuardBps") return f.navDeviationBps;
@@ -592,6 +595,11 @@ describe("verifyFundSystem negative coverage (DEP-01..03, E47)", () => {
     drifted[0]!.capBps = 4500n;
     fDrift.chain.on(FUND, "assetConfigs", () => drifted);
     expect((await failedLabels(fDrift.opts)).join("\n")).toContain("asset[0].capBps: got 4500, want 4000");
+
+    // ADR-0019: a basket adapter whose code the fund no longer allows
+    const fAdapter = makeFixture();
+    fAdapter.chain.adapterAllowed = false;
+    expect((await failedLabels(fAdapter.opts)).join("\n")).toContain("fund: every active basket adapter's code hash is allowed (ADR-0019)");
   });
 
   test("rejects recursive library code mismatch, extra/missing roles, adminCount() discrepancy, and Safe anomalies", async () => {
