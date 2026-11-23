@@ -1088,8 +1088,18 @@ contract Invariants is PrototypeHarness {
             ++callsShutdown;
             refreshFeeds();
         } else if (!shut && fund.isShutdown()) {
-            timelockExecute(address(fund), abi.encodeCall(IRobotMoneyFund.restore, (TVL_CAP)));
-            ++callsRestore;
+            // A restore raises the cap from 0, so it must fit the pools (§4.5 rule 3, safety review 0.9.0 MISSED-03).
+            // The handler's market actions can thin a pool, so the Safe halves the cap until one fits. The call is
+            // the timelock's own (as its execution of a scheduled restore would be).
+            uint256 cap = TVL_CAP;
+            for (uint256 k; k < 4 && fund.isShutdown(); ++k) {
+                vm.prank(address(timelock));
+                try fund.restore(cap) {
+                    ++callsRestore;
+                } catch {
+                    cap /= 2;
+                }
+            }
             refreshFeeds();
         }
     }

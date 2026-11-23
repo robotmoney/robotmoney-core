@@ -5,7 +5,7 @@ description: "Every value-moving path of `RobotMoneyFund` except the share mint/
 
 # FundFlowsLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FundFlowsLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FundFlowsLib.sol)
 
 **Title:** FundFlowsLib
 
@@ -66,6 +66,12 @@ uint8 internal constant FLOW_EMERGENCY_UNWIND_ASSET = 4;
 
 ```solidity
 uint8 internal constant FLOW_SWEEP_FOREIGN = 5;
+```
+
+### FLOW_REABSORB
+
+```solidity
+uint8 internal constant FLOW_REABSORB = 6;
 ```
 
 ## Functions
@@ -767,14 +773,15 @@ function executeDelistStep(FundState storage s, uint256 index, uint256 maxUsdcNo
 | tokensSold | `uint256` |  |
 | usdcReceived | `uint256` |  |
 
-<a id="_emergencyunwindasset-fundstate-uint256"></a>
+<a id="_emergencyunwindasset-fundstate-uint256-uint256"></a>
 
 ### _emergencyUnwindAsset
 
-Step 3f (`IRobotMoneyFund.emergencyUnwind(uint256)`): single-asset unwind without halting other assets.
+Step 3f (`IRobotMoneyFund.emergencyUnwind(uint256,uint256)`): single-asset unwind without halting other
+assets.
 
 ```solidity
-function _emergencyUnwindAsset(FundState storage s, uint256 index)
+function _emergencyUnwindAsset(FundState storage s, uint256 index, uint256 minUsdcOut)
         private
         returns (uint256 recoveredUsdc);
 ```
@@ -785,6 +792,7 @@ function _emergencyUnwindAsset(FundState storage s, uint256 index)
 | ---- | ---- | ----------- |
 | s | `FundState` |  |
 | index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
 
 **Returns**
 
@@ -792,13 +800,17 @@ function _emergencyUnwindAsset(FundState storage s, uint256 index)
 | ---- | ---- | ----------- |
 | recoveredUsdc | `uint256` |  |
 
-<a id="_emergencyunwindsingleswap-fundstate-uint256-assetconfig"></a>
+<a id="_emergencyunwindsingleswap-fundstate-uint256-assetconfig-uint256"></a>
 
 ### _emergencyUnwindSingleSwap
 
 ```solidity
-function _emergencyUnwindSingleSwap(FundState storage s, uint256 index, AssetConfig memory a)
-        private;
+function _emergencyUnwindSingleSwap(
+        FundState storage s,
+        uint256 index,
+        AssetConfig memory a,
+        uint256 minUsdcOut
+    ) private;
 ```
 
 **Parameters**
@@ -808,6 +820,107 @@ function _emergencyUnwindSingleSwap(FundState storage s, uint256 index, AssetCon
 | s | `FundState` |  |
 | index | `uint256` |  |
 | a | `AssetConfig` |  |
+| minUsdcOut | `uint256` |  |
+
+<a id="_salefloor-fundstate-uint256-address-uint256-uint256"></a>
+
+### _saleFloor
+
+<i>
+
+The floor of a sale outside a step: the larger of the feed price less `delistBandBps` and the caller's
+`minUsdcOut`. A stale feed leaves only the caller's floor, which must then be set (AGY-01). A stale price is
+never a floor, because it would trap an asset that crashed.
+
+</i>
+
+```solidity
+function _saleFloor(
+        FundState storage s,
+        uint256 index,
+        address token,
+        uint256 amount,
+        uint256 minUsdcOut
+    ) private view returns (uint256 floor);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| token | `address` |  |
+| amount | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| floor | `uint256` |  |
+
+<a id="_reabsorb-fundstate-uint256-uint256"></a>
+
+### _reabsorb
+
+`IRobotMoneyFund.reabsorbRemovedAsset` (INV-2, LIFE-6; safety review 0.9.0, AGY-07): sell the tokens of a
+removed basket asset that reappeared in the fund (a late transfer, an airdrop, a rounding remainder)
+into idle USDC, so they count in NAV instead of being stranded. Only the part no one is owed is sold:
+the deferred in-kind claims and the delisting claims of every slot with the same token stay. It is
+refused while any slot with that token is active or in sale (a re-listed position is never sold).
+
+```solidity
+function _reabsorb(FundState storage s, uint256 index, uint256 minUsdcOut)
+        private
+        returns (uint256 usdcGot);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| minUsdcOut | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| usdcGot | `uint256` |  |
+
+<a id="_unowedbalance-fundstate-uint256-address"></a>
+
+### _unowedBalance
+
+<i>
+
+The fund's balance of `token` above what every slot with that token still owes; reverts when one of them
+is active or in sale.
+
+</i>
+
+```solidity
+function _unowedBalance(FundState storage s, uint256 index, address token)
+        private
+        view
+        returns (uint256);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FundState` |  |
+| index | `uint256` |  |
+| token | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
 
 <a id="_settleclaim-fundstate-uint256-address"></a>
 
@@ -896,6 +1009,29 @@ function _payLeg(address token, address receiver, uint256 amount, uint256 feeBps
 | amount | `uint256` |  |
 | feeBps | `uint256` |  |
 | feeTo | `address` |  |
+
+<a id="_payfee-address-address-uint256"></a>
+
+### _payFee
+
+<i>
+
+Pay a fee without letting a refusal block the exit it belongs to (MISSED-04): an unpaid fee stays with
+the holders.
+
+</i>
+
+```solidity
+function _payFee(address token, address to, uint256 amount) private;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
 
 <a id="_haircut-uint256-uint256"></a>
 

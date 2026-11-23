@@ -51,7 +51,7 @@ interface IRebalanceGovernance {
     ///         TARGET_SETTER_ROLE only (the timelock: RB-1). `nonReentrant`.
     ///         Checks in order (RouterGovernance.applyReceipt, unchanged):
     ///         recorded (`ReceiptNotRecorded`), not released (`ReceiptAlreadyReleased`), stored digest
-    ///         == `payloadDigest` (`PayloadDigestMismatch`), `recordedAt > lastAppliedRecordedAt`
+    ///         == `payloadDigest` (`PayloadDigestMismatch`), `recordedAt >= lastAppliedRecordedAt`
     ///         (`ReceiptNotNewerThanApplied`). Effects: `lastAppliedRecordedAt = recordedAt`,
     ///         `receipts.releaseReceipt(receiptId)`, then
     ///         `fund.setTargetAndOpenPlan(assets, bps, defaultPlanParams, receiptId)`, which runs

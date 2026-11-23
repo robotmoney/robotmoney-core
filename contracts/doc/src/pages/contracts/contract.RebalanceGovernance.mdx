@@ -5,7 +5,7 @@ description: "The fund's target setter (§5.1, §6). It holds the fund's `GOVERN
 
 # RebalanceGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/RebalanceGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/RebalanceGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalanceGovernance](/contracts/interfaces/interface.IRebalanceGovernance)
 
@@ -132,6 +132,35 @@ function initialize(
 | upgradeTimelock_ | `address` | The only upgrade and freeze authority. |
 | upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
 
+<a id="_revokerole-bytes32-address"></a>
+
+### _revokeRole
+
+<i>
+
+Last-holder floor for the self-administered `TARGET_SETTER_ROLE` (`ADMIN_ROLE` is covered by
+`AdminFloorAccessControl`). No `ADMIN_ROLE` holder can grant it, so with zero holders no target or plan
+could ever be set again (safety review 0.9.0, AGY-08). Both `revokeRole` and `renounceRole` route here.
+
+</i>
+
+```solidity
+function _revokeRole(bytes32 role, address account) internal virtual override returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
+| account | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
 <a id="applyreceipt-bytes32-bytes32-address-uint256"></a>
 
 ### applyReceipt
@@ -140,7 +169,7 @@ Release `receiptId` and open a plan to its per-asset vector, in one call (§5.1 
 TARGET_SETTER_ROLE only (the timelock: RB-1). `nonReentrant`.
 Checks in order (RouterGovernance.applyReceipt, unchanged):
 recorded (`ReceiptNotRecorded`), not released (`ReceiptAlreadyReleased`), stored digest
-== `payloadDigest` (`PayloadDigestMismatch`), `recordedAt > lastAppliedRecordedAt`
+== `payloadDigest` (`PayloadDigestMismatch`), `recordedAt >= lastAppliedRecordedAt`
 (`ReceiptNotNewerThanApplied`). Effects: `lastAppliedRecordedAt = recordedAt`,
 `receipts.releaseReceipt(receiptId)`, then
 `fund.setTargetAndOpenPlan(assets, bps, defaultPlanParams, receiptId)`, which runs

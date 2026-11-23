@@ -5,7 +5,7 @@ description: "Shared state and helpers of the mechanism tests. Everything runs o
 
 # FlowQueueBase
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/test/prototype/FlowQueue.t.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/prototype/FlowQueue.t.sol)
 
 **Inherits:** [PrototypeHarness](/contracts/test/prototype/abstract.PrototypeHarness)
 
@@ -171,6 +171,24 @@ function _settleNow() internal returns (uint256);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `uint256` |  |
+
+<a id="_keepersettleround"></a>
+
+### _keeperSettleRound
+
+`settle` as the keeper, one call a block, until a settlement is recorded (at most 8 calls). A round
+with more than `ENROLL_PROCEED_MAX` requests takes calls that only enroll before the one that books the
+match and walks the sides (safety review 0.9.0, MISSED-01). Returns the settlement id (0 if none).
+
+```solidity
+function _keeperSettleRound() internal returns (uint256 id);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| id | `uint256` |  |
 
 <a id="_trysettle-address-uint256-uint256"></a>
 

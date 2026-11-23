@@ -212,8 +212,8 @@ contract TargetVectorTest is PrototypeHarness {
     }
 
     /// @dev `addAsset` refuses a second active entry with the same asset id, for a Basket token and a Lending
-    ///      adapter. After deactivation the same token may be re-added (with its feed, E15), and a vector naming it
-    ///      maps to the new index.
+    ///      adapter. After deactivation the same token may be re-added (with its feed, E15). Nothing is left open on
+    ///      its old slot, so it takes that slot back (safety review 0.9.0, AGY-07) and a vector naming it maps there.
     function test_addAsset_duplicateId_reverts_and_relist_maps_to_new_index()
         public
         fixtureCovered
@@ -234,20 +234,18 @@ contract TargetVectorTest is PrototypeHarness {
         );
         assertEq(fund.assetCount(), n, "no entry added");
 
-        // Genesis target is 0, so cbBTC deactivates. The same token then lists again at a new index.
+        // Genesis target is 0, so cbBTC deactivates. The same token then lists again, in its old slot.
         timelockExecute(address(fund), abi.encodeCall(fund.deactivateAsset, (IDX_CBBTC)));
         timelockExecute(address(fund), addB);
-        uint256 relisted = n;
-        assertEq(fund.assetCount(), n + 1, "re-added");
-        assertTrue(fund.assetConfig(relisted).active, "new entry active");
+        assertEq(fund.assetCount(), n, "re-added without a new slot");
+        assertTrue(fund.assetConfig(IDX_CBBTC).active, "the old slot is active again");
 
-        // The vector names cbBTC by its token, so its weight lands on the new index.
+        // The vector names cbBTC by its token, so its weight lands on that slot.
         uint16[5] memory v = _valid();
         recordAndApply(v);
         uint16[] memory t = fund.targetBps();
-        assertEq(t.length, n + 1, "target grew with the asset list");
-        assertEq(t[IDX_CBBTC], 0, "old inactive entry target 0");
-        assertEq(t[relisted], v[IDX_CBBTC], "new entry carries the cbBTC weight");
+        assertEq(t.length, n, "the target list did not grow");
+        assertEq(t[IDX_CBBTC], v[IDX_CBBTC], "the re-listed slot carries the cbBTC weight");
     }
 
     /// @dev E57 (Rule 7): `maxBasketBps` defaults to `10 000`; raising above `10 000` reverts `InvalidParam`;

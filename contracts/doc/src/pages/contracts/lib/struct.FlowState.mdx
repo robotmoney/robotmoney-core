@@ -5,7 +5,7 @@ description: "Every piece of FlowQueue state outside the OpenZeppelin namespaces
 
 # FlowState
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowStorage.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FlowStorage.sol)
 
 Every piece of FlowQueue state outside the OpenZeppelin namespaces, in one struct, so the queue's linked
 libraries (`Flow*Lib`) take one storage reference per call. Owned by the `queue` agent after the
@@ -133,6 +133,15 @@ struct FlowState {
     /// @dev Longest `minHold` stored on any deposit request created so far (E41). Settlement hold end uses it, not
     ///      the live `params.minHold`, so a later param change never shortens a hold a request was promised.
     uint32 maxDepositMinHold;
+    // ── Safety review 0.9.0 (agy MISSED-01) ──
+    /// @dev Position inside `activeEpochs[enrollCursor]` (deposit ids, then redemption ids) where a round's
+    ///      enrollment resumes. Enrollment runs in bounded batches, so a flood of requests in one epoch takes more
+    ///      keeper calls instead of one call over the gas cap.
+    uint256 enrollPos;
+    /// @dev Longest `minHold` of a deposit enrolled in each deposit cycle (safety review 0.9.0, AGY-10). A match books
+    ///      the hold of the cycle it fills, not the all-time `maxDepositMinHold`, so lowering `minHold` shortens the
+    ///      freeze window of later matches and a freeze cannot land on shares already unlocked.
+    mapping(uint256 cycle => uint32) depCycleMaxMinHold;
 }
 ```
 
@@ -222,4 +231,6 @@ struct FlowState {
 | noticeRequestsByRound | `mapping(uint64 roundEpoch => uint256[])` |  |
 | pendingNoticeRounds | `uint64[]` |  |
 | maxDepositMinHold | `uint32` |  |
+| enrollPos | `uint256` |  |
+| depCycleMaxMinHold | `mapping(uint256 cycle => uint32)` |  |
 

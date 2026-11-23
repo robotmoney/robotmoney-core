@@ -35,11 +35,20 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
 ///         The constructor's grants to `proposers` go through the same override,
 ///         so the count is right from birth. `proposerCount()` is what the govern
 ///         tool reads before it builds `timelock-revoke-role PROPOSER_ROLE`.
+///
+///         Executor floor (safety review 0.9.0, AGY-02). The fund system closes execution to the Safe alone
+///         (decision D4-10), so the Safe is the only `EXECUTOR_ROLE` holder. Dropping it would leave operations that
+///         can be scheduled but never executed: the same permanent loss of every `ADMIN_ROLE` function. The same
+///         counter floor applies to `EXECUTOR_ROLE`. An open executor (`address(0)` holds the role) counts as one
+///         holder, so it cannot be dropped to zero either.
 contract ProposerFloorTimelock is TimelockController {
     /// @notice Number of accounts currently holding `PROPOSER_ROLE`.
     /// @dev No initializer on purpose: a derived-contract initializer would run
     ///      after the `TimelockController` constructor and reset the count.
     uint256 public proposerCount;
+
+    /// @notice Number of accounts currently holding `EXECUTOR_ROLE` (`address(0)` included when execution is open).
+    uint256 public executorCount;
 
     /// @notice Revoking or renouncing the sole `PROPOSER_ROLE` holder is forbidden:
     ///         nothing could ever be scheduled again.
@@ -47,6 +56,13 @@ contract ProposerFloorTimelock is TimelockController {
 
     /// @notice A timelock born with no proposer could never schedule anything.
     error NoProposer();
+
+    /// @notice Revoking or renouncing the sole `EXECUTOR_ROLE` holder is forbidden: nothing scheduled could ever be
+    ///         executed again (AGY-02).
+    error LastExecutorFloor();
+
+    /// @notice A timelock born with no executor could never execute anything.
+    error NoExecutor();
 
     /// @param minDelay Initial minimum delay in seconds for operations.
     /// @param proposers Accounts granted `PROPOSER_ROLE` and `CANCELLER_ROLE`; at least one.
@@ -59,6 +75,7 @@ contract ProposerFloorTimelock is TimelockController {
         address admin
     ) TimelockController(minDelay, proposers, executors, admin) {
         if (proposerCount == 0) revert NoProposer();
+        if (executorCount == 0) revert NoExecutor();
     }
 
     /// @inheritdoc AccessControl
@@ -67,6 +84,7 @@ contract ProposerFloorTimelock is TimelockController {
     function _grantRole(bytes32 role, address account) internal virtual override returns (bool) {
         bool granted = super._grantRole(role, account);
         if (granted && role == PROPOSER_ROLE) proposerCount++;
+        if (granted && role == EXECUTOR_ROLE) executorCount++;
         return granted;
     }
 
@@ -78,8 +96,12 @@ contract ProposerFloorTimelock is TimelockController {
         if (role == PROPOSER_ROLE && proposerCount == 1 && hasRole(role, account)) {
             revert LastProposerFloor();
         }
+        if (role == EXECUTOR_ROLE && executorCount == 1 && hasRole(role, account)) {
+            revert LastExecutorFloor();
+        }
         bool revoked = super._revokeRole(role, account);
         if (revoked && role == PROPOSER_ROLE) proposerCount--;
+        if (revoked && role == EXECUTOR_ROLE) executorCount--;
         return revoked;
     }
 }

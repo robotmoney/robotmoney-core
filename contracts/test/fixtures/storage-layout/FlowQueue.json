@@ -104,7 +104,9 @@
       "mapping(address owner => uint256) ownerUnenrolledRedShares;",
       "mapping(uint64 roundEpoch => uint256[]) noticeRequestsByRound;",
       "uint64[] pendingNoticeRounds;",
-      "uint32 maxDepositMinHold;"
+      "uint32 maxDepositMinHold;",
+      "uint256 enrollPos;",
+      "mapping(uint256 cycle => uint32) depCycleMaxMinHold;"
     ],
     "robotmoney.storage.GovernedUUPS": [
       "address upgradeTimelock;",
@@ -610,7 +612,7 @@
       },
       "t_struct(FlowState)_storage": {
         "arrayElement": false,
-        "bytes": 2688,
+        "bytes": 2752,
         "members": [
           {
             "label": "fund",
@@ -1103,6 +1105,18 @@
             "offset": 0,
             "slot": "83",
             "type": "t_uint32"
+          },
+          {
+            "label": "enrollPos",
+            "offset": 0,
+            "slot": "84",
+            "type": "t_uint256"
+          },
+          {
+            "label": "depCycleMaxMinHold",
+            "offset": 0,
+            "slot": "85",
+            "type": "t_mapping(t_uint256,t_uint32)"
           }
         ]
       },

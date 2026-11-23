@@ -1,0 +1,383 @@
+---
+title: "SafetyReview090Test"
+description: "Proof tests for the agy safety review of 0.9.0. Each test states the failure the review claims as a property that must hold. A test that failed before its fix is the proof the finding was real."
+---
+
+# SafetyReview090Test
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/prototype/SafetyReview090.t.sol)
+
+**Inherits:** [FlowQueueBase](/contracts/test/prototype/abstract.FlowQueueBase)
+
+**Title:** SafetyReview090Test
+
+Proof tests for the agy safety review of 0.9.0. Each test states the failure the review claims as a
+property that must hold. A test that failed before its fix is the proof the finding was real.
+
+## Constants
+
+### TX_GAS_CAP
+
+<i>
+
+EIP-7825 per-transaction gas cap (2^24). A keeper call above it cannot be included at all.
+
+</i>
+
+```solidity
+uint256 internal constant TX_GAS_CAP = 16_777_216;
+```
+
+### KEEPER_MAX_REQUESTS
+
+<i>
+
+`settle(maxRequests)` a keeper sends under a 2^24 per-tx gas cap: the side call reserves 450 000 gas a fill.
+
+</i>
+
+```solidity
+uint256 internal constant KEEPER_MAX_REQUESTS = 16;
+```
+
+### SPAM_REQUESTS
+
+<i>
+
+Dust requests the attack test opens in one epoch.
+
+</i>
+
+```solidity
+uint256 internal constant SPAM_REQUESTS = 300;
+```
+
+### FLOW_STATE_BASE
+
+<i>
+
+`FlowState.lastAssetPerShare` (ERC-7201 namespace robotmoney.storage.FlowQueue, member slot 59).
+
+</i>
+
+```solidity
+bytes32 internal constant FLOW_STATE_BASE =
+        0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
+```
+
+### DEP_POOL_SLOT
+
+<i>
+
+`FlowState.depPoolUsdc` member slot.
+
+</i>
+
+```solidity
+uint256 internal constant DEP_POOL_SLOT = 67;
+```
+
+### FUND_STATE_BASE
+
+<i>
+
+`FundState` base (ERC-7201 robotmoney.storage.RobotMoneyFund) and the `saleStartValue` member slot.
+
+</i>
+
+```solidity
+bytes32 internal constant FUND_STATE_BASE =
+        0x1f474ae58db9fb6ccfa907fed2f1bf5577ac55e97dddcd5c18f25868bd856c00;
+```
+
+### SALE_START_VALUE_SLOT
+
+```solidity
+uint256 internal constant SALE_START_VALUE_SLOT = 39;
+```
+
+## State Variables
+
+### attacker
+
+```solidity
+address internal attacker = makeAddr("attacker");
+```
+
+## Functions
+
+<a id="test_missed01_dustredeemfloodcannotbricksettle"></a>
+
+### test_MISSED01_dustRedeemFloodCannotBrickSettle
+
+Many holders each open a one-wei whole-balance redemption in one epoch. Every keeper settle call must
+fit under the per-tx gas cap, and repeated calls must finish the round.
+
+```solidity
+function test_MISSED01_dustRedeemFloodCannotBrickSettle() public fixtureCovered;
+```
+
+<a id="test_missed01_owneropenrequestcapandnothirdpartydust"></a>
+
+### test_MISSED01_ownerOpenRequestCapAndNoThirdPartyDust
+
+One owner holds at most `MAX_OWNER_OPEN_REQUESTS` open redemptions, and a request naming another owner
+must meet the minimum: dust cannot fill a victim's slots.
+
+```solidity
+function test_MISSED01_ownerOpenRequestCapAndNoThirdPartyDust() public fixtureCovered;
+```
+
+<a id="test_missed05_deadfeedofinsaleassetdoesnotblockrebalance"></a>
+
+### test_MISSED05_deadFeedOfInSaleAssetDoesNotBlockRebalance
+
+A delisting asset whose feed died must not block the rebalancer from stepping the healthy assets. The
+fund's own step already masks in-sale assets out of the feed check. The rebalancer's decision must too.
+
+```solidity
+function test_MISSED05_deadFeedOfInSaleAssetDoesNotBlockRebalance() public fixtureCovered;
+```
+
+<a id="test_agy01_agy03_deadfeedunwindneedsafloorandfreesthefund"></a>
+
+### test_AGY01_AGY03_deadFeedUnwindNeedsAFloorAndFreesTheFund
+
+With wETH's feed dead, a single-asset unwind must name a floor (AGY-01). With one it sells the whole
+leg, and the emptied asset leaves the active set even while a plan is live, so the dead feed no longer
+blocks the fund's NAV or the queue (AGY-03).
+
+```solidity
+function test_AGY01_AGY03_deadFeedUnwindNeedsAFloorAndFreesTheFund() public fixtureCovered;
+```
+
+<a id="test_agy08_targetsetterrolehasalastholderfloor"></a>
+
+### test_AGY08_targetSetterRoleHasALastHolderFloor
+
+The last `TARGET_SETTER_ROLE` holder cannot renounce or be revoked: the role is self-administered, so
+zero holders would end target setting for good. A second holder lets the first one go.
+
+```solidity
+function test_AGY08_targetSetterRoleHasALastHolderFloor() public fixtureCovered;
+```
+
+<a id="_blacklistusdc-address"></a>
+
+### _blacklistUsdc
+
+Blacklist `who` on the real FiatToken (v2.2 keeps the flag in bit 255 of the balance slot, mapping slot 9).
+
+```solidity
+function _blacklistUsdc(address who) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| who | `address` |  |
+
+<a id="test_missed04_blacklistedfeerecipientdoesnotblockexits"></a>
+
+### test_MISSED04_blacklistedFeeRecipientDoesNotBlockExits
+
+A fee recipient that USDC refuses (Circle blacklist) must not stop a redemption from settling and paying
+out. The fee stays with the holders instead.
+
+```solidity
+function test_MISSED04_blacklistedFeeRecipientDoesNotBlockExits() public fixtureCovered;
+```
+
+<a id="test_agy05_planconvergesafteranassetleavesit"></a>
+
+### test_AGY05_planConvergesAfterAnAssetLeavesIt
+
+An asset unwound during a live plan leaves its end weight in idle USDC. The plan must still converge
+(idle's end target is the freed weight), not stall until it expires.
+
+```solidity
+function test_AGY05_planConvergesAfterAnAssetLeavesIt() public fixtureCovered;
+```
+
+<a id="test_missed03_shutdownrestoreleavesnophantomqueuedshares"></a>
+
+### test_MISSED03_shutdownRestoreLeavesNoPhantomQueuedShares
+
+A redemption left partly unmatched by a shutdown must not be counted again after a restore. Bob's
+queued shares (what the exclusion ledger pays recoveries on) must equal what he really has queued.
+
+```solidity
+function test_MISSED03_shutdownRestoreLeavesNoPhantomQueuedShares() public fixtureCovered;
+```
+
+<a id="test_missed03_restorerunsthepoolsharecheck"></a>
+
+### test_MISSED03_restoreRunsThePoolShareCheck
+
+A restore raises the TVL cap from 0, so it must pass the pool-share check a higher cap passes.
+
+```solidity
+function test_MISSED03_restoreRunsThePoolShareCheck() public fixtureCovered;
+```
+
+<a id="test_missed06_subminimumdepositremaindersettles"></a>
+
+### test_MISSED06_subMinimumDepositRemainderSettles
+
+A deposit the match fills down to less than `minRequestUsdc` must not sit in the pool as work the keeper
+sees but can never do. The remainder returns to its owner as USDC credit (RB-14 keeps it out of
+`mintInKind`).
+
+```solidity
+function test_MISSED06_subMinimumDepositRemainderSettles() public fixtureCovered;
+```
+
+<a id="test_agy09_revokeddirectadapterstopsnewexposurenotexits"></a>
+
+### test_AGY09_revokedDirectAdapterStopsNewExposureNotExits
+
+Revoking a direct swap adapter's code hash stops new exposure through it (a rebalance step buying wETH)
+while valuation and the exits keep working. A proxy hash the fund still allows cannot be un-marked.
+
+```solidity
+function test_AGY09_revokedDirectAdapterStopsNewExposureNotExits() public fixtureCovered;
+```
+
+<a id="test_agy09_allowedproxyhashcannotbeunmarked"></a>
+
+### test_AGY09_allowedProxyHashCannotBeUnmarked
+
+```solidity
+function test_AGY09_allowedProxyHashCannotBeUnmarked() public fixtureCovered;
+```
+
+<a id="test_agy11_delistbeforefirstrecordedvaluedoesnottripcheck6"></a>
+
+### test_AGY11_delistBeforeFirstRecordedValueDoesNotTripCheck6
+
+The first settlement after the in-place upgrade has no record of an asset's value. A delisting then must
+not trip the share-price check (Check 6): the asset stays on both sides of it.
+
+```solidity
+function test_AGY11_delistBeforeFirstRecordedValueDoesNotTripCheck6() public fixtureCovered;
+```
+
+<a id="test_agy12_emptydepositbucketisnotwork"></a>
+
+### test_AGY12_emptyDepositBucketIsNotWork
+
+A fully filled deposit leaves its bucket listed with no basis until it expires. With only rounding dust
+left in the pool, the keeper must see no work in the next round.
+
+```solidity
+function test_AGY12_emptyDepositBucketIsNotWork() public fixtureCovered;
+```
+
+<a id="test_agy13_adapterrefusesanoncanonicalpool"></a>
+
+### test_AGY13_adapterRefusesANonCanonicalPool
+
+The swap adapter accepts only the factory's own pool: a look-alike with the same tokens and fee fails.
+
+```solidity
+function test_AGY13_adapterRefusesANonCanonicalPool() public fixtureCovered;
+```
+
+<a id="_setminhold-uint32"></a>
+
+### _setMinHold
+
+```solidity
+function _setMinHold(uint32 h) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| h | `uint32` |  |
+
+<a id="test_agy10_matchholdfollowsitsowndeposits"></a>
+
+### test_AGY10_matchHoldFollowsItsOwnDeposits
+
+After `minHold` was raised once and lowered again, a later match's hold must follow the deposits it
+filled: a freeze two hours later, when every share of it is unlocked, is refused.
+
+```solidity
+function test_AGY10_matchHoldFollowsItsOwnDeposits() public fixtureCovered;
+```
+
+<a id="test_agy07_removedassettokensarereabsorbedandtheslotreused"></a>
+
+### test_AGY07_removedAssetTokensAreReabsorbedAndTheSlotReused
+
+wETH that reaches the fund after its asset was removed is not stranded: the foreign sweep still refuses
+it, and `reabsorbRemovedAsset` sells it into idle USDC. Re-listing wETH then reuses its old slot.
+
+```solidity
+function test_AGY07_removedAssetTokensAreReabsorbedAndTheSlotReused() public fixtureCovered;
+```
+
+<a id="test_missed08_delistclaimleavesinkindaftershutdown"></a>
+
+### test_MISSED08_delistClaimLeavesInKindAfterShutdown
+
+After shutdown no sale step runs. A redeemer with a delisting claim takes its tokens in kind.
+
+```solidity
+function test_MISSED08_delistClaimLeavesInKindAfterShutdown() public fixtureCovered;
+```
+
+<a id="test_missed08_zerostartvaluesalestillsells"></a>
+
+### test_MISSED08_zeroStartValueSaleStillSells
+
+A sale opened with no price (start value 0) must still sell once a price returns.
+
+```solidity
+function test_MISSED08_zeroStartValueSaleStillSells() public fixtureCovered;
+```
+
+<a id="test_missed08_dustinsaleclosesondeactivate"></a>
+
+### test_MISSED08_dustInSaleClosesOnDeactivate
+
+An in-sale asset holding only dust worth nothing closes on `deactivateAsset`, as a non-sale one does.
+
+```solidity
+function test_MISSED08_dustInSaleClosesOnDeactivate() public fixtureCovered;
+```
+
+<a id="test_missed09_lendingselllegisclampedtovenueliquidity"></a>
+
+### test_MISSED09_lendingSellLegIsClampedToVenueLiquidity
+
+A lending sell leg takes no more than the venue can pay out now.
+
+```solidity
+function test_MISSED09_lendingSellLegIsClampedToVenueLiquidity() public fixtureCovered;
+```
+
+<a id="test_tm16_smallinkindexitstillpaysthefee"></a>
+
+### test_TM16_smallInKindExitStillPaysTheFee
+
+An in-kind exit pays a non-zero fee on any non-zero leg, so splitting an exit into small calls cannot
+round the fee away (TestMachine #16).
+
+```solidity
+function test_TM16_smallInKindExitStillPaysTheFee() public fixtureCovered;
+```
+
+<a id="test_tm17_sameblockreceiptsbothapply"></a>
+
+### test_TM17_sameBlockReceiptsBothApply
+
+Two receipts recorded in the same block both stay applicable, in either order (TestMachine #17).
+
+```solidity
+function test_TM17_sameBlockReceiptsBothApply() public fixtureCovered;
+```
+

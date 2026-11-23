@@ -1,0 +1,50 @@
+---
+title: "ScalingToken"
+---
+
+# ScalingToken
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/DelistClaimScaling.t.sol)
+
+**Inherits:** ERC20
+
+## Functions
+
+<a id="constructor"></a>
+
+### constructor
+
+```solidity
+constructor() ERC20("Wrapped Ether", "WETH");
+```
+
+<a id="mint-address-uint256"></a>
+
+### mint
+
+```solidity
+function mint(address to, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+<a id="burn-address-uint256"></a>
+
+### burn
+
+```solidity
+function burn(address from, uint256 amount) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| from | `address` |  |
+| amount | `uint256` |  |
+

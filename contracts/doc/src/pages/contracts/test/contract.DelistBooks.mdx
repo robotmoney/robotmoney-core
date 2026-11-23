@@ -1,0 +1,134 @@
+---
+title: "DelistBooks"
+description: "The fund's delisting books on their own: the claim units and the USDC pot of one in-sale asset."
+---
+
+# DelistBooks
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/DelistClaimScaling.t.sol)
+
+The fund's delisting books on their own: the claim units and the USDC pot of one in-sale asset.
+
+## Constants
+
+### token
+
+```solidity
+ScalingToken public immutable token;
+```
+
+## State Variables
+
+### s
+
+```solidity
+FundState internal s;
+```
+
+## Functions
+
+<a id="constructor-scalingtoken-uint256"></a>
+
+### constructor
+
+```solidity
+constructor(ScalingToken t, uint256 fundTokens);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| t | `ScalingToken` |  |
+| fundTokens | `uint256` |  |
+
+<a id="claimed"></a>
+
+### claimed
+
+```solidity
+function claimed() external view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="fundtokens"></a>
+
+### fundTokens
+
+```solidity
+function fundTokens() public view returns (uint256);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint256` |  |
+
+<a id="claim-address-uint256"></a>
+
+### claim
+
+<i>
+
+A redemption sets `tok` of the fund's own tokens aside for `owner` (no fee).
+
+</i>
+
+```solidity
+function claim(address owner, uint256 tok) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+| tok | `uint256` |  |
+
+<a id="sell-uint256-uint256"></a>
+
+### sell
+
+<i>
+
+One sale step of `sold` tokens for `usdc` (the swap burns them here).
+
+</i>
+
+```solidity
+function sell(uint256 sold, uint256 usdc) external;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| sold | `uint256` |  |
+| usdc | `uint256` |  |
+
+<a id="pay-address"></a>
+
+### pay
+
+```solidity
+function pay(address owner) external returns (uint256 net);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| owner | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| net | `uint256` |  |
+

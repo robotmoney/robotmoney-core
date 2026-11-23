@@ -36,6 +36,7 @@ import {IRobotMoneyFundFull} from "../interfaces/IRobotMoneyFund.sol";
 import {FlowEpochs, FlowState, RoundState, WalkCursor} from "./FlowStorage.sol";
 import {FlowCheckLib, IExclusionLedgerView} from "./FlowCheckLib.sol";
 import {FlowMatchLib} from "./FlowMatchLib.sol";
+import {FeeTransfer} from "./FeeTransfer.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 
 interface IFlowQueueSides {
@@ -67,7 +68,8 @@ library FlowSettleLib {
         Pass,
         Fill,
         Partial,
-        Hold
+        Hold,
+        Refund
     }
 
     struct Walk {
@@ -113,7 +115,9 @@ library FlowSettleLib {
         if (maxRequests == 0) return 0;
 
         uint64 cur = FlowEpochs.current(s);
-        uint256 matchSettlementId = _prepareRoundIfNeeded(s, c, cur);
+        (uint256 matchSettlementId, bool ready) = _prepareRoundIfNeeded(s, c, cur);
+        // The round's enrollment ran out of its per-call budget (MISSED-01): the next call resumes it.
+        if (!ready) return 0;
 
         Walk memory w;
         w.cur = cur;
@@ -198,12 +202,13 @@ library FlowSettleLib {
     ///      and book the whole match `M` O(1) (E24, E35).
     function _prepareRoundIfNeeded(FlowState storage s, SettleContext memory c, uint64 cur)
         private
-        returns (uint256 matchSettlementId)
+        returns (uint256 matchSettlementId, bool ready)
     {
         RoundState storage rs = s.rounds[c.roundEpoch];
+        ready = true;
         if (rs.opened) {
             c.depositsOpen = rs.depositsOpen;
-            return 0;
+            return (0, true);
         }
 
         address reb = IRobotMoneyFundFull(s.fund).rebalancer();
@@ -216,7 +221,7 @@ library FlowSettleLib {
 
         FlowMatchLib.finalizeEndedNotices(s);
         FlowMatchLib.evictExpiredDepBuckets(s, cur);
-        FlowMatchLib.enrollEpochs(s, c.roundEpoch, cur);
+        if (!FlowMatchLib.enrollEpochs(s, c.roundEpoch, cur)) return (0, false);
 
         rs.opened = true;
         if (!c.depositsOpen) {
@@ -333,6 +338,10 @@ library FlowSettleLib {
             if (w.budget == 0 || _roomLeft(w, kind) == 0) break;
             --w.budget;
             Outcome o = _consider(s, c, w, kind, s.sideIds[k][e][i]);
+            if (o == Outcome.Refund) {
+                FlowMatchLib.refundDepositRemainder(s, s.sideIds[k][e][i]);
+                o = Outcome.Pass;
+            }
             if (o != Outcome.Pass) {
                 if (!pos.hasStop) {
                     pos.hasStop = true;
@@ -407,7 +416,10 @@ library FlowSettleLib {
         pure
         returns (Outcome)
     {
-        if (remaining < w.minRequestUsdc) return Outcome.Pass;
+        // A remainder below `minRequestUsdc` (a match filled the rest) is never sent to the fund as a tiny net deposit
+        // (RB-14). It returns to its owner as USDC credit. Left in the pool it was work the keeper saw on every call
+        // but could never do (safety review 0.9.0, MISSED-06).
+        if (remaining < w.minRequestUsdc) return Outcome.Refund;
         uint256 amt = _partial(remaining, w.depRoom - w.depTotal, w.minRequestUsdc);
         if (amt == 0) return Outcome.Hold;
         w.dep[w.nDep++] = Fill({requestId: id, amount: amt, capValue: amt});
@@ -497,6 +509,9 @@ library FlowSettleLib {
             } else if (ap.kind == PRICE_KIND_BASKET && ap.unit != 0) {
                 s.lastAssetPerShare[i] =
                     c.held[i].mulDiv(ap.feedPerToken, ap.unit).mulDiv(PRICE_SCALE, c.supply);
+            } else {
+                // Unpriced this settlement: no stale value may outlive it (a reused slot, AGY-07 and AGY-11).
+                s.lastAssetPerShare[i] = 0;
             }
         }
     }
@@ -593,7 +608,11 @@ library FlowSettleLib {
         }
         if (totalFee != 0) {
             (,,, address feeRecipient) = fund.config();
-            IERC20(s.usdc).safeTransfer(feeRecipient, totalFee);
+            // A refused fee joins the dust (swept to the fund) and cannot block the settlement (MISSED-04).
+            if (!FeeTransfer.tryPay(s.usdc, feeRecipient, totalFee)) {
+                s.dustUsdc += totalFee;
+                emit IFlowEvents.FeeNotPaid(feeRecipient, totalFee);
+            }
         }
         s.dustUsdc += grossOut - totalFee - totalNet;
     }

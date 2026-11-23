@@ -1,0 +1,41 @@
+---
+title: "DelistClaimScalingTest"
+description: "MISSED-02 claimed that claim units inflate across partial sales until a claimer's USDC rounds to zero. A long sale (1 000 steps of 5 % each) with a new claim before every step must still pay each claimer its fair share: its tokens at the sale price."
+---
+
+# DelistClaimScalingTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/test/DelistClaimScaling.t.sol)
+
+**Inherits:** Test
+
+**Title:** DelistClaimScalingTest
+
+MISSED-02 claimed that claim units inflate across partial sales until a claimer's USDC rounds to zero. A
+long sale (1 000 steps of 5 % each) with a new claim before every step must still pay each claimer its fair
+share: its tokens at the sale price.
+
+## Constants
+
+### PRICE
+
+```solidity
+uint256 internal constant PRICE = 3_000e6;
+```
+
+### STEPS
+
+```solidity
+uint256 internal constant STEPS = 1000;
+```
+
+## Functions
+
+<a id="test_missed02_longsalepayseveryclaimeritsshare"></a>
+
+### test_MISSED02_longSalePaysEveryClaimerItsShare
+
+```solidity
+function test_MISSED02_longSalePaysEveryClaimerItsShare() public;
+```
+

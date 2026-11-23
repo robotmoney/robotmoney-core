@@ -213,9 +213,14 @@ library FundDelistLib {
         if (!ok) revert IRobotMoneyFund.FeedUnhealthy(index, st);
         s.saleFallbackPrice[index] = feedPx;
         s.lastGoodAssetPrice[index] = feedPx;
+        uint256 tokenUnit = 10 ** IERC20Metadata(s.assets[index].token).decimals();
+        // A sale opened with no price at all has a zero loss budget, so every step would revert
+        // `DelistBudgetExceeded`. The first priced step sets the start value (safety review 0.9.0, MISSED-08).
+        if (s.saleStartValue[index] == 0) {
+            s.saleStartValue[index] = totalTokens.mulDiv(feedPx, tokenUnit);
+        }
 
         if (maxUsdcNotional == 0) return (false, 0, 0, 0, fundTokensBefore, claimedBefore);
-        uint256 tokenUnit = 10 ** IERC20Metadata(s.assets[index].token).decimals();
         uint256 maxTokens = maxUsdcNotional.mulDiv(tokenUnit, feedPx);
         tokensToSell = maxTokens < totalTokens ? maxTokens : totalTokens;
         if (tokensToSell == 0) return (false, 0, 0, 0, fundTokensBefore, claimedBefore);
@@ -351,6 +356,31 @@ library FundDelistLib {
                 s.reservedClaimUsdc -= s.delistUsdcPot[index];
                 s.delistUsdcPot[index] = 0;
             }
+        }
+    }
+
+    /// @notice After `shutdown` no sale step runs, so a delisting claim would never turn into USDC. Its holder takes
+    ///         their slice of the tokens still set aside, in kind (safety review 0.9.0, MISSED-08). Run after
+    ///         `consumeDelistClaim`, which pays the USDC already earned. Returns the net and fee-linked token amounts.
+    function takeDelistClaimInKind(FundState storage s, uint256 index, address owner)
+        public
+        returns (uint256 tokNet, uint256 tokFee)
+    {
+        DelistClaimAccount storage c = s.delistClaims[index][owner];
+        DelistClaimAccount storage f = s.delistFeeLinked[index][owner];
+        uint256 total = s.delistTotalScaled[index];
+        uint256 claimed = s.delistClaimedTokens[index];
+        if (total == 0 || claimed == 0) return (0, 0);
+        tokNet = claimed.mulDiv(c.scaled, total);
+        tokFee = claimed.mulDiv(f.scaled, total);
+        s.delistClaimedTokens[index] = claimed - tokNet - tokFee;
+        total -= c.scaled + f.scaled;
+        s.delistTotalScaled[index] = total;
+        c.scaled = 0;
+        f.scaled = 0;
+        if (total == 0 && s.delistUsdcPot[index] != 0) {
+            s.reservedClaimUsdc -= s.delistUsdcPot[index];
+            s.delistUsdcPot[index] = 0;
         }
     }
 

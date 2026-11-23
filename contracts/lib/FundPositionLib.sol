@@ -7,6 +7,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {FeeTransfer} from "./FeeTransfer.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 import {ILendingRateAdapter} from "../interfaces/IFlowAdapters.sol";
@@ -754,7 +755,10 @@ library FundPositionLib {
         ownerEntry.pendingUsdc = 0;
         feeEntry.pendingUsdc = 0;
 
-        if (feeUsdc != 0) IERC20(s.usdc).safeTransfer(s.feeRecipient, feeUsdc);
+        // A refused fee stays with the holders and cannot block the claim (MISSED-04).
+        if (!FeeTransfer.tryPay(s.usdc, s.feeRecipient, feeUsdc)) {
+            emit IRobotMoneyFund.FeeNotPaid(s.usdc, s.feeRecipient, feeUsdc);
+        }
         if (netUsdc != 0) IERC20(s.usdc).safeTransfer(owner, netUsdc);
         if (netUsdc != 0 || feeUsdc != 0) {
             emit IRobotMoneyFund.ClaimSettled(i, owner, netUsdc, feeUsdc);

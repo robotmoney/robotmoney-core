@@ -81,7 +81,9 @@ library FlowClaimLib {
             (uint256 nav,) = fund.lastGoodNav();
             uint256 supply = fund.totalSupply();
             uint256 value = supply == 0 ? 0 : shares.mulDiv(nav, supply);
-            if (value < minUsdc && shares != fund.balanceOf(msg.sender)) {
+            // The whole-balance exception is for a holder's own exit only (safety review 0.9.0, MISSED-01): a request
+            // that names another owner meets the minimum, so dust cannot fill that owner's open-request slots.
+            if (value < minUsdc && (shares != fund.balanceOf(msg.sender) || owner != msg.sender)) {
                 revert IFlowEvents.BelowMinRequest(value, minUsdc);
             }
         }

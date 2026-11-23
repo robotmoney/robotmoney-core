@@ -213,6 +213,10 @@ library FlowCheckLib {
         for (uint256 i; i < len && i < 256; ++i) {
             uint256 bit = 1 << i;
             if ((m.saleMask & bit) == 0) continue;
+            // No record of the asset's value at the last settlement (the first settlement after the in-place upgrade,
+            // or a slot unpriced then): the reference may hold it, so keep it on both sides rather than take it off
+            // one (safety review 0.9.0, AGY-11).
+            if ((s.lastSaleMask & bit) == 0 && s.lastAssetPerShare[i] == 0) continue;
             if (m.prices[i].kind == PRICE_KIND_BASKET && m.prices[i].unit != 0) {
                 uint256 curValPerShare = m.held[i]
                     .mulDiv(m.prices[i].feedPerToken, m.prices[i].unit)
@@ -593,6 +597,10 @@ library FlowCheckLib {
         for (uint256 i; i < cfgs.length; ++i) {
             if (!cfgs[i].active || cfgs[i].kind != AssetKind.Basket) continue;
             if (i >= targets.length || targets[i] == 0) continue;
+            // Trust the adapter's answer only while the fund allows its code (safety review 0.9.0, AGY-09).
+            if (!f.adapterCodeHashAllowed(cfgs[i].adapter.codehash)) {
+                revert IFlowEvents.FlowParamOutOfBounds(14);
+            }
             bool fixedFee;
             try IExactOutSwapAdapter(cfgs[i].adapter).isFixedFeePool(cfgs[i].pool) returns (
                 bool b

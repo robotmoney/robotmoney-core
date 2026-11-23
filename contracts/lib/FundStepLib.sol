@@ -24,7 +24,7 @@ import {
 } from "../FundTypes.sol";
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
-import {FundState} from "./FundStorage.sol";
+import {FundState, FundStorage} from "./FundStorage.sol";
 import {FundAdapterGuard} from "./FundAdapterGuard.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
@@ -139,6 +139,10 @@ library FundStepLib {
         for (uint256 i; i < n; ++i) {
             cfg[i] = s.assets[i];
             if (s.inSale[i]) cfg[i].active = false;
+            // StepFeedLib reads the TWAP of every active basket asset, an empty one included, through its adapter.
+            // It runs for the rebalancer too and cannot read the fund's allow list, so the fund vets here, outside
+            // that library's try, so a revoked adapter reverts with its own error (safety review 0.9.0, AGY-09).
+            else if (cfg[i].active && cfg[i].kind == AssetKind.Basket) FundAdapterGuard.vet(s, cfg[i].adapter);
         }
         StepFeedCheck c;
         uint256 index;
@@ -287,7 +291,7 @@ library FundStepLib {
     ) private returns (uint256 got) {
         uint256 before = IERC20(tokenOut).balanceOf(address(this));
         BasketSwaps.swap(
-            FundAdapterGuard.vet(a.adapter),
+            FundAdapterGuard.vetNew(FundStorage.layout(), a.adapter),
             tokenIn,
             tokenOut,
             a.poolFee,

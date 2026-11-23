@@ -5,7 +5,7 @@ description: "The `fund` stage (Deploy 4): `RobotMoneyFund` behind its ERC-1967 
 
 # DeployFund
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/script/DeployFund.s.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/script/DeployFund.s.sol)
 
 **Inherits:** [FundSystemBase](/contracts/script/abstract.FundSystemBase)
 
@@ -240,6 +240,7 @@ struct Deployed {
         address cometAdapter;
         address moonwellAdapter;
         address swapAdapter;
+        address swapAdapterImplementation;
         uint256 seedShares;
         uint256 assetCount;
         UpgradeConfig upgrade;
@@ -257,6 +258,7 @@ struct Deployed {
 | cometAdapter | `address` |  |
 | moonwellAdapter | `address` |  |
 | swapAdapter | `address` |  |
+| swapAdapterImplementation | `address` |  |
 | seedShares | `uint256` |  |
 | assetCount | `uint256` |  |
 | upgrade | `UpgradeConfig` |  |

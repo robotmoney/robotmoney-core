@@ -1,0 +1,42 @@
+---
+title: "FeeTransfer"
+description: "A fee payment that cannot block the flow it is part of (safety review 0.9.0, MISSED-04). USDC can refuse a recipient (a Circle blacklist), and a push of the fee with `safeTransfer` then reverted every settlement, claim and in-kind exit until governance rotated `feeRecipient`. The caller keeps an unpaid fee with the holders and emits an event, so a refused fee costs the team its fee, never a customer an exit."
+---
+
+# FeeTransfer
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/lib/FeeTransfer.sol)
+
+**Title:** FeeTransfer
+
+A fee payment that cannot block the flow it is part of (safety review 0.9.0, MISSED-04). USDC can refuse a
+recipient (a Circle blacklist), and a push of the fee with `safeTransfer` then reverted every settlement,
+claim and in-kind exit until governance rotated `feeRecipient`. The caller keeps an unpaid fee with the
+holders and emits an event, so a refused fee costs the team its fee, never a customer an exit.
+
+## Functions
+
+<a id="trypay-address-address-uint256"></a>
+
+### tryPay
+
+Transfer `amount` of `token` to `to`. True when paid (or zero); false when the token refused.
+
+```solidity
+function tryPay(address token, address to, uint256 amount) internal returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| token | `address` |  |
+| to | `address` |  |
+| amount | `uint256` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+

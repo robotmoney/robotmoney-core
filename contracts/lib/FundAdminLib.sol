@@ -109,23 +109,42 @@ library FundAdminLib {
     ///         `active` is forced true and `targetBps` grows by a 0. There is no sleeve to check (§4.1).
     function addAsset(FundState storage s, AssetConfig memory c) public returns (uint256 index) {
         requireNoLivePlan(s);
-        index = s.assets.length;
-        if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.adapter == address(0)) revert IFundEvents.ZeroAddress();
         FundAdapterGuard.requireAdmissible(s, c.adapter);
+        // Re-listing a removed asset reuses its slot when nothing is left open on it, so the same asset never
+        // spends a second of the `MAX_FUND_ASSETS` slots (safety review 0.9.0, AGY-07).
+        uint256 reuse = _rejectDuplicate(s, c);
+        index = reuse != type(uint256).max ? reuse : s.assets.length;
+        if (index >= MAX_FUND_ASSETS) revert IRobotMoneyFund.MaxAssetsReached();
         if (c.kind == AssetKind.Lending) {
             _checkLending(s, c);
         } else {
             _checkBasket(s, c, index);
         }
-        _rejectDuplicate(s, c);
         c.active = true;
-        s.assets.push(c);
-        s.targetBps.push(0);
+        if (index == s.assets.length) {
+            s.assets.push(c);
+            s.targetBps.push(0);
+        } else {
+            s.assets[index] = c;
+            // The old life's prices and sale budget must not carry over.
+            delete s.lastGoodAssetPrice[index];
+            delete s.saleFallbackPrice[index];
+            delete s.saleStartValue[index];
+            delete s.delistLossSpent[index];
+        }
         emit IRobotMoneyFund.AssetAdded(index, c);
     }
 
-    function _rejectDuplicate(FundState storage s, AssetConfig memory c) private view {
+    /// @dev Reverts `DuplicateAsset` for an active entry of the same asset, and for an inactive lending entry whose
+    ///      position claims are still open. Returns the inactive slot of the same asset that is clean enough to reuse
+    ///      (nothing owed, nothing in sale, no claim pot), else `type(uint256).max`.
+    function _rejectDuplicate(FundState storage s, AssetConfig memory c)
+        private
+        view
+        returns (uint256 reuse)
+    {
+        reuse = type(uint256).max;
         uint256 n = s.assets.length;
         address id = PlanMath.assetId(c);
         for (uint256 i; i < n; ++i) {
@@ -138,6 +157,12 @@ library FundAdminLib {
             if (e.kind == AssetKind.Lending && s.positionClaimTotal[i] != 0) {
                 revert IRobotMoneyFund.DuplicateAsset(i);
             }
+            if (
+                reuse == type(uint256).max && e.kind == c.kind && !s.inSale[i]
+                    && s.deferredTotal[i] == 0 && s.delistClaimedTokens[i] == 0
+                    && s.delistTotalScaled[i] == 0 && s.delistUsdcPot[i] == 0
+                    && RobotMoneyVaultOps.exclusions().openExclusionOf[i] == 0
+            ) reuse = i;
         }
     }
 
@@ -540,6 +565,9 @@ library FundAdminLib {
             }
             s.shutdown = false;
             s.tvlCap = val;
+            // A restore raises the cap from 0, so it runs the same pool-share check as any higher cap (§4.5 rule 3,
+            // safety review 0.9.0 MISSED-03).
+            FundValuationLib.requirePoolShare(s, s.targetBps);
             emit IRobotMoneyFund.Restored(val);
         } else {
             revert IFundEvents.InvalidParam();
@@ -572,7 +600,12 @@ library FundAdminLib {
                 closedExclusion = true;
             }
         } else if (s.inSale[i]) {
-            if (FundValuationLib.heldBalance(s, i) != 0) revert IRobotMoneyFund.AssetStillHeld(i);
+            // Dust worth nothing after slippage closes the sale, as it lets a basket asset out below (MISSED-08).
+            uint256 held = FundValuationLib.heldBalance(s, i);
+            if (
+                held != 0
+                    && FundValuationLib.usdcValue(s, i, held) * (BPS - s.maxSlippageBps) / BPS != 0
+            ) revert IRobotMoneyFund.AssetStillHeld(i);
             FundDelistLib.closeDelistSale(s, i);
             return;
         } else {
@@ -654,6 +687,9 @@ library FundAdminLib {
             bytes32 h = bytes32(val);
             if (h == bytes32(0)) revert IFundEvents.InvalidParam();
             bool isProxy = op == ADMIN_MARK_ADAPTER_PROXY;
+            // Un-marking a proxy hash the fund still allows would turn its proxies into direct adapters that `vet`
+            // passes with no implementation check (safety review 0.9.0, AGY-09). Revoke the hash first.
+            if (!isProxy && s.codeHashAllowed[h]) revert IFundEvents.InvalidParam();
             s.adapterProxyCodeHash[h] = isProxy;
             emit IRobotMoneyFund.AdapterProxyCodeHashSet(h, isProxy);
         }

@@ -876,8 +876,22 @@ contract RobotMoneyFund is
     }
 
     /// @inheritdoc IRobotMoneyFund
-    function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc) {
-        return _flowAction(FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET, index, address(0));
+    function emergencyUnwind(uint256 index, uint256 minUsdcOut)
+        external
+        returns (uint256 recoveredUsdc)
+    {
+        return _floored(FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET, index, minUsdcOut);
+    }
+
+    /// @inheritdoc IRobotMoneyFund
+    function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external returns (uint256) {
+        return _floored(FundFlowsLib.FLOW_REABSORB, index, minUsdcOut);
+    }
+
+    /// @dev `minUsdcOut` rides in the address argument (EIP-170 headroom). It must fit 160 bits.
+    function _floored(uint8 op, uint256 index, uint256 minUsdcOut) private returns (uint256) {
+        if (minUsdcOut >> 160 != 0) revert InvalidParam();
+        return _flowAction(op, index, address(uint160(minUsdcOut)));
     }
 
     /// @inheritdoc IRobotMoneyFund
@@ -926,7 +940,7 @@ contract RobotMoneyFund is
     {
         if (
             op == FundFlowsLib.FLOW_EMERGENCY_UNWIND
-                || op == FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET
+                || op == FundFlowsLib.FLOW_EMERGENCY_UNWIND_ASSET || op == FundFlowsLib.FLOW_REABSORB
         ) {
             _checkRole(ADMIN_ROLE);
         }

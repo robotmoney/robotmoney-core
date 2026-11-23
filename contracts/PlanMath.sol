@@ -15,8 +15,11 @@ import {AssetConfig, AssetKind, IFundEvents, Plan, BPS, IDLE_INDEX} from "./Fund
 ///         `pathTarget(now)` is.
 ///
 ///         Units. Weights are basis points of fund NAV (10 000 = 100%). Values are USDC base units
-///         (6 decimals) at TWAP. "Idle" is the fund's own USDC balance; its target is always 0 and
-///         its path glides from the plan's `startIdleBps` to 0.
+///         (6 decimals) at TWAP. "Idle" is the fund's own USDC balance; its end target is
+///         `10 000 - Σ endBps` (`idleEndBps`), 0 for every plan as opened, and its path glides from the
+///         plan's `startIdleBps` to it. A delisting or a single-asset unwind zeroes one asset's end weight
+///         during a live plan; that weight then waits in idle USDC until the Safe sets a new target
+///         (safety review 0.9.0, AGY-05). Nothing reinvests it on its own.
 ///
 ///         Rounding. Path targets round toward the plan's START weight, so the path never runs
 ///         ahead of the linear schedule and the rebalancer never moves past `pathTarget(now)`
@@ -220,7 +223,17 @@ library PlanMath {
         for (uint256 i; i < n; ++i) {
             bps[i] = pathBps(p.startBps[i], p.endBps[i], e, d);
         }
-        idleBps = pathBps(p.startIdleBps, 0, e, d);
+        idleBps = pathBps(p.startIdleBps, idleEndBps(p.endBps), e, d);
+    }
+
+    /// @notice Idle USDC's end target in bps: `10 000 - Σ endBps` (AGY-05). 0 for every plan as opened; the end
+    ///         weight of an asset delisted or unwound during the plan.
+    function idleEndBps(uint16[] memory endBps) internal pure returns (uint256 idle) {
+        uint256 sum;
+        for (uint256 i; i < endBps.length; ++i) {
+            sum += endBps[i];
+        }
+        return sum < BPS ? BPS - sum : 0;
     }
 
     /// @notice USDC path target of asset `index` (or idle for IDLE_INDEX) under plan `p` at `t`,
@@ -231,7 +244,9 @@ library PlanMath {
         returns (uint256)
     {
         (uint256 e, uint256 d) = progress(p.startTime, p.endTime, t);
-        if (index == IDLE_INDEX) return pathValue(p.startIdleBps, 0, e, d, nav);
+        if (index == IDLE_INDEX) {
+            return pathValue(p.startIdleBps, idleEndBps(p.endBps), e, d, nav);
+        }
         return pathValue(p.startBps[index], p.endBps[index], e, d, nav);
     }
 
@@ -319,9 +334,9 @@ library PlanMath {
     // ─── Convergence (§5.5) ──────────────────────────────────────────────────
 
     /// @notice True when every asset and idle sit within `toleranceBps` of NAV of their END
-    ///         target: `|value_i − end_i × nav / 10 000| ≤ toleranceBps × nav / 10 000`, and
-    ///         `idle ≤ toleranceBps × nav / 10 000`. Callers also require `now ≥ endTime` before
-    ///         marking a plan Converged. A zero NAV is converged.
+    ///         target: `|value_i − end_i × nav / 10 000| ≤ toleranceBps × nav / 10 000`, and the same
+    ///         for idle against `idleEndBps(endBps)` (AGY-05). Callers also require `now ≥ endTime`
+    ///         before marking a plan Converged. A zero NAV is converged.
     function withinTolerance(
         uint256[] memory values,
         uint256 idle,
@@ -331,7 +346,11 @@ library PlanMath {
     ) internal pure returns (bool) {
         if (nav == 0) return true;
         uint256 band = Math.mulDiv(nav, toleranceBps, BPS);
-        if (idle > band) return false;
+        {
+            (uint256 io, uint256 iu) =
+                deviation(idle, Math.mulDiv(nav, idleEndBps(endBps), BPS));
+            if (io > band || iu > band) return false;
+        }
         for (uint256 i; i < values.length; ++i) {
             (uint256 o, uint256 u) = deviation(values[i], Math.mulDiv(nav, endBps[i], BPS));
             if (o > band || u > band) return false;

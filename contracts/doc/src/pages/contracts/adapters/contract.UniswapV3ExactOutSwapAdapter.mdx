@@ -5,7 +5,7 @@ description: "Test copy of the production `UniswapV3SwapAdapter` (step 3d): it i
 
 # UniswapV3ExactOutSwapAdapter
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/adapters/UniswapV3ExactOutSwapAdapter.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/adapters/UniswapV3ExactOutSwapAdapter.sol)
 
 **Inherits:** [UniswapV3SwapAdapter](/contracts/adapters/contract.UniswapV3SwapAdapter), [IExactOutSwapAdapter](/contracts/interfaces/interface.IExactOutSwapAdapter)
 
@@ -16,6 +16,21 @@ Test copy of the production `UniswapV3SwapAdapter` (step 3d): it inherits the pr
 of the fund's pro-rata purchase (check 9). The production adapter does not change (eng plan §3.3).
 Inheriting instead of copying keeps the production code paths byte-identical in behaviour; the runtime
 code hash differs, so the harness allowlists this copy's hash.
+
+## Constants
+
+### POOL_INIT_CODE_HASH
+
+<i>
+
+Uniswap V3's pool init code hash (the same pool bytecode on every chain the factory runs on, Base included).
+
+</i>
+
+```solidity
+bytes32 internal constant POOL_INIT_CODE_HASH =
+        0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54;
+```
 
 ## Functions
 
@@ -103,6 +118,35 @@ function isFixedFeePool(address pool) external view returns (bool);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | pool | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bool` |  |
+
+<a id="_iscanonicalpool-address-uint256"></a>
+
+### _isCanonicalPool
+
+<i>
+
+True when `pool` is the router's factory's pool for its own tokens and fee: its CREATE2 address from the
+factory. A contract that only answers `fee()` and `slot0()` like a pool is refused (safety review 0.9.0,
+AGY-13). Reads the tokens from the pool and the factory from the router, no factory storage.
+
+</i>
+
+```solidity
+function _isCanonicalPool(address pool, uint256 feePips) internal view returns (bool);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| pool | `address` |  |
+| feePips | `uint256` |  |
 
 **Returns**
 

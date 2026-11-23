@@ -33,7 +33,7 @@ import {
 import {PlanMath} from "../PlanMath.sol";
 import {IRobotMoneyFund} from "../interfaces/IRobotMoneyFund.sol";
 import {IExactOutSwapAdapter} from "../interfaces/IFlowAdapters.sol";
-import {FundState} from "./FundStorage.sol";
+import {FundState, FundStorage} from "./FundStorage.sol";
 import {FundAdapterGuard} from "./FundAdapterGuard.sol";
 import {FundValuationLib} from "./FundValuationLib.sol";
 import {FundPositionLib} from "./FundPositionLib.sol";
@@ -75,6 +75,7 @@ library FundFlowsLib {
     uint8 internal constant FLOW_EMERGENCY_UNWIND = 3;
     uint8 internal constant FLOW_EMERGENCY_UNWIND_ASSET = 4;
     uint8 internal constant FLOW_SWEEP_FOREIGN = 5;
+    uint8 internal constant FLOW_REABSORB = 6;
 
     /// @notice Body of `IRobotMoneyFund.seed` (E14). The fund checks ADMIN_ROLE, holds `nonReentrant` and mints the
     ///         returned shares to itself. Once, only at zero supply (`AlreadySeeded`), at least `minSeedUsdc`
@@ -218,7 +219,7 @@ library FundFlowsLib {
         }
         uint256 fee = ctx.grossOnly ? 0 : gross.mulDiv(ctx.feeBps, BPS);
         payout = gross - fee;
-        if (fee != 0) IERC20(ctx.usdc).safeTransfer(s.feeRecipient, fee);
+        _payFee(ctx.usdc, s.feeRecipient, fee);
         if (payout != 0) IERC20(ctx.usdc).safeTransfer(ctx.caller, payout);
         FundValuationLib.requireProportion(
             s, idle0, held0, ctx.supplyBefore, ctx.supplyBefore - ctx.shares
@@ -300,7 +301,7 @@ library FundFlowsLib {
         uint256 amountOut,
         uint256 limit
     ) private returns (uint256 amountIn) {
-        address adapter = FundAdapterGuard.vet(a.adapter);
+        address adapter = FundAdapterGuard.vetNew(FundStorage.layout(), a.adapter);
         IERC20(usdc).forceApprove(adapter, limit);
         amountIn = IExactOutSwapAdapter(adapter)
             .swapExactOut(
@@ -419,7 +420,8 @@ library FundFlowsLib {
             if (a.kind != AssetKind.Basket) continue;
             uint256 amount = held0[i].mulDiv(shares, supplyBefore);
             if (amount == 0) continue;
-            uint256 feeAmt = amount.mulDiv(s.exitFeeBps, BPS);
+            // Rounded up, so splitting an exit into small calls cannot round each leg's fee to zero (TestMachine #16).
+            uint256 feeAmt = amount.mulDiv(s.exitFeeBps, BPS, Math.Rounding.Ceil);
             if (!_tryTransfer(a.token, receiver, amount - feeAmt)) {
                 _deferSplit(s, i, amount, claimant);
             } else if (feeAmt != 0 && !_tryTransfer(a.token, s.feeRecipient, feeAmt)) {
@@ -460,7 +462,7 @@ library FundFlowsLib {
     ///      to `claimant` (the split an unfrozen leg would have paid). Step 3d: Basket legs only; a lending leg that
     ///      cannot pay becomes a position claim (`FundPositionLib`).
     function _deferSplit(FundState storage s, uint256 i, uint256 amount, address claimant) private {
-        uint256 feeAmt = amount.mulDiv(s.exitFeeBps, BPS);
+        uint256 feeAmt = amount.mulDiv(s.exitFeeBps, BPS, Math.Rounding.Ceil);
         _defer(s, i, claimant, amount - feeAmt);
         _defer(s, i, s.feeRecipient, feeAmt);
     }
@@ -531,10 +533,13 @@ library FundFlowsLib {
             return recovered;
         }
         if (op == FLOW_EMERGENCY_UNWIND_ASSET) {
-            uint256 recovered = _emergencyUnwindAsset(s, index);
+            // `addr` carries the caller's `minUsdcOut` (RobotMoneyFund.emergencyUnwind(uint256,uint256)).
+            uint256 recovered = _emergencyUnwindAsset(s, index, uint160(addr));
             emit IRobotMoneyFund.EmergencyUnwound(recovered);
             return recovered;
         }
+        // `addr` carries the caller's `minUsdcOut` (RobotMoneyFund.reabsorbRemovedAsset).
+        if (op == FLOW_REABSORB) return _reabsorb(s, index, uint160(addr));
         if (op == FLOW_SWEEP_FOREIGN) {
             _sweepForeign(s, addr, caller);
             return 0;
@@ -639,8 +644,9 @@ library FundFlowsLib {
         executed = true;
     }
 
-    /// @notice Step 3f (`IRobotMoneyFund.emergencyUnwind(uint256)`): single-asset unwind without halting other assets.
-    function _emergencyUnwindAsset(FundState storage s, uint256 index)
+    /// @notice Step 3f (`IRobotMoneyFund.emergencyUnwind(uint256,uint256)`): single-asset unwind without halting other
+    ///         assets.
+    function _emergencyUnwindAsset(FundState storage s, uint256 index, uint256 minUsdcOut)
         private
         returns (uint256 recoveredUsdc)
     {
@@ -669,35 +675,103 @@ library FundFlowsLib {
                 ExclusionLedger.RecoverySource.EmergencyWithdraw
             );
         } else {
-            _emergencyUnwindSingleSwap(s, index, a);
+            _emergencyUnwindSingleSwap(s, index, a, minUsdcOut);
         }
         uint256 afterIdle = FundValuationLib.idleUsdc(s);
         recoveredUsdc = afterIdle > beforeIdle ? afterIdle - beforeIdle : 0;
     }
 
-    function _emergencyUnwindSingleSwap(FundState storage s, uint256 index, AssetConfig memory a)
-        private
-    {
+    function _emergencyUnwindSingleSwap(
+        FundState storage s,
+        uint256 index,
+        AssetConfig memory a,
+        uint256 minUsdcOut
+    ) private {
         uint256 fundTok = FundValuationLib.heldBalance(s, index);
         bool inSaleNow = s.inSale[index];
         uint256 claimTok = inSaleNow ? s.delistClaimedTokens[index] : 0;
         uint256 totalTok = fundTok + claimTok;
-        if (totalTok == 0) {
-            if (inSaleNow) FundDelistLib.closeDelistSale(s, index);
+        if (totalTok != 0) {
+            // Floor: the larger of the feed price less `delistBandBps` (plan section 3.3) and the caller's
+            // `minUsdcOut`. A stale feed leaves only the caller's floor, which must then be set: a market sale with
+            // no floor at all could be sandwiched for the whole position (safety review 0.9.0, AGY-01). A stale price
+            // is never a floor, because it would trap an asset that crashed.
+            uint256 floor = _saleFloor(s, index, a.token, totalTok, minUsdcOut);
+            (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, s.usdc, totalTok, floor);
+            if (inSaleNow) {
+                FundDelistLib.finalizeDelistSale(
+                    s, index, sold, usdcGot, 0, fundTok, claimTok, false
+                );
+                return;
+            }
+        } else if (inSaleNow) {
+            FundDelistLib.closeDelistSale(s, index);
             return;
         }
-        // Floor: the feed price less `delistBandBps` (plan section 3.3). A stale feed leaves no floor, so the unwind
-        // can still run when the feeds are what failed.
-        uint256 floor;
+        // An emptied basket asset leaves the active set, as a closed delisting sale does (`closeDelistSale`, which
+        // also runs during a live plan). Its feed then stops gating NAV, settlement and steps (AGY-03).
+        if (FundValuationLib.heldBalance(s, index) == 0) {
+            s.assets[index].active = false;
+            emit IRobotMoneyFund.AssetDeactivated(index);
+        }
+    }
+
+    /// @dev The floor of a sale outside a step: the larger of the feed price less `delistBandBps` and the caller's
+    ///      `minUsdcOut`. A stale feed leaves only the caller's floor, which must then be set (AGY-01). A stale price is
+    ///      never a floor, because it would trap an asset that crashed.
+    function _saleFloor(
+        FundState storage s,
+        uint256 index,
+        address token,
+        uint256 amount,
+        uint256 minUsdcOut
+    ) private view returns (uint256 floor) {
+        floor = minUsdcOut;
         (bool feedOk,, uint256 feedPx) = FundValuationLib.feedPricePerToken(s, index);
         if (feedOk) {
-            floor = totalTok.mulDiv(feedPx, 10 ** IERC20Metadata(a.token).decimals())
+            uint256 feedFloor = amount.mulDiv(feedPx, 10 ** IERC20Metadata(token).decimals())
                 .mulDiv(BPS - s.delistBandBps, BPS);
+            if (feedFloor > floor) floor = feedFloor;
+        } else if (floor == 0) {
+            revert IRobotMoneyFund.EmergencyFloorRequired(index);
         }
-        (uint256 sold, uint256 usdcGot) = _swapAndMeasureSold(a, s.usdc, totalTok, floor);
-        if (inSaleNow) {
-            FundDelistLib.finalizeDelistSale(s, index, sold, usdcGot, 0, fundTok, claimTok, false);
+    }
+
+    /// @notice `IRobotMoneyFund.reabsorbRemovedAsset` (INV-2, LIFE-6; safety review 0.9.0, AGY-07): sell the tokens of a
+    ///         removed basket asset that reappeared in the fund (a late transfer, an airdrop, a rounding remainder)
+    ///         into idle USDC, so they count in NAV instead of being stranded. Only the part no one is owed is sold:
+    ///         the deferred in-kind claims and the delisting claims of every slot with the same token stay. It is
+    ///         refused while any slot with that token is active or in sale (a re-listed position is never sold).
+    function _reabsorb(FundState storage s, uint256 index, uint256 minUsdcOut)
+        private
+        returns (uint256 usdcGot)
+    {
+        if (index >= s.assets.length) revert IFundEvents.InvalidAssetIndex(index);
+        AssetConfig memory a = s.assets[index];
+        if (a.active || a.kind != AssetKind.Basket) revert IRobotMoneyFund.AssetNotRemoved(index);
+        uint256 amount = _unowedBalance(s, index, a.token);
+        if (amount == 0) return 0;
+        uint256 floor = _saleFloor(s, index, a.token, amount, minUsdcOut);
+        usdcGot = _swap(a, a.token, s.usdc, amount, floor);
+        emit IRobotMoneyFund.RemovedAssetReabsorbed(index, amount, usdcGot);
+    }
+
+    /// @dev The fund's balance of `token` above what every slot with that token still owes; reverts when one of them
+    ///      is active or in sale.
+    function _unowedBalance(FundState storage s, uint256 index, address token)
+        private
+        view
+        returns (uint256)
+    {
+        uint256 owed;
+        uint256 n = s.assets.length;
+        for (uint256 k; k < n; ++k) {
+            if (s.assets[k].token != token) continue;
+            if (s.assets[k].active || s.inSale[k]) revert IRobotMoneyFund.AssetNotRemoved(index);
+            owed += s.deferredTotal[k] + s.delistClaimedTokens[k];
         }
+        uint256 bal = IERC20(token).balanceOf(address(this));
+        return bal > owed ? bal - owed : 0;
     }
 
     /// @notice Step 3f (`IRobotMoneyFund.settleClaim`): permissionlessly settle `owner`'s lending or delisting claim.
@@ -719,10 +793,20 @@ library FundFlowsLib {
         (netUsdc, feeUsdc, hasClaim) = FundDelistLib.consumeDelistClaim(s, index, owner);
         if (!hasClaim) revert IRobotMoneyFund.NoClaimToSettle(index, owner);
         address usdc = s.usdc;
-        if (feeUsdc != 0) IERC20(usdc).safeTransfer(s.feeRecipient, feeUsdc);
+        _payFee(usdc, s.feeRecipient, feeUsdc);
         if (netUsdc != 0) IERC20(usdc).safeTransfer(owner, netUsdc);
         if (netUsdc != 0 || feeUsdc != 0) {
             emit IRobotMoneyFund.ClaimSettled(index, owner, netUsdc, feeUsdc);
+        }
+        // Wind-down: no sale runs any more, so the claim's remaining tokens leave in kind (MISSED-08).
+        if (s.shutdown) {
+            (uint256 tokNet, uint256 tokFee) = FundDelistLib.takeDelistClaimInKind(s, index, owner);
+            address token = s.assets[index].token;
+            _payFee(token, s.feeRecipient, tokFee);
+            if (tokNet != 0) IERC20(token).safeTransfer(owner, tokNet);
+            if (tokNet != 0 || tokFee != 0) {
+                emit IRobotMoneyFund.DelistClaimTakenInKind(index, owner, tokNet, tokFee);
+            }
         }
     }
 
@@ -757,9 +841,15 @@ library FundFlowsLib {
         private
     {
         if (amount == 0) return;
-        uint256 fee = amount.mulDiv(feeBps, BPS);
-        if (fee != 0) IERC20(token).safeTransfer(feeTo, fee);
+        uint256 fee = amount.mulDiv(feeBps, BPS, Math.Rounding.Ceil);
+        _payFee(token, feeTo, fee);
         IERC20(token).safeTransfer(receiver, amount - fee);
+    }
+
+    /// @dev Pay a fee without letting a refusal block the exit it belongs to (MISSED-04): an unpaid fee stays with
+    ///      the holders.
+    function _payFee(address token, address to, uint256 amount) private {
+        if (!_tryTransfer(token, to, amount)) emit IRobotMoneyFund.FeeNotPaid(token, to, amount);
     }
 
     /// @dev `value × (1 − bps)`, floored (BasketVault._applySlippage).

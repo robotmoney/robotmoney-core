@@ -662,7 +662,7 @@ contract AdaptersTest is BaseFixture {
         sb.pool.setPartialWithdrawBps(5_000);
         sb.mechAave.setMode(sb.mechAave.SHORT_PAY(), 2_000);
         uint256 fundBal0 = sb.mUsdc.balanceOf(address(sb.fund));
-        uint256 unwound = sb.fund.emergencyUnwind(0);
+        uint256 unwound = sb.fund.emergencyUnwind(0, 0);
         assertGt(unwound, 0, "partial short-paying emergencyUnwind recovered real USDC");
         assertEq(
             sb.mUsdc.balanceOf(address(sb.fund)) - fundBal0,
@@ -680,7 +680,7 @@ contract AdaptersTest is BaseFixture {
         sb.fund.deactivateAsset(0);
 
         // `emergencyUnwind(0)` while excluded credits ONLY actual recovered USDC into ExclusionLedger.
-        sb.fund.emergencyUnwind(0);
+        sb.fund.emergencyUnwind(0, 0);
         uint256 ledgerBal1 = sb.mUsdc.balanceOf(ledgerAddr);
         (,,,,,,, uint256 rec1,) = FundExclusionLedger(ledgerAddr).exclusions(exclId);
         assertGt(rec1, 0, "excluded unwind recovered partial USDC");

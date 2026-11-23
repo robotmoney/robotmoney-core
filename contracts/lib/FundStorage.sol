@@ -180,7 +180,7 @@ library FundStorage {
     uint16 internal constant DEFAULT_MAX_BASKET_BPS = 10_000;
     uint32 internal constant DEFAULT_MAX_PAUSE = 72 hours;
     uint256 internal constant DELIST_UNIT_SCALE = 1e12;
-    uint256 internal constant DELIST_ACC_SCALE = 1e30;
+    uint256 internal constant DELIST_ACC_SCALE = 1e48;
     uint256 internal constant LENDING_ACC_NORM = 1e24;
     uint256 internal constant LENDING_ACC_SCALE = 1e36;
 

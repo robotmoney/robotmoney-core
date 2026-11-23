@@ -58,6 +58,13 @@ interface IRobotMoneyFund is IFundEvents {
     event Shutdown();
     event Restored(uint256 newTvlCap);
     event EmergencyUnwound(uint256 usdcRecovered);
+    /// @notice `token` refused a fee of `amount` to `to` (safety review 0.9.0, MISSED-04). The fee stayed in the fund.
+    event FeeNotPaid(address indexed token, address indexed to, uint256 amount);
+    /// @notice `amount` tokens of removed asset `index` were sold into idle USDC for `usdc` (AGY-07).
+    event RemovedAssetReabsorbed(uint256 indexed index, uint256 amount, uint256 usdc);
+    /// @notice After shutdown, `owner` took `tokens` of in-sale asset `index` in kind for their delisting claim, and
+    ///         `feeTokens` went to the fee recipient (MISSED-08).
+    event DelistClaimTakenInKind(uint256 indexed index, address indexed owner, uint256 tokens, uint256 feeTokens);
     event RedeemedInKind(address indexed owner, address indexed receiver, uint256 shares);
     event ExitFeeCharged(address indexed owner, uint256 grossAssets, uint256 fee);
     event ForeignTokenSwept(address indexed token, uint256 amount);
@@ -225,6 +232,12 @@ interface IRobotMoneyFund is IFundEvents {
     error PoolFeeMarginTooSmall(uint256 poolFeeBps, uint256 marginBps, uint256 legBandBps);
     error AssetInSale(uint256 index);
     error AssetNotInSale(uint256 index);
+    /// @notice A single-asset emergency unwind with no usable floor: the asset's feed is unhealthy and the caller set
+    ///         no `minUsdcOut` (safety review 0.9.0, AGY-01).
+    error EmergencyFloorRequired(uint256 index);
+    /// @notice `reabsorbRemovedAsset` on an asset that is not a removed basket asset, or whose token another slot
+    ///         still holds as an active or in-sale asset (AGY-07).
+    error AssetNotRemoved(uint256 index);
     error DelistBandExceeded(uint256 index, uint256 receivedUsdc, uint256 minUsdc);
     error DelistBudgetExceeded(uint256 index, uint256 lossUsdc, uint256 budgetUsdc);
     error LendingHasClaims(uint256 index, uint256 claimUnits);
@@ -772,7 +785,16 @@ interface IRobotMoneyFund is IFundEvents {
     function executeDelistStep(uint256 index, uint256 maxUsdcNotional)
         external
         returns (bool executed, uint256 tokensSold, uint256 usdcReceived);
-    function emergencyUnwind(uint256 index) external returns (uint256 recoveredUsdc);
+    /// @notice Sell all of asset `index` to idle USDC (ADMIN_ROLE). The swap floor is the larger of the feed price less
+    ///         `delistBandBps` and `minUsdcOut`. With an unhealthy feed `minUsdcOut` is the only floor and must be
+    ///         non-zero (AGY-01). A basket asset left empty is deactivated, so its feed stops gating NAV, settlement
+    ///         and steps (AGY-03).
+    function emergencyUnwind(uint256 index, uint256 minUsdcOut)
+        external
+        returns (uint256 recoveredUsdc);
+    /// @notice Sell the reappeared tokens of removed basket asset `index` into idle USDC (ADMIN_ROLE; INV-2, LIFE-6).
+    ///         Same floor rule as `emergencyUnwind(index, minUsdcOut)`. Returns the USDC received.
+    function reabsorbRemovedAsset(uint256 index, uint256 minUsdcOut) external returns (uint256 usdc);
     function settleClaim(uint256 index, address owner) external returns (uint256 netUsdc);
 }
 
