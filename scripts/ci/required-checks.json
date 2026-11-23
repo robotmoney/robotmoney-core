@@ -51,6 +51,7 @@
     { "name": "assert-basescan-mock-tests", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "onevault-share-delivery-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "onevault-keeper-selftest", "source": "suite-18-upstream-monitoring.yml" },
+    { "name": "keeper-service-anvil", "source": "suite-18-upstream-monitoring.yml" },
     { "name": "watchdog-unit", "source": "suite-20-watchdog.yml" },
     { "name": "watchdog-integration", "source": "suite-20-watchdog.yml" },
     { "name": "forge-invariant-spec-tests", "source": "suite-22-formal-verification.yml" },

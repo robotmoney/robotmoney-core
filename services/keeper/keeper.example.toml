@@ -1,0 +1,30 @@
+# One-vault keeper service config (docs/technical/one-vault-rebalancer-proposal.md §8.1.6).
+# Every field can be overridden by KEEPER_<FIELD_IN_SNAKE_CASE>, e.g. KEEPER_RPC_URL.
+# Values below are placeholders: fill in the deployment's addresses from its manifest.
+
+rpcUrl = "https://base-mainnet.example-paid-rpc.invalid/v2/REPLACE"   # a vetted paid RPC as primary
+rpcFallbackUrls = ["https://mainnet.base.org"]                         # the public RPC as fallback only
+chainId = 8453
+queue = "0x0000000000000000000000000000000000000001"                  # FlowQueue proxy
+rebalancer = "0x0000000000000000000000000000000000000002"             # Rebalancer
+# keeperAccount = "0x..."   # account mode; leave unset for direct mode (the key itself holds KEEPER_ROLE)
+# manifest = "/etc/robotmoney-keeper/deployment.json"   # optional: the addresses are checked against it at start
+keystore = "/etc/robotmoney-keeper/keeper.keystore"   # under systemd, KEEPER_KEYSTORE points at the LoadCredential copy
+# passwordFile: the systemd unit sets KEEPER_PASSWORD_FILE to its LoadCredential path. Never put the password here.
+stateDir = "/var/lib/robotmoney-keeper"
+
+intervalSecs = 300
+fastPollSecs = 30
+maxRequests = 100
+maxUsdc = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+maxCallsPerTick = 4
+gasMultiplier = 1.5
+maxFeeGwei = 5
+minGasWei = "200000000000000"
+runwaySettles = 10
+receiptTimeoutSecs = 120
+maxReplacements = 3
+overdueSecs = 900
+realertSecs = 3600
+# alertWebhook = "https://hooks.example.invalid/keeper"
+healthPort = 9464

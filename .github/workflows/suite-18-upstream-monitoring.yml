@@ -117,3 +117,48 @@ jobs:
       # Core 2049: the stage keeper launcher against a stub keeper (no chain, no key).
       - name: Stage keeper launcher self-test
         run: bash scripts/ops/test-start-stage-keeper.sh
+
+  keeper-service-anvil:
+    name: keeper-service-anvil
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    # Core 2057: the TypeScript keeper service (services/keeper, proposal §8.1). Runs its unit suite, then its anvil suite
+    # against the one-vault stack in account and direct mode, including the forced mined settle revert. Fails loudly
+    # when anvil or forge is missing, and fails when either suite runs zero tests. It never skips.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CI_CLASS: system-correctness
+    defaults:
+      run:
+        working-directory: services/keeper
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Each suite must pass at least one test with none failing: a suite that runs zero tests fails the job.
+      - name: Unit suite
+        run: |
+          set -o pipefail
+          bun test ./test 2>&1 | tee "$RUNNER_TEMP/unit.log"
+          grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/unit.log" && grep -Eq '^ *0 fail' "$RUNNER_TEMP/unit.log"
+
+      - name: Anvil suite
+        run: |
+          set -o pipefail
+          bun test ./test-anvil 2>&1 | tee "$RUNNER_TEMP/anvil.log"
+          grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/anvil.log" && grep -Eq '^ *0 fail' "$RUNNER_TEMP/anvil.log"

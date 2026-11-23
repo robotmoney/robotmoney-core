@@ -1,0 +1,21 @@
+{
+  "name": "@robotmoney/keeper",
+  "private": true,
+  "type": "module",
+  "description": "One-vault keeper service (proposal §8.1): settles the FlowQueue and steps the Rebalancer. Bun + viem.",
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "test": "bun test ./test",
+    "test:anvil": "bun test ./test-anvil",
+    "typecheck": "tsc --noEmit",
+    "gen-abi": "bun scripts/gen-abi.ts"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.5.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}

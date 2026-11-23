@@ -1,0 +1,2042 @@
+{
+ "FlowQueue": [
+  {
+   "type": "function",
+   "name": "KEEPER_ROLE",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "checkSettle",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "check",
+     "type": "uint8",
+     "internalType": "enum SettleCheck"
+    },
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "currentEpoch",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "hasRole",
+   "inputs": [
+    {
+     "name": "role",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    },
+    {
+     "name": "account",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "liveness",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "l",
+     "type": "tuple",
+     "internalType": "struct QueueLiveness",
+     "components": [
+      {
+       "name": "keeperConfigured",
+       "type": "bool",
+       "internalType": "bool"
+      },
+      {
+       "name": "queuePausedNow",
+       "type": "bool",
+       "internalType": "bool"
+      },
+      {
+       "name": "queuePausedUntil",
+       "type": "uint64",
+       "internalType": "uint64"
+      },
+      {
+       "name": "depositsStoppedNow",
+       "type": "bool",
+       "internalType": "bool"
+      },
+      {
+       "name": "windDownActive",
+       "type": "bool",
+       "internalType": "bool"
+      },
+      {
+       "name": "cancelBuffer",
+       "type": "uint32",
+       "internalType": "uint32"
+      },
+      {
+       "name": "maxPause",
+       "type": "uint32",
+       "internalType": "uint32"
+      }
+     ]
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "settle",
+   "inputs": [
+    {
+     "name": "maxRequests",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "maxUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "settleableAt",
+   "inputs": [
+    {
+     "name": "epoch",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "settlementCount",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  }
+ ],
+ "Rebalancer": [
+  {
+   "type": "function",
+   "name": "KEEPER_ROLE",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "assetBackoffUntil",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "fund",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "address",
+     "internalType": "contract IRobotMoneyFund"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "hasRole",
+   "inputs": [
+    {
+     "name": "role",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    },
+    {
+     "name": "account",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "previewStep",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "reason",
+     "type": "uint8",
+     "internalType": "enum SkipReason"
+    },
+    {
+     "name": "sellIndex",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "buyIndex",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "notionalUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "step",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "executed",
+     "type": "bool",
+     "internalType": "bool"
+    },
+    {
+     "name": "reason",
+     "type": "uint8",
+     "internalType": "enum SkipReason"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "stepDelisted",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "executed",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  }
+ ],
+ "KeeperAccount": [
+  {
+   "type": "function",
+   "name": "execute",
+   "inputs": [
+    {
+     "name": "target",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "data",
+     "type": "bytes",
+     "internalType": "bytes"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "ret",
+     "type": "bytes",
+     "internalType": "bytes"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "isBotKey",
+   "inputs": [
+    {
+     "name": "who",
+     "type": "address",
+     "internalType": "address"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "view"
+  }
+ ],
+ "RobotMoneyFund": [
+  {
+   "type": "function",
+   "name": "assetCount",
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "view"
+  },
+  {
+   "type": "function",
+   "name": "executeDelistStep",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "maxUsdcNotional",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "executed",
+     "type": "bool",
+     "internalType": "bool"
+    },
+    {
+     "name": "tokensSold",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "usdcReceived",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "stateMutability": "nonpayable"
+  },
+  {
+   "type": "function",
+   "name": "isAssetInSale",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "",
+     "type": "bool",
+     "internalType": "bool"
+    }
+   ],
+   "stateMutability": "view"
+  }
+ ],
+ "errors": [
+  {
+   "type": "error",
+   "name": "AbovePerDepositCap",
+   "inputs": [
+    {
+     "name": "usdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "cap",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AccessControlBadConfirmation",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "AccessControlUnauthorizedAccount",
+   "inputs": [
+    {
+     "name": "account",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "neededRole",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AdapterAssetMismatch",
+   "inputs": [
+    {
+     "name": "adapter",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "expected",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "actual",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AdapterCodeHashNotAllowed",
+   "inputs": [
+    {
+     "name": "adapter",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "codeHash",
+     "type": "bytes32",
+     "internalType": "bytes32"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AdapterVaultMismatch",
+   "inputs": [
+    {
+     "name": "adapter",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "expected",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "actual",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AlreadySeeded",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "AssetInSale",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AssetNotInSale",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AssetStillHeld",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "AssetStillTargeted",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "targetBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "BasketCapExceeded",
+   "inputs": [
+    {
+     "name": "sum",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "cap",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "BelowMinRequest",
+   "inputs": [
+    {
+     "name": "valueUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "minRequestUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "BoundAtOrBelowPoolFee",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "boundBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "poolFeeBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "CallFailed",
+   "inputs": [
+    {
+     "name": "data",
+     "type": "bytes",
+     "internalType": "bytes"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ClaimFrozen",
+   "inputs": [
+    {
+     "name": "claimId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "frozenUntil",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ClaimLocked",
+   "inputs": [
+    {
+     "name": "claimId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "unlockAt",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "DeferredShortfall",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "received",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "owed",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "DelistBandExceeded",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "receivedUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "minUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "DelistBudgetExceeded",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "lossUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "budgetUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "DepositBelowSlippageFloor",
+   "inputs": [
+    {
+     "name": "realizedDelta",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "floor",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "DepositsArePaused",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "DepositsClosedDuringExclusion",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "DuplicateAsset",
+   "inputs": [
+    {
+     "name": "existingIndex",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC20InsufficientAllowance",
+   "inputs": [
+    {
+     "name": "spender",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "allowance",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "needed",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC20InsufficientBalance",
+   "inputs": [
+    {
+     "name": "sender",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "balance",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "needed",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC20InvalidApprover",
+   "inputs": [
+    {
+     "name": "approver",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC20InvalidReceiver",
+   "inputs": [
+    {
+     "name": "receiver",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC20InvalidSender",
+   "inputs": [
+    {
+     "name": "sender",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC20InvalidSpender",
+   "inputs": [
+    {
+     "name": "spender",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC4626ExceededMaxDeposit",
+   "inputs": [
+    {
+     "name": "receiver",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "assets",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "max",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC4626ExceededMaxMint",
+   "inputs": [
+    {
+     "name": "receiver",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "shares",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "max",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC4626ExceededMaxRedeem",
+   "inputs": [
+    {
+     "name": "owner",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "shares",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "max",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ERC4626ExceededMaxWithdraw",
+   "inputs": [
+    {
+     "name": "owner",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "assets",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "max",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FeedUnhealthy",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "status",
+     "type": "uint8",
+     "internalType": "enum FeedStatus"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FlowLegLimit",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "amount",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "limit",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FlowLeverOutOfBounds",
+   "inputs": [
+    {
+     "name": "field",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FlowParamOutOfBounds",
+   "inputs": [
+    {
+     "name": "field",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FlowRoleAlreadyBound",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "FreezeOnCooldown",
+   "inputs": [
+    {
+     "name": "availableAt",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FreezeOutsideHold",
+   "inputs": [
+    {
+     "name": "settlementId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "FundIsShutdown",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "FundResultMismatch",
+   "inputs": [
+    {
+     "name": "expected",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "actual",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "InKindClosed",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "InsufficientIdle",
+   "inputs": [
+    {
+     "name": "requested",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "available",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "InvalidAccount",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "InvalidAssetIndex",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "InvalidInitialization",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "InvalidParam",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "InvalidPlanTransition",
+   "inputs": [
+    {
+     "name": "planId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "from",
+     "type": "uint8",
+     "internalType": "enum PlanStatus"
+    },
+    {
+     "name": "to",
+     "type": "uint8",
+     "internalType": "enum PlanStatus"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "LastAdminFloor",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "LastOwner",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "LegLimitsLength",
+   "inputs": [
+    {
+     "name": "given",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "expected",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "LendingHasClaims",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "claimUnits",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "LendingLiquidityUnavailable",
+   "inputs": [
+    {
+     "name": "adapter",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "LendingRateUnavailable",
+   "inputs": [
+    {
+     "name": "adapter",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "LendingSupplyRefused",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "placed",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "asked",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "MathOverflowedMulDiv",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "MaxAssetsReached",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "MaxStepBelowMinStep",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "maxStepUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "minStepUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "MintInKindOverMax",
+   "inputs": [
+    {
+     "name": "spent",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "maxUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "MissingFeed",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NavMarketDeviationExceeded",
+   "inputs": [
+    {
+     "name": "token",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "deviationBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "thresholdBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NoClaimToSettle",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "owner",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NoPositionClaim",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "account",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NotBotKey",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "NotEnoughClaimable",
+   "inputs": [
+    {
+     "name": "asked",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "claimable",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NotInitializing",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "NotKeeperBeforeGrace",
+   "inputs": [
+    {
+     "name": "caller",
+     "type": "address",
+     "internalType": "address"
+    },
+    {
+     "name": "openAt",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NotOwner",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "NotRequestOwner",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "caller",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NotSeeded",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "NotUpgradeTimelock",
+   "inputs": [
+    {
+     "name": "caller",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NothingDeferred",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "account",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NothingToWithdraw",
+   "inputs": [
+    {
+     "name": "owner",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NoticeAlreadyGiven",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "NoticeNotReady",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "readyEpoch",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "OnlyFund",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "OnlySelf",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "PauseOnCooldown",
+   "inputs": [
+    {
+     "name": "availableAt",
+     "type": "uint64",
+     "internalType": "uint64"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PerDepositCapExceeded",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "PlanLive",
+   "inputs": [
+    {
+     "name": "planId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PlanParamOutOfBounds",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "PoolDepthTooLow",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "depthUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "minDepthUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PoolFeeMarginTooSmall",
+   "inputs": [
+    {
+     "name": "poolFeeBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "marginBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "legBandBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PoolHistoryTooShort",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "window",
+     "type": "uint32",
+     "internalType": "uint32"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PoolNotFixedFee",
+   "inputs": [
+    {
+     "name": "pool",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PoolShareExceeded",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "targetUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "limitUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "PreviewNotSupported",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "ProportionViolated",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "before",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "afterAmount",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "supplyBefore",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "supplyAfter",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ProtectedToken",
+   "inputs": [
+    {
+     "name": "token",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "QueueIsPaused",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "RedeemOnly",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "ReentrancyGuardReentrantCall",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "RequestLocked",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "RequestNotExpired",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "RequestNotPending",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "RolesAlreadyBound",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "SeedBelowMinimum",
+   "inputs": [
+    {
+     "name": "usdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "minSeedUsdc",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "SeedSharesLocked",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "SelfCall",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "SettleBlocked",
+   "inputs": [
+    {
+     "name": "check",
+     "type": "uint8",
+     "internalType": "enum SettleCheck"
+    },
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "detail",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "SettleSideOutOfGas",
+   "inputs": [
+    {
+     "name": "kind",
+     "type": "uint8",
+     "internalType": "enum RequestKind"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "SettlementAlreadyFrozen",
+   "inputs": [
+    {
+     "name": "settlementId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "SettlementNotFrozen",
+   "inputs": [
+    {
+     "name": "settlementId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepBalanceChanged",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "before",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "afterAmount",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepBelowMinOut",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "received",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "minOut",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepCostExceeded",
+   "inputs": [
+    {
+     "name": "cost",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "maxCost",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepExceedsPath",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "notional",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "room",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepFeedCheckFailed",
+   "inputs": [
+    {
+     "name": "check",
+     "type": "uint8",
+     "internalType": "enum StepFeedCheck"
+    },
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "detail",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepGasStarved",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "StepInWindow",
+   "inputs": [
+    {
+     "name": "lastBasketStepAt",
+     "type": "uint64",
+     "internalType": "uint64"
+    },
+    {
+     "name": "settleWindow",
+     "type": "uint32",
+     "internalType": "uint32"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "StepParamOutOfBounds",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "StepSupplyChanged",
+   "inputs": [
+    {
+     "name": "before",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "afterSupply",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "TVLCapExceeded",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "TargetAssetDuplicate",
+   "inputs": [
+    {
+     "name": "asset",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "TargetAssetMissing",
+   "inputs": [
+    {
+     "name": "asset",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "TargetAssetNotActive",
+   "inputs": [
+    {
+     "name": "asset",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "TargetExceedsCap",
+   "inputs": [
+    {
+     "name": "index",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "targetBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    },
+    {
+     "name": "capBps",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "TargetSumInvalid",
+   "inputs": [
+    {
+     "name": "sum",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "UUPSUnauthorizedCallContext",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "UnknownClaim",
+   "inputs": [
+    {
+     "name": "claimId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "UnknownRequest",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "UnknownSettlement",
+   "inputs": [
+    {
+     "name": "settlementId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "UseFlowQueue",
+   "inputs": [
+    {
+     "name": "queue",
+     "type": "address",
+     "internalType": "address"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "WrongRequestKind",
+   "inputs": [
+    {
+     "name": "requestId",
+     "type": "uint256",
+     "internalType": "uint256"
+    }
+   ]
+  },
+  {
+   "type": "error",
+   "name": "ZeroAddress",
+   "inputs": []
+  },
+  {
+   "type": "error",
+   "name": "ZeroAmount",
+   "inputs": []
+  }
+ ]
+}
