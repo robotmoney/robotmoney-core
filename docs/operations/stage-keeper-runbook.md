@@ -83,3 +83,66 @@ The key held 0.00088 ETH on 2026-11-23. A settle on Base costs a small fraction 
 
 - No supervisor. A crash or reboot stops settlement until someone restarts it.
 - `ALERT_WEBHOOK` is not set, so alerts only go to the log.
+- The script logs a mined revert as sent. `cast send` exits 0 on a revert, and the script reads only the exit code
+  (settle `0xb8a1e8ea…29d5` reverted with `SettleSideOutOfGas(Deposit)` on 2026-11-23). The keeper service below fixes
+  this.
+
+## The keeper service (replaces the script)
+
+`services/keeper` is the TypeScript keeper of proposal §8.1. It checks every receipt, alerts `<duty>_reverted` with the
+decoded reason, sets the settle gas limit from the contract's own side budget, and serves `/healthz` and `/metrics`.
+The script stays the stage keeper until the service has run one full week on stage with no missed epoch and no
+unalerted revert. Then the script and its tests are deleted.
+
+Never run the script and the service on the same key at once. Stop the script first.
+
+### Install
+
+On the host, as root:
+
+```bash
+git clone --depth 1 https://github.com/robotmoney/robotmoney-core /opt/robotmoney-keeper
+(cd /opt/robotmoney-keeper/services/keeper && bun install --frozen-lockfile)
+install -d -m 700 /etc/robotmoney-keeper
+install -m 600 ~/onevault-keeper/KEEPER.keystore /etc/robotmoney-keeper/keeper.keystore
+cp /opt/robotmoney-keeper/services/keeper/keeper.example.toml /etc/robotmoney-keeper/keeper.toml
+cp /opt/robotmoney-keeper/services/keeper/systemd/robotmoney-keeper.service /etc/systemd/system/
+```
+
+Edit `/etc/robotmoney-keeper/keeper.toml` with the values in the table at the top: `queue`, `rebalancer`,
+`chainId = 8453`, no `keeperAccount` (Deploy 4 is direct mode), `minGasWei = "200000000000000"`. Use a vetted paid RPC
+as `rpcUrl` and `https://mainnet.base.org` only in `rpcFallbackUrls`.
+
+### The password
+
+The unit reads it through systemd `LoadCredential=` from `/etc/robotmoney-keeper/password` (root, mode 0600). The
+service refuses a password file that a group or other user can read. Write it from the operator machine over ssh
+stdin, so it never appears on a command line:
+
+```bash
+ssh rm-core-stage-1 'umask 077; cat > /etc/robotmoney-keeper/password' < ~/robotmoney-keys/base-mainnet-test.pass
+```
+
+For a one-off run without systemd, pipe the password on stdin instead:
+`bun src/cli.ts --config keeper.toml --once < password`. `--once` runs one tick and exits 0 (no alert), 1 (an alert),
+or 2 (bad config, a failed start-up check, or another instance holds the lock).
+
+### Start, check, stop
+
+```bash
+ssh rm-core-stage-1 'pkill -f "^bash onevault-keeper\.sh"; systemctl daemon-reload; systemctl enable --now robotmoney-keeper'
+ssh rm-core-stage-1 'journalctl -u robotmoney-keeper -n 20; curl -s localhost:9464/healthz; curl -s localhost:9464/metrics'
+ssh rm-core-stage-1 'systemctl stop robotmoney-keeper'
+```
+
+`/healthz` returns 200 while the last tick finished within 2 × `intervalSecs`. `/metrics` carries
+`keeper_last_tick_timestamp_seconds` and `keeper_seconds_since_last_settle` for the Watchdog's keeper liveness check
+(the Watchdog does not read them yet). Exit 2 does not restart
+(`RestartPreventExitStatus=2`): read the `keeper_unconfigured` line in the journal and fix the config.
+
+### Alerts
+
+One JSON line each in the journal, and a POST to `alertWebhook` when set. The same kind and cause alerts once, again
+every `realertSecs`, and once on recovery (`"recovered":true`). Kinds: `keeper_unconfigured`, `queue_paused`,
+`low_gas`, `gas_price_high`, `settle_reverted`, `step_reverted`, `delist_step_reverted`, `send_failed`, `tx_stuck`,
+`rpc_unreadable`, `epoch_overdue`.

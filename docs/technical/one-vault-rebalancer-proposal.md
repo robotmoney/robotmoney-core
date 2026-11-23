@@ -2015,6 +2015,40 @@ given. A mismatch exits 2.
 - No test or log line contains the keystore password.
 - One week on stage (Deploy 4) with no missed epoch and no unalerted revert.
 
+#### 8.1.8 Implementation notes
+
+Core issue 2057 built `services/keeper`. These choices fill gaps the
+sections above leave open:
+
+- **ABIs.** `scripts/gen-abi.ts` writes `src/abi.generated.json` from the
+  forge artifacts in `out/`: the functions the keeper calls and every error
+  of `FlowQueue`, `Rebalancer`, `KeeperAccount` and `RobotMoneyFund`. The
+  anvil suite rebuilds and fails on drift. `KeeperAccount.CallFailed(bytes)`
+  is unwrapped, so account mode alerts the inner reason.
+- **Gas floor.** `SIDE_GAS_*` are `internal` constants, so they cannot be
+  read on chain. `src/gas.ts` copies them and a unit test pins them to
+  `FlowSettleLib.sol`. Each side's share of the floor is the guard's own
+  need, `sideGas + sideGas / 63 + SIDE_CALL_MARGIN`. The overhead is 1.5 M.
+- **K2.** `settle` returns only the settlement id, not a cursor. The keeper
+  reads `checkSettle()` again after a mined settle and settles again while it
+  reads `Ok`, up to `maxCallsPerTick` (default 4).
+- **K3.** `previewStep()` reading `Concluded` is due too: that `step()` moves
+  the plan to its terminal status (the `previewStep` NatSpec).
+- **Replay.** A mined revert is replayed at the block before with the same
+  gas limit, so a gas-dependent revert such as `SettleSideOutOfGas` decodes.
+- **Fees.** The duty skips with `gas_price_high` when base fee plus tip is
+  above `maxFeeGwei`. Otherwise `maxFeePerGas` is `2 × baseFee + tip`,
+  capped at `maxFeeGwei`.
+- **low_gas.** Below `minGasWei` nothing is sent. Below the runway
+  (`runwaySettles` × the last settle's gas, or the one-fill floor before any
+  settle, × the current price) it alerts and still sends.
+- **epoch_overdue.** The age is measured from the `settleableAt` of the
+  latest epoch whose window has ended, while `checkSettle()` is not `Window`.
+  That is a lower bound on the oldest pending epoch's age.
+- **Environment.** Each field's override is `KEEPER_<FIELD>` in snake case,
+  so `keystore` and `passwordFile` keep the script's `KEEPER_KEYSTORE` and
+  `KEEPER_PASSWORD_FILE`. `KEEPER_PASSWORD` is read and then deleted.
+
 ## 9. Migration
 
 Out of the experiment's scope (owner, 2026-11-09). This section records the
