@@ -37,7 +37,7 @@ decisions:
   - id: "D10-1"
     question: "Which one-vault contracts does 0.10.0 upgrade, and with which one-time migrations?"
     status: decided
-    answer: "Owner, 2026-11-24: every one-vault contract upgrades, and each runs its one-time migration when in doubt; do not skip an upgrade or a migration because it looks unnecessary. Applied: all five proxies and the swap adapter proxy upgrade. No 0.10.0 contract has a migration function, so the data is empty (notes)."
+    answer: "Owner, 2026-11-24: every one-vault contract upgrades, and each runs its one-time migration when in doubt; do not skip an upgrade or a migration because it looks unnecessary. Applied: all five proxies and the swap adapter proxy upgrade. Follow-up owner answer 2026-11-24: add migrateV0100 where it fits (issue 2062); the fund gets one only if it fits its EIP-170 headroom. Until 2062 lands the upgrade data is empty (notes)."
     decidedOn: "2026-11-24"
     ref: "Owner instruction relayed in the release-0.10.0 runbook session, 2026-11-24"
   - id: "D4-10"
@@ -72,16 +72,16 @@ decisions:
     ref: null
   - id: "D10-3"
     question: "Two scripts are missing: adapter-swap.ts upgrade (allow the new adapter implementation hash, then upgrade the adapter proxy, P2.93) and the relocation of the 0.9.0 record's five build paths (P0.91; relocate-deploy4-v080.ts accepts only two). Write both before the Twin run?"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Yes: ticket and build both scripts before the Twin run (issue 2063)."
+    decidedOn: "2026-11-24"
+    ref: "Owner answer in the release-0.10.0 session; tracking issue 2061"
   - id: "D10-4"
     question: "Must a full Twin pass at the rc commit precede the 8453 run (v0.9.0 waived it, D4-20)?"
-    status: open
-    answer: null
-    decidedOn: null
-    ref: null
+    status: decided
+    answer: "Yes: a full Twin pass at the rc commit precedes the 8453 run. No waiver as in D4-20."
+    decidedOn: "2026-11-24"
+    ref: "Owner answer in the release-0.10.0 session; tracking issue 2061"
   - id: "D10-5"
     question: "The live fund timelock runs pre-AGY-02 code with no executor floor and cannot be upgraded. Leave it (the govern tool guards it) or replace it in a later release?"
     status: open
