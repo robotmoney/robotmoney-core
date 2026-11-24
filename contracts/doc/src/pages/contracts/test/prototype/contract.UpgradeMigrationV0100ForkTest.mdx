@@ -1,0 +1,114 @@
+---
+title: "UpgradeMigrationV0100ForkTest"
+description: "The 0.10.0 in-place upgrade of Deploy 4 on real Base 8453 state: the Twin fork (FORK_RPC_URL, chain 918453) pinned by the run (suite-05 job forge-upgrade-fork). Every proxy is upgraded from the fund timelock in release order (Rebalancer, fund with empty data, queue, governance, receipt, swap adapter), each with `migrateV0100()` but the fund, which has none (EIP-170 headroom). The test asserts version 3, the second-call revert, and that balances, supply and the queue's records are unchanged. Nothing is sent to a live chain: the upgrades run in forge's local copy of the fork."
+---
+
+# UpgradeMigrationV0100ForkTest
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/test/prototype/UpgradeMigrationV0100Fork.t.sol)
+
+**Inherits:** Test
+
+**Title:** UpgradeMigrationV0100ForkTest
+
+The 0.10.0 in-place upgrade of Deploy 4 on real Base 8453 state: the Twin fork (FORK_RPC_URL, chain 918453)
+pinned by the run (suite-05 job forge-upgrade-fork). Every proxy is upgraded from the fund timelock in
+release order (Rebalancer, fund with empty data, queue, governance, receipt, swap adapter), each with
+`migrateV0100()` but the fund, which has none (EIP-170 headroom). The test asserts version 3, the
+second-call revert, and that balances, supply and the queue's records are unchanged. Nothing is sent to a
+live chain: the upgrades run in forge's local copy of the fork.
+
+## Constants
+
+### TIMELOCK
+
+```solidity
+address internal constant TIMELOCK = 0x592899400A6c58cb1382D3B7e96931FA43F55c30;
+```
+
+### FUND
+
+```solidity
+address internal constant FUND = 0xb2c17a384b6fc03d96D77f39E016aD7b9E34af2B;
+```
+
+### QUEUE
+
+```solidity
+address internal constant QUEUE = 0xbB414D1536Fef6c240e984a24F777ca0958e5439;
+```
+
+### REBALANCER
+
+```solidity
+address internal constant REBALANCER = 0x13c1169Da48Bb06E327286971eB3E56c0411A65B;
+```
+
+### GOVERNANCE
+
+```solidity
+address internal constant GOVERNANCE = 0xCD368b5276A4CAdf710C220348f64487F240a192;
+```
+
+### RECEIPT
+
+```solidity
+address internal constant RECEIPT = 0xbf756a0B5CBD2f2244c34329e79f9a13d3b0750F;
+```
+
+### SWAP_ADAPTER
+
+```solidity
+address internal constant SWAP_ADAPTER = 0xc0BdeD669301EC505475322C9Ad6DBbA37d120EB;
+```
+
+### USDC
+
+```solidity
+address internal constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+```
+
+## Functions
+
+<a id="test_deploy4upgradesto0100inreleaseorder"></a>
+
+### test_deploy4UpgradesTo0100InReleaseOrder
+
+```solidity
+function test_deploy4UpgradesTo0100InReleaseOrder() public;
+```
+
+<a id="_snapshot"></a>
+
+### _snapshot
+
+```solidity
+function _snapshot() internal view returns (bytes32 h);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| h | `bytes32` |  |
+
+<a id="_version-address"></a>
+
+### _version
+
+```solidity
+function _version(address proxy) internal view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+

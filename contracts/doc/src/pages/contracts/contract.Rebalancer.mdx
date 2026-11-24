@@ -5,7 +5,7 @@ description: "Step selection for the one vault (§5). It holds no funds, grants 
 
 # Rebalancer
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/Rebalancer.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/Rebalancer.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalancer](/contracts/interfaces/interface.IRebalancer)
 
@@ -207,6 +207,40 @@ the hard bounds (one already in the 0.9.0 layout does not, for any usual `minSte
 ```solidity
 function migrateV090() external reinitializer(2);
 ```
+
+<a id="migratev0100"></a>
+
+### migrateV0100
+
+The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. 0.10.0 adds
+no Rebalancer storage, so it writes nothing: it checks that the step parameters read inside their hard
+bounds in the 0.9.0 layout (what `migrateV090` or `initialize` left), so the new code never runs on
+parameters it cannot use. The upgrade timelock passes it as the data of `upgradeToAndCall`; nobody
+else can run it, and it runs once. It calls nothing.
+
+```solidity
+function migrateV0100() external reinitializer(3);
+```
+
+<a id="_requirehardbounds-stepparams"></a>
+
+### _requireHardBounds
+
+<i>
+
+The hard bounds every stored `StepParams` meets (the fund-dependent bounds of `_setStepParams` aside).
+
+</i>
+
+```solidity
+function _requireHardBounds(StepParams memory p) private pure;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| p | `StepParams` |  |
 
 <a id="step"></a>
 

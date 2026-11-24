@@ -5,7 +5,7 @@ description: "On-chain commitment register for the swarm's consensus recommendat
 
 # ConsensusRecommendationReceipt
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/ConsensusRecommendationReceipt.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/ConsensusRecommendationReceipt.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IConsensusRecommendationReceipt](/contracts/interfaces/interface.IConsensusRecommendationReceipt)
 
@@ -182,6 +182,20 @@ function migrateToSubmitterRoles(address releaser) external reinitializer(2);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | releaser | `address` | RouterGovernance. |
+
+<a id="migratev0100"></a>
+
+### migrateV0100
+
+The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. 0.10.0 adds
+no receipt storage, so it writes nothing. It checks the role wiring the release keeps:
+`DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE` each have a holder and `ADMIN_ROLE` administers the submitter and
+releaser roles (what `initialize` or `migrateToSubmitterRoles` left). The upgrade timelock passes it
+as the data of `upgradeToAndCall`; nobody else can run it, and it runs once. Receipts are untouched.
+
+```solidity
+function migrateV0100() external reinitializer(3);
+```
 
 <a id="_revokerole-bytes32-address"></a>
 
@@ -391,4 +405,21 @@ function computeReceiptId(string calldata sessionId, string calldata subjectId)
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `bytes32` |  |
+
+## Errors
+
+### RoleWiringBroken
+
+`role` has no holder, or the submitter and releaser roles are not administered by `ADMIN_ROLE`
+(`migrateV0100`).
+
+```solidity
+error RoleWiringBroken(bytes32 role);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
 

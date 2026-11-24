@@ -5,7 +5,7 @@ description: "The fund's Uniswap V3 swap adapter as the implementation of an Ope
 
 # UniswapV3ExactOutSwapAdapterUpgradeable
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol)
 
 **Inherits:** [UniswapV3ExactOutSwapAdapter](/contracts/adapters/contract.UniswapV3ExactOutSwapAdapter), [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS)
 
@@ -51,6 +51,19 @@ function initialize(address timelock) external initializer;
 | ---- | ---- | ----------- |
 | timelock | `address` |  |
 
+<a id="migratev0100"></a>
+
+### migrateV0100
+
+The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. The adapter
+keeps no state, so it writes nothing. It checks what the 0.10.0 canonical pool check (AGY-13) needs:
+the router answers `factory()` with a contract. The upgrade timelock passes it as the data of
+`upgradeToAndCall`; nobody else can run it, and it runs once.
+
+```solidity
+function migrateV0100() external reinitializer(3);
+```
+
 <a id="implementation"></a>
 
 ### implementation
@@ -66,4 +79,20 @@ function implementation() external view returns (address);
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | &lt;none&gt; | `address` |  |
+
+## Errors
+
+### RouterHasNoFactory
+
+The router does not name a factory with code, so the 0.10.0 canonical pool check would refuse every pool.
+
+```solidity
+error RouterHasNoFactory(address router);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| router | `address` |  |
 

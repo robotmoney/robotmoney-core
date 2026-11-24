@@ -5,7 +5,7 @@ description: "The fund's target setter (§5.1, §6). It holds the fund's `GOVERN
 
 # RebalanceGovernance
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/893c1186ef707584db241351db921b86ee31f9a2/contracts/RebalanceGovernance.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/RebalanceGovernance.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IRebalanceGovernance](/contracts/interfaces/interface.IRebalanceGovernance)
 
@@ -131,6 +131,20 @@ function initialize(
 | defaultPlanParams_ | `PlanParams` | Plan parameters for `applyReceipt`, bounded as §5.6. |
 | upgradeTimelock_ | `address` | The only upgrade and freeze authority. |
 | upgradeMode_ | `UpgradeMode` | The release mode. `Undeclared` reverts. |
+
+<a id="migratev0100"></a>
+
+### migrateV0100
+
+The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. 0.10.0 adds
+no governance storage, so it writes nothing. It checks what the new last-holder floor of
+`TARGET_SETTER_ROLE` (AGY-08) assumes: `ADMIN_ROLE` and `TARGET_SETTER_ROLE` each have a holder, and
+the fund and receipt register are set. The upgrade timelock passes it as the data of
+`upgradeToAndCall`; nobody else can run it, and it runs once.
+
+```solidity
+function migrateV0100() external reinitializer(3);
+```
 
 <a id="_revokerole-bytes32-address"></a>
 
@@ -338,4 +352,20 @@ function _checkPlanParams(PlanParams calldata params) internal pure;
 | Name | Type | Description |
 | ---- | ---- | ----------- |
 | params | `PlanParams` |  |
+
+## Errors
+
+### RoleHasNoHolder
+
+`role` has no holder, so the 0.10.0 last-holder floors would guard nothing (`migrateV0100`).
+
+```solidity
+error RoleHasNoHolder(bytes32 role);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| role | `bytes32` |  |
 

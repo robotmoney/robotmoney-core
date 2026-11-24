@@ -5,7 +5,7 @@ description: "The one-time state migration of a `FlowQueue` proxy upgraded in pl
 
 # FlowMigrateLib
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/a0f81d7b391eda815b1402df582ae333989a41fb/contracts/lib/FlowMigrateLib.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/lib/FlowMigrateLib.sol)
 
 **Title:** FlowMigrateLib
 
@@ -81,6 +81,30 @@ function migrateV090(
 | cancelBuffer | `uint32` | `FlowParams.cancelBuffer` to write, in [MIN_CANCEL_BUFFER, MAX_CANCEL_BUFFER] and below<br/>`epochLength`. |
 | maxPause | `uint32` | `FlowParams.maxPause` to write, in [MIN_MAX_PAUSE, MAX_PAUSE_DURATION] and at least<br/>`TIMELOCK_DELAY_REFERENCE + epochLength`. |
 | matchBandBps | `uint16` | `FlowParams.matchBandBps` to write, in [1, `refBandBps`]. |
+
+<a id="migratev0100-flowstate"></a>
+
+### migrateV0100
+
+Body of `FlowQueue.migrateV0100`, the in-place upgrade from contracts 0.9.0 to 0.10.0 (ADR-0020),
+version 3. No struct changed in the middle; 0.10.0 appended `enrollPos` and `depBucketMaxMinHold`.
+- `enrollPos` must read 0 (a fresh queue's value): 0.9.0 enrolled a round in one call, so no
+enrollment is in progress.
+- Every deposit bucket of the live cycle that holds basis gets `maxDepositMinHold` as its hold mark,
+the hold 0.9.0 booked for it. The 0.10.0 match reads the same value through its fallback for a
+bucket with no mark, so this changes no hold; it records the value so each bucket has its own mark.
+- The three parameters `migrateV090` wrote are non-zero (the queue ran the 0.9.0 migration).
+It moves no funds and rewrites no request, settlement or claim.
+
+```solidity
+function migrateV0100(FlowState storage s) public;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| s | `FlowState` |  |
 
 <a id="_migraterequest-flowstate-uint256"></a>
 
@@ -213,6 +237,21 @@ event LegacySettlementMigrated(
 | depositBoundPrice | `uint256` |  |
 | redeemBoundPrice | `uint256` |  |
 
+### QueueMigratedV0100
+
+The 0.10.0 migration ran: `buckets` live deposit buckets got their hold mark.
+
+```solidity
+event QueueMigratedV0100(uint256 buckets, uint32 hold);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| buckets | `uint256` |  |
+| hold | `uint32` |  |
+
 ## Errors
 
 ### LegacyEscrowOpen
@@ -329,4 +368,26 @@ error HeldSharesMismatch(uint256 claimsSum, uint256 totalHeldShares);
 | ---- | ---- | ----------- |
 | claimsSum | `uint256` |  |
 | totalHeldShares | `uint256` |  |
+
+### NotMigratedV090
+
+A 0.9.0 parameter `migrateV090` or `initialize` writes reads 0: the queue never ran the 0.9.0 migration.
+
+```solidity
+error NotMigratedV090();
+```
+
+### EnrollmentInProgress
+
+`enrollPos` is not 0: the queue already holds a 0.10.0 enrollment in progress.
+
+```solidity
+error EnrollmentInProgress(uint256 enrollPos);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| enrollPos | `uint256` |  |
 

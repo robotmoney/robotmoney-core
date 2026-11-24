@@ -72,6 +72,7 @@
   ],
   "optional": [
     { "prefix": "fork-integration-", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 legs on the Twin chain and anvil. Optional since the list was created (core 1505), next to forge-fork-vault-regressions, which reads the same public upstream." },
+    { "name": "forge-upgrade-fork", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 leg on the Twin chain (issue 2062, the 0.10.0 upgrade of Deploy 4 on real state). It reads the same public upstream as fork-integration-*, so it is optional with them." },
     { "name": "base-testnet-adapters", "source": "suite-05-fork-integration.yml", "reason": "Suite 5 leg that needs the Base testnet RPC and a funded testnet account from repository secrets. A testnet outage or an empty funder must not block a deploy sha. Kept with fork-integration-*." },
     { "name": "solidity-slither", "source": "suite-03-solidity-quality.yml", "reason": "It installs the latest slither-analyzer from pip with no version pin, so a new detector release can turn it red with no change in the sha." },
     { "name": "skill-url-reachability", "source": "suite-23-skill-url-reachability.yml", "reason": "It fetches the published raw SKILL.md URLs of the dev ref over the live network, not this sha's files (CI_CLASS heavy, a sweep)." }

@@ -1,0 +1,247 @@
+---
+title: "UpgradeMigrationV0100Test"
+description: "The in-place upgrade of a contracts 0.9.0 deployment to 0.10.0 (`migrateV0100`, version 3, ADR-0020) on every one-vault proxy that has one: FlowQueue, Rebalancer, RebalanceGovernance, the consensus receipt and the swap adapter proxy. RobotMoneyFund has none: it has 17 bytes left under EIP-170, less than a gated entry point costs (ADR-0020, 0.10.0)."
+---
+
+# UpgradeMigrationV0100Test
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/test/prototype/UpgradeMigration.t.sol)
+
+**Inherits:** [FlowQueueFixesBase](/contracts/test/prototype/abstract.FlowQueueFixesBase)
+
+**Title:** UpgradeMigrationV0100Test
+
+The in-place upgrade of a contracts 0.9.0 deployment to 0.10.0 (`migrateV0100`, version 3, ADR-0020) on
+every one-vault proxy that has one: FlowQueue, Rebalancer, RebalanceGovernance, the consensus receipt and
+the swap adapter proxy. RobotMoneyFund has none: it has 17 bytes left under EIP-170, less than a gated
+entry point costs (ADR-0020, 0.10.0).
+
+Deploy 4 ran the 0.9.0 migrations on the queue, the fund and the Rebalancer (version 2); the governance,
+receipt and adapter proxies are at version 1. The fixture's fresh deployment is set to those versions
+with `vm.store`, then each upgrade runs as the release runs it: `upgradeToAndCall(newImpl,
+migrateV0100())` from the upgrade timelock.
+
+## Constants
+
+### AC_BASE
+
+<i>
+
+erc7201:openzeppelin.storage.AccessControl and .AccessControlEnumerable.
+
+</i>
+
+```solidity
+bytes32 internal constant AC_BASE =
+        0x02dd7bc7dec4dceedda775e58dd541e08a116c6c53815c0bd028192f7b626800;
+```
+
+### ACE_BASE
+
+```solidity
+bytes32 internal constant ACE_BASE =
+        0xc1f6fe24621ce81ec5827caf0253cadb74709b061630e6b55e82371705932000;
+```
+
+### FLOW
+
+```solidity
+uint256 internal constant FLOW =
+        0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
+```
+
+## State Variables
+
+### adapter
+
+```solidity
+address internal adapter;
+```
+
+### proxies
+
+```solidity
+address[5] internal proxies;
+```
+
+### impls
+
+```solidity
+address[5] internal impls;
+```
+
+## Functions
+
+<a id="_setupv090"></a>
+
+### _setUpV090
+
+```solidity
+function _setUpV090() internal;
+```
+
+<a id="_migration"></a>
+
+### _migration
+
+```solidity
+function _migration() internal pure returns (bytes memory);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `bytes` |  |
+
+<a id="_upgrade-uint256"></a>
+
+### _upgrade
+
+```solidity
+function _upgrade(uint256 k) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+
+<a id="test_v0100_eachproxymigratesoncetoversion3"></a>
+
+### test_v0100_eachProxyMigratesOnceToVersion3
+
+Each proxy migrates once inside `upgradeToAndCall`, ends at version 3, and a second call (direct or in
+another upgrade) reverts `InvalidInitialization`. An upgrade with no data still works afterwards.
+
+```solidity
+function test_v0100_eachProxyMigratesOnceToVersion3() public fixtureCovered;
+```
+
+<a id="test_v0100_oldermigrationsrevert"></a>
+
+### test_v0100_olderMigrationsRevert
+
+After the 0.10.0 migrations no 0.9.0 (or older) migration can run on any proxy, the fund included.
+
+```solidity
+function test_v0100_olderMigrationsRevert() public fixtureCovered;
+```
+
+<a id="test_v0100_stateisbyteidentical"></a>
+
+### test_v0100_stateIsByteIdentical
+
+The migrations move no funds and rewrite no request, settlement, claim or share balance.
+
+```solidity
+function test_v0100_stateIsByteIdentical() public fixtureCovered;
+```
+
+<a id="test_v0100_refusesothercallersandtheimplementations"></a>
+
+### test_v0100_refusesOtherCallersAndTheImplementations
+
+Only the upgrade timelock migrates, and the implementations are locked.
+
+```solidity
+function test_v0100_refusesOtherCallersAndTheImplementations() public fixtureCovered;
+```
+
+<a id="test_v0100_refusesbrokeninvariants"></a>
+
+### test_v0100_refusesBrokenInvariants
+
+Each migration reverts on state that breaks the invariant it checks, and the upgrade with it.
+
+```solidity
+function test_v0100_refusesBrokenInvariants() public fixtureCovered;
+```
+
+<a id="test_v0100_queuerefusesanenrollmentinprogress"></a>
+
+### test_v0100_queueRefusesAnEnrollmentInProgress
+
+The queue refuses to migrate while a 0.10.0 enrollment is in progress (`enrollPos`, slot 84 of
+`FlowState`: `forge inspect LayoutProbe_robotmoney_storage_FlowQueue storageLayout`).
+
+```solidity
+function test_v0100_queueRefusesAnEnrollmentInProgress() public fixtureCovered;
+```
+
+<a id="test_v0100_fundhasnomigration"></a>
+
+### test_v0100_fundHasNoMigration
+
+RobotMoneyFund has no `migrateV0100`: the selector is absent from the fund, so the release tooling cannot
+encode a fund migration that does not exist. Its 0.10.0 upgrade carries empty data.
+
+```solidity
+function test_v0100_fundHasNoMigration() public fixtureCovered;
+```
+
+<a id="_expectupgraderevert-uint256-bytes"></a>
+
+### _expectUpgradeRevert
+
+```solidity
+function _expectUpgradeRevert(uint256 k, bytes memory err) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| k | `uint256` |  |
+| err | `bytes` |  |
+
+<a id="_snapshot"></a>
+
+### _snapshot
+
+```solidity
+function _snapshot() internal view returns (bytes32 h);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| h | `bytes32` |  |
+
+<a id="_setversion-address-uint64"></a>
+
+### _setVersion
+
+```solidity
+function _setVersion(address proxy, uint64 v) internal;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+| v | `uint64` |  |
+
+<a id="_version-address"></a>
+
+### _version
+
+```solidity
+function _version(address proxy) internal view returns (uint64);
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| proxy | `address` |  |
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `uint64` |  |
+

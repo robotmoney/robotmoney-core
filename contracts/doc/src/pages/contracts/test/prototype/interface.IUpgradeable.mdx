@@ -1,0 +1,39 @@
+---
+title: "IUpgradeable"
+---
+
+# IUpgradeable
+
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/test/prototype/UpgradeMigrationV0100Fork.t.sol)
+
+## Functions
+
+<a id="upgradetoandcall-address-bytes"></a>
+
+### upgradeToAndCall
+
+```solidity
+function upgradeToAndCall(address newImplementation, bytes calldata data) external payable;
+```
+
+**Parameters**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| newImplementation | `address` |  |
+| data | `bytes` |  |
+
+<a id="upgradetimelock"></a>
+
+### upgradeTimelock
+
+```solidity
+function upgradeTimelock() external view returns (address);
+```
+
+**Returns**
+
+| Name | Type | Description |
+| ---- | ---- | ----------- |
+| &lt;none&gt; | `address` |  |
+
