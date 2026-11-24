@@ -133,6 +133,11 @@ async function main(argv: string[]): Promise<number> {
     }
     case "execute": {
       const b = readBundle(need(f, "bundle"));
+      if (b.executed?.tx_hash && (await handle.nonce()) > b.nonce) {
+        // a rerun after this bundle's own execution: already done, nothing is sent
+        console.log(JSON.stringify({ tx_hash: b.executed.tx_hash, block: b.executed.block, safe_tx_hash: b.safe_tx_hash, simulated: false, already_executed: true }));
+        return 0;
+      }
       const sender = await signerFromSpec(f.signer ?? "env:funder", f["hd-path"]);
       const r = await executeTx(handle, b, sender, { dryRun: f["dry-run"] === "1", fees: feesFromFlags(f) });
       if (!r.simulated) {

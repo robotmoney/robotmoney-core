@@ -9,7 +9,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   PRODUCTION_ROSTER, SAFE_141, STALE_READ_DELAY_MS, STALE_READ_TRIES, connectSafe, createSafe, executeTx, proposeTx, signTx, SafeRevertError, SafeToolError, TIMELOCK_ABI, ZERO_BYTES32, addSignature, defaultSaltNonce, describeCalldata, importSignatureBundle,
   isLoopbackRpc, jsonLogger, ownerHardwareSigner, keystoreSigner, ledgerSigner, localSafeTxHash, loopbackKeySigner, modeOf, packSignatures, readPassphraseFile, recoverSafeSigner,
-  redact, toSafeSignature, validateRoster, verifySafeSignature, type SafeTxBundle,
+  redact, toSafeSignature, writeBundle, validateRoster, verifySafeSignature, type SafeTxBundle,
 } from "./index.ts";
 import { proxyRuntimeCodeOf } from "./safe.ts";
 import { parseFlags, callsFromFlags, feesFromFlags } from "./cli.ts";
@@ -333,6 +333,28 @@ describe("post-broadcast reads on a stale load-balanced RPC (issue 1723)", () =>
     expect(seen[0]).toMatchObject({ maxFeePerGas: 20_000_000n, maxPriorityFeePerGas: 1_000_000n });
     expect(feesFromFlags({})).toEqual({});
     expect(() => feesFromFlags({ "gas-price": "1", "priority-gas-price": "2" })).toThrow("exceeds");
+  });
+
+  test("propose rerun: the same request reuses the open bundle with its signatures, sign is idempotent, an executed one is already done, a different request refuses", async () => {
+    const rpc = fake({ safe: SAFE });
+    const handle = await connectSafe({ rpcUrl: rpc.url, chainId: FAKE_CHAIN_ID, allowChainIds: [FAKE_CHAIN_ID], safeAddress: SAFE });
+    const out = join(mkdtempSync(join(tmpdir(), "propose-rerun-")), "b.json");
+    let b = await proposeTx(handle, { to: SAFE, data: "0x", action: "self-call", out });
+    b = await signTx(handle, b, loopbackKeySigner(ownerKeys[0]!, handle.chain));
+    writeBundle(out, b);
+    const again = await proposeTx(handle, { to: SAFE, data: "0x", action: "self-call", out });
+    expect(again.safe_tx_hash).toBe(b.safe_tx_hash);
+    expect(again.signatures).toHaveLength(1);
+    expect(await signTx(handle, again, loopbackKeySigner(ownerKeys[0]!, handle.chain))).toEqual(again);
+    await expect(proposeTx(handle, { to: SAFE, data: "0x01", action: "self-call", out })).rejects.toMatchObject({ code: "BAD_INPUT", message: expect.stringContaining("different request") });
+    const two = await signTx(handle, again, loopbackKeySigner(ownerKeys[1]!, handle.chain));
+    const r = await executeTx(handle, two, rpc.deployerSigner(), { nonceRetry: { sleep: async () => {} } });
+    writeBundle(out, r.bundle);
+    const done = await proposeTx(handle, { to: SAFE, data: "0x", action: "self-call", out });
+    expect(done.executed?.tx_hash).toBe(r.txHash!);
+    const { executed: _e, ...unexecuted } = r.bundle;
+    writeBundle(out, unexecuted as typeof r.bundle);
+    await expect(proposeTx(handle, { to: SAFE, data: "0x", action: "self-call", out })).rejects.toMatchObject({ code: "STALE_BUNDLE" });
   });
 
   test("executeTx: a Safe nonce that moved by two (another transaction) fails at once with NONCE_DID_NOT_MOVE", async () => {

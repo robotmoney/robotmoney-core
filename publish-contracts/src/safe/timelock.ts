@@ -7,7 +7,7 @@ import { MAX_SAFE_DELAY, MIN_SAFE_DELAY, TIMELOCK_ABI, ZERO_ADDRESS, ZERO_BYTES3
 import { SafeToolError } from "./errors.ts";
 import { delayFloor, rehearsalDelayProblem, REHEARSAL_DELAY_FLOOR, type DeploymentKind } from "../floors.ts";
 import type { SafeHandle } from "./safe.ts";
-import { proposeTx, type SafeTxBundle } from "./tx.ts";
+import { priorBundle, proposeTx, type SafeTxBundle } from "./tx.ts";
 import { keccak256, toBytes } from "viem";
 
 export interface TimelockCall { target: Address; value?: bigint; data: Hex }
@@ -106,10 +106,15 @@ export async function scheduleOnTimelock(handle: SafeHandle, p: ScheduleParams):
   if (delay < minDelay) throw new SafeToolError("TIMELOCK_STATE", `delay ${delay} is below the timelock's minimum delay ${minDelay}`);
   await requireRole(handle, timelock, "PROPOSER_ROLE");
   const id = await operationId(handle, { ...p, timelock });
-  if ((await operationState(handle, timelock, id)).exists) throw new SafeToolError("TIMELOCK_STATE", `operation ${id} already exists on the timelock; use a new salt`, { id });
   const data = s.single
     ? encodeFunctionData({ abi: TIMELOCK_ABI, functionName: "schedule", args: [s.targets[0]!, s.values[0]!, s.datas[0]!, s.predecessor, s.salt, delay] })
     : encodeFunctionData({ abi: TIMELOCK_ABI, functionName: "scheduleBatch", args: [s.targets, s.values, s.datas, s.predecessor, s.salt, delay] });
+  if ((await operationState(handle, timelock, id)).exists) {
+    // a rerun after this bundle's own execution scheduled it: already done
+    const prior = await priorBundle(handle, p.out, timelock, data, timelock);
+    if (prior?.state === "executed") { handle.logger.log("info", "safe.tx.already_executed", { out: p.out, id, executed: prior.bundle.executed?.tx_hash }); return prior.bundle; }
+    throw new SafeToolError("TIMELOCK_STATE", `operation ${id} already exists on the timelock; use a new salt`, { id });
+  }
   return propose(handle, { ...p, timelock }, s.single ? "schedule" : "scheduleBatch", data, id, minDelay);
 }
 
@@ -121,11 +126,15 @@ export async function executeOnTimelock(handle: SafeHandle, p: ExecuteParams): P
   await requireRole(handle, timelock, "EXECUTOR_ROLE");
   const id = await operationId(handle, { ...p, timelock });
   const st = await operationState(handle, timelock, id);
-  if (!st.pending) throw new SafeToolError("TIMELOCK_STATE", `operation ${id} is not scheduled (or already done): nothing to execute`, { id });
-  if (!st.ready) handle.logger.log("warn", "timelock.not_ready", { id, ready_at: st.readyAt.toString(), note: "the Safe transaction reverts until then" });
   const data = s.single
     ? encodeFunctionData({ abi: TIMELOCK_ABI, functionName: "execute", args: [s.targets[0]!, s.values[0]!, s.datas[0]!, s.predecessor, s.salt] })
     : encodeFunctionData({ abi: TIMELOCK_ABI, functionName: "executeBatch", args: [s.targets, s.values, s.datas, s.predecessor, s.salt] });
+  if (!st.pending) {
+    const prior = st.done ? await priorBundle(handle, p.out, timelock, data, timelock) : undefined;
+    if (prior?.state === "executed") { handle.logger.log("info", "safe.tx.already_executed", { out: p.out, id, executed: prior.bundle.executed?.tx_hash }); return prior.bundle; }
+    throw new SafeToolError("TIMELOCK_STATE", `operation ${id} is not scheduled (or already done): nothing to execute`, { id });
+  }
+  if (!st.ready) handle.logger.log("warn", "timelock.not_ready", { id, ready_at: st.readyAt.toString(), note: "the Safe transaction reverts until then" });
   return propose(handle, { ...p, timelock }, s.single ? "execute" : "executeBatch", data, id, minDelay);
 }
 
