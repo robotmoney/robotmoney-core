@@ -18,11 +18,12 @@
 // after the receipt upgrade and executes after the delay:
 //   upgrade deploy  forge create the new implementation from BUILD (linked as above, the proxy's own ROUTER as constructor argument). A recorded implementation
 //                   (upg-adapter-new-impl) whose code matches the build is reused. Requires the proxy unfrozen, named for the fund timelock and on another
-//                   implementation, and simulates upgradeToAndCall(impl, 0x) from the timelock. Writes upg-adapter-new-impl-hash.
-//              --rpc URL --build DIR --state-dir DIR --proxy A --timelock A --governed-upgrade A --twap-tick-math A -- {cast}
-//   upgrade plan    the batch: fund.setAdapterCodeHashAllowed(new impl hash, true), then proxy.upgradeToAndCall(new impl, 0x). Writes target-, data-,
+//                   implementation, and simulates upgradeToAndCall(impl, DATA) from the timelock. Writes upg-adapter-new-impl-hash.
+//              --rpc URL --build DIR --state-dir DIR --proxy A --timelock A --governed-upgrade A --twap-tick-math A [--data HEX] -- {cast}
+//   upgrade plan    the batch: fund.setAdapterCodeHashAllowed(new impl hash, true), then proxy.upgradeToAndCall(new impl, DATA). Writes target-, data-,
 //                   values- and salt-upg-adapter and its operation id (upg-adapter-op) with the given predecessor (the receipt upgrade's operation).
-//              --state-dir DIR --run-dir DIR --timelock A --fund A --proxy A --impl A --impl-hash H --predecessor H
+//              --state-dir DIR --run-dir DIR --timelock A --fund A --proxy A --impl A --impl-hash H --predecessor H [--data HEX]
+//   DATA is the proxy's migration (v0.10.0: migrateV0100(), 0x42829c5e), default 0x.
 //   pending         as above, with the upg-adapter files.
 //   upgrade check   (after the Safe executes it) the batch reads done, the proxy's ERC-1967 slot and implementation() name the new implementation, its
 //                   code hash is allowed, every basket asset on the proxy vets (its pool reads fixed-fee through the proxy) and NAV reads.
@@ -194,7 +195,7 @@ export function checkExecuted(cast: Cast, o: Record<string, string>): void {
 /** ERC-1967 implementation slot. */
 export const IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
 
-export interface UpgradeDeployInput { rpc: string; build: string; stateDir: string; proxy: string; timelock: string; governedUpgrade: string; twapTickMath: string; signer: string[] }
+export interface UpgradeDeployInput { rpc: string; build: string; stateDir: string; proxy: string; timelock: string; governedUpgrade: string; twapTickMath: string; signer: string[]; data?: string }
 
 /** upgrade deploy: the new implementation, reused when recorded and matching the build, checked against the proxy, its upgrade simulated from the timelock. */
 export async function upgradeDeploy(cast: Cast, forge: Forge, codeCheck: CodeCheck, d: UpgradeDeployInput): Promise<string> {
@@ -209,25 +210,25 @@ export async function upgradeDeploy(cast: Cast, forge: Forge, codeCheck: CodeChe
   check(r.ok, `UniswapV3ExactOutSwapAdapterUpgradeable at ${impl} is not the build's code`);
   check(!sameAddress(cast(["call", d.proxy, "implementation()(address)"]), impl), "the adapter proxy already runs this implementation");
   check(sameAddress(cast(["call", impl, "ROUTER()(address)"]), router), "the new implementation does not use the proxy's router");
-  cast(["call", "--from", d.timelock, d.proxy, "upgradeToAndCall(address,bytes)", impl, "0x"]);
+  cast(["call", "--from", d.timelock, d.proxy, "upgradeToAndCall(address,bytes)", impl, d.data ?? "0x"]);
   const implHash = cast(["keccak", cast(["code", impl])]);
   writeState(join(d.stateDir, "upg-adapter-new-impl-hash"), implHash);
   console.log(`adapter implementation ${impl} hash ${implHash}; upgradeToAndCall simulates from the timelock`);
   return impl;
 }
 
-/** PURE over cast calldata. The upgrade batch: allow the new implementation's hash on the fund, then move the proxy to it with empty data. */
-export function upgradeBatch(cast: Cast, b: { fund: string; proxy: string; impl: string; implHash: string }): Omit<Batch, "moved"> {
+/** PURE over cast calldata. The upgrade batch: allow the new implementation's hash on the fund, then move the proxy to it with `data` (default 0x). */
+export function upgradeBatch(cast: Cast, b: { fund: string; proxy: string; impl: string; implHash: string; data?: string }): Omit<Batch, "moved"> {
   return {
     targets: [b.fund, b.proxy],
-    datas: [cast(["calldata", "setAdapterCodeHashAllowed(bytes32,bool)", b.implHash, "true"]), cast(["calldata", "upgradeToAndCall(address,bytes)", b.impl, "0x"])],
+    datas: [cast(["calldata", "setAdapterCodeHashAllowed(bytes32,bool)", b.implHash, "true"]), cast(["calldata", "upgradeToAndCall(address,bytes)", b.impl, b.data ?? "0x"])],
     values: ["0", "0"],
   };
 }
 
 export function upgradePlan(cast: Cast, o: Record<string, string>): void {
   const [stateDir, runDir, timelock, fund, proxy, impl, implHash, predecessor] = need(o, "state-dir", "run-dir", "timelock", "fund", "proxy", "impl", "impl-hash", "predecessor");
-  const b = upgradeBatch(cast, { fund: fund!, proxy: proxy!, impl: impl!, implHash: implHash! });
+  const b = upgradeBatch(cast, { fund: fund!, proxy: proxy!, impl: impl!, implHash: implHash!, data: o.data || "0x" });
   const salt = cast(["keccak", `robotmoney.deploy4-upgrade.adapter-v0100.${runDir}`]);
   writeState(join(stateDir!, "target-upg-adapter"), b.targets.join(","));
   writeState(join(stateDir!, "data-upg-adapter"), b.datas.join(","));
@@ -278,7 +279,7 @@ if (import.meta.main) {
     else if (verb === "upgrade deploy") {
       const [rpc, build, stateDir, proxy, timelock, governedUpgrade, twapTickMath] = need(opts, "rpc", "build", "state-dir", "proxy", "timelock", "governed-upgrade", "twap-tick-math");
       const codeCheck: CodeCheck = async (addr, name) => compareCode(await codeAt(rpc!, addr), loadArtifact(join(build!, "out"), name));
-      await upgradeDeploy(realCast, realForge, codeCheck, { rpc: rpc!, build: build!, stateDir: stateDir!, proxy: proxy!, timelock: timelock!, governedUpgrade: governedUpgrade!, twapTickMath: twapTickMath!, signer: rest });
+      await upgradeDeploy(realCast, realForge, codeCheck, { rpc: rpc!, build: build!, stateDir: stateDir!, proxy: proxy!, timelock: timelock!, governedUpgrade: governedUpgrade!, twapTickMath: twapTickMath!, signer: rest, data: opts.data || "0x" });
     } else if (verb === "upgrade plan") upgradePlan(realCast, opts);
     else if (verb === "upgrade check") upgradeCheck(realCast, opts);
     else throw new UsageError(`unknown subcommand ${verb ?? "(none)"}`);

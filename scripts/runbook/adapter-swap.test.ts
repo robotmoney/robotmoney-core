@@ -164,6 +164,7 @@ test("upgrade plan: setAdapterCodeHashAllowed(new impl hash) then upgradeToAndCa
   const key = `call ${TL} hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32) [${FUND},${PROXY}] [0,0] [${datas.join(",")}] ${PRED} ${salt}`;
   const { cast } = fakeCast([], { [key]: "0xbatchop" });
   expect(upgradeBatch(cast, { fund: FUND, proxy: PROXY, impl: NEW, implHash: "0xN" })).toEqual({ targets: [FUND, PROXY], datas, values: ["0", "0"] });
+  expect(upgradeBatch(cast, { fund: FUND, proxy: PROXY, impl: NEW, implHash: "0xN", data: "0x42829c5e" }).datas[1]).toBe(`0xupgradeToAndCall-${NEW}-0x42829c5e`);
   upgradePlan(cast, { "state-dir": dir, "run-dir": RUN, timelock: TL, fund: FUND, proxy: PROXY, impl: NEW, "impl-hash": "0xN", predecessor: PRED });
   const r = (f: string) => readFileSync(join(dir, f), "utf8");
   expect(r("target-upg-adapter")).toBe(`${FUND},${PROXY}\n`);
@@ -186,10 +187,10 @@ test("upgrade deploy: forge creates the implementation with the proxy's router, 
       [`call ${PROXY} implementation()(address)`]: OLD_IMPL, [`call ${NEW} ROUTER()(address)`]: ROUTER, [`code ${NEW}`]: code[NEW] ?? "0x",
     };
     if (k in e) return e[k]!;
-    if (k === `call --from ${TL} ${PROXY} upgradeToAndCall(address,bytes) ${NEW} 0x`) { simulated.push(k); return "0x"; }
+    if (k === `call --from ${TL} ${PROXY} upgradeToAndCall(address,bytes) ${NEW} 0x42829c5e`) { simulated.push(k); return "0x"; }
     return fakeCast([]).cast(args);
   };
-  const input = { rpc: "http://r", build: "/b/v0100", stateDir: dir, proxy: PROXY, timelock: TL, governedUpgrade: "0xG", twapTickMath: "0xT", signer: [] };
+  const input = { rpc: "http://r", build: "/b/v0100", stateDir: dir, proxy: PROXY, timelock: TL, governedUpgrade: "0xG", twapTickMath: "0xT", signer: [], data: "0x42829c5e" };
   expect(await upgradeDeploy(cast, forge, async () => ({ ok: true, detail: "ok" }), input)).toBe(NEW);
   expect(forged).toHaveLength(1);
   expect(forged[0]!.slice(-4)).toEqual([ADAPTER_SOURCE, "--json", "--constructor-args", ROUTER]);
