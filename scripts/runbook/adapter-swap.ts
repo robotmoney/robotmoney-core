@@ -240,6 +240,16 @@ export function upgradePlan(cast: Cast, o: Record<string, string>): void {
   console.log(`adapter upgrade batch ${id}: allow ${implHash}, then ${proxy} -> ${impl}; predecessor ${predecessor}`);
 }
 
+/** live: the recorded adapter proxy is live. Its ERC-1967 slot holds the recorded implementation, and at least one basket asset swaps through it. It only reads. */
+export function liveCheck(cast: Cast, o: Record<string, string>): void {
+  const [fund, proxy, impl] = need(o, "fund", "proxy", "impl");
+  const slot = cast(["storage", proxy!, IMPLEMENTATION_SLOT]);
+  check(lower(`0x${slot.replace(/^0x/, "").slice(-40)}`) === lower(impl!), `the adapter proxy's ERC-1967 slot reads ${slot}, not ${impl}`);
+  let m = 0;
+  for (const a of basket(cast, fund!)) if (lower(a.adapter) === lower(proxy!)) { m++; console.log(`asset ${a.index} uses ${lower(proxy!)}`); }
+  check(m > 0, "no basket asset uses the adapter proxy");
+}
+
 export function upgradeCheck(cast: Cast, o: Record<string, string>): void {
   const [timelock, fund, proxy, impl, implHash] = need(o, "timelock", "fund", "proxy", "impl", "impl-hash");
   const id = batchOp(cast, o);
@@ -261,7 +271,7 @@ export function upgradeCheck(cast: Cast, o: Record<string, string>): void {
   if (o.done) writeState(o.done, id);
 }
 
-const USAGE = "usage: adapter-swap.ts deploy|plan|pending|check|upgrade deploy|upgrade plan|upgrade check --name value ... [-- {cast}] (see the header)";
+const USAGE = "usage: adapter-swap.ts deploy|plan|pending|check|live|upgrade deploy|upgrade plan|upgrade check --name value ... [-- {cast}] (see the header)";
 
 if (import.meta.main) {
   await runMain(USAGE, async () => {
@@ -278,6 +288,7 @@ if (import.meta.main) {
     } else if (verb === "plan") plan(realCast, opts);
     else if (verb === "pending") pending(realCast, opts);
     else if (verb === "check") checkExecuted(realCast, opts);
+    else if (verb === "live") liveCheck(realCast, opts);
     else if (verb === "upgrade deploy") {
       const [rpc, build, stateDir, proxy, timelock, governedUpgrade, twapTickMath] = need(opts, "rpc", "build", "state-dir", "proxy", "timelock", "governed-upgrade", "twap-tick-math");
       const codeCheck: CodeCheck = async (addr, name) => compareCode(await codeAt(rpc!, addr), loadArtifact(join(build!, "out"), name));

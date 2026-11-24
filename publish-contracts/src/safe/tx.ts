@@ -12,7 +12,7 @@ import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
 import { readAfterWrite, type StaleReadRetry } from "./read-after-write.ts";
 import type { SafeHandle } from "./safe.ts";
 import { recoverSafeSigner, splitSignature, verifySafeSignature, type SignMode } from "./sig.ts";
-import type { Signer } from "./signers.ts";
+import { feeFields, type SendFees, type Signer } from "./signers.ts";
 
 export const BUNDLE_FORMAT = "robotmoney-safe-tx/1" as const;
 
@@ -159,11 +159,42 @@ export interface ProposeOpts {
   out?: string;
 }
 
+/**
+ * A rerun of propose (a resumed runbook step). The bundle at `out` is the same request when its chain, Safe, target, calldata (which carries the timelock salt and
+ * predecessor), value, operation and timelock match. Then: the Safe nonce still at the bundle's nonce is "open" (reuse it, signatures kept); the nonce past it with the
+ * bundle's execution recorded is "executed" (already done). Any other difference refuses, as a new proposal over an existing file always did.
+ */
+export async function priorBundle(handle: SafeHandle, out: string | undefined, to: Address, data: Hex, timelock?: Address): Promise<{ bundle: SafeTxBundle; state: "open" | "executed" } | undefined> {
+  if (!out || !existsSync(out)) return undefined;
+  const b = readBundle(out);
+  const why: string[] = [];
+  if (b.chain_id !== handle.chain.chainId) why.push(`chain ${b.chain_id}`);
+  if (!sameAddress(b.safe, handle.address)) why.push(`Safe ${b.safe}`);
+  if (!sameAddress(b.to, to)) why.push(`target ${b.to}`);
+  if (lc(b.data) !== lc(data)) why.push("calldata (call, salt or predecessor)");
+  if (b.value !== "0" || b.operation !== 0) why.push("value or operation");
+  if ((b.timelock ?? "") !== "" !== (timelock !== undefined) || (b.timelock && timelock && !sameAddress(b.timelock, timelock))) why.push(`timelock ${b.timelock ?? "none"}`);
+  if (why.length) throw new SafeToolError("BAD_INPUT", `${out} exists for a different request (${why.join(", ")}); choose a new name (a bundle is one Safe nonce)`, { out });
+  const live = await handle.nonce();
+  if (b.nonce === live) {
+    const hash = await safeTxHashOf(handle, b.to, b.data, b.nonce);
+    if (lc(hash) !== lc(b.safe_tx_hash)) throw new SafeToolError("HASH_MISMATCH", `${out}: its safe_tx_hash is not what the Safe computes for its fields`, { out });
+    return { bundle: b, state: "open" };
+  }
+  if (b.nonce < live && b.executed?.tx_hash) return { bundle: b, state: "executed" };
+  throw new SafeToolError("STALE_BUNDLE", `${out} was built for Safe nonce ${b.nonce}, the Safe is at ${live}, and the bundle records no execution of its own: read the chain, then propose under a new name`, { out, bundle: b.nonce, live });
+}
+
 /** Builds the Safe transaction at the Safe's current nonce, hashes it through the SDK, and returns a public bundle with no signatures yet. */
 export async function proposeTx(handle: SafeHandle, o: ProposeOpts): Promise<SafeTxBundle> {
   if (!isHex(o.data) || (o.data.length - 2) % 2 !== 0) throw new SafeToolError("BAD_INPUT", "data must be 0x hex calldata");
   const to = getAddress(o.to);
   if (o.timelock) assertTimelockCall(to, o.data, o.timelock);
+  const prior = await priorBundle(handle, o.out, to, o.data, o.timelock ? getAddress(o.timelock) : undefined);
+  if (prior) {
+    handle.logger.log("info", prior.state === "open" ? "safe.tx.propose_reused" : "safe.tx.already_executed", { out: o.out, nonce: prior.bundle.nonce, safe_tx_hash: prior.bundle.safe_tx_hash, signatures: prior.bundle.signatures.length, executed: prior.bundle.executed?.tx_hash });
+    return prior.bundle;
+  }
   const nonce = await handle.nonce();
   const hash = await safeTxHashOf(handle, to, o.data, nonce);
   const bundle: SafeTxBundle = {
@@ -219,8 +250,11 @@ export interface SignOpts {
 
 /** One owner signs. Returns a NEW bundle with that owner's signature added (replacing an earlier one from the same owner), sorted by owner. */
 export async function signTx(handle: SafeHandle, bundle: SafeTxBundle, signer: Signer, opts: SignOpts = {}): Promise<SafeTxBundle> {
+  if (bundle.executed?.tx_hash) { handle.logger.log("info", "safe.tx.already_executed", { safe_tx_hash: bundle.safe_tx_hash, executed: bundle.executed.tx_hash }); return bundle; }
   if (!opts.skipChainChecks) await reverifyBundle(handle, bundle);
   const owner = await signer.address();
+  const had = bundle.signatures.find((s) => sameAddress(s.owner, owner));
+  if (had && (await verifySafeSignature(bundle.safe_tx_hash, owner, had.signature))) { handle.logger.log("info", "safe.tx.already_signed", { signer: owner, safe_tx_hash: bundle.safe_tx_hash }); return bundle; }
   if (!opts.allowNonOwner && !handle.owners.some((o) => sameAddress(o, owner))) throw new SafeToolError("NOT_OWNER", `the signer ${owner} is not an owner of the Safe. Nothing was signed.`, { signer: owner });
   const mode = opts.mode ?? (signer.modes.includes("raw") ? "raw" : "eth_sign");
   if (!signer.modes.includes(mode)) throw new SafeToolError("UNSUPPORTED_SIGN_MODE", `a ${signer.kind} signer cannot sign in mode ${mode}`);
@@ -321,6 +355,8 @@ export interface ExecuteOpts {
   nonceRetry?: NonceRetry;
   /** Send every signature in the bundle, not only the threshold. The Safe checks the first `threshold` of them: the rest are readable from the chain by a verifier (the control proof). */
   allSignatures?: boolean;
+  /** Explicit fees for the execTransaction send (the run's cast fee level). Absent, the node default. With a max fee the balance pre-check covers the estimated gas at it. */
+  fees?: SendFees;
 }
 
 export interface ExecuteResult {
@@ -386,6 +422,11 @@ export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender
 
   const balance = await handle.client.getBalance({ address: senderAddr });
   if (balance === 0n) throw new SafeToolError("INSUFFICIENT_FUNDS", `the sender ${senderAddr} has no ETH for gas`);
+  if (opts.fees?.maxFeePerGas !== undefined) {
+    const gas = await handle.client.estimateContractGas({ address: handle.address, abi: SAFE_ABI, functionName: "execTransaction", args, account: senderAddr });
+    const need = gas * opts.fees.maxFeePerGas;
+    if (balance < need) throw new SafeToolError("INSUFFICIENT_FUNDS", `the sender ${senderAddr} holds ${balance} wei, below the ${need} wei the execute may cost at the max fee`, { balance: balance.toString(), need: need.toString() });
+  }
 
   // the exact calldata the SDK would send, signatures packed by the kit
   const sdkTx = await buildSdkTx(handle, bundle.to, bundle.data, bundle.nonce);
@@ -393,7 +434,7 @@ export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender
   const encoded = (await handle.sdk.getEncodedTransaction(sdkTx)) as Hex;
 
   let txHash: Hex;
-  try { txHash = await sender.send({ to: handle.address, data: encoded }, handle.chain); }
+  try { txHash = await sender.send({ to: handle.address, data: encoded, ...feeFields(opts.fees ?? {}) }, handle.chain); }
   catch (e) { throw new SafeToolError("SEND_FAILED", `the send failed: ${revertReasonOf(e)}. Read the chain before retrying.`); }
   const receipt = await handle.client.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== "success") throw new SafeToolError("TX_REVERTED", `the transaction reverted: ${txHash}`, { tx_hash: txHash });

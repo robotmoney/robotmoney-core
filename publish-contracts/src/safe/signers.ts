@@ -13,7 +13,12 @@ import { SafeToolError } from "./errors.ts";
 import { hiddenPrompt } from "./prompt.ts";
 import { toSafeSignature, type SignMode } from "./sig.ts";
 
-export interface SendRequest { to: Address; data: Hex; value?: bigint; gas?: bigint }
+/** Explicit EIP-1559 fees (wei): the run's fee level, as cast's --gas-price (max fee) and --priority-gas-price. Absent, the node's default is used. */
+export interface SendFees { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint }
+export interface SendRequest extends SendFees { to: Address; data: Hex; value?: bigint; gas?: bigint }
+
+/** PURE. The viem fee fields of a request: only the ones it names. */
+export function feeFields(r: SendFees): SendFees { return { ...(r.maxFeePerGas !== undefined ? { maxFeePerGas: r.maxFeePerGas } : {}), ...(r.maxPriorityFeePerGas !== undefined ? { maxPriorityFeePerGas: r.maxPriorityFeePerGas } : {}) }; }
 
 export interface Signer {
   readonly kind: "keystore" | "ledger" | "trezor" | "loopback-key" | "address-only";
@@ -78,7 +83,7 @@ function accountSigner(kind: "keystore" | "loopback-key", account: PrivateKeyAcc
     },
     async send(req, chain) {
       const wallet = createWalletClient({ account, chain: viemChain(chain), transport: http(chain.rpcUrl) });
-      return wallet.sendTransaction({ to: req.to, data: req.data, value: req.value ?? 0n, ...(req.gas ? { gas: req.gas } : {}) });
+      return wallet.sendTransaction({ to: req.to, data: req.data, value: req.value ?? 0n, ...(req.gas ? { gas: req.gas } : {}), ...feeFields(req) });
     },
   };
 }
@@ -195,6 +200,8 @@ function hardwareSigner(kind: "ledger" | "trezor", opts: { hdPath?: string; runn
       if (opts.owner) await checkOwner("send");
       const args = ["send", flag, ...hd, "--rpc-url", chain.rpcUrl, "--chain", String(chain.chainId), "--json", req.to, req.data];
       if (req.value) args.push("--value", req.value.toString());
+      if (req.maxFeePerGas !== undefined) args.push("--gas-price", req.maxFeePerGas.toString());
+      if (req.maxPriorityFeePerGas !== undefined) args.push("--priority-gas-price", req.maxPriorityFeePerGas.toString());
       const out = await call(args, "send");
       try { const j = JSON.parse(out) as { transactionHash?: string; status?: string }; if (j.status && j.status !== "0x1" && j.status !== "1") throw new SafeToolError("TX_REVERTED", `transaction ${j.transactionHash} reverted`); if (j.transactionHash) return j.transactionHash as Hex; } catch (e) { if (e instanceof SafeToolError) throw e; }
       throw new SafeToolError("SEND_FAILED", `${kind} send gave no transaction hash`);
@@ -244,7 +251,7 @@ export function impersonatedSender(address: Address, chain: ChainOpts): Signer {
     async signSafeHash() { throw new SafeToolError("BAD_INPUT", "an impersonated sender cannot sign a Safe hash"); },
     async send(req, c) {
       const wallet = createWalletClient({ account: address, chain: viemChain(c), transport: http(c.rpcUrl) });
-      return wallet.sendTransaction({ to: req.to, data: req.data, value: req.value ?? 0n, ...(req.gas ? { gas: req.gas } : {}) });
+      return wallet.sendTransaction({ to: req.to, data: req.data, value: req.value ?? 0n, ...(req.gas ? { gas: req.gas } : {}), ...feeFields(req) });
     },
   };
 }

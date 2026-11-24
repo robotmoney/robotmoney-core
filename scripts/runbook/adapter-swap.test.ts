@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ADAPTER_SOURCE, IMPLEMENTATION_SLOT, PROXY_SOURCE, adapterBatch, basket, deploy, forgeCreateAddress, forgeCreateArgs, parseAssetConfig, plan, pending, checkExecuted, upgradeBatch, upgradeCheck, upgradeDeploy, upgradePlan } from "./adapter-swap.ts";
+import { ADAPTER_SOURCE, IMPLEMENTATION_SLOT, PROXY_SOURCE, adapterBatch, basket, deploy, forgeCreateAddress, forgeCreateArgs, parseAssetConfig, plan, pending, checkExecuted, liveCheck, upgradeBatch, upgradeCheck, upgradeDeploy, upgradePlan } from "./adapter-swap.ts";
 import type { Cast } from "./cast-io.ts";
 
 const FUND = "0x00000000000000000000000000000000000000f0";
@@ -254,3 +254,12 @@ test("the CLI: upgrade check exits 1 when the proxy slot or a basket vet fails a
   expect(vet.status).toBe(1);
   expect(vet.stderr).toContain("no longer vets");
 }, 60_000);
+
+test("live: the slot holds the recorded implementation and a basket asset uses the proxy", () => {
+  const IMPL = "0x00000000000000000000000000000000000000aa";
+  const slot = { [`storage ${PROXY} ${IMPLEMENTATION_SLOT}`]: `0x000000000000000000000000${IMPL.slice(2)}` };
+  const moved = [config(0, 1, POOL(0xa1), POOL(0)), config(1, 1, PROXY, POOL(0x501))];
+  expect(() => liveCheck(fakeCast(moved, slot).cast, { fund: FUND, proxy: PROXY, impl: IMPL })).not.toThrow();
+  expect(() => liveCheck(fakeCast(moved, slot).cast, { fund: FUND, proxy: PROXY, impl: LEGACY })).toThrow("ERC-1967 slot");
+  expect(() => liveCheck(fakeCast(ASSETS, slot).cast, { fund: FUND, proxy: PROXY, impl: IMPL })).toThrow("no basket asset uses the adapter proxy");
+});

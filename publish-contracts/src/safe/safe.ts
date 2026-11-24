@@ -6,7 +6,7 @@ import { FACTORY_ABI, FALLBACK_HANDLER_SLOT, SAFE_141, SAFE_ABI, SAFE_VERSION, Z
 import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
 import { silentLogger, type Logger } from "./log.ts";
 import { readAfterWrite, settle, type ReadVerdict, type StaleReadRetry } from "./read-after-write.ts";
-import type { Signer } from "./signers.ts";
+import { feeFields, type SendFees, type Signer } from "./signers.ts";
 
 export interface SafeHandle {
   readonly chain: ChainOpts;
@@ -108,6 +108,8 @@ export interface CreateSafeOpts extends ChainOpts {
   confirm?: (plan: CreateSafePlan) => Promise<boolean>;
   /** Simulate and plan only. */
   dryRun?: boolean;
+  /** Explicit fees for the creation send (the run's cast fee level). With a max fee, the balance pre-check uses it in place of the node's gas price. */
+  fees?: SendFees;
   logger?: Logger;
   /** Bound and test seam for the reads after the creation transaction (issue 1723). Default: STALE_READ_TRIES tries, STALE_READ_DELAY_MS apart. */
   staleRead?: StaleReadRetry;
@@ -230,7 +232,7 @@ export async function createSafe(opts: CreateSafeOpts): Promise<CreateSafeResult
   };
   logger.log("info", "safe.create.plan", { ...plan, estimatedGas: estimatedGas.toString() });
 
-  const gasPrice = await client.getGasPrice();
+  const gasPrice = opts.fees?.maxFeePerGas ?? await client.getGasPrice();
   const balance = await client.getBalance({ address: deployer });
   if (balance < gasPrice * estimatedGas * 3n + 100_000_000_000_000n) {
     // a dry run sends nothing: an unfunded deployer is a warning there (the preflight runs before the deployer is funded), a refusal otherwise
@@ -243,7 +245,7 @@ export async function createSafe(opts: CreateSafeOpts): Promise<CreateSafeResult
 
   logger.log("info", "safe.create.broadcast", { deployer, safe: predictedAddress });
   let txHash: Hex;
-  try { txHash = await opts.deployer.send({ to: SAFE_141.proxyFactory, data, gas: estimatedGas * 12n / 10n }, opts); }
+  try { txHash = await opts.deployer.send({ to: SAFE_141.proxyFactory, data, gas: estimatedGas * 12n / 10n, ...feeFields(opts.fees ?? {}) }, opts); }
   catch (e) { throw new SafeToolError("CREATION_FAILED", `the creation did not complete: ${revertReasonOf(e)}. Read the chain before sending it again.`); }
   const receipt = await client.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== "success") throw new SafeToolError("TX_REVERTED", `the creation transaction reverted: ${txHash}`);

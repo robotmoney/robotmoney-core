@@ -8,7 +8,7 @@
 //   safe-cli show    --rpc URL --chain-id N --bundle F
 //   safe-cli sign    --rpc URL --chain-id N --bundle F --signer SPEC [--mode raw|eth_sign]
 //   safe-cli import  --rpc URL --chain-id N --bundle F --signatures FILE_OR_HEX
-//   safe-cli execute --rpc URL --chain-id N --bundle F --signer SPEC   (the gas payer)
+//   safe-cli execute --rpc URL --chain-id N --bundle F --signer SPEC [--priority-gas-price WEI] [--gas-price WEI]   (the gas payer; the fee flags are cast's, the run's fee level)
 // Actions: schedule|execute (--target --data [--value]), scheduleBatch|executeBatch (--targets --datas [--values]), cancel (--id),
 //          updateDelay (--new-delay SECONDS --phase schedule|execute [--allow-unsafe-delay yes]); all take --salt, [--predecessor], [--delay].
 import { createInterface } from "node:readline";
@@ -17,13 +17,21 @@ import type { Address, Hex } from "viem";
 import { SafeToolError } from "./errors.ts";
 import { jsonLogger } from "./log.ts";
 import { connectSafe, createSafe } from "./safe.ts";
-import { signerFromSpec } from "./signers.ts";
+import { feeFields, signerFromSpec, type SendFees } from "./signers.ts";
 import {
   cancelOnTimelock, executeOnTimelock, scheduleOnTimelock, updateTimelockDelay, verifyTimelockEffect, type TimelockCall,
 } from "./timelock.ts";
 import { describeBundle, executeTx, importSignatureBundle, proposeTx, readBundle, signTx, writeBundle } from "./tx.ts";
 import { assertNoPlaintextKeys } from "./guard.ts";
 import { MAINNET_CHAIN_ID } from "../chains.ts";
+
+/** The explicit fee flags (wei), cast's names: --gas-price is the EIP-1559 max fee, --priority-gas-price the tip. Absent, the node default. */
+export function feesFromFlags(f: Record<string, string>): SendFees {
+  const wei = (k: string): bigint | undefined => { const v = f[k]; if (v === undefined) return undefined; if (!/^\d+$/.test(v)) throw new SafeToolError("BAD_INPUT", `--${k} is a wei integer, got ${v}`); return BigInt(v); };
+  const fees: SendFees = { maxFeePerGas: wei("gas-price"), maxPriorityFeePerGas: wei("priority-gas-price") };
+  if (fees.maxFeePerGas !== undefined && fees.maxPriorityFeePerGas !== undefined && fees.maxPriorityFeePerGas > fees.maxFeePerGas) throw new SafeToolError("BAD_INPUT", "--priority-gas-price exceeds --gas-price");
+  return feeFields(fees);
+}
 
 export function parseFlags(argv: string[]): Record<string, string> {
   const o: Record<string, string> = {};
@@ -67,7 +75,7 @@ async function main(argv: string[]): Promise<number> {
     const deployer = await signerFromSpec(need(f, "signer"), f["hd-path"]);
     const res = await createSafe({
       ...chain, owners: csv(need(f, "owners")), threshold: Number(need(f, "threshold")), deployer, saltNonce: f["salt-nonce"], deploySha: f["deploy-sha"],
-      expectDeployerNonce: f["expect-deployer-nonce"] !== undefined ? Number(f["expect-deployer-nonce"]) : undefined, dryRun: f["dry-run"] === "1", logger,
+      expectDeployerNonce: f["expect-deployer-nonce"] !== undefined ? Number(f["expect-deployer-nonce"]) : undefined, dryRun: f["dry-run"] === "1", logger, fees: feesFromFlags(f),
       forbiddenOwners: Object.fromEntries(["ADMIN_ADDRESS", "PAUSER_ADDRESS", "EMERGENCY_ADDRESS"].map((k) => [k, process.env[k]])),
       confirm: f.yes === "1" ? undefined : async (plan) => {
         const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -125,8 +133,13 @@ async function main(argv: string[]): Promise<number> {
     }
     case "execute": {
       const b = readBundle(need(f, "bundle"));
+      if (b.executed?.tx_hash && (await handle.nonce()) > b.nonce) {
+        // a rerun after this bundle's own execution: already done, nothing is sent
+        console.log(JSON.stringify({ tx_hash: b.executed.tx_hash, block: b.executed.block, safe_tx_hash: b.safe_tx_hash, simulated: false, already_executed: true }));
+        return 0;
+      }
       const sender = await signerFromSpec(f.signer ?? "env:funder", f["hd-path"]);
-      const r = await executeTx(handle, b, sender, { dryRun: f["dry-run"] === "1" });
+      const r = await executeTx(handle, b, sender, { dryRun: f["dry-run"] === "1", fees: feesFromFlags(f) });
       if (!r.simulated) {
         if (b.timelock) await verifyTimelockEffect(handle, b);
         writeBundle(f.bundle!, r.bundle);

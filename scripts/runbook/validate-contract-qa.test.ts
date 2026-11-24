@@ -5,7 +5,7 @@ import { keccak256 } from "../ci/config-check.ts";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, fundPausePairingProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, validateAll, scheduledActionProblems, emergencyRevocationProblems } from "./validate-contract-qa.ts";
+import { FUND_MANIFEST_FILES, FUND_SHEET, FUND_VAULT_MANIFESTS, QA_DIR, ROOT, applicableSteps, commandProblems, fundPausePairingProblems, isFundSheet, loadModel, parseRelease, parseSteps, localForkProblems, stateSelfReadProblems, qaSupersetProblems, recordStepProblems, sends, parseSheetText, runnableProblems, sheetProblems, gateAbsentPaths, mainOutProblems, rebalanceRoundProblems, keeperGasProblems, holdWaitProblems, fundExecuteProblems, unwindGuardProblems, upgradeBuildGateProblems, fundProxyArgProblems, fundProxyNames, validateAll, scheduledActionProblems, emergencyRevocationProblems } from "./validate-contract-qa.ts";
 
 const model = loadModel(ROOT);
 const RELEASE = "releases/v0.5.0.yaml";
@@ -1232,4 +1232,13 @@ test("v0.9.0 done markers count only this run's build (three proxies), and the s
   expect(j("P3.72-upg-adapter-execute")).toContain("scripts/runbook/flow-params.ts resubmit --queue {m:queue.queue} --timelock {m:fund-timelock.timelock}");
   expect(j("P2.84-upg-after-upgrade")).not.toContain("flow-params.ts");
   expect(r.steps.some((x) => x.id === "P3.82-upg-executor-execute" || x.id === "P3.85-upg-epoch-schedule")).toBe(false);
+});
+
+test("a fund-system --proxy must be a fund proxy of the stage table", () => {
+  const names = fundProxyNames(ROOT);
+  expect(names.sort()).toEqual(["fund", "fund-governance", "fund-receipt", "queue", "rebalancer"]);
+  const step = (proxy: string) => ({ id: "X", cmds: [["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", proxy], ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--proxy", proxy]] });
+  expect(fundProxyArgProblems([step("fund-governance")], "r", names)).toEqual([]);
+  expect(fundProxyArgProblems([step("governance")], "r", names)).toHaveLength(2);
+  expect(fundProxyArgProblems([{ id: "L", cmds: [["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--proxy", "governance"]] }], "r", names)).toEqual([]);
 });

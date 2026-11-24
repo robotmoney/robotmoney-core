@@ -46,6 +46,8 @@ not run against the old code.
 | Empty deposit bucket (AGY-12) | A deposit bucket with no basis is not work. | `test_AGY12_*` |
 | Canonical pool (AGY-13) | `isFixedFeePool` requires the router's factory to have made the pool: its CREATE2 address for the pool's own tokens and fee, or the factory's `getPool` answer. | `test_AGY13_*` |
 
+> Deploy 4 (0.10.0, decision D10-6): the fund keeps its 0.9.0 `FundExclusionLedger` (0xe3Ae6802fFA11EAdd4888a4D6F15844a56bc7D12). `claimTo` is not live on Deploy 4 until a later release replaces the ledger. The fee-push fix is fund code and is live after the 0.10.0 upgrade.
+
 ## Off-chain, CI and documentation findings
 
 | Finding | What changed |

@@ -106,6 +106,9 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // runner's config adds the run's passphrase file, as it does for {cast}.
   keepercast: ["--keystore", "{keeperKeystore}"],
   emergencycast: ["--keystore", "{emergencyKeystore}"],
+  // The fee flags of a Safe send (safe/cli.ts create and execute): the runner takes --priority-gas-price and --gas-price from the target's {cast} list (feeFlagsOf in run.ts),
+  // so a Safe execute pays the same fee level as the cast deploys on the Twin and on 8453. A config may set it explicitly. Empty here: the node default.
+  safefee: [],
   // The fund-upgrade flow: the CLI arguments against the LIVE Deploy 4 deployment, as {v050common} names the live Deploy 3 one. --core-dir is the checkout of the sha Deploy 4 was
   // deployed from (7c23569f8, release/v0.7.0-onevault-rc.5-rehearsal), made and built by the flow ({runDir}/v070): its out/ is the live code the upgrade tools compare with, and
   // the release gate on 8453 runs at that sha (its tag, its green CI, its committed frozen counts). The new build is the --upgrade-build checkout ({runDir}/v080, the run's sha).
@@ -832,6 +835,27 @@ const makesCheckout = (s: Pick<RunbookStep, "cmds">, dir: string): boolean => s.
  * its gateAbsent lists the gateAbsent of every step that reads the checkout, no more and no less, so it is skipped exactly when every reader is. Each reader must
  * have a gateAbsent (else the build can never be skipped by it), the build step comes before every reader and runs on every flow and target a reader runs on.
  */
+/**
+ * The fund-system proxy names the stage table declares (scripts/deploy/stage-table.json): every fund stage with proxies. They are the names
+ * deploy-implementation --system fund and fund-upgrade-record.ts accept (proxySpecs with FUND_PROXY_NAMES, the identity on the stage name).
+ */
+export function fundProxyNames(root: string = ROOT): string[] {
+  const t = JSON.parse(readFileSync(join(root, "scripts/deploy/stage-table.json"), "utf8")) as { stages: { name: string; system?: string; proxies?: unknown[] }[] };
+  return t.stages.filter((s) => s.system === "fund" && (s.proxies?.length ?? 0) > 0).map((s) => s.name);
+}
+
+/** PURE. Every --proxy of a fund-system command (deploy-implementation --system fund, fund-upgrade-record.ts) names a fund proxy of the stage table, so the tool cannot refuse it at run time. */
+export function fundProxyArgProblems(steps: Pick<RunbookStep, "id" | "cmds">[], where: string, names: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) for (const c of s.cmds) for (const inv of invocations(c)) {
+    const a = inv.args;
+    const fund = inv.tool === "publish-contracts/src/fund-upgrade-record.ts" || (inv.tool === "publish-contracts/src/cli.ts" && a.some((w, i) => w === "--system" && a[i + 1] === "fund"));
+    if (!fund) continue;
+    a.forEach((w, i) => { if (w === "--proxy" && a[i + 1] !== undefined && !names.includes(a[i + 1]!)) out.push(`${where} ${s.id}: --proxy ${a[i + 1]} is no fund-system proxy of the stage table (${names.join(", ")})`); });
+  }
+  return out;
+}
+
 export function upgradeBuildGateProblems(steps: RunbookStep[], where: string): string[] {
   const out: string[] = [];
   for (const dir of [...new Set(steps.flatMap(upgradeBuildsOf))]) {
@@ -1101,6 +1125,7 @@ export function validateAll(root: string = ROOT, model: CliModel = loadModel(roo
       problems.push(...commandProblems(r.steps, model, root), ...fundPausePairingProblems(r.steps, `releases/${f}`), ...scheduledActionProblems(r.steps, `releases/${f}`), ...emergencyRevocationProblems(r.steps, `releases/${f}`));
       problems.push(...clearVectorProblems(r.steps, `releases/${f}`));
       problems.push(...upgradeBuildGateProblems(r.steps, `releases/${f}`));
+      problems.push(...fundProxyArgProblems(r.steps, `releases/${f}`, fundProxyNames(root)));
       problems.push(...recordStepProblems(r.steps), ...localForkProblems(r.steps), ...stateSelfReadProblems(r.steps));
       problems.push(...rebalanceRoundProblems(r.steps, `releases/${f}`));
       problems.push(...keeperGasProblems(r), ...fundExecuteProblems(r));

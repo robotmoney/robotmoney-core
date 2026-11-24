@@ -232,6 +232,8 @@ export interface VerifyOptions {
    * contract reads `artifactsDir`. Absent or no entry: `artifactsDir`.
    */
   proxyBuildDirs?: Record<string, string>;
+  /** The forge out/ of the build that created the fund's exclusion ledger (verify-stage.ts exclusionLedgerBuildDirOf, from the run manifest). Absent: the fund's build. */
+  exclusionLedgerBuildDir?: string;
   /**
    * Issue 1912, ADR-0017: the vaults the Safe retired through `govern --row retire-vault` (the run manifest's `vault_retirements`). The registry still lists them, so the vault set check expects
    * the manifests plus these retired vaults, and each gets its own labels: Retired in the registry, out of the router's default and effective vectors, deposits halted, still holding code.
