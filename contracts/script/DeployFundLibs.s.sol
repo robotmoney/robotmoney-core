@@ -98,7 +98,8 @@ contract DeployFundLibs is ExpectedChainGuard {
         d.flowMatchLib = address(FlowMatchLib);
         d.flowSettleLib = address(FlowSettleLib);
         d.flowClaimLib = address(FlowClaimLib);
-        // The one-time 0.8.0 to 0.9.0 state migrations (`FlowQueue.migrateV090`, `RobotMoneyFund.migrateV090`).
+        // The one-time in-place state migrations (`FlowQueue.migrateV090`, `RobotMoneyFund.migrateV090`; 0.10.0:
+        // `FlowQueue.migrateV0100`, whose body is also in FlowMigrateLib).
         d.flowMigrateLib = address(FlowMigrateLib);
         d.fundMigrateLib = address(FundMigrateLib);
         // The call proves TickMath is linked to working code, not only to an address (finding L3-D1).

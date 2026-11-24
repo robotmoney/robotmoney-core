@@ -165,6 +165,45 @@ library FlowMigrateLib {
         emit QueueMigratedV090(nRequests, nSettlements, nClaims, held);
     }
 
+    /// @notice The 0.10.0 migration ran: `buckets` live deposit buckets got their hold mark.
+    event QueueMigratedV0100(uint256 buckets, uint32 hold);
+    /// @notice A 0.9.0 parameter `migrateV090` or `initialize` writes reads 0: the queue never ran the 0.9.0 migration.
+    error NotMigratedV090();
+    /// @notice `enrollPos` is not 0: the queue already holds a 0.10.0 enrollment in progress.
+    error EnrollmentInProgress(uint256 enrollPos);
+
+    /// @notice Body of `FlowQueue.migrateV0100`, the in-place upgrade from contracts 0.9.0 to 0.10.0 (ADR-0020),
+    ///         version 3. No struct changed in the middle; 0.10.0 appended `enrollPos` and `depBucketMaxMinHold`.
+    ///         - `enrollPos` must read 0 (a fresh queue's value): 0.9.0 enrolled a round in one call, so no
+    ///           enrollment is in progress.
+    ///         - Every deposit bucket of the live cycle that holds basis gets `maxDepositMinHold` as its hold mark,
+    ///           the hold 0.9.0 booked for it. The 0.10.0 match reads the same value through its fallback for a
+    ///           bucket with no mark, so this changes no hold; it records the value so each bucket has its own mark.
+    ///         - The three parameters `migrateV090` wrote are non-zero (the queue ran the 0.9.0 migration).
+    ///         It moves no funds and rewrites no request, settlement or claim.
+    function migrateV0100(FlowState storage s) public {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert GovernedUpgrade.NotUpgradeTimelock(msg.sender);
+        }
+        FlowParams storage p = s.params;
+        if (p.cancelBuffer == 0 || p.maxPause == 0 || p.matchBandBps == 0) {
+            revert NotMigratedV090();
+        }
+        if (s.enrollPos != 0) revert EnrollmentInProgress(s.enrollPos);
+        uint256 cyc = s.depCycle;
+        uint32 hold = s.maxDepositMinHold;
+        uint256 n;
+        for (uint256 i; i < s.activeDepBuckets.length; ++i) {
+            uint64 e = s.activeDepBuckets[i];
+            if (s.depBuckets[cyc][e].totalNormBasis == 0 || s.depBucketMaxMinHold[cyc][e] != 0) {
+                continue;
+            }
+            s.depBucketMaxMinHold[cyc][e] = hold;
+            ++n;
+        }
+        emit QueueMigratedV0100(n, hold);
+    }
+
     /// @dev Rewrite request `id` from the 0.8.0 layout. Slots 0 to 2 are the same in both.
     function _migrateRequest(FlowState storage s, uint256 id) private {
         Request storage r = s.requests[id];

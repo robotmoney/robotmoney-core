@@ -211,6 +211,8 @@ jobs:
           LAYOUT_RESET: ${{ contains(github.event.pull_request.labels.*.name, 'storage-layout-reset') }}
         run: |
           git fetch --quiet --no-tags --depth=1 origin '+refs/tags/release/*:refs/tags/release/*'
+          # Issue 2062: Deploy 4 runs contracts 0.9.0 since 2026-11-21; the 0.10.0 layout must extend it too.
+          git fetch --quiet --no-tags --depth=1 origin '+refs/tags/contracts-0.9.0:refs/tags/contracts-0.9.0'
           base=()
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             if [[ "$LAYOUT_RESET" == "true" ]]; then
@@ -225,7 +227,7 @@ jobs:
             fi
           fi
           scripts/ci/check-core-storage-layout.sh --selftest
-          scripts/ci/check-core-storage-layout.sh "${base[@]}" --releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0 --require-migrations
+          scripts/ci/check-core-storage-layout.sh "${base[@]}" --baseline contracts-0.9.0 --releases --baseline-dir contracts/test/fixtures/storage-layout/baselines/v0.8.0 --require-migrations
 
       - name: Core storage-layout gate, nested struct self-test (Deploy 4 v0.9.0 upgrade audit)
         # Proves the struct rule on the committed snapshots and, with --live, through the gate itself: this tree

@@ -115,6 +115,14 @@ contract FlowQueue is
         FlowMigrateLib.migrateV090(_s(), cancelBuffer_, maxPause_, matchBandBps_);
     }
 
+    /// @notice The one-time state migration of a queue upgraded in place from contracts 0.9.0 to 0.10.0
+    ///         (`FlowMigrateLib.migrateV0100`): checks the 0.9.0 state and gives each live deposit bucket its hold
+    ///         mark. The upgrade timelock passes it as the data of `upgradeToAndCall`; nobody else can run it, and it
+    ///         runs once.
+    function migrateV0100() external reinitializer(3) {
+        FlowMigrateLib.migrateV0100(_s());
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     //  Requests and exits (FlowClaimLib, FlowMatchLib)
     // ═════════════════════════════════════════════════════════════════════════

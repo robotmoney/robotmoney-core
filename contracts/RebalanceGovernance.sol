@@ -10,7 +10,7 @@ import {AdminFloorAccessControl} from "./lib/AdminFloorAccessControl.sol";
 import {
     ReentrancyGuardUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
-import {GovernedUUPS} from "./lib/GovernedUUPS.sol";
+import {GovernedUUPS, GovernedUpgrade} from "./lib/GovernedUUPS.sol";
 import {IConsensusRecommendationReceipt} from "./interfaces/IConsensusRecommendationReceipt.sol";
 import {
     PlanParams,
@@ -121,6 +121,27 @@ contract RebalanceGovernance is
         _grantRole(ADMIN_ROLE, admin_);
         _setRoleAdmin(TARGET_SETTER_ROLE, TARGET_SETTER_ROLE);
         _grantRole(TARGET_SETTER_ROLE, admin_);
+    }
+
+    /// @notice `role` has no holder, so the 0.10.0 last-holder floors would guard nothing (`migrateV0100`).
+    error RoleHasNoHolder(bytes32 role);
+
+    /// @notice The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. 0.10.0 adds
+    ///         no governance storage, so it writes nothing. It checks what the new last-holder floor of
+    ///         `TARGET_SETTER_ROLE` (AGY-08) assumes: `ADMIN_ROLE` and `TARGET_SETTER_ROLE` each have a holder, and
+    ///         the fund and receipt register are set. The upgrade timelock passes it as the data of
+    ///         `upgradeToAndCall`; nobody else can run it, and it runs once.
+    function migrateV0100() external reinitializer(3) {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert GovernedUpgrade.NotUpgradeTimelock(msg.sender);
+        }
+        if (address(fund) == address(0) || address(receipts) == address(0)) {
+            revert IFundEvents.ZeroAddress();
+        }
+        if (getRoleMemberCount(ADMIN_ROLE) == 0) revert RoleHasNoHolder(ADMIN_ROLE);
+        if (getRoleMemberCount(TARGET_SETTER_ROLE) == 0) {
+            revert RoleHasNoHolder(TARGET_SETTER_ROLE);
+        }
     }
 
     /// @dev Last-holder floor for the self-administered `TARGET_SETTER_ROLE` (`ADMIN_ROLE` is covered by

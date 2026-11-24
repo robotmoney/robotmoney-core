@@ -26,6 +26,15 @@ import {
     Settlement
 } from "../../FlowTypes.sol";
 import {FlowQueueFixesBase} from "./FlowQueueFixes.t.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {RebalanceGovernance} from "../../RebalanceGovernance.sol";
+import {ConsensusRecommendationReceipt} from "../../ConsensusRecommendationReceipt.sol";
+import {
+    IConsensusRecommendationReceipt
+} from "../../interfaces/IConsensusRecommendationReceipt.sol";
+import {
+    UniswapV3ExactOutSwapAdapterUpgradeable
+} from "../../adapters/UniswapV3ExactOutSwapAdapterUpgradeable.sol";
 
 /// @dev What a 0.8.0 Rebalancer looks like to the fund's migration: code at the address, no `lastBasketStepAt()`.
 contract LegacyRebalancerStub {
@@ -1050,4 +1059,266 @@ contract UpgradeMigrationTest is FlowQueueFixesBase {
     function _initializedVersion(address proxy) internal view returns (uint64) {
         return uint64(uint256(vm.load(proxy, GovernedUpgrade.INITIALIZABLE_STORAGE)));
     }
+}
+
+/// @dev A router whose `factory()` names a contract (itself), what the 0.10.0 adapter migration requires.
+contract RouterWithFactory {
+    function factory() external view returns (address) {
+        return address(this);
+    }
+}
+
+/// @dev A router with no `factory()`: the 0.10.0 canonical pool check could never pass.
+contract RouterWithoutFactory {}
+
+/// @title UpgradeMigrationV0100Test
+/// @notice The in-place upgrade of a contracts 0.9.0 deployment to 0.10.0 (`migrateV0100`, version 3, ADR-0020) on
+///         every one-vault proxy that has one: FlowQueue, Rebalancer, RebalanceGovernance, the consensus receipt and
+///         the swap adapter proxy. RobotMoneyFund has none: it has 17 bytes left under EIP-170, less than a gated
+///         entry point costs (ADR-0020, 0.10.0).
+///
+///         Deploy 4 ran the 0.9.0 migrations on the queue, the fund and the Rebalancer (version 2); the governance,
+///         receipt and adapter proxies are at version 1. The fixture's fresh deployment is set to those versions
+///         with `vm.store`, then each upgrade runs as the release runs it: `upgradeToAndCall(newImpl,
+///         migrateV0100())` from the upgrade timelock.
+contract UpgradeMigrationV0100Test is FlowQueueFixesBase {
+    /// @dev erc7201:openzeppelin.storage.AccessControl and .AccessControlEnumerable.
+    bytes32 internal constant AC_BASE =
+        0x02dd7bc7dec4dceedda775e58dd541e08a116c6c53815c0bd028192f7b626800;
+    bytes32 internal constant ACE_BASE =
+        0xc1f6fe24621ce81ec5827caf0253cadb74709b061630e6b55e82371705932000;
+    uint256 internal constant FLOW =
+        0x5ca698e4220eb646640b8313725773ea79d9bb0180fc107a75b91aa030545000;
+
+    address internal adapter;
+    address[5] internal proxies;
+    address[5] internal impls;
+
+    function _setUpV090() internal {
+        RouterWithFactory router = new RouterWithFactory();
+        UniswapV3ExactOutSwapAdapterUpgradeable adapterImpl =
+            new UniswapV3ExactOutSwapAdapterUpgradeable(address(router));
+        adapter = address(
+            new ERC1967Proxy(
+                address(adapterImpl),
+                abi.encodeCall(
+                    UniswapV3ExactOutSwapAdapterUpgradeable.initialize, (address(timelock))
+                )
+            )
+        );
+        _setVersion(address(queue), 2);
+        _setVersion(address(fund), 2);
+        _setVersion(address(rebalancer), 2);
+        proxies =
+            [address(queue), address(rebalancer), address(governance), address(receipts), adapter];
+        impls = [
+            address(new FlowQueue()),
+            address(new Rebalancer()),
+            address(new RebalanceGovernance()),
+            address(new ConsensusRecommendationReceipt()),
+            address(new UniswapV3ExactOutSwapAdapterUpgradeable(address(router)))
+        ];
+    }
+
+    function _migration() internal pure returns (bytes memory) {
+        return abi.encodeWithSignature("migrateV0100()");
+    }
+
+    function _upgrade(uint256 k) internal {
+        vm.prank(address(timelock));
+        UUPSLike(proxies[k]).upgradeToAndCall(impls[k], _migration());
+    }
+
+    /// @notice Each proxy migrates once inside `upgradeToAndCall`, ends at version 3, and a second call (direct or in
+    ///         another upgrade) reverts `InvalidInitialization`. An upgrade with no data still works afterwards.
+    function test_v0100_eachProxyMigratesOnceToVersion3() public fixtureCovered {
+        _setUpV090();
+        for (uint256 k; k < proxies.length; ++k) {
+            _upgrade(k);
+            assertEq(_version(proxies[k]), 3, "version 3");
+            vm.startPrank(address(timelock));
+            (bool ok, bytes memory ret) = proxies[k].call(_migration());
+            assertFalse(ok, "a second direct call reverts");
+            assertEq(bytes4(ret), GovernedUpgrade.InvalidInitialization.selector, "direct");
+            vm.expectRevert(GovernedUpgrade.InvalidInitialization.selector);
+            UUPSLike(proxies[k]).upgradeToAndCall(impls[k], _migration());
+            UUPSLike(proxies[k]).upgradeToAndCall(impls[k], "");
+            vm.stopPrank();
+        }
+    }
+
+    /// @notice After the 0.10.0 migrations no 0.9.0 (or older) migration can run on any proxy, the fund included.
+    function test_v0100_olderMigrationsRevert() public fixtureCovered {
+        _setUpV090();
+        for (uint256 k; k < proxies.length; ++k) {
+            _upgrade(k);
+        }
+        vm.startPrank(address(timelock));
+        vm.expectRevert(GovernedUpgrade.InvalidInitialization.selector);
+        queue.migrateV090(900, 72 hours, 10);
+        vm.expectRevert(GovernedUpgrade.InvalidInitialization.selector);
+        rebalancer.migrateV090();
+        vm.expectRevert(GovernedUpgrade.InvalidInitialization.selector);
+        RobotMoneyFund(address(fund)).migrateV090(address(rebalancer));
+        vm.expectRevert(GovernedUpgrade.InvalidInitialization.selector);
+        receipts.migrateToSubmitterRoles(address(governance));
+        vm.stopPrank();
+    }
+
+    /// @notice The migrations move no funds and rewrite no request, settlement, claim or share balance.
+    function test_v0100_stateIsByteIdentical() public fixtureCovered {
+        _setUpV090();
+        _invest();
+        _holder(alice, 5_000e6);
+        openDepositRequest(bob, 1_000e6);
+        bytes32 before = _snapshot();
+        for (uint256 k; k < proxies.length; ++k) {
+            _upgrade(k);
+        }
+        assertEq(
+            _snapshot(), before, "balances, supply, requests, settlements and claims unchanged"
+        );
+        // The flows still run end to end on the migrated queue.
+        assertGt(_holder(carol, 2_000e6), 0, "a deposit after the migration settles");
+    }
+
+    /// @notice Only the upgrade timelock migrates, and the implementations are locked.
+    function test_v0100_refusesOtherCallersAndTheImplementations() public fixtureCovered {
+        _setUpV090();
+        for (uint256 k; k < proxies.length; ++k) {
+            vm.prank(stranger);
+            (bool ok, bytes memory ret) = proxies[k].call(_migration());
+            assertFalse(ok, "a stranger cannot migrate");
+            bytes4 sel = bytes4(ret);
+            assertTrue(
+                sel == GovernedUpgrade.NotUpgradeTimelock.selector
+                    || sel == IConsensusRecommendationReceipt.MigrationCallerNotTimelock.selector,
+                "not the timelock"
+            );
+            vm.prank(address(timelock));
+            (ok, ret) = impls[k].call(_migration());
+            assertFalse(ok, "the implementation is locked");
+            assertEq(bytes4(ret), GovernedUpgrade.InvalidInitialization.selector, "locked");
+            assertLt(_version(proxies[k]), 3, "nothing ran");
+        }
+    }
+
+    /// @notice Each migration reverts on state that breaks the invariant it checks, and the upgrade with it.
+    function test_v0100_refusesBrokenInvariants() public fixtureCovered {
+        _setUpV090();
+        // Queue: a 0.9.0 parameter at 0 (the 0.9.0 migration never ran). Slot 7 is `params`' fourth slot,
+        // `cancelBuffer` at bytes 4 to 7.
+        bytes32 pSlot = bytes32(FLOW + 7);
+        uint256 word = uint256(vm.load(address(queue), pSlot));
+        vm.store(address(queue), pSlot, bytes32(word & ~(uint256(type(uint32).max) << 32)));
+        _expectUpgradeRevert(0, abi.encodeWithSelector(FlowMigrateLib.NotMigratedV090.selector));
+        vm.store(address(queue), pSlot, bytes32(word));
+        // Rebalancer: step parameters outside the hard bounds (plain slot 1).
+        bytes32 sp = vm.load(address(rebalancer), bytes32(uint256(1)));
+        vm.store(address(rebalancer), bytes32(uint256(1)), bytes32(0));
+        _expectUpgradeRevert(1, abi.encodeWithSelector(IFundEvents.StepParamOutOfBounds.selector));
+        vm.store(address(rebalancer), bytes32(uint256(1)), sp);
+        // Governance: no TARGET_SETTER_ROLE holder (the enumerable set's length).
+        bytes32 ts = governance.TARGET_SETTER_ROLE();
+        bytes32 lenSlot = keccak256(abi.encode(ts, ACE_BASE));
+        bytes32 len = vm.load(address(governance), lenSlot);
+        vm.store(address(governance), lenSlot, bytes32(0));
+        _expectUpgradeRevert(
+            2, abi.encodeWithSelector(RebalanceGovernance.RoleHasNoHolder.selector, ts)
+        );
+        vm.store(address(governance), lenSlot, len);
+        // Receipt: the submitter role not administered by ADMIN_ROLE.
+        bytes32 sub = receipts.RECEIPT_SUBMITTER_ROLE();
+        bytes32 adminSlot = bytes32(uint256(keccak256(abi.encode(sub, AC_BASE))) + 1);
+        bytes32 adm = vm.load(address(receipts), adminSlot);
+        vm.store(address(receipts), adminSlot, bytes32(0));
+        _expectUpgradeRevert(
+            3, abi.encodeWithSelector(ConsensusRecommendationReceipt.RoleWiringBroken.selector, sub)
+        );
+        vm.store(address(receipts), adminSlot, adm);
+        // Adapter: an implementation whose router names no factory.
+        address noFactory = address(new RouterWithoutFactory());
+        address bad = address(new UniswapV3ExactOutSwapAdapterUpgradeable(noFactory));
+        vm.prank(address(timelock));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                UniswapV3ExactOutSwapAdapterUpgradeable.RouterHasNoFactory.selector, noFactory
+            )
+        );
+        UUPSLike(adapter).upgradeToAndCall(bad, _migration());
+        // Repaired state migrates.
+        for (uint256 k; k < proxies.length; ++k) {
+            _upgrade(k);
+            assertEq(_version(proxies[k]), 3, "migrates once the state is sound");
+        }
+    }
+
+    /// @notice The queue refuses to migrate while a 0.10.0 enrollment is in progress (`enrollPos`, slot 84 of
+    ///         `FlowState`: `forge inspect LayoutProbe_robotmoney_storage_FlowQueue storageLayout`).
+    function test_v0100_queueRefusesAnEnrollmentInProgress() public fixtureCovered {
+        _setUpV090();
+        bytes32 slot = bytes32(FLOW + 84);
+        vm.store(address(queue), slot, bytes32(uint256(5)));
+        _expectUpgradeRevert(
+            0, abi.encodeWithSelector(FlowMigrateLib.EnrollmentInProgress.selector, 5)
+        );
+    }
+
+    /// @notice RobotMoneyFund has no `migrateV0100`: the selector is absent from the fund, so the release tooling cannot
+    ///         encode a fund migration that does not exist. Its 0.10.0 upgrade carries empty data.
+    function test_v0100_fundHasNoMigration() public fixtureCovered {
+        _setUpV090();
+        RobotMoneyFund fundImpl = new RobotMoneyFund();
+        vm.prank(address(timelock));
+        (bool ok,) = address(fundImpl).call(_migration());
+        assertFalse(ok, "no migrateV0100 on the fund implementation");
+        vm.prank(address(timelock));
+        (ok,) = address(fund).call(_migration());
+        assertFalse(ok, "no migrateV0100 on the fund proxy");
+        // No overload with arguments either: the name is nowhere in the fund's source.
+        assertFalse(
+            vm.contains(vm.readFile("contracts/RobotMoneyFund.sol"), "migrateV0100"),
+            "no migrateV0100 in RobotMoneyFund.sol"
+        );
+        assertEq(_version(address(fund)), 2, "the fund stays at version 2");
+    }
+
+    function _expectUpgradeRevert(uint256 k, bytes memory err) internal {
+        vm.prank(address(timelock));
+        vm.expectRevert(err);
+        UUPSLike(proxies[k]).upgradeToAndCall(impls[k], _migration());
+    }
+
+    function _snapshot() internal view returns (bytes32 h) {
+        h = keccak256(
+            abi.encode(
+                IERC20(USDC).balanceOf(address(queue)),
+                IERC20(USDC).balanceOf(address(fund)),
+                IERC20(address(fund)).totalSupply(),
+                IERC20(address(fund)).balanceOf(address(queue)),
+                queue.books()
+            )
+        );
+        for (uint256 id = 1; id <= queue.requestCount(); ++id) {
+            h = keccak256(abi.encode(h, queue.getRequest(id)));
+        }
+        for (uint256 id = 1; id <= queue.settlementCount(); ++id) {
+            h = keccak256(abi.encode(h, queue.getSettlement(id)));
+        }
+        for (uint256 id = 1; id <= queue.claimCount(); ++id) {
+            h = keccak256(abi.encode(h, queue.getClaim(id)));
+        }
+    }
+
+    function _setVersion(address proxy, uint64 v) internal {
+        vm.store(proxy, GovernedUpgrade.INITIALIZABLE_STORAGE, bytes32(uint256(v)));
+    }
+
+    function _version(address proxy) internal view returns (uint64) {
+        return uint64(uint256(vm.load(proxy, GovernedUpgrade.INITIALIZABLE_STORAGE)));
+    }
+}
+
+interface UUPSLike {
+    function upgradeToAndCall(address newImplementation, bytes calldata data) external payable;
 }
