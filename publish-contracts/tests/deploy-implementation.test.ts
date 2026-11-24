@@ -448,10 +448,31 @@ describe("Deploy 4: deploy-implementation --system fund", () => {
     expect(fundMigrationExpr(join(w.ctx.coreDir, "out"), "fund", "RobotMoneyFund", { rebalancer_: RB_PROXY })).toBe(`$(cast calldata "migrateV090(address)" ${RB_PROXY})`);
     const qArt = join(w.ctx.coreDir, "out", "FlowQueue.sol");
     mkdirSync(qArt, { recursive: true });
-    writeFileSync(join(qArt, "FlowQueue.json"), JSON.stringify({ abi: [{ type: "function", name: "migrateV090", inputs: [] }] }));
+    writeFileSync(join(qArt, "FlowQueue.json"), JSON.stringify({ abi: [{ type: "function", name: "migrateV090", inputs: [{ type: "uint32", name: "cancelBuffer_" }, { type: "uint32", name: "maxPause_" }, { type: "uint16", name: "matchBandBps_" }] }] }));
     expect(fundMigrationExpr(join(w.ctx.coreDir, "out"), "queue", "FlowQueue", { FLOW_CANCEL_BUFFER: "900", FLOW_MAX_PAUSE: "259200" })).toBe(`$(cast calldata "migrateV090(uint32,uint32,uint16)" 900 259200 <FLOW_MATCH_BAND_BPS>)`);
     // RebalancerV2 (test-only) is no migration target
     expect(fundMigrationExpr(join(w.ctx.coreDir, "out"), "rebalancer", "RebalancerV2", {})).toBeUndefined();
+  });
+
+  test("v0.10.0: an ABI naming migrateV0100 prints the v0.10.0 data; a proxy of that build without migrateV0100 prints 0x, never migrateV090", async () => {
+    const w = fundWorld();
+    const out = join(w.ctx.coreDir, "out");
+    const write = (c: string, fns: { name: string; inputs?: unknown[] }[]) => {
+      mkdirSync(join(out, `${c}.sol`), { recursive: true });
+      writeFileSync(join(out, `${c}.sol`, `${c}.json`), JSON.stringify({ abi: fns.map((f) => ({ type: "function", inputs: [], ...f })) }));
+    };
+    const art = join(out, "Rebalancer.sol", "Rebalancer.json");
+    const j = JSON.parse(readFileSync(art, "utf8"));
+    j.abi = [{ type: "function", name: "migrateV090", inputs: [] }, { type: "function", name: "migrateV0100", inputs: [] }];
+    writeFileSync(art, JSON.stringify(j));
+    write("RobotMoneyFund", [{ name: "migrateV090", inputs: [{ type: "address", name: "rebalancer_" }] }]);
+    write("RebalanceGovernance", [{ name: "migrateV0100" }]);
+    const res = await w.run();
+    expect(res.next).toContain(`upgradeToAndCall(address,bytes)" ${NEW} $(cast calldata "migrateV0100()"))`);
+    expect(res.next).not.toContain("migrateV090");
+    expect(fundMigrationExpr(out, "fund-governance", "RebalanceGovernance", {})).toBe(`$(cast calldata "migrateV0100()")`);
+    // the fund of a v0.10.0 build without migrateV0100: no current-release migration, so the data is 0x (undefined), not the v0.9.0 one
+    expect(fundMigrationExpr(out, "fund", "RobotMoneyFund", { rebalancer_: RB_PROXY })).toBeUndefined();
   });
 
   test("a subsequent fund upgrade checks layout against that proxy's last build", async () => {

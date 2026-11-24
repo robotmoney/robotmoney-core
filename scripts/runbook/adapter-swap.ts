@@ -14,6 +14,19 @@
 //            at least one uses the proxy; prints NAV.
 //              pending|check: --timelock A --targets CSV --values CSV --datas CSV --predecessor H --salt H [--out FILE]
 //                       check also: --fund A --proxy A --legacy A --impl-hash H --proxy-hash H
+// The 0.10.0 move of the adapter proxy to a new implementation (releases/v0.10.0-onevault-upgrade.yaml P2.93, decision D10-1), one timelock batch the Safe schedules
+// after the receipt upgrade and executes after the delay:
+//   upgrade deploy  forge create the new implementation from BUILD (linked as above, the proxy's own ROUTER as constructor argument). A recorded implementation
+//                   (upg-adapter-new-impl) whose code matches the build is reused. Requires the proxy unfrozen, named for the fund timelock and on another
+//                   implementation, and simulates upgradeToAndCall(impl, 0x) from the timelock. Writes upg-adapter-new-impl-hash.
+//              --rpc URL --build DIR --state-dir DIR --proxy A --timelock A --governed-upgrade A --twap-tick-math A -- {cast}
+//   upgrade plan    the batch: fund.setAdapterCodeHashAllowed(new impl hash, true), then proxy.upgradeToAndCall(new impl, 0x). Writes target-, data-,
+//                   values- and salt-upg-adapter and its operation id (upg-adapter-op) with the given predecessor (the receipt upgrade's operation).
+//              --state-dir DIR --run-dir DIR --timelock A --fund A --proxy A --impl A --impl-hash H --predecessor H
+//   pending         as above, with the upg-adapter files.
+//   upgrade check   (after the Safe executes it) the batch reads done, the proxy's ERC-1967 slot and implementation() name the new implementation, its
+//                   code hash is allowed, every basket asset on the proxy vets (its pool reads fixed-fee through the proxy) and NAV reads.
+//              --timelock A --targets CSV --values CSV --datas CSV --predecessor H --salt H --fund A --proxy A --impl A --impl-hash H
 // Reads the chain through cast with ETH_RPC_URL (cast-io.ts). Exit 0 pass, 1 a failed check or call, 2 a usage error.
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -178,11 +191,80 @@ export function checkExecuted(cast: Cast, o: Record<string, string>): void {
   console.log(`NAV ${cast(["call", fund!, "totalAssets()(uint256)"])}`);
 }
 
-const USAGE = "usage: adapter-swap.ts deploy|plan|pending|check --name value ... [-- {cast}] (see the header)";
+/** ERC-1967 implementation slot. */
+export const IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
+export interface UpgradeDeployInput { rpc: string; build: string; stateDir: string; proxy: string; timelock: string; governedUpgrade: string; twapTickMath: string; signer: string[] }
+
+/** upgrade deploy: the new implementation, reused when recorded and matching the build, checked against the proxy, its upgrade simulated from the timelock. */
+export async function upgradeDeploy(cast: Cast, forge: Forge, codeCheck: CodeCheck, d: UpgradeDeployInput): Promise<string> {
+  check(cast(["call", d.proxy, "upgradesFrozen()(bool)"]) === "false", "the adapter proxy is frozen");
+  check(sameAddress(cast(["call", d.proxy, "upgradeTimelock()(address)"]), d.timelock), "the adapter proxy does not name the fund timelock");
+  const router = firstToken(cast(["call", d.proxy, "ROUTER()(address)"]));
+  const libraries = [`${GOVERNED_UPGRADE_LIB}:${d.governedUpgrade}`, `${TWAP_TICK_MATH_LIB}:${d.twapTickMath}`];
+  const impl = deployOnce(cast, join(d.stateDir, "upg-adapter-new-impl"), "implementation", () =>
+    forge(forgeCreateArgs({ rpc: d.rpc, signer: d.signer, libraries, contract: ADAPTER_SOURCE, ctorArgs: [router] }), d.build));
+  const r = await codeCheck(impl, "UniswapV3ExactOutSwapAdapterUpgradeable");
+  console.log(`UniswapV3ExactOutSwapAdapterUpgradeable at ${impl}: ${r.ok ? "matches the build" : "DIFFERS"} (${r.detail})`);
+  check(r.ok, `UniswapV3ExactOutSwapAdapterUpgradeable at ${impl} is not the build's code`);
+  check(!sameAddress(cast(["call", d.proxy, "implementation()(address)"]), impl), "the adapter proxy already runs this implementation");
+  check(sameAddress(cast(["call", impl, "ROUTER()(address)"]), router), "the new implementation does not use the proxy's router");
+  cast(["call", "--from", d.timelock, d.proxy, "upgradeToAndCall(address,bytes)", impl, "0x"]);
+  const implHash = cast(["keccak", cast(["code", impl])]);
+  writeState(join(d.stateDir, "upg-adapter-new-impl-hash"), implHash);
+  console.log(`adapter implementation ${impl} hash ${implHash}; upgradeToAndCall simulates from the timelock`);
+  return impl;
+}
+
+/** PURE over cast calldata. The upgrade batch: allow the new implementation's hash on the fund, then move the proxy to it with empty data. */
+export function upgradeBatch(cast: Cast, b: { fund: string; proxy: string; impl: string; implHash: string }): Omit<Batch, "moved"> {
+  return {
+    targets: [b.fund, b.proxy],
+    datas: [cast(["calldata", "setAdapterCodeHashAllowed(bytes32,bool)", b.implHash, "true"]), cast(["calldata", "upgradeToAndCall(address,bytes)", b.impl, "0x"])],
+    values: ["0", "0"],
+  };
+}
+
+export function upgradePlan(cast: Cast, o: Record<string, string>): void {
+  const [stateDir, runDir, timelock, fund, proxy, impl, implHash, predecessor] = need(o, "state-dir", "run-dir", "timelock", "fund", "proxy", "impl", "impl-hash", "predecessor");
+  const b = upgradeBatch(cast, { fund: fund!, proxy: proxy!, impl: impl!, implHash: implHash! });
+  const salt = cast(["keccak", `robotmoney.deploy4-upgrade.adapter-v0100.${runDir}`]);
+  writeState(join(stateDir!, "target-upg-adapter"), b.targets.join(","));
+  writeState(join(stateDir!, "data-upg-adapter"), b.datas.join(","));
+  writeState(join(stateDir!, "values-upg-adapter"), b.values.join(","));
+  writeState(join(stateDir!, "salt-upg-adapter"), salt);
+  const id = batchOp(cast, { timelock: timelock!, targets: b.targets.join(","), values: b.values.join(","), datas: b.datas.join(","), predecessor: predecessor!, salt });
+  writeState(join(stateDir!, "upg-adapter-op"), id);
+  console.log(`adapter upgrade batch ${id}: allow ${implHash}, then ${proxy} -> ${impl}; predecessor ${predecessor}`);
+}
+
+export function upgradeCheck(cast: Cast, o: Record<string, string>): void {
+  const [timelock, fund, proxy, impl, implHash] = need(o, "timelock", "fund", "proxy", "impl", "impl-hash");
+  const id = batchOp(cast, o);
+  check(cast(["call", timelock!, "isOperationDone(bytes32)(bool)", id]) === "true", `adapter upgrade batch ${id} is not done`);
+  const slot = cast(["storage", proxy!, IMPLEMENTATION_SLOT]);
+  check(lower(`0x${slot.replace(/^0x/, "").slice(-40)}`) === lower(impl!), `the adapter proxy's ERC-1967 slot reads ${slot}, not ${impl}`);
+  check(sameAddress(cast(["call", proxy!, "implementation()(address)"]), impl!), "the adapter proxy does not report the new implementation");
+  check(lower(cast(["keccak", cast(["code", impl!])])) === lower(implHash!), "the new implementation's code hash is not the planned one");
+  check(cast(["call", fund!, "adapterCodeHashAllowed(bytes32)(bool)", implHash!]) === "true", "the new implementation hash is not allowed");
+  let m = 0;
+  for (const a of basket(cast, fund!)) {
+    if (lower(a.adapter) !== lower(proxy!)) continue;
+    check(cast(["call", proxy!, "isFixedFeePool(address)(bool)", a.pool]) === "true", `asset ${a.index} pool ${a.pool} no longer vets through the upgraded adapter`);
+    m++;
+    console.log(`asset ${a.index} pool ${a.pool} vets through ${lower(proxy!)}`);
+  }
+  check(m > 0, "no basket asset uses the adapter proxy");
+  console.log(`NAV ${cast(["call", fund!, "totalAssets()(uint256)"])}`);
+}
+
+const USAGE = "usage: adapter-swap.ts deploy|plan|pending|check|upgrade deploy|upgrade plan|upgrade check --name value ... [-- {cast}] (see the header)";
 
 if (import.meta.main) {
   await runMain(USAGE, async () => {
-    const [verb, ...argv] = process.argv.slice(2);
+    const args = process.argv.slice(2);
+    const verb = args[0] === "upgrade" ? `upgrade ${args[1] ?? ""}` : args[0];
+    const argv = args.slice(args[0] === "upgrade" ? 2 : 1);
     let parsed;
     try { parsed = options(argv); } catch (e) { throw new UsageError((e as Error).message); }
     const { opts, rest } = parsed;
@@ -193,6 +275,12 @@ if (import.meta.main) {
     } else if (verb === "plan") plan(realCast, opts);
     else if (verb === "pending") pending(realCast, opts);
     else if (verb === "check") checkExecuted(realCast, opts);
+    else if (verb === "upgrade deploy") {
+      const [rpc, build, stateDir, proxy, timelock, governedUpgrade, twapTickMath] = need(opts, "rpc", "build", "state-dir", "proxy", "timelock", "governed-upgrade", "twap-tick-math");
+      const codeCheck: CodeCheck = async (addr, name) => compareCode(await codeAt(rpc!, addr), loadArtifact(join(build!, "out"), name));
+      await upgradeDeploy(realCast, realForge, codeCheck, { rpc: rpc!, build: build!, stateDir: stateDir!, proxy: proxy!, timelock: timelock!, governedUpgrade: governedUpgrade!, twapTickMath: twapTickMath!, signer: rest });
+    } else if (verb === "upgrade plan") upgradePlan(realCast, opts);
+    else if (verb === "upgrade check") upgradeCheck(realCast, opts);
     else throw new UsageError(`unknown subcommand ${verb ?? "(none)"}`);
   });
 }
