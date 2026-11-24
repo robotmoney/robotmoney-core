@@ -317,6 +317,8 @@ contracts/test/prototype/contract.RebalancerGapsTest.mdx
 contracts/test/prototype/contract.ReviewFixesDepthTest.mdx
 contracts/test/prototype/contract.ReviewFixesQueueTest.mdx
 contracts/test/prototype/contract.ReviewFixesRebalancerTest.mdx
+contracts/test/prototype/contract.RouterWithFactory.mdx
+contracts/test/prototype/contract.RouterWithoutFactory.mdx
 contracts/test/prototype/contract.SafetyReview090Test.mdx
 contracts/test/prototype/contract.SizeGateTest.mdx
 contracts/test/prototype/contract.Step3eHostileSwapAdapter.mdx
@@ -325,6 +327,8 @@ contracts/test/prototype/contract.Step3eTest.mdx
 contracts/test/prototype/contract.TargetVectorTest.mdx
 contracts/test/prototype/contract.ThinStretchPool.mdx
 contracts/test/prototype/contract.UpgradeMigrationTest.mdx
+contracts/test/prototype/contract.UpgradeMigrationV0100ForkTest.mdx
+contracts/test/prototype/contract.UpgradeMigrationV0100Test.mdx
 contracts/test/prototype/interface.IAavePool.mdx
 contracts/test/prototype/interface.IAeroCLFactoryRead.mdx
 contracts/test/prototype/interface.IAeroCLPoolRead.mdx
@@ -346,8 +350,10 @@ contracts/test/prototype/interface.IRealAggregator.mdx
 contracts/test/prototype/interface.IRouterFactory.mdx
 contracts/test/prototype/interface.ISwapRouter02.mdx
 contracts/test/prototype/interface.IUniswapV3PoolMint.mdx
+contracts/test/prototype/interface.IUpgradeable.mdx
 contracts/test/prototype/interface.IV3Pool.mdx
 contracts/test/prototype/interface.IWeth9.mdx
+contracts/test/prototype/interface.UUPSLike.mdx
 contracts/test/prototype/library.IFlowEventsSel.mdx
 contracts/test/prototype/mocks/abstract.MechReentry.mdx
 contracts/test/prototype/mocks/contract.MechAaveAdapter.mdx

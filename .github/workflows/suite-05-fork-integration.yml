@@ -181,6 +181,40 @@ jobs:
         if: always()
         uses: ./.github/actions/twin-fork-save-cache
 
+  # Issue 2062: the 0.10.0 in-place upgrade of Deploy 4 (ADR-0020) on real Base state. Every proxy is upgraded from
+  # the fund timelock in release order with its migrateV0100 (the fund with empty data) inside forge's copy of the
+  # Twin fork at the run pin; nothing is sent to a live chain. FORK_RPC_URL is set, so ForkSelect never skips, and
+  # the executed-test guard makes a run that executed nothing red.
+  forge-upgrade-fork:
+    name: forge-upgrade-fork
+    needs: pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI_CLASS: system-correctness
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Start the Twin chain at the run pin
+        id: twin
+        uses: ./.github/actions/twin-fork
+        with:
+          pin-block: ${{ needs.pin.outputs.block }}
+          upstream-secret: ${{ secrets.BASE_UPSTREAM_RPC }}
+
+      - name: forge test (0.10.0 upgrade of Deploy 4 on the Twin fork)
+        env:
+          FORK_RPC_URL: ${{ steps.twin.outputs.rpc-url }}
+          FORGE_TEST_MIN_EXECUTED: 1
+        run: bash .github/scripts/forge_test_require_executed.sh -vv --match-contract UpgradeMigrationV0100Fork
+
+      - name: Stop the Twin fork and save its RPC cache
+        if: always()
+        uses: ./.github/actions/twin-fork-save-cache
+
   base-testnet-adapters:
     name: base-testnet-adapters
     needs: pin

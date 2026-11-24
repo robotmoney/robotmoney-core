@@ -1,6 +1,6 @@
 // scripts/runbook/simulate-upgrades.test.ts: the pre-send simulation of the three v0.9.0 upgrades with their migrations (P1.85, decision D4-19).
 import { expect, test } from "bun:test";
-import { decodeFunctionData, encodeErrorResult, getAddress, parseAbi, type Address, type Hex } from "../../publish-contracts/node_modules/viem";
+import { decodeFunctionData, encodeErrorResult, encodeFunctionData, getAddress, parseAbi, type Address, type Hex } from "../../publish-contracts/node_modules/viem";
 import { IMPLEMENTATION_SLOT, describeRevert, revertData, simulate, upgradeCalls, type CallRequest, type Leg } from "./simulate-upgrades.ts";
 
 const A = (n: number) => getAddress(`0x${n.toString(16).padStart(40, "0")}`) as Address;
@@ -38,4 +38,29 @@ test("revert data is found in nested viem errors and decoded, or reported raw", 
   expect(describeRevert(data, ERRORS)).toBe("LegacyEscrowOpen(5, 0)");
   expect(describeRevert("0xdeadbeef", ERRORS)).toBe("reverted with unknown error 0xdeadbeef");
   expect(describeRevert(undefined, ERRORS)).toBe("reverted without data");
+});
+
+test("v0.10.0: migrateV0100() data on every leg, the fund leg empty, the extra legs after the queue in release order", async () => {
+  const MIG = parseAbi(["function migrateV0100()"]);
+  const data = encodeFunctionData({ abi: MIG, functionName: "migrateV0100" });
+  expect(data).toBe("0x42829c5e" as Hex);
+  const legs = {
+    rebalancer: { ...LEGS.rebalancer, data },
+    fund: { ...LEGS.fund, data: "0x" as Hex },
+    queue: { ...LEGS.queue, data },
+    extra: [
+      { name: "governance", proxy: A(0xc1), impl: A(0xc2), data },
+      { name: "receipt", proxy: A(0xd1), impl: A(0xd2), data },
+      { name: "adapter", proxy: A(0xe1), impl: A(0xe2), data },
+    ],
+  };
+  const c = upgradeCalls(TL, legs);
+  expect(c.map((x) => x.to)).toEqual([A(0xb1), A(0xf1), A(0xa1), A(0xc1), A(0xd1), A(0xe1)]);
+  expect(decodeFunctionData({ abi: UPGRADE, data: c[1]!.data }).args).toEqual([A(0xf2), "0x"]);
+  for (const i of [0, 2, 3, 4, 5]) expect(decodeFunctionData({ abi: UPGRADE, data: c[i]!.data }).args[1]).toBe(data);
+  const seen: Address[] = [];
+  const err = encodeErrorResult({ abi: ERRORS, errorName: "LegacyEscrowOpen", args: [1n, 0n] });
+  const caller = async (x: CallRequest) => { seen.push(x.to); if (x.to === A(0xd1)) throw Object.assign(new Error("reverted"), { cause: { data: err } }); };
+  await expect(simulate(caller, TL, legs, ERRORS)).rejects.toThrow("the receipt upgrade with its migration reverts from the timelock: LegacyEscrowOpen(1, 0)");
+  expect(seen).toEqual([A(0xb1), A(0xf1), A(0xa1), A(0xc1), A(0xd1)]);
 });

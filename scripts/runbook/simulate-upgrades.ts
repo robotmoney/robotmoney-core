@@ -6,6 +6,8 @@
 //      (the fund migration requires the Rebalancer to run 0.9.0: it calls lastBasketStepAt(); it reads nothing the Rebalancer migration writes)
 //   3. queue.upgradeToAndCall(queueImpl, migrateV090(cancelBuffer, maxPause, matchBandBps)) (it depends on neither)
 // A call that reverts fails the step with the decoded custom error (the build's ABIs), so the migrations' own requires decide, nothing re-implements them.
+// v0.10.0 (issue 2062): every leg may carry migrateV0100() (version 3), and the optional --governance, --receipt and --adapter legs (each with
+// -impl and -data) run after the queue. The fund has no migrateV0100 (EIP-170 headroom), so its leg passes --fund-data 0x (an empty upgrade).
 // It works on any RPC that serves eth_call with a state override (Base 8453 and the Twin). Nothing is sent.
 //   bun scripts/runbook/simulate-upgrades.ts --rpc URL --timelock A --out BUILD/out
 //       --rebalancer A --rebalancer-impl A --rebalancer-data HEX --fund A --fund-impl A --fund-data HEX --queue A --queue-impl A --queue-data HEX
@@ -19,7 +21,10 @@ import { UsageError, check, need, options, runMain } from "./cast-io.ts";
 export const IMPLEMENTATION_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc" as Hex;
 const UPGRADE_ABI = parseAbi(["function upgradeToAndCall(address newImplementation, bytes data)"]);
 /** The artifacts whose custom errors a migration can revert with. */
-export const ERROR_ARTIFACTS = ["Rebalancer", "RobotMoneyFund", "FlowQueue", "FundMigrateLib", "FlowMigrateLib", "GovernedUpgrade", "ERC1967Utils", "Initializable"];
+export const ERROR_ARTIFACTS = ["Rebalancer", "RobotMoneyFund", "FlowQueue", "FundMigrateLib", "FlowMigrateLib", "GovernedUpgrade", "ERC1967Utils", "Initializable", "RebalanceGovernance", "ConsensusRecommendationReceipt", "UniswapV3ExactOutSwapAdapterUpgradeable"];
+/** The optional legs after the queue, in release order. */
+export const EXTRA_LEGS = ["governance", "receipt", "adapter"] as const;
+export type Legs = { rebalancer: Leg; fund: Leg; queue: Leg; extra?: Leg[] };
 
 export interface Leg { name: string; proxy: Address; impl: Address; data: Hex }
 export interface CallRequest { from: Address; to: Address; data: Hex; stateOverride?: { address: Address; stateDiff: { slot: Hex; value: Hex }[] }[] }
@@ -27,12 +32,13 @@ export interface CallRequest { from: Address; to: Address; data: Hex; stateOverr
 export type Caller = (c: CallRequest) => Promise<void>;
 
 /** PURE. The three calls, in order, each with the state overrides that stand in for the earlier upgrades it depends on. */
-export function upgradeCalls(timelock: Address, legs: { rebalancer: Leg; fund: Leg; queue: Leg }): CallRequest[] {
+export function upgradeCalls(timelock: Address, legs: Legs): CallRequest[] {
   const call = (l: Leg): CallRequest => ({ from: timelock, to: l.proxy, data: encodeFunctionData({ abi: UPGRADE_ABI, functionName: "upgradeToAndCall", args: [l.impl, l.data] }) });
   return [
     call(legs.rebalancer),
     { ...call(legs.fund), stateOverride: [{ address: legs.rebalancer.proxy, stateDiff: [{ slot: IMPLEMENTATION_SLOT, value: pad(legs.rebalancer.impl, { size: 32 }) }] }] },
     call(legs.queue),
+    ...(legs.extra ?? []).map(call),
   ];
 }
 
@@ -68,9 +74,9 @@ export function loadErrorAbi(out: string): Abi {
   return abi as Abi;
 }
 
-export async function simulate(caller: Caller, timelock: Address, legs: { rebalancer: Leg; fund: Leg; queue: Leg }, errors: Abi): Promise<void> {
+export async function simulate(caller: Caller, timelock: Address, legs: Legs, errors: Abi): Promise<void> {
   const calls = upgradeCalls(timelock, legs);
-  const names = [legs.rebalancer.name, legs.fund.name, legs.queue.name];
+  const names = [legs.rebalancer.name, legs.fund.name, legs.queue.name, ...(legs.extra ?? []).map((l) => l.name)];
   for (let i = 0; i < calls.length; i++) {
     try {
       await caller(calls[i]!);
@@ -87,11 +93,12 @@ export function viemCaller(rpc: string): Caller {
 }
 
 if (import.meta.main) {
-  await runMain("usage: simulate-upgrades.ts --rpc URL --timelock A --out BUILD/out --rebalancer A --rebalancer-impl A --rebalancer-data HEX --fund A --fund-impl A --fund-data HEX --queue A --queue-impl A --queue-data HEX", async () => {
+  await runMain("usage: simulate-upgrades.ts --rpc URL --timelock A --out BUILD/out --rebalancer A --rebalancer-impl A --rebalancer-data HEX --fund A --fund-impl A --fund-data HEX --queue A --queue-impl A --queue-data HEX [--governance A --governance-impl A --governance-data HEX] [--receipt ...] [--adapter ...]", async () => {
     let o;
     try { o = options(process.argv.slice(2)).opts; } catch (e) { throw new UsageError((e as Error).message); }
     const [rpc, timelock, out] = need(o, "rpc", "timelock", "out");
     const leg = (n: string): Leg => { const [proxy, impl, data] = need(o, n, `${n}-impl`, `${n}-data`); return { name: n, proxy: getAddress(proxy!.toLowerCase()), impl: getAddress(impl!.toLowerCase()), data: data as Hex }; };
-    await simulate(viemCaller(rpc!), getAddress(timelock!.toLowerCase()), { rebalancer: leg("rebalancer"), fund: leg("fund"), queue: leg("queue") }, loadErrorAbi(out!));
+    const extra = EXTRA_LEGS.filter((n) => o[n] !== undefined).map(leg);
+    await simulate(viemCaller(rpc!), getAddress(timelock!.toLowerCase()), { rebalancer: leg("rebalancer"), fund: leg("fund"), queue: leg("queue"), extra }, loadErrorAbi(out!));
   });
 }

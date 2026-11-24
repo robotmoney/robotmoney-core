@@ -214,14 +214,31 @@ contract Rebalancer is
             toleranceBps: uint16(legacy >> 112),
             minStepUsdc: uint128(legacy >> 128)
         });
+        _requireHardBounds(p);
+        _stepParams = p;
+        emit StepParamsSet(p);
+    }
+
+    /// @notice The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. 0.10.0 adds
+    ///         no Rebalancer storage, so it writes nothing: it checks that the step parameters read inside their hard
+    ///         bounds in the 0.9.0 layout (what `migrateV090` or `initialize` left), so the new code never runs on
+    ///         parameters it cannot use. The upgrade timelock passes it as the data of `upgradeToAndCall`; nobody
+    ///         else can run it, and it runs once. It calls nothing.
+    function migrateV0100() external reinitializer(3) {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert GovernedUpgrade.NotUpgradeTimelock(msg.sender);
+        }
+        _requireHardBounds(_stepParams);
+    }
+
+    /// @dev The hard bounds every stored `StepParams` meets (the fund-dependent bounds of `_setStepParams` aside).
+    function _requireHardBounds(StepParams memory p) private pure {
         if (
             p.stepInterval < MIN_STEP_INTERVAL || p.stepInterval > MAX_STEP_INTERVAL
                 || p.maxOverrun > MAX_OVERRUN || p.maxStepCostBps == 0
                 || p.maxStepCostBps > MAX_STEP_COST_BPS || p.toleranceBps == 0
                 || p.toleranceBps > MAX_TOLERANCE_BPS
         ) revert StepParamOutOfBounds();
-        _stepParams = p;
-        emit StepParamsSet(p);
     }
 
     // ═════════════════════════════════════════════════════════════════════════

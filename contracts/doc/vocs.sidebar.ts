@@ -473,6 +473,8 @@ export const sidebar = [
             { text: "ReviewFixesDepthTest", link: "/contracts/test/prototype/contract.ReviewFixesDepthTest" },
             { text: "ReviewFixesQueueTest", link: "/contracts/test/prototype/contract.ReviewFixesQueueTest" },
             { text: "ReviewFixesRebalancerTest", link: "/contracts/test/prototype/contract.ReviewFixesRebalancerTest" },
+            { text: "RouterWithFactory", link: "/contracts/test/prototype/contract.RouterWithFactory" },
+            { text: "RouterWithoutFactory", link: "/contracts/test/prototype/contract.RouterWithoutFactory" },
             { text: "SafetyReview090Test", link: "/contracts/test/prototype/contract.SafetyReview090Test" },
             { text: "SizeGateTest", link: "/contracts/test/prototype/contract.SizeGateTest" },
             { text: "Step3eHostileSwapAdapter", link: "/contracts/test/prototype/contract.Step3eHostileSwapAdapter" },
@@ -481,6 +483,8 @@ export const sidebar = [
             { text: "TargetVectorTest", link: "/contracts/test/prototype/contract.TargetVectorTest" },
             { text: "ThinStretchPool", link: "/contracts/test/prototype/contract.ThinStretchPool" },
             { text: "UpgradeMigrationTest", link: "/contracts/test/prototype/contract.UpgradeMigrationTest" },
+            { text: "UpgradeMigrationV0100ForkTest", link: "/contracts/test/prototype/contract.UpgradeMigrationV0100ForkTest" },
+            { text: "UpgradeMigrationV0100Test", link: "/contracts/test/prototype/contract.UpgradeMigrationV0100Test" },
           ],
         },
         {
@@ -519,8 +523,10 @@ export const sidebar = [
             { text: "IRouterFactory", link: "/contracts/test/prototype/interface.IRouterFactory" },
             { text: "ISwapRouter02", link: "/contracts/test/prototype/interface.ISwapRouter02" },
             { text: "IUniswapV3PoolMint", link: "/contracts/test/prototype/interface.IUniswapV3PoolMint" },
+            { text: "IUpgradeable", link: "/contracts/test/prototype/interface.IUpgradeable" },
             { text: "IV3Pool", link: "/contracts/test/prototype/interface.IV3Pool" },
             { text: "IWeth9", link: "/contracts/test/prototype/interface.IWeth9" },
+            { text: "UUPSLike", link: "/contracts/test/prototype/interface.UUPSLike" },
           ],
         },
         {

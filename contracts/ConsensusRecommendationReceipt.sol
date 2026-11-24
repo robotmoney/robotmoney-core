@@ -139,6 +139,31 @@ contract ConsensusRecommendationReceipt is
         if (hasRole(ADMIN_ROLE, releaser)) _revokeRole(ADMIN_ROLE, releaser);
     }
 
+    /// @notice `role` has no holder, or the submitter and releaser roles are not administered by `ADMIN_ROLE`
+    ///         (`migrateV0100`).
+    error RoleWiringBroken(bytes32 role);
+
+    /// @notice The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. 0.10.0 adds
+    ///         no receipt storage, so it writes nothing. It checks the role wiring the release keeps:
+    ///         `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE` each have a holder and `ADMIN_ROLE` administers the submitter and
+    ///         releaser roles (what `initialize` or `migrateToSubmitterRoles` left). The upgrade timelock passes it
+    ///         as the data of `upgradeToAndCall`; nobody else can run it, and it runs once. Receipts are untouched.
+    function migrateV0100() external reinitializer(3) {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert MigrationCallerNotTimelock();
+        }
+        if (getRoleMemberCount(DEFAULT_ADMIN_ROLE) == 0) {
+            revert RoleWiringBroken(DEFAULT_ADMIN_ROLE);
+        }
+        if (getRoleMemberCount(ADMIN_ROLE) == 0) revert RoleWiringBroken(ADMIN_ROLE);
+        if (getRoleAdmin(RECEIPT_SUBMITTER_ROLE) != ADMIN_ROLE) {
+            revert RoleWiringBroken(RECEIPT_SUBMITTER_ROLE);
+        }
+        if (getRoleAdmin(RECEIPT_RELEASER_ROLE) != ADMIN_ROLE) {
+            revert RoleWiringBroken(RECEIPT_RELEASER_ROLE);
+        }
+    }
+
     /// @dev Last-admin floor for `DEFAULT_ADMIN_ROLE` (ADMIN_ROLE is covered by
     ///      `AdminFloorAccessControl`). Both `revokeRole` and `renounceRole`
     ///      route here, so the timelock cannot lock itself out (#1447, L).

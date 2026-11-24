@@ -5,7 +5,7 @@ description: "The entry point for timed, netted, forward-priced deposits and red
 
 # FlowQueue
 
-[Git Source](https://github.com/robotmoney/robotmoney-core/blob/0ab4b2ac1ec333cb0ac75c1007001e41c97d9264/contracts/FlowQueue.sol)
+[Git Source](https://github.com/robotmoney/robotmoney-core/blob/5148a1d0ecdc8f5ddda83168c51a247d8d1d49bb/contracts/FlowQueue.sol)
 
 **Inherits:** [AdminFloorAccessControl](/contracts/lib/abstract.AdminFloorAccessControl), ReentrancyGuardUpgradeable, [GovernedUUPS](/contracts/lib/abstract.GovernedUUPS), [IFlowQueue](/contracts/interfaces/interface.IFlowQueue)
 
@@ -84,6 +84,19 @@ function migrateV090(uint32 cancelBuffer_, uint32 maxPause_, uint16 matchBandBps
 | cancelBuffer_ | `uint32` |  |
 | maxPause_ | `uint32` |  |
 | matchBandBps_ | `uint16` |  |
+
+<a id="migratev0100"></a>
+
+### migrateV0100
+
+The one-time state migration of a queue upgraded in place from contracts 0.9.0 to 0.10.0
+(`FlowMigrateLib.migrateV0100`): checks the 0.9.0 state and gives each live deposit bucket its hold
+mark. The upgrade timelock passes it as the data of `upgradeToAndCall`; nobody else can run it, and it
+runs once.
+
+```solidity
+function migrateV0100() external reinitializer(3);
+```
 
 <a id="requestdeposit-uint256-address"></a>
 

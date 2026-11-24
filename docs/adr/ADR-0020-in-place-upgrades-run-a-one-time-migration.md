@@ -41,6 +41,16 @@ The audit of 2026-11-20 found 13 hazards. Owner, 2026-11-20: fix everything in t
 
 5. **Before anything is scheduled, the real upgrade chain is simulated from the timelock.** `scripts/runbook/simulate-upgrades.ts` calls each `upgradeToAndCall(newImplementation, migration data)` as the timelock, by `eth_call`, against the deployed implementations, in the on-chain order. The migrations' own requires decide. A revert stops the run with the decoded error before a signer signs.
 
+6. **The v0.10.0 migrations** (issue 2062, owner decision 2026-11-24 on release issue 2061: every one-vault proxy runs a one-time migration where it fits). Each is `migrateV0100()` on the proxy, `reinitializer(3)`, callable only by `upgradeTimelock()`. No 0.10.0 struct changed in the middle, so none rewrites an entry. Each checks the 0.9.0 state the new code relies on, writes only fields a fresh 0.10.0 deployment would hold, and moves no funds.
+   - `FlowQueue.migrateV0100()` (`FlowMigrateLib.migrateV0100`): reverts `NotMigratedV090` unless `cancelBuffer`, `maxPause` and `matchBandBps` are non-zero, and `EnrollmentInProgress` unless `enrollPos` is 0. It gives each live deposit bucket of the current cycle that holds basis its hold mark (`depBucketMaxMinHold = maxDepositMinHold`), the hold the 0.10.0 match already falls back to, so no hold changes.
+   - `Rebalancer.migrateV0100()`: reverts `StepParamOutOfBounds` unless the stored step parameters are inside the hard bounds.
+   - `RebalanceGovernance.migrateV0100()`: reverts `ZeroAddress` without a fund or receipt register and `RoleHasNoHolder` unless `ADMIN_ROLE` and `TARGET_SETTER_ROLE` each have a holder (the new last-holder floor, AGY-08).
+   - `ConsensusRecommendationReceipt.migrateV0100()`: reverts `RoleWiringBroken` unless `DEFAULT_ADMIN_ROLE` and `ADMIN_ROLE` have holders and `ADMIN_ROLE` administers the submitter and releaser roles.
+   - `UniswapV3ExactOutSwapAdapterUpgradeable.migrateV0100()`: reverts `RouterHasNoFactory` unless the router's `factory()` names a contract (the canonical pool check, AGY-13).
+   - **`RobotMoneyFund` has no `migrateV0100`.** It has 17 bytes left under EIP-170 (24,559 of 24,576), less than any gated entry point costs (the 0.9.0 gate alone was 191 bytes as a modifier). Its upgrade carries empty data. A test asserts the selector is absent.
+   - **Order on chain: Rebalancer, fund (empty data), queue, governance, receipt, swap adapter.** None calls another contract but the adapter's read of its router, so the order is the 0.9.0 one with the three new legs after it. `simulate-upgrades.ts` takes them as `--governance`, `--receipt` and `--adapter` legs.
+   - Tests: `UpgradeMigration.t.sol::UpgradeMigrationV0100Test` on synthetic 0.9.0 state, and `UpgradeMigrationV0100Fork.t.sol` on Deploy 4's real state on the Twin fork (suite-05 job `forge-upgrade-fork`). The storage gate also extends the `contracts-0.9.0` tag.
+
 ## Consequences
 
 - The fund applies the reinitializer gate inside `FundMigrateLib`, not as a modifier on `RobotMoneyFund.migrateV090`. The modifier costs 191 bytes and the fund had 382 left under EIP-170. The library writes the same `Initializable` slot and uses the same error (`InvalidInitialization`) and event (`Initialized(2)`) as OpenZeppelin's modifier. The gate is hand-written, so it is review surface that the queue and the Rebalancer do not have.
@@ -55,6 +65,6 @@ The audit of 2026-11-20 found 13 hazards. Owner, 2026-11-20: fix everything in t
 
 Still open:
 
-- A recorded real-state upgrade test in CI. Today only the Twin run exercises the migrations on Deploy 4's real state.
+- A recorded real-state upgrade test in CI for 0.9.0. For 0.10.0 it exists (`UpgradeMigrationV0100Fork`); it needs updating once 0.10.0 is live, when it proves only the second-call revert.
 - The keeper self-test flake (issue 2045).
 - The verifier's log-scan backoff (issue 2044). Commit `7d57d35e5` implemented the window and retry options for chains other than the Twin. The issue is still open.

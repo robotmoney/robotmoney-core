@@ -4,7 +4,7 @@
 pragma solidity ^0.8.24;
 
 import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
-import {GovernedUUPS} from "../lib/GovernedUUPS.sol";
+import {GovernedUUPS, GovernedUpgrade} from "../lib/GovernedUUPS.sol";
 import {UniswapV3ExactOutSwapAdapter} from "./UniswapV3ExactOutSwapAdapter.sol";
 
 /// @title UniswapV3ExactOutSwapAdapterUpgradeable
@@ -21,6 +21,23 @@ contract UniswapV3ExactOutSwapAdapterUpgradeable is UniswapV3ExactOutSwapAdapter
     ///         proxy's deployment (`ERC1967Proxy(impl, abi.encodeCall(initialize, (timelock)))`).
     function initialize(address timelock) external initializer {
         __GovernedUUPS_init(timelock, UpgradeMode.Upgradeable);
+    }
+
+    /// @notice The router does not name a factory with code, so the 0.10.0 canonical pool check would refuse every pool.
+    error RouterHasNoFactory(address router);
+
+    /// @notice The one-time migration of the in-place upgrade to contracts 0.10.0 (ADR-0020), version 3. The adapter
+    ///         keeps no state, so it writes nothing. It checks what the 0.10.0 canonical pool check (AGY-13) needs:
+    ///         the router answers `factory()` with a contract. The upgrade timelock passes it as the data of
+    ///         `upgradeToAndCall`; nobody else can run it, and it runs once.
+    function migrateV0100() external reinitializer(3) {
+        if (msg.sender != GovernedUpgrade.layout().upgradeTimelock) {
+            revert GovernedUpgrade.NotUpgradeTimelock(msg.sender);
+        }
+        (bool ok, bytes memory d) = address(ROUTER).staticcall(abi.encodeWithSignature("factory()"));
+        if (!ok || d.length != 32 || abi.decode(d, (address)).code.length == 0) {
+            revert RouterHasNoFactory(address(ROUTER));
+        }
     }
 
     /// @notice The implementation in the proxy's ERC-1967 slot (ADR-0019 vetting).
