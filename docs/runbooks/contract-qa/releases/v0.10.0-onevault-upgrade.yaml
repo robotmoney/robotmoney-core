@@ -1177,7 +1177,8 @@ steps:
       - ["bun", "publish-contracts/src/ci/fund-claims.ts", "same", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--snapshot", "{runDir}/claims-before.json"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast call {m:fund.fund} \"decimals()(uint8)\")\" 24"]
       - ["bun", "scripts/runbook/fund-state.ts", "counters", "--fund", "{m:fund.fund}", "--queue", "{m:queue.queue}", "--same", "{state:upg-fund-before}"]
-      - ["bash", "-c", "for fn in \"shutdown()\" \"emergencyUnwind(uint256,uint256)\" 0 0; do out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"$fn\" 2>&1); echo \"emergency $fn: $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\" || exit 1; done"]
+      - ["bash", "-c", "out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"shutdown()\" 2>&1); echo \"emergency shutdown(): $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\""]
+      - ["bash", "-c", "out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"emergencyUnwind(uint256,uint256)\" 0 0 2>&1); echo \"emergency emergencyUnwind(0,0): $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\""]
       - ["bash", "-c", "cast call --from {m:fund-timelock.timelock} {m:fund.fund} \"shutdown()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"pauseDeposits()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:queue.queue} \"pauseQueue()\" > /dev/null && echo \"the timelock may shut down; the emergency key still pauses (simulated)\""]
       - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{evidenceDir}/publish-run.json", "--timelock", "{m:fund-timelock.timelock}", "--deployment-kind", "{deploymentKind}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
     env:
