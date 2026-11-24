@@ -700,7 +700,7 @@ steps:
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "governance", "--upgrade-build", "{runDir}/v0100", "{d4live}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "fund-governance", "--upgrade-build", "{runDir}/v0100", "{d4live}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P1.86-upg-deploy-governance-impl} | tail -n 1 | jq -r .implementation > {runDir}/state/upg-governance-impl"]
       - ["bash", "-c", "! bun scripts/runbook/qa-assert.ts eq \"{state:upg-governance-impl}\" \"{m:fund-governance.governance_implementation}\" && test \"$(cast code \"{state:upg-governance-impl}\" | wc -c)\" -gt 100"]
     env:
@@ -723,7 +723,7 @@ steps:
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "consensus_receipt", "--upgrade-build", "{runDir}/v0100", "{d4live}", "{gate}"]
+      - ["bun", "publish-contracts/src/cli.ts", "deploy-implementation", "--system", "fund", "--proxy", "fund-receipt", "--upgrade-build", "{runDir}/v0100", "{d4live}", "{gate}"]
       - ["bash", "-c", "grep '\"event\":\"deploy_implementation\"' {journal:P1.87-upg-deploy-receipt-impl} | tail -n 1 | jq -r .implementation > {runDir}/state/upg-receipt-impl"]
       - ["bash", "-c", "! bun scripts/runbook/qa-assert.ts eq \"{state:upg-receipt-impl}\" \"{m:fund-receipt.consensus_receipt_implementation}\" && test \"$(cast code \"{state:upg-receipt-impl}\" | wc -c)\" -gt 100"]
     env:
@@ -1027,7 +1027,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-execute.json", "--signer", "{signer}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-governance-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund-governance.governance}\")\" \"{state:upg-governance-impl}\" && test \"$(cast call \"{m:fund-governance.governance}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund-governance.governance}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
-      - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "governance", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-governance-execute.json"]
+      - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "fund-governance", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-governance-execute.json"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1052,7 +1052,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-execute.json", "--signer", "{signer}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-receipt-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund-receipt.consensus_receipt}\")\" \"{state:upg-receipt-impl}\" && test \"$(cast call \"{m:fund-receipt.consensus_receipt}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund-receipt.consensus_receipt}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
-      - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "consensus_receipt", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-receipt-execute.json"]
+      - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "fund-receipt", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-receipt-execute.json"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
