@@ -1,7 +1,7 @@
 // The one-time migrations of the fund system, per release: the only non-empty `upgradeToAndCall` data a fund-system upgrade may carry. Each is the proxy's own
 // migrate function, a reinitializer callable only from the upgrade timelock, passed as the data of upgradeToAndCall.
 //   v0.9.0  (contracts commit 588a68598): migrateV090 on rebalancer, fund, queue. Order on chain: rebalancer, fund, queue (the fund migration requires the Rebalancer to run 0.9.0).
-//   v0.10.0 (issue 2062): migrateV0100() on rebalancer, fund, queue, fund-governance and fund-receipt, each without arguments. A proxy whose build has no migrateV0100 upgrades with 0x.
+//   v0.10.0 (issue 2062): migrateV0100() (0x42829c5e) on rebalancer, queue, fund-governance and fund-receipt. The fund has none (EIP-170 headroom): its upgrade data is 0x.
 // Canonical: contracts/lib/FundMigrateLib.sol, contracts/lib/FlowMigrateLib.sol, contracts/Rebalancer.sol, docs/runbooks/contract-qa/releases/v0.10.0-onevault-upgrade.yaml.
 // fund-upgrade-record.ts records a decoded `fund_migration` on the proxy_upgrades entry; evidence-check.ts checks it offline and against the scheduled call; deploy-implementation.ts
 // prints the current release's data in its next-step command. Any other data is refused: arbitrary calldata never passes as a migration.
@@ -27,7 +27,6 @@ export const FUND_MIGRATION_RELEASES: readonly ReleaseMigrations[] = [
   {
     release: "v0.10.0", function: "migrateV0100", defs: {
       rebalancer: noArgs("rebalancer", "Rebalancer", "migrateV0100"),
-      fund: noArgs("fund", "RobotMoneyFund", "migrateV0100"),
       queue: noArgs("queue", "FlowQueue", "migrateV0100"),
       "fund-governance": noArgs("fund-governance", "RebalanceGovernance", "migrateV0100"),
       "fund-receipt": noArgs("fund-receipt", "ConsensusRecommendationReceipt", "migrateV0100"),
