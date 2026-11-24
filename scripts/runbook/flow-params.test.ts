@@ -20,6 +20,19 @@ test("the live snapshot: 18 words, epochLength 3600, settleWindow 720, minHold t
   expect(liveProblems(raw([...LIVE, 0]), "3600")[0]).toContain("19 words");
 });
 
+test("the v0.9.0 live snapshot (--words 21): same offsets, 21 words", () => {
+  const live21 = raw([...LIVE, 900, 259200, 10]);
+  expect(liveProblems(live21, "3600", 21)).toEqual([]);
+  expect(liveProblems(live21, "3600")[0]).toBe("flowParams has 21 words, not 18");
+  expect(liveProblems(BEFORE, "3600", 21)).toEqual(["flowParams has 18 words, not 21"]);
+  expect(liveProblems(raw([3600, 360, 7200, ...LIVE.slice(3), 900, 259200, 10]), "3600", 21)).toEqual(["settleWindow 360, not 720", "minHold 7200, not 3600"]);
+  const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "flow-params-"));
+  main(() => live21, "snapshot", { queue: "0xq", "min-hold": "3600", out: join(dir, "before"), words: "21" });
+  expect(readFileSync(join(dir, "before"), "utf8")).toBe(`${live21}\n`);
+  expect(() => main(() => live21, "snapshot", { queue: "0xq", "min-hold": "3600", out: join(dir, "b2") })).toThrow("21 words, not 18");
+  expect(() => main(() => live21, "snapshot", { queue: "0xq", "min-hold": "3600", out: join(dir, "b3"), words: "19" })).toThrow("--words 19");
+});
+
 test("the resubmitted tuple is the queue's own 21 words; an unupgraded queue is refused", () => {
   expect(tupleOf(raw([...LIVE, 900, 259200, 10]))).toBe(`(${[...LIVE, 900, 259200, 10].join(",")})`);
   expect(() => tupleOf(BEFORE)).toThrow("18 words, not 21");
