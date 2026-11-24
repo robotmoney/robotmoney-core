@@ -520,14 +520,14 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P0.94-upg-pre-state"
     standing: ["4.15"]
-    description: "Reads the live state before any send: the five proxies on their manifest implementations, the timelock delay and Safe-only roles, the 18 flowParams words, every queue claim, the fund counters, and the emergency key refused shutdown (simulated). It warns, without failing, for each basket pool below the migration's minPoolDepthUsdc (fund-state.ts pool-depth)"
+    description: "Reads the live state before any send: the five proxies on their manifest implementations, the timelock delay and Safe-only roles, the 21 flowParams words of the live v0.9.0 queue, every queue claim, the fund counters, and the emergency key refused shutdown (simulated). It warns, without failing, for each basket pool below the migration's minPoolDepthUsdc (fund-state.ts pool-depth)"
     host: "control"
     phase: 0
     cmds:
       - ["bun", "scripts/runbook/fund-state.ts", "proxies", "--timelock", "{m:fund-timelock.timelock}", "--proxy", "{m:fund.fund}:{m:fund.fund_implementation}", "--proxy", "{m:queue.queue}:{m:queue.queue_implementation}", "--proxy", "{m:rebalancer.rebalancer}:{m:rebalancer.rebalancer_implementation}", "--proxy", "{m:fund-governance.governance}:{m:fund-governance.governance_implementation}", "--proxy", "{m:fund-receipt.consensus_receipt}:{m:fund-receipt.consensus_receipt_implementation}"]
       - ["bun", "scripts/runbook/fund-state.ts", "timelock", "--timelock", "{m:fund-timelock.timelock}", "--safe", "{m:safe.safe}", "--delay", "{sheet:TIMELOCK_MIN_DELAY}"]
       - ["bash", "-c", "out=$(cast call --from \"{sheet:ADMIN_ADDRESS}\" {m:fund-timelock.timelock} \"execute(address,uint256,bytes,bytes32,bytes32)\" 0x0000000000000000000000000000000000000001 0 0x $(cast hash-zero) $(cast hash-zero) 2>&1); echo \"$out\" | head -n 1; echo \"$out\" | grep -Eq \"TimelockUnexpectedOperationState|0x5ead8eb5|AccessControlUnauthorizedAccount|0xe2517d3f\""]
-      - ["bun", "scripts/runbook/flow-params.ts", "snapshot", "--queue", "{m:queue.queue}", "--min-hold", "{sheet:FLOW_MIN_HOLD}", "--out", "{runDir}/state/upg-flow-params-before"]
+      - ["bun", "scripts/runbook/flow-params.ts", "snapshot", "--queue", "{m:queue.queue}", "--min-hold", "{sheet:FLOW_MIN_HOLD}", "--words", "21", "--out", "{runDir}/state/upg-flow-params-before"]
       - ["bun", "publish-contracts/src/ci/fund-claims.ts", "snapshot", "--rpc", "{rpcUrl}", "--queue", "{m:queue.queue}", "--out", "{runDir}/claims-before.json"]
       - ["bun", "scripts/runbook/fund-state.ts", "counters", "--fund", "{m:fund.fund}", "--queue", "{m:queue.queue}", "--out", "{runDir}/state/upg-fund-before"]
       - ["bash", "-c", "out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"shutdown()\" 2>&1); echo \"emergency shutdown: $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\" && echo \"before the upgrade the emergency key is refused shutdown (simulated, nothing sent)\""]

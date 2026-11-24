@@ -2,7 +2,9 @@
 // scripts/runbook/flow-params.ts: the queue's flowParams around the v0.9.0 upgrade (releases/v0.9.0-onevault-upgrade.yaml). The live queue returns
 // the 18 words of the v0.8 FlowParams; the v0.9.0 queue returns 21 (contracts/FlowTypes.sol): cancelBuffer, maxPause and matchBandBps are appended,
 // and the queue's own migration writes them (decision D4-19). No governed setFlowParams runs.
-//   snapshot   (P0.94) --queue A --min-hold N --out FILE    the live 18 words, written raw: epochLength 3600, settleWindow 720, minHold N
+//   snapshot   (P0.94) --queue A --min-hold N --out FILE [--words 18|21]   the live words, written raw: epochLength 3600, settleWindow 720,
+//                                                           minHold N. --words is the live layout: 18 (v0.8 queue, the default) or 21 (v0.9.0
+//                                                           queue, releases/v0.10.0-onevault-upgrade.yaml). The first three offsets match in both
 //   sync-sheet (P0.87) --queue A --sheet FILE               sets the run sheet copy's FLOW_EPOCH_LENGTH and FLOW_SETTLE_WINDOW to the chain's
 //                                                           (deploy-4.env still names the values before v0.8.0-onevault-upgrade), before the go
 //   resubmit   (P3.72) --queue A --timelock A               after the adapter swap: the queue accepts setFlowParams of its own 21 live words from
@@ -18,9 +20,9 @@ export const NEW_WORDS = 21;
 const EPOCH = 0, SETTLE = 1, MIN_HOLD = 2;
 
 /** PURE. Why a live (pre-upgrade) flowParams return is not the one the upgrade expects. */
-export function liveProblems(raw: string, minHold: string): string[] {
+export function liveProblems(raw: string, minHold: string, expected: number = LIVE_WORDS): string[] {
   const w = words(raw);
-  if (w.length !== LIVE_WORDS) return [`flowParams has ${w.length} words, not ${LIVE_WORDS}`];
+  if (w.length !== expected) return [`flowParams has ${w.length} words, not ${expected}`];
   const out: string[] = [];
   if (wordDec(w[EPOCH]!) !== "3600") out.push(`epochLength ${wordDec(w[EPOCH]!)}, not 3600`);
   if (wordDec(w[SETTLE]!) !== "720") out.push(`settleWindow ${wordDec(w[SETTLE]!)}, not 720`);
@@ -44,10 +46,12 @@ export function syncSheet(sheet: string, raw: string): string {
 export function main(cast: Cast, verb: string | undefined, o: Record<string, string>): void {
   if (verb === "snapshot") {
     const [queue, minHold, out] = need(o, "queue", "min-hold", "out");
+    const expected = Number(o.words ?? LIVE_WORDS);
+    if (expected !== LIVE_WORDS && expected !== NEW_WORDS) throw new UsageError(`--words ${o.words}: the live layout is ${LIVE_WORDS} or ${NEW_WORDS}`);
     const raw = cast(["call", queue!, "flowParams()"]);
     writeState(out!, raw);
     console.log(`flowParams ${raw}`);
-    const p = liveProblems(raw, minHold!);
+    const p = liveProblems(raw, minHold!, expected);
     check(p.length === 0, p.join("; "));
   } else if (verb === "sync-sheet") {
     const [queue, sheet] = need(o, "queue", "sheet");
