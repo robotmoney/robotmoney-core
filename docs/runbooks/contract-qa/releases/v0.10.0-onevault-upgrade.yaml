@@ -1179,7 +1179,8 @@ steps:
       - ["bun", "scripts/runbook/fund-state.ts", "counters", "--fund", "{m:fund.fund}", "--queue", "{m:queue.queue}", "--same", "{state:upg-fund-before}"]
       - ["bash", "-c", "out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"shutdown()\" 2>&1); echo \"emergency shutdown(): $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\""]
       - ["bash", "-c", "out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"emergencyUnwind(uint256,uint256)\" 0 0 2>&1); echo \"emergency emergencyUnwind(0,0): $(echo \"$out\" | head -n 1)\"; echo \"$out\" | grep -Eq \"AccessControlUnauthorizedAccount|0xe2517d3f\""]
-      - ["bash", "-c", "cast call --from {m:fund-timelock.timelock} {m:fund.fund} \"shutdown()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"pauseDeposits()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:queue.queue} \"pauseQueue()\" > /dev/null && echo \"the timelock may shut down; the emergency key still pauses (simulated)\""]
+      - ["bash", "-c", "cast call --from {m:fund-timelock.timelock} {m:fund.fund} \"shutdown()\" > /dev/null && cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:fund.fund} \"pauseDeposits()\" > /dev/null && echo \"the timelock may shut down; the emergency key still pauses deposits (simulated)\""]
+      - ["bash", "-c", "echo \"queuePausedUntil $(cast call {m:queue.queue} \"queuePausedUntil()(uint64)\") maxPause $(cast call {m:queue.queue} \"maxPause()(uint32)\")\"; out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:queue.queue} \"pauseQueue()\" 2>&1) && { echo \"the emergency key may pause the queue (simulated)\"; exit 0; }; echo \"$out\" | head -n 1; if echo \"$out\" | grep -Eq \"PauseOnCooldown|0x3346ed3a\"; then end=$(echo \"$out\" | grep -Eo \"PauseOnCooldown\\([0-9]+\" | head -n 1 | tr -dc 0-9); w=$(echo \"$out\" | grep -Eo \"3346ed3a[0-9a-fA-F]{64}\" | head -n 1 | cut -c9-); [ -n \"$w\" ] || w=$(echo \"$out\" | grep -Eo \"0x[0-9a-fA-F]{64}\" | head -n 1 | cut -c3-); [ -z \"$w\" ] || w=0x$w; if [ -z \"$end\" ] && [ -n \"$w\" ]; then end=$(cast to-dec $w); fi; if [ -n \"$end\" ]; then end=\"$end ($(date -u -d @$end +%FT%TZ))\"; else end=unknown; fi; echo \"the emergency key holds EMERGENCY_ROLE (onlyRole runs before the cooldown check, FlowQueue.pauseQueue); pauseQueue is on cooldown until $end (the last drill, E39); pauseDeposits stays available (D33)\"; exit 0; fi; exit 1"]
       - ["bun", "publish-contracts/src/evidence-check.ts", "--governed-upgrades", "{evidenceDir}/publish-run.json", "--timelock", "{m:fund-timelock.timelock}", "--deployment-kind", "{deploymentKind}", "--delay-floor", "{sheet:TIMELOCK_MIN_DELAY}", "--rpc", "{rpcUrl}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1295,7 +1296,7 @@ steps:
     phase: 3
     cmds:
       - ["bun", "publish-contracts/src/ci/owner-liveness.ts", "--run-manifest", "{evidenceDir}/publish-run.json", "--owners", "{sheet:SAFE_OWNERS}", "--rpc", "{rpcUrl}", "--chain-id", "8453", "--timelock", "{m:fund-timelock.timelock}", "--out", "{evidenceDir}/owner-liveness.json"]
-      - ["bash", "-c", "owners=$(echo \"{sheet:SAFE_OWNERS}\" | tr A-F a-f); for b in {runDir}/bundles/*.json; do jq -e \".executed.tx_hash != null and (.signatures | length) >= 2\" \"$b\" > /dev/null || { echo \"$b: not executed with two signatures\" >&2; exit 1; }; for o in $(jq -r \".signatures[].owner\" \"$b\" | tr A-F a-f); do echo \"$owners\" | tr , \"\\n\" | grep -qx \"$o\" || { echo \"$b: $o is no Safe owner\" >&2; exit 1; }; done; echo \"$(basename $b): $(jq -r \"[.signatures[].owner] | join(\\\",\\\")\" \"$b\")\"; done"]
+      - ["bash", "-c", "owners=$(echo \"{sheet:SAFE_OWNERS}\" | tr A-F a-f); for b in {runDir}/bundles/*.json; do jq -e \".executed.tx_hash != null and (.signatures | length) >= 2\" \"$b\" > /dev/null || { echo \"$b: not executed with two signatures\" >&2; exit 1; }; for o in $(jq -r \".signatures[].owner\" \"$b\" | tr A-F a-f); do echo \"$owners\" | tr , \"\\n\" | grep -qx \"$o\" || { echo \"$b: $o is no Safe owner\" >&2; exit 1; }; done; echo \"$(basename $b): $(jq -r \"[.signatures[].owner] | join(\",\")\" \"$b\")\"; done"]
     expectExit: 0
     receipts:
       - {"dir": "{evidenceDir}", "pattern": "owner-liveness.json", "required": true}
@@ -2032,6 +2033,21 @@ steps:
     irreversible: false
     onlyFor: ["twin", "rehearsal"]
   # ── v0.10.0-onevault-upgrade, flow fund-upgrade, phase 9 ──
+  - id: "P9.79-upg-queue-pause-cooldown"
+    standing: ["4.5", "4.6"]
+    description: "Before the pause drill: a pauseQueue simulated from the emergency key. A drill starts a fresh pauseQueue cooldown of lastEnd + maxPause (about 6 days, FlowQueue E39), while pauseDeposits stays available (D33). If the queue is not paused and the simulation reverts PauseOnCooldown, the drill of P9.80 to P9.82 is skipped: this step writes queue-pause-cooldown naming the cooldown end, which their gateAbsent reads. Otherwise nothing is written and the drill runs. It only reads"
+    host: "control"
+    phase: 9
+    cmds:
+      - ["bash", "-c", "rm -f {runDir}/state/queue-pause-cooldown; test \"$(cast call {m:queue.queue} \"queuePaused()(bool)\")\" = true && { echo \"the queue is paused (a drill in progress): no skip\"; exit 0; }; out=$(cast call --from \"{sheet:EMERGENCY_ADDRESS}\" {m:queue.queue} \"pauseQueue()\" 2>&1) && { echo \"pauseQueue is available: the drill runs\"; exit 0; }; echo \"$out\" | head -n 1; echo \"$out\" | grep -Eq \"PauseOnCooldown|0x3346ed3a\" || exit 1; end=$(echo \"$out\" | grep -Eo \"PauseOnCooldown\\([0-9]+\" | head -n 1 | tr -dc 0-9); w=$(echo \"$out\" | grep -Eo \"3346ed3a[0-9a-fA-F]{64}\" | head -n 1 | cut -c9-); [ -n \"$w\" ] || w=$(echo \"$out\" | grep -Eo \"0x[0-9a-fA-F]{64}\" | head -n 1 | cut -c3-); [ -z \"$w\" ] || w=0x$w; if [ -z \"$end\" ] && [ -n \"$w\" ]; then end=$(cast to-dec $w); fi; if [ -n \"$end\" ]; then end=\"$end ($(date -u -d @$end +%FT%TZ))\"; else end=unknown; fi; echo \"pauseQueue cooldown until $end: P9.80 to P9.82 skip\" | tee {runDir}/state/queue-pause-cooldown"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    added: "v0.10.0-onevault-upgrade"
   - id: "P9.80-upg-pause"
     standing: ["4.5", "4.6"]
     description: "The emergency key pauses deposits on the fund (pauseDeposits) and pauses the queue (pauseQueue): the pauses it keeps after the upgrade; both read back paused, and a deposit request the deployer would send now reverts in simulation"
@@ -2049,6 +2065,7 @@ steps:
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
+    gateAbsent: "{runDir}/state/queue-pause-cooldown"
     added: "v0.10.0-onevault-upgrade"
   - id: "P9.81-upg-unpause-schedule"
     standing: ["4.5"]
@@ -2072,6 +2089,7 @@ steps:
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     writes: ["salt-upg-unpause", "target-upg-unpause", "data-upg-unpause"]
+    gateAbsent: "{runDir}/state/queue-pause-cooldown"
     added: "v0.10.0-onevault-upgrade"
   - id: "P9.82-upg-unpause-execute"
     standing: ["4.5", "4.10"]
@@ -2096,6 +2114,7 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     notBefore: {"afterStep": "P9.81-upg-unpause-schedule", "hours": "timelockDelay"}
     maxMinutes: 60
+    gateAbsent: "{runDir}/state/queue-pause-cooldown"
     added: "v0.10.0-onevault-upgrade"
   - id: "P9.83-upg-verify-final"
     standing: ["4.5", "4.12"]
