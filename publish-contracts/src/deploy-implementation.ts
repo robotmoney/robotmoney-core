@@ -39,7 +39,7 @@ import { viemReader } from "./verify/reader.ts";
 import { layoutId, proxySpecs, type ProxySpec } from "./verify/upgradeability.ts";
 import { proxyBuildDirsOf, UPGRADEABILITY_MANIFEST } from "./verify-stage.ts";
 import { upgradeLibraries } from "./upgrade-libraries.ts";
-import { FUND_MIGRATIONS, FUND_MIGRATION_ORDER } from "./fund-migrations.ts";
+import { FUND_MIGRATION_ORDER, FUND_MIGRATION_RELEASES, currentRelease } from "./fund-migrations.ts";
 
 export const DEPLOY_IMPL_VERB = "deploy-implementation";
 
@@ -104,18 +104,27 @@ export function fundUpgradeCommand(ctx: Pick<RunContext, "chainId">, d: Pick<Imp
 }
 
 /**
- * v0.9.0 (contracts 588a68598): the `cast calldata` expression of `proxy`'s migrateV090 when the build's `contract` has one (its ABI names migrateV090), else undefined
- * (the upgrade data stays 0x). Arguments come from `known` (the Rebalancer proxy for the fund; FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE, FLOW_MATCH_BAND_BPS from the sheet for the
- * queue); a missing one is printed as a <NAME> placeholder the operator fills in.
+ * The `cast calldata` expression of `proxy`'s migration of the build's current release (fund-migrations.ts currentRelease: the newest release whose migrate function any
+ * fund-system contract of the build names), when the build's `contract` names that function; else undefined (the upgrade data stays 0x). A build whose current release is
+ * v0.10.0 never suggests migrateV090, which would revert. The signature comes from the build's ABI. Arguments come from `known` by the release table's sheet key or argument
+ * name (the Rebalancer proxy for the v0.9.0 fund; FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE, FLOW_MATCH_BAND_BPS from the sheet for the v0.9.0 queue); a missing one is printed
+ * as a <NAME> placeholder the operator fills in.
  */
 export function fundMigrationExpr(outDir: string, proxy: string, contract: string, known: Record<string, string | undefined>): string | undefined {
-  const def = FUND_MIGRATIONS[proxy];
-  if (!def || def.contract !== contract) return undefined;
-  let abi: unknown[] = [];
-  try { abi = (artifactJson(outDir, contract).abi ?? []) as unknown[]; } catch { return undefined; }
-  if (!abi.some((x: any) => x?.type === "function" && x?.name === "migrateV090")) return undefined;
-  const args = def.args.map((a) => known[a.sheet ?? a.name] ?? `<${a.sheet ?? (a.name === "rebalancer_" ? "REBALANCER_PROXY" : a.name)}>`);
-  return `$(cast calldata "${def.signature}"${args.map((x) => ` ${x}`).join("")})`;
+  const abiOf = (name: string): unknown[] => { try { return (artifactJson(outDir, name).abi ?? []) as unknown[]; } catch { return []; } };
+  const contracts = [...new Set(FUND_MIGRATION_RELEASES.flatMap((r) => Object.values(r.defs).map((d) => d.contract)))];
+  const release = currentRelease(contracts.map(abiOf));
+  const def = release?.defs[proxy];
+  if (!release || !def || def.contract !== contract) return undefined;
+  const fn = abiOf(contract).find((x: any) => x?.type === "function" && x?.name === release.function) as { inputs?: { type: string; name?: string }[] } | undefined;
+  if (!fn) return undefined;
+  const inputs = fn.inputs ?? [];
+  const args = inputs.map((inp, i) => {
+    const a = def.args[i];
+    const key = a?.sheet ?? a?.name ?? inp.name ?? `arg${i}`;
+    return known[key] ?? `<${a?.sheet ?? (key === "rebalancer_" ? "REBALANCER_PROXY" : key)}>`;
+  });
+  return `$(cast calldata "${release.function}(${inputs.map((x) => x.type).join(",")})"${args.map((x) => ` ${x}`).join("")})`;
 }
 
 /**
@@ -225,7 +234,7 @@ export async function runDeployImplementation(ctx: RunContext, o: { proxy: strin
     else layout.push(...layoutExtensionProblems(JSON.parse(readFileSync(join(layoutBase, spec.layout), "utf8")), JSON.parse(readFileSync(cand, "utf8")), layoutRenames(build), spec.contract, libraryRenames(build), declaredStructMigrations(build, contract)).map((p) => `${contract}: ${p}`));
   }
   if (layout.length) refuse(`the storage layout gate refuses the build ${build}${contract !== spec.contract ? ` (${contract})` : ""}: ${layout.join("; ")}`, { layout });
-  // v0.9.0: the fund-system next step carries the proxy's migrateV090 when the build has one (fund-migrations.ts), with the arguments this run knows.
+  // The fund-system next step carries the proxy's migration of the build's current release when it has one (fund-migrations.ts), with the arguments this run knows.
   const migrationKnown = (): Record<string, string | undefined> => {
     const params = (ctx.sheet as { fund?: { params?: Record<string, bigint> } } | undefined)?.fund?.params ?? {};
     const rebPath = join(manifestDir(ctx), "rebalancer.json");

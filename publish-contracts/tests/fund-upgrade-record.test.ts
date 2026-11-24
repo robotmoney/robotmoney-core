@@ -140,7 +140,10 @@ describe("v0.9.0 migrations (contracts 588a68598)", () => {
     expect(decodeFundMigration("queue", fundMigrationData("queue", [900, 259200, 10])).record).toMatchObject({ name: "queue-v090", args: ["900", "259200", "10"] });
     expect(decodeFundMigration("rebalancer", fundMigrationData("rebalancer", [])).record?.data).toBe("0x27491b91");
     expect(decodeFundMigration("fund", fundMigrationData("queue", [900, 259200, 10])).problem).toContain("selector");
-    expect(decodeFundMigration("fund-governance", "0x27491b91").problem).toContain("has no v0.9.0 migration");
+    expect(decodeFundMigration("fund-governance", "0x27491b91").problem).toContain("is not one of the fund-governance proxy's migrations (migrateV0100()");
+    expect(decodeFundMigration("fund-governance", "0x12345678").problem).toContain("selector");
+    expect(decodeFundMigration("vault[x]", "0x27491b91").problem).toContain("has no migration");
+    expect(decodeFundMigration("fund-governance", fundMigrationData("fund-governance", [], "v0.10.0")).record).toMatchObject({ name: "fund-governance-v0100", function: "migrateV0100", signature: "migrateV0100()", args: [] });
     expect(decodeFundMigration("rebalancer", "0x27491b9100").problem).toBeDefined();
     expect(decodeFundMigration("fund", "0x").problem).toBeUndefined();
   });

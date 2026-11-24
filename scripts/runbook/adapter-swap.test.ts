@@ -1,9 +1,11 @@
-// scripts/runbook/adapter-swap.test.ts: the ADR-0019 adapter steps of v0.9.0-onevault-upgrade (P1.83, P2.85, P3.72) against a fake cast and forge.
+// scripts/runbook/adapter-swap.test.ts: the ADR-0019 adapter steps of v0.9.0-onevault-upgrade (P1.83, P2.85, P3.72) and the v0.10.0 upgrade verb (P2.93)
+// against a fake cast and forge.
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ADAPTER_SOURCE, PROXY_SOURCE, adapterBatch, basket, deploy, forgeCreateAddress, forgeCreateArgs, parseAssetConfig, plan, pending, checkExecuted } from "./adapter-swap.ts";
+import { ADAPTER_SOURCE, IMPLEMENTATION_SLOT, PROXY_SOURCE, adapterBatch, basket, deploy, forgeCreateAddress, forgeCreateArgs, parseAssetConfig, plan, pending, checkExecuted, upgradeBatch, upgradeCheck, upgradeDeploy, upgradePlan } from "./adapter-swap.ts";
 import type { Cast } from "./cast-io.ts";
 
 const FUND = "0x00000000000000000000000000000000000000f0";
@@ -148,3 +150,107 @@ test("deploy: forge creates the implementation then the proxy over it, reads bot
   await expect(deploy(castOf(), forge, async () => ({ ok: false, detail: "differs" }), input)).rejects.toThrow("not the build's code");
   expect(existsSync(join(dir, "upg-adapter-proxy"))).toBe(true);
 });
+
+// v0.10.0 P2.93: the adapter proxy moves to a new implementation.
+const NEW = "0x00000000000000000000000000000000000000cC";
+const OLD_IMPL = IMPL;
+const PRED = "0xreceiptop";
+const RUN = "/rundir";
+
+test("upgrade plan: setAdapterCodeHashAllowed(new impl hash) then upgradeToAndCall(new impl, 0x), with the given predecessor", () => {
+  const dir = runDir();
+  const salt = `0xkeccak(robotmoney.deploy4-upgrade.adapter-v0100.${RUN})`;
+  const datas = ["0xsetAdapterCodeHashAllowed-0xN-true", `0xupgradeToAndCall-${NEW}-0x`];
+  const key = `call ${TL} hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32) [${FUND},${PROXY}] [0,0] [${datas.join(",")}] ${PRED} ${salt}`;
+  const { cast } = fakeCast([], { [key]: "0xbatchop" });
+  expect(upgradeBatch(cast, { fund: FUND, proxy: PROXY, impl: NEW, implHash: "0xN" })).toEqual({ targets: [FUND, PROXY], datas, values: ["0", "0"] });
+  expect(upgradeBatch(cast, { fund: FUND, proxy: PROXY, impl: NEW, implHash: "0xN", data: "0x42829c5e" }).datas[1]).toBe(`0xupgradeToAndCall-${NEW}-0x42829c5e`);
+  upgradePlan(cast, { "state-dir": dir, "run-dir": RUN, timelock: TL, fund: FUND, proxy: PROXY, impl: NEW, "impl-hash": "0xN", predecessor: PRED });
+  const r = (f: string) => readFileSync(join(dir, f), "utf8");
+  expect(r("target-upg-adapter")).toBe(`${FUND},${PROXY}\n`);
+  expect(r("data-upg-adapter")).toBe(`${datas.join(",")}\n`);
+  expect(r("values-upg-adapter")).toBe("0,0\n");
+  expect(r("salt-upg-adapter")).toBe(`${salt}\n`);
+  expect(r("upg-adapter-op")).toBe("0xbatchop\n");
+});
+
+test("upgrade deploy: forge creates the implementation with the proxy's router, simulates the upgrade; a recorded one whose code matches is reused; a mismatch fails", async () => {
+  const dir = runDir();
+  const forged: string[][] = [];
+  const forge = (args: string[]) => { forged.push(args); return `{"deployedTo": "${NEW}"}`; };
+  const code: Record<string, string> = {};
+  const simulated: string[] = [];
+  const cast: Cast = (args) => {
+    const k = args.join(" ");
+    const e: Record<string, string> = {
+      [`call ${PROXY} upgradesFrozen()(bool)`]: "false", [`call ${PROXY} upgradeTimelock()(address)`]: TL, [`call ${PROXY} ROUTER()(address)`]: ROUTER,
+      [`call ${PROXY} implementation()(address)`]: OLD_IMPL, [`call ${NEW} ROUTER()(address)`]: ROUTER, [`code ${NEW}`]: code[NEW] ?? "0x",
+    };
+    if (k in e) return e[k]!;
+    if (k === `call --from ${TL} ${PROXY} upgradeToAndCall(address,bytes) ${NEW} 0x42829c5e`) { simulated.push(k); return "0x"; }
+    return fakeCast([]).cast(args);
+  };
+  const input = { rpc: "http://r", build: "/b/v0100", stateDir: dir, proxy: PROXY, timelock: TL, governedUpgrade: "0xG", twapTickMath: "0xT", signer: [], data: "0x42829c5e" };
+  expect(await upgradeDeploy(cast, forge, async () => ({ ok: true, detail: "ok" }), input)).toBe(NEW);
+  expect(forged).toHaveLength(1);
+  expect(forged[0]!.slice(-4)).toEqual([ADAPTER_SOURCE, "--json", "--constructor-args", ROUTER]);
+  expect(forged[0]!).toContain("contracts/lib/TwapTickMath.sol:TwapTickMath:0xT");
+  expect(simulated).toHaveLength(1);
+  expect(readFileSync(join(dir, "upg-adapter-new-impl"), "utf8")).toBe(`${NEW}\n`);
+  code[NEW] = "0x60cc";
+  const checked: string[] = [];
+  await upgradeDeploy(cast, forge, async (a) => { checked.push(a); return { ok: true, detail: "ok" }; }, input);
+  expect(forged).toHaveLength(1);
+  expect(checked).toEqual([NEW]);
+  expect(readFileSync(join(dir, "upg-adapter-new-impl-hash"), "utf8")).toBe("0xkeccak(0x60cc)\n");
+  await expect(upgradeDeploy(cast, forge, async () => ({ ok: false, detail: "differs" }), input)).rejects.toThrow("not the build's code");
+  expect(forged).toHaveLength(1);
+});
+
+const SLOT_NEW = `0x${"0".repeat(24)}${NEW.slice(2).toLowerCase()}`;
+const UPGRADED: Record<string, string> = {
+  [HASH_KEY]: "0xop", [`call ${TL} isOperationDone(bytes32)(bool) 0xop`]: "true", [`storage ${PROXY} ${IMPLEMENTATION_SLOT}`]: SLOT_NEW,
+  [`call ${PROXY} implementation()(address)`]: NEW, [`code ${NEW}`]: "0x60cc", [`call ${FUND} adapterCodeHashAllowed(bytes32)(bool) 0xkeccak(0x60cc)`]: "true",
+  [`call ${PROXY} isFixedFeePool(address)(bool) ${POOL(0x501)}`]: "true", [`call ${FUND} totalAssets()(uint256)`]: "5",
+};
+const UPGRADE_OPTS = { ...OP, fund: FUND, proxy: PROXY, impl: NEW, "impl-hash": "0xkeccak(0x60cc)" };
+const ON_PROXY = [config(0, 1, POOL(0xa1), POOL(0)), config(1, 1, PROXY, POOL(0x501))];
+
+test("upgrade check: done, the slot and implementation() name the new implementation, its hash allowed, every basket asset on the proxy vets; else it fails", () => {
+  const run = (over: Record<string, string>) => () => upgradeCheck(fakeCast(ON_PROXY, { ...UPGRADED, ...over }).cast, UPGRADE_OPTS);
+  expect(run({})).not.toThrow();
+  const done = join(runDir(), "done-adapter-upgrade");
+  upgradeCheck(fakeCast(ON_PROXY, UPGRADED).cast, { ...UPGRADE_OPTS, done });
+  expect(readFileSync(done, "utf8")).toBe("0xop\n");
+  const notDone = join(runDir(), "done-adapter-upgrade");
+  expect(() => upgradeCheck(fakeCast(ON_PROXY, { ...UPGRADED, [`call ${PROXY} isFixedFeePool(address)(bool) ${POOL(0x501)}`]: "false" }).cast, { ...UPGRADE_OPTS, done: notDone })).toThrow();
+  expect(existsSync(notDone)).toBe(false);
+  expect(run({ [`storage ${PROXY} ${IMPLEMENTATION_SLOT}`]: `0x${"0".repeat(24)}${OLD_IMPL.slice(2)}` })).toThrow("ERC-1967 slot reads");
+  expect(run({ [`call ${PROXY} isFixedFeePool(address)(bool) ${POOL(0x501)}`]: "false" })).toThrow("no longer vets");
+  expect(run({ [`call ${TL} isOperationDone(bytes32)(bool) 0xop`]: "false" })).toThrow("not done");
+  expect(run({ [`call ${FUND} adapterCodeHashAllowed(bytes32)(bool) 0xkeccak(0x60cc)`]: "false" })).toThrow("hash is not allowed");
+});
+
+test("the CLI: upgrade check exits 1 when the proxy slot or a basket vet fails after execution, 2 on a usage error", () => {
+  const script = join(import.meta.dir, "adapter-swap.ts");
+  expect(spawnSync("bun", [script, "upgrade", "check", "--timelock", TL], { encoding: "utf8" }).status).toBe(2);
+  expect(spawnSync("bun", [script, "upgrade", "nope"], { encoding: "utf8" }).status).toBe(2);
+  // A fake cast binary on PATH that answers from a table, as the real one would after the Safe executed the batch.
+  const bin = runDir();
+  const table = join(bin, "table.json");
+  writeFileSync(join(bin, "cast"), `#!/usr/bin/env bun\nconst t = JSON.parse(require("fs").readFileSync(${JSON.stringify(table)}, "utf8"));\nconst k = process.argv.slice(2).join(" ");\nconst m = /^call \\S+ assetConfig\\(uint256\\) (\\d+)$/.exec(k);\nconst v = m ? t.assets[Number(m[1])] : k === "call ${FUND} assetCount()(uint256)" ? String(t.assets.length) : k.startsWith("keccak ") ? "0xkeccak(" + process.argv[3] + ")" : t.answers[k];\nif (v === undefined) { console.error("no answer for " + k); process.exit(1); }\nconsole.log(v);\n`);
+  chmodSync(join(bin, "cast"), 0o755);
+  const args = ["upgrade", "check", ...Object.entries(UPGRADE_OPTS).flatMap(([k, v]) => [`--${k}`, v])];
+  const run = (over: Record<string, string>) => {
+    writeFileSync(table, JSON.stringify({ assets: ON_PROXY, answers: { ...UPGRADED, ...over } }));
+    return spawnSync("bun", [script, ...args], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  };
+  const ok = run({});
+  expect(ok.status, ok.stderr).toBe(0);
+  const slot = run({ [`storage ${PROXY} ${IMPLEMENTATION_SLOT}`]: `0x${"0".repeat(24)}${OLD_IMPL.slice(2)}` });
+  expect(slot.status).toBe(1);
+  expect(slot.stderr).toContain("ERC-1967 slot reads");
+  const vet = run({ [`call ${PROXY} isFixedFeePool(address)(bool) ${POOL(0x501)}`]: "false" });
+  expect(vet.status).toBe(1);
+  expect(vet.stderr).toContain("no longer vets");
+}, 60_000);
