@@ -93,7 +93,7 @@ decisions:
   - id: "D10-6"
     question: "Does 0.10.0 replace the fund's FundExclusionLedger, so FundExclusionLedger.claimTo (the ledger half of MISSED-04) is live on Deploy 4?"
     status: decided
-    answer: "Owner, 2026-11-24: no. 0.10.0 keeps the live ledger 0xe3Ae6802fFA11EAdd4888a4D6F15844a56bc7D12 on its 0.9.0 code, so claimTo is NOT live on Deploy 4 until a later release replaces the ledger. The main MISSED-04 fix (a refused fee push does not block exits) is fund code and is upgraded. The fund verifier (P0.97, P3.83, P9.83) checks the ledger against the build that created it, the v090 build of the run manifest's fund upgrade entry whose exclusion_ledger_replaced names it (verify-stage.ts exclusionLedgerBuildDirOf), never the fund's v0100 build"
+    answer: "Decided by the coordinator under the owner's delegated /superfield-decision (2026-11-24): reversible, a later release replaces the ledger; owner may override. No: 0.10.0 keeps the live ledger 0xe3Ae6802fFA11EAdd4888a4D6F15844a56bc7D12 on its 0.9.0 code, so claimTo is NOT live on Deploy 4 until a later release replaces the ledger. The main MISSED-04 fix (a refused fee push does not block exits) is fund code and is upgraded. The fund verifier (P0.97, P3.83, P9.83) checks the ledger against the build that created it, the v090 build of the run manifest's fund upgrade entry whose exclusion_ledger_replaced names it (verify-stage.ts exclusionLedgerBuildDirOf), never the fund's v0100 build"
     decidedOn: "2026-11-24"
     ref: "docs/code-reviews/20261121-214700-agy/06-remediation-status.md (MISSED-04)"
 recovery: |
