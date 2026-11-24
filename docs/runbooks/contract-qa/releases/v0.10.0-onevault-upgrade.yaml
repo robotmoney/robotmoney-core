@@ -591,6 +591,23 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     added: "v0.10.0-onevault-upgrade"
+  - id: "P0.98-upg-adapter-record"
+    standing: ["4.3", "4.15"]
+    description: "The live swap adapter proxy of the 0.9.0 upgrade is copied into the run state, never edited in place: fund.json still names the retired non-proxy adapter, and the 0.9.0 run wrote the proxy and its implementation only to its state ({liveManifestDir}/../state/upg-adapter-proxy and upg-adapter-impl). It proves on chain that the proxy's ERC-1967 slot holds the recorded implementation and that a basket asset of the fund swaps through it. It only reads. A separate step from P0.85, whose gate skips it on a resumed run"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bash", "-c", "for k in upg-adapter-proxy upg-adapter-impl; do test -s {liveManifestDir}/../state/$k && cp {liveManifestDir}/../state/$k {runDir}/state/$k; done"]
+      - ["bash", "-c", "bun scripts/runbook/adapter-swap.ts live --fund {m:fund.fund} --proxy $(cat {runDir}/state/upg-adapter-proxy) --impl $(cat {runDir}/state/upg-adapter-impl)"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    writes: ["upg-adapter-proxy", "upg-adapter-impl"]
+    added: "v0.10.0-onevault-upgrade"
   # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
   - id: "P1.50-record-go"
     standing: ["4.3"]
@@ -770,7 +787,7 @@ steps:
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "deploy", "--rpc", "{rpcUrl}", "--build", "{runDir}/v0100", "--state-dir", "{runDir}/state", "--proxy", "{m:fund.swap_adapter}", "--timelock", "{m:fund-timelock.timelock}", "--governed-upgrade", "{m:fund-libs.governed_upgrade}", "--twap-tick-math", "{m:fund-libs.twap_tick_math}", "--data", "0x42829c5e", "--", "{cast}"]
+      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "deploy", "--rpc", "{rpcUrl}", "--build", "{runDir}/v0100", "--state-dir", "{runDir}/state", "--proxy", "{state:upg-adapter-proxy}", "--timelock", "{m:fund-timelock.timelock}", "--governed-upgrade", "{m:fund-libs.governed_upgrade}", "--twap-tick-math", "{m:fund-libs.twap_tick_math}", "--data", "0x42829c5e", "--", "{cast}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -789,7 +806,7 @@ steps:
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "scripts/runbook/simulate-upgrades.ts", "--rpc", "{rpcUrl}", "--timelock", "{m:fund-timelock.timelock}", "--out", "{runDir}/v0100/out", "--leg", "rebalancer={m:rebalancer.rebalancer},{state:upg-rebalancer-impl},0x42829c5e", "--leg", "fund={m:fund.fund},{state:upg-fund-impl},0x", "--leg", "queue={m:queue.queue},{state:upg-queue-impl},0x42829c5e", "--leg", "governance={m:fund-governance.governance},{state:upg-governance-impl},0x42829c5e", "--leg", "receipt={m:fund-receipt.consensus_receipt},{state:upg-receipt-impl},0x42829c5e", "--leg", "adapter={m:fund.swap_adapter},{state:upg-adapter-new-impl},0x42829c5e"]
+      - ["bun", "scripts/runbook/simulate-upgrades.ts", "--rpc", "{rpcUrl}", "--timelock", "{m:fund-timelock.timelock}", "--out", "{runDir}/v0100/out", "--leg", "rebalancer={m:rebalancer.rebalancer},{state:upg-rebalancer-impl},0x42829c5e", "--leg", "fund={m:fund.fund},{state:upg-fund-impl},0x", "--leg", "queue={m:queue.queue},{state:upg-queue-impl},0x42829c5e", "--leg", "governance={m:fund-governance.governance},{state:upg-governance-impl},0x42829c5e", "--leg", "receipt={m:fund-receipt.consensus_receipt},{state:upg-receipt-impl},0x42829c5e", "--leg", "adapter={state:upg-adapter-proxy},{state:upg-adapter-new-impl},0x42829c5e"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1073,8 +1090,8 @@ steps:
     host: "control"
     phase: 2
     cmds:
-      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "deploy", "--rpc", "{rpcUrl}", "--build", "{runDir}/v0100", "--state-dir", "{runDir}/state", "--proxy", "{m:fund.swap_adapter}", "--timelock", "{m:fund-timelock.timelock}", "--governed-upgrade", "{m:fund-libs.governed_upgrade}", "--twap-tick-math", "{m:fund-libs.twap_tick_math}", "--data", "0x42829c5e", "--", "{cast}"]
-      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "plan", "--state-dir", "{runDir}/state", "--run-dir", "{runDir}", "--timelock", "{m:fund-timelock.timelock}", "--fund", "{m:fund.fund}", "--proxy", "{m:fund.swap_adapter}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--predecessor", "{state:upg-receipt-op}", "--data", "0x42829c5e"]
+      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "deploy", "--rpc", "{rpcUrl}", "--build", "{runDir}/v0100", "--state-dir", "{runDir}/state", "--proxy", "{state:upg-adapter-proxy}", "--timelock", "{m:fund-timelock.timelock}", "--governed-upgrade", "{m:fund-libs.governed_upgrade}", "--twap-tick-math", "{m:fund-libs.twap_tick_math}", "--data", "0x42829c5e", "--", "{cast}"]
+      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "plan", "--state-dir", "{runDir}/state", "--run-dir", "{runDir}", "--timelock", "{m:fund-timelock.timelock}", "--fund", "{m:fund.fund}", "--proxy", "{state:upg-adapter-proxy}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--predecessor", "{state:upg-receipt-op}", "--data", "0x42829c5e"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "scheduleBatch", "--targets", "{state:target-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--values", "{state:values-upg-adapter}", "--salt", "{state:salt-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--out", "{runDir}/bundles/adapter-upgrade-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-schedule.json", "--signer", "{ownerSigner2}"]
@@ -1103,7 +1120,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{signer}"]
-      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{m:fund.swap_adapter}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--done", "{runDir}/state/done-adapter-upgrade"]
+      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{state:upg-adapter-proxy}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--done", "{runDir}/state/done-adapter-upgrade"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
