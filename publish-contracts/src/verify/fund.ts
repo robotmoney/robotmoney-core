@@ -374,20 +374,21 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   // v0.9.0 (contracts 588a68598): a fresh fund writes rebalancer() in bindRebalanceRoles; a fund upgraded in place from 0.8.0 writes it in migrateV090. Either way it is the Rebalancer proxy.
   await c.runEq("fund: rebalancer() is the rebalancer", async () => lc((await chain.read(addr.fund, "function rebalancer() view returns (address)")) as string), lc(addr.rebalancer));
   // The exclusion ledger: the fund's own (a fresh fund creates it at initialize, the v0.9.0 migration replaces it; fund-upgrade-record.ts re-records fund.json's exclusion_ledger).
-  // It must be the manifest's, run the FundExclusionLedger code of the fund's build (the upgrade build once the fund is upgraded) and be bound to this fund and USDC.
-  await c.run("fund: exclusionLedger() is the manifest's exclusion_ledger, FundExclusionLedger of the fund's build, bound to the fund and USDC", async () => {
+  // It must be the manifest's, run the FundExclusionLedger code of the build that CREATED it (the run manifest's record, opts.exclusionLedgerBuildDir: a fund upgrade that keeps
+  // the ledger, as v0.10.0 does, leaves it on its creator's code) and be bound to this fund and USDC. The code must equal that build's artifact: nothing else is accepted.
+  await c.run("fund: exclusionLedger() is the manifest's exclusion_ledger, FundExclusionLedger of its creating build, bound to the fund and USDC", async () => {
     const ledger = String(await chain.read(addr.fund, "function exclusionLedger() view returns (address)")) as Address;
     const recorded = files.fund.exclusion_ledger;
     if (!isAddress(ledger) || lc(ledger) === ZERO) return { ok: false, detail: `exclusionLedger() is ${ledger}` };
     if (typeof recorded !== "string" || lc(recorded) !== lc(ledger)) return { ok: false, detail: `exclusionLedger() is ${ledger}, fund.json exclusion_ledger is ${String(recorded)}` };
-    const built = fundProxyBuildDir("fund", opts);
+    const built = opts.exclusionLedgerBuildDir ?? fundProxyBuildDir("fund", opts);
     const art = tryLoadArtifact(built, "FundExclusionLedger");
     if (!art) return { ok: false, detail: `${built} has no FundExclusionLedger artifact` };
     const code = compareCode(await chain.getCode(ledger), art);
     const vault = lc(String(await chain.read(ledger, "function VAULT() view returns (address)")));
     const usdc = lc(String(await chain.read(ledger, "function USDC() view returns (address)")));
     const ok = code.ok && vault === lc(addr.fund) && usdc === lc(USDC_ADDRESS);
-    return { ok, detail: `ledger ${ledger}: code ${code.detail}; VAULT ${vault}; USDC ${usdc}` };
+    return { ok, detail: `ledger ${ledger} (build ${built}): code ${code.detail}; VAULT ${vault}; USDC ${usdc}` };
   });
   for (const r of ["GOVERNANCE", "REBALANCER", "FLOW"] as const) await c.runEq(`fund: ${r}_ROLE not held by the deployer`, () => hasRole(chain, addr.fund, FUND_ROLES[r], D), false);
   await c.runEq("rebalancer: fund() is the fund", async () => lc((await chain.read(addr.rebalancer, "function fund() view returns (address)")) as string), lc(addr.fund));

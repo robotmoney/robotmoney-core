@@ -90,6 +90,12 @@ decisions:
     answer: null
     decidedOn: null
     ref: null
+  - id: "D10-6"
+    question: "Does 0.10.0 replace the fund's FundExclusionLedger, so FundExclusionLedger.claimTo (the ledger half of MISSED-04) is live on Deploy 4?"
+    status: decided
+    answer: "Owner, 2026-11-24: no. 0.10.0 keeps the live ledger 0xe3Ae6802fFA11EAdd4888a4D6F15844a56bc7D12 on its 0.9.0 code, so claimTo is NOT live on Deploy 4 until a later release replaces the ledger. The main MISSED-04 fix (a refused fee push does not block exits) is fund code and is upgraded. The fund verifier (P0.97, P3.83, P9.83) checks the ledger against the build that created it, the v090 build of the run manifest's fund upgrade entry whose exclusion_ledger_replaced names it (verify-stage.ts exclusionLedgerBuildDirOf), never the fund's v0100 build"
+    decidedOn: "2026-11-24"
+    ref: "docs/code-reviews/20261121-214700-agy/06-remediation-status.md (MISSED-04)"
 recovery: |
   Before P1.80 nothing is sent. Before P2.87 only implementations are deployed; reruns reuse them. After that P0.93 marks each proxy
   already upgraded so its schedule and execute skip. A scheduled chain is cancelled from its tail by the Safe (safe/cli.ts propose
@@ -98,6 +104,7 @@ recovery: |
 scope:
   - {pr: 2053, what: "0.9.0 safety review remediation: settle gas bound, enrollment cursor, per-book delist and lending scales, executor and target-setter floors, canonical pool check, emergencyUnwind floor, reabsorbRemovedAsset", check: "P3.83-upg-verify"}
   - {pr: 2056, what: "rmFUND decimals() reports 24 via the OpenZeppelin default", check: "P2.84-upg-after-upgrade"}
+  - {pr: 2069, what: "No ledger replacement (D10-6): the fund keeps its 0.9.0 FundExclusionLedger, so MISSED-04 claimTo is not live on Deploy 4; the verifier checks the ledger against its creating v090 build", check: "P3.83-upg-verify"}
   - {pr: 2041, what: "multi-vault TestMachine fixes; already in the contracts-0.9.0 tree and touches no one-vault contract", none: "out of scope: no one-vault bytecode change"}
 steps:
   - id: "P0.01-runbook-valid"
@@ -1274,7 +1281,7 @@ steps:
   # ── v0.10.0-onevault-upgrade, flow fund-upgrade, phase 3 ──
   - id: "P3.83-upg-verify"
     standing: ["4.3", "4.12"]
-    description: "The fund verifier on the upgraded system, the one check of the migrated values: the fund, queue and Rebalancer proxies against the v0.10.0 build, the others against the live build, the Safe as only executor, every role, fund.rebalancer(), the new exclusion ledger, flowParams with FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE and FLOW_MATCH_BAND_BPS, the five FUND_* params and REBALANCER_* against the run sheet. On the Twin its role scan checks holders now plus grants after the fork pin"
+    description: "The fund verifier on the upgraded system, the one check of the migrated values: the fund, queue and Rebalancer proxies against the v0.10.0 build, the others against the live build, the Safe as only executor, every role, fund.rebalancer(), the exclusion ledger against its creating v090 build (D10-6: kept, not replaced), flowParams with FLOW_CANCEL_BUFFER, FLOW_MAX_PAUSE and FLOW_MATCH_BAND_BPS, the five FUND_* params and REBALANCER_* against the run sheet. On the Twin its role scan checks holders now plus grants after the fork pin"
     host: "control"
     phase: 3
     cmds:

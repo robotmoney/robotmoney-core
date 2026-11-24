@@ -36,6 +36,7 @@ import {
 import { Collector } from "../../src/verify/collector.ts";
 import type { Address, ChainReader, ExpectedFundAsset, Hex, LogEntry, VerifyOptions, VerifySheet } from "../../src/verify/types.ts";
 import { REPO_ROOT } from "../repo-root.ts";
+import { exclusionLedgerBuildDirOf } from "../../src/verify-stage.ts";
 
 const TABLE = loadStageTable(REPO_ROOT);
 const SCRATCH_PARENT = tmpdir();
@@ -988,6 +989,30 @@ describe("verifyFundSystem: the v0.9.0 migrated state", () => {
     expect(await failing((f) => { f.chain.fundLedger = A(0x1ed0); f.chain.codes.set(lc(A(0x1ed0)), ARTIFACT_BYTECODES.FundExclusionLedger!.onchain); })).toContain("fund.json exclusion_ledger is");
     expect(await failing((f) => { f.chain.ledgerVault = A(0xbad); })).toContain("fund: exclusionLedger()");
     expect(await failing((f) => { f.chain.codes.set(lc(LEDGER), "0x6080604052ee060000"); })).toContain("fund: exclusionLedger()");
+  });
+  test("the ledger runs its creating build's code: an older recorded build passes, unknown bytecode fails", async () => {
+    const OLD = "0x6080604052cc060000";
+    const older = join(mkdtempSync(join(tmpdir(), "ledger-build-")), "out");
+    mkdirSync(join(older, "FundExclusionLedger.sol"), { recursive: true });
+    writeFileSync(join(older, "FundExclusionLedger.sol", "FundExclusionLedger.json"), JSON.stringify({ deployedBytecode: { object: OLD, linkReferences: {}, immutableReferences: {} } }));
+    const run = async (dir: string | undefined, code: string) => {
+      const f = makeFixture({ params: { ...defaultSheetParams(), REBALANCER_MAX_OVERRUN: 604800n, REBALANCER_MAX_STEP_COST_BPS: 50n, REBALANCER_TOLERANCE_BPS: 50n, REBALANCER_MIN_STEP_USDC: 1000000n } });
+      f.chain.codes.set(lc(LEDGER), code as Hex);
+      return (await failedLabels({ ...f.opts, ...(dir ? { exclusionLedgerBuildDir: dir } : {}) })).join("\n");
+    };
+    expect(await run(older, OLD)).toBe("");
+    expect(await run(undefined, OLD)).toContain("fund: exclusionLedger()");
+    expect(await run(older, "0x6080604052ee060000")).toContain("fund: exclusionLedger()");
+  });
+  test("exclusionLedgerBuildDirOf: the build of the fund upgrade that replaced the ledger, else the deployment's", () => {
+    const m = { proxy_upgrades: [
+      { proxy_name: "fund", build: "/r/v080", exclusion_ledger_replaced: null },
+      { proxy_name: "fund", build: "/r/v090", exclusion_ledger_replaced: { from: "0xa", to: "0xE3AE" } },
+      { proxy_name: "fund", build: "/r/v0100", exclusion_ledger_replaced: null },
+    ] };
+    expect(exclusionLedgerBuildDirOf(m, "/r/v070/out", "0xe3ae")).toBe(join("/r/v090", "out"));
+    expect(exclusionLedgerBuildDirOf(m, "/r/v070/out", "0xother")).toBe("/r/v070/out");
+    expect(exclusionLedgerBuildDirOf({}, "/r/v070/out", "0xe3ae")).toBe("/r/v070/out");
   });
   test("fails: matchBandBps 0, a shifted step param (an upgrade without the Rebalancer migration)", async () => {
     expect(await failing((f) => { f.chain.matchBandBps = 0n; })).toContain("matchBandBps is set");

@@ -1,14 +1,22 @@
 // Deploy 4 (owner exception 2026-11-12): the verify stage of the fund system, the one-vault prototype deployed as a rehearsal. The fund run's own verifier (verify/fund.ts), on
 // its own run manifest and stage table. A failed fund verify fails the run. It pauses nothing by itself: the vaults system's pause-all knows no fund, and the fund's
 // emergency levers (pauseDeposits on the fund, the queue's own pause) are the emergency key's, driven by the runbook's pause drill.
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PublishError } from "./errors.ts";
 import { effectiveCounts } from "./counts.ts";
 import { adoptedTxs, manifestDir, saveRunManifest, type RunContext, type RunManifest } from "./runner.ts";
-import { proxyBuildDirsOf } from "./verify-stage.ts";
+import { exclusionLedgerBuildDirOf, proxyBuildDirsOf } from "./verify-stage.ts";
 import { DEPLOYER_STAGES, getStageTable, handoverStage, type StageRow } from "./stages.ts";
 import { runAdoptedContracts, runDeployTxs } from "./verify/manifests.ts";
 import { RPC_REFUSED_DETAIL, type VerifyOptions, type VerifyReport, type VerifySheet } from "./verify/index.ts";
+
+/** fund.json's exclusion_ledger in the run's manifests, or undefined (the verifier reports a missing or different one). */
+function readFundLedger(ctx: RunContext): string | undefined {
+  const p = join(manifestDir(ctx), "fund.json");
+  if (!existsSync(p)) return undefined;
+  try { const v = (JSON.parse(readFileSync(p, "utf8")) as { exclusion_ledger?: unknown }).exclusion_ledger; return typeof v === "string" ? v : undefined; } catch { return undefined; }
+}
 
 /** The verifier's sheet of the fund run: the shared fields and the fund's own values. No vault of the vaults system, no router vector. */
 export function buildFundVerifySheet(ctx: Pick<RunContext, "sheet" | "chainId">): VerifySheet {
@@ -47,6 +55,8 @@ export async function runFundVerifyStage(ctx: RunContext, row: StageRow, manifes
     deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
     // An in-place upgrade (the fund-upgrade flow): a proxy the run manifest records as upgraded (proxy_upgrades, fund-upgrade-record.ts) is compared with its upgrade's build.
     ...proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")),
+    // The exclusion ledger runs the code of the build that created it (0.10.0 keeps the 0.9.0 ledger), recorded in proxy_upgrades' exclusion_ledger_replaced.
+    exclusionLedgerBuildDir: exclusionLedgerBuildDirOf(manifest, join(ctx.coreDir, "out"), readFundLedger(ctx)),
     deployerStartNonce: manifest.deployerStartNonce, ...(handover?.status === "done" && handover.endNonce !== undefined ? { deployerNonceAtDeployEnd: handover.endNonce } : {}),
   });
   for (const c of report.checks) ctx.log.log(c.ok ? "info" : "error", "verify.check", { label: c.label, ok: c.ok, detail: c.ok ? undefined : c.detail });

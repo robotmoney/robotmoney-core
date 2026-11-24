@@ -198,6 +198,21 @@ export function proxyBuildDirsOf(manifest: object, deployOut: string): { proxyBu
   return Object.keys(dirs).length ? { proxyBuildDirs: dirs } : {};
 }
 
+/**
+ * PURE. The forge out/ of the build that created the fund's exclusion ledger, from the run manifest: the `build` of the last fund `proxy_upgrades` entry whose
+ * `exclusion_ledger_replaced.to` is that ledger (a fund migration made it, fund-upgrade-record.ts). No such entry: the ledger is the one the fund's initialize created,
+ * so the deployment's own build. A later fund upgrade that keeps the ledger (v0.10.0) does not move it: the ledger's code is its creator's, never the fund's newer build.
+ */
+export function exclusionLedgerBuildDirOf(manifest: object, deployOut: string, ledger: string | undefined): string {
+  if (!ledger) return deployOut;
+  let out = deployOut;
+  for (const e of ((manifest as { proxy_upgrades?: unknown }).proxy_upgrades as { proxy_name?: unknown; build?: unknown; exclusion_ledger_replaced?: { to?: unknown } | null }[] | undefined) ?? []) {
+    if (e?.proxy_name !== "fund" || typeof e.build !== "string" || e.build === "") continue;
+    if (typeof e.exclusion_ledger_replaced?.to === "string" && e.exclusion_ledger_replaced.to.toLowerCase() === ledger.toLowerCase()) out = join(e.build, "out");
+  }
+  return out;
+}
+
 export interface VerifyDeps {
   verifyDeployment: (o: VerifyOptions) => Promise<VerifyReport>;
   verifySources: typeof verifySources;
