@@ -21,7 +21,8 @@ if pkill -f '^bash onevault-keeper\.sh'; then
   for i in 1 2 3 4 5; do pgrep -f '^bash onevault-keeper' >/dev/null || break; sleep 1; done
   pkill -KILL -f '^bash onevault-keeper\.sh' || true
 fi
-pkill -f '^bash .*start-service\.sh --run' || true
+# Stop a supervisor started from this same file, whatever name it was copied under.
+pkill -f "^bash .*$(basename "$0" | sed 's/\./\\./g') --run" || true
 IFS= read -r PW || [[ -n "${PW:-}" ]] || exit 1
 export PW
 exec setsid nohup bash "$0" --run >>service.log 2>&1 </dev/null &
