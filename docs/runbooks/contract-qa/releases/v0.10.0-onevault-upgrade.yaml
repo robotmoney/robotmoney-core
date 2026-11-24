@@ -746,13 +746,31 @@ steps:
     maxMinutes: 60
     writes: ["upg-rebalancer-impl"]
     added: "v0.10.0-onevault-upgrade"
-  - id: "P1.85-upg-simulate-upgrades"
+  - id: "P1.88-upg-deploy-adapter-impl"
     standing: ["4.12"]
-    description: "Deploys the swap adapter's 0.10.0 implementation (adapter-swap.ts upgrade deploy: code checked against the build, a recorded one reused, its upgrade with migrateV0100() simulated), then simulates the six upgrades in chain order from the fund timelock (simulate-upgrades.ts --leg, each after the earlier legs' implementation slots are overridden): Rebalancer, fund, queue, governance, receipt and adapter, each with migrateV0100() (0x42829c5e) but the fund, which has none and upgrades with empty data (decision D10-1)"
+    description: "Deploys the swap adapter's new implementation from the v0.10.0 build (adapter-swap.ts upgrade deploy): the proxy must be unfrozen and name the fund timelock, a recorded implementation is reused only when its code matches the build, the new code is compared with the build, and its upgradeToAndCall with migrateV0100() is simulated from the timelock. The new implementation is not the live one (decision D10-1)"
     host: "control"
     phase: 1
     cmds:
       - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "deploy", "--rpc", "{rpcUrl}", "--build", "{runDir}/v0100", "--state-dir", "{runDir}/state", "--proxy", "{m:fund.swap_adapter}", "--timelock", "{m:fund-timelock.timelock}", "--governed-upgrade", "{m:fund-libs.governed_upgrade}", "--twap-tick-math", "{m:fund-libs.twap_tick_math}", "--data", "0x42829c5e", "--", "{cast}"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: true
+    notBefore: {"afterStep": "P1.80-upg-record-go", "hours": 0}
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    gateAbsent: "{runDir}/state/done-adapter-upgrade"
+    maxMinutes: 60
+    writes: ["upg-adapter-new-impl", "upg-adapter-new-impl-hash"]
+    added: "v0.10.0-onevault-upgrade"
+  - id: "P1.85-upg-simulate-upgrades"
+    standing: ["4.12"]
+    description: "Simulates the six upgrades in chain order from the fund timelock before anything is scheduled (simulate-upgrades.ts --leg, each after the earlier legs' implementation slots are overridden): Rebalancer, fund, queue, governance, receipt and the swap adapter (its P1.88 implementation), each with migrateV0100() (0x42829c5e) but the fund, which has none and upgrades with empty data (decision D10-1). Nothing is sent"
+    host: "control"
+    phase: 1
+    cmds:
       - ["bun", "scripts/runbook/simulate-upgrades.ts", "--rpc", "{rpcUrl}", "--timelock", "{m:fund-timelock.timelock}", "--out", "{runDir}/v0100/out", "--leg", "rebalancer={m:rebalancer.rebalancer},{state:upg-rebalancer-impl},0x42829c5e", "--leg", "fund={m:fund.fund},{state:upg-fund-impl},0x", "--leg", "queue={m:queue.queue},{state:upg-queue-impl},0x42829c5e", "--leg", "governance={m:fund-governance.governance},{state:upg-governance-impl},0x42829c5e", "--leg", "receipt={m:fund-receipt.consensus_receipt},{state:upg-receipt-impl},0x42829c5e", "--leg", "adapter={m:fund.swap_adapter},{state:upg-adapter-new-impl},0x42829c5e"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -762,7 +780,6 @@ steps:
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     gateAbsent: ["{runDir}/state/done-rebalancer-upgrade", "{runDir}/state/done-fund-upgrade", "{runDir}/state/done-queue-upgrade", "{runDir}/state/done-governance-upgrade", "{runDir}/state/done-receipt-upgrade"]
-    writes: ["upg-adapter-new-impl", "upg-adapter-new-impl-hash"]
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.01-verify-pre-govern"
     standing: ["4.3"]
@@ -1032,7 +1049,7 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.93-upg-adapter-upgrade"
     standing: ["4.12", "4.10"]
-    description: "Decision D10-1, ADR-0019: the swap adapter proxy moves to the 0.10.0 implementation (canonical pool check, AGY-13). adapter-swap.ts upgrade deploy reuses the P1.85 implementation (its code checked again) and simulates its upgrade; upgrade plan builds one batch (allow the new implementation hash, then upgradeToAndCall with migrateV0100(), calldata 0x42829c5e) with the receipt upgrade as predecessor; the Safe schedules it and pending proves it scheduled"
+    description: "Decision D10-1, ADR-0019: the swap adapter proxy moves to the 0.10.0 implementation (canonical pool check, AGY-13). adapter-swap.ts upgrade deploy reuses the P1.88 implementation (its code checked again) and simulates its upgrade; upgrade plan builds one batch (allow the new implementation hash, then upgradeToAndCall with migrateV0100(), calldata 0x42829c5e) with the receipt upgrade as predecessor; the Safe schedules it and pending proves it scheduled"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at P2.94"
     host: "control"
@@ -1056,6 +1073,7 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     writes: ["upg-adapter-new-impl", "upg-adapter-new-impl-hash", "target-upg-adapter", "data-upg-adapter", "values-upg-adapter", "salt-upg-adapter", "upg-adapter-op"]
+    gateAbsent: "{runDir}/state/done-adapter-upgrade"
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.94-upg-adapter-upgrade-execute"
     standing: ["4.12", "4.10"]
@@ -1067,7 +1085,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{signer}"]
-      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{m:fund.swap_adapter}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}"]
+      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{m:fund.swap_adapter}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--done", "{runDir}/state/done-adapter-upgrade"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1078,6 +1096,8 @@ steps:
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
+    gateAbsent: "{runDir}/state/done-adapter-upgrade"
+    writes: ["done-adapter-upgrade"]
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.84-upg-after-upgrade"
     standing: ["4.12"]

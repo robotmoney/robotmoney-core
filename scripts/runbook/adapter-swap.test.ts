@@ -219,6 +219,12 @@ const ON_PROXY = [config(0, 1, POOL(0xa1), POOL(0)), config(1, 1, PROXY, POOL(0x
 test("upgrade check: done, the slot and implementation() name the new implementation, its hash allowed, every basket asset on the proxy vets; else it fails", () => {
   const run = (over: Record<string, string>) => () => upgradeCheck(fakeCast(ON_PROXY, { ...UPGRADED, ...over }).cast, UPGRADE_OPTS);
   expect(run({})).not.toThrow();
+  const done = join(runDir(), "done-adapter-upgrade");
+  upgradeCheck(fakeCast(ON_PROXY, UPGRADED).cast, { ...UPGRADE_OPTS, done });
+  expect(readFileSync(done, "utf8")).toBe("0xop\n");
+  const notDone = join(runDir(), "done-adapter-upgrade");
+  expect(() => upgradeCheck(fakeCast(ON_PROXY, { ...UPGRADED, [`call ${PROXY} isFixedFeePool(address)(bool) ${POOL(0x501)}`]: "false" }).cast, { ...UPGRADE_OPTS, done: notDone })).toThrow();
+  expect(existsSync(notDone)).toBe(false);
   expect(run({ [`storage ${PROXY} ${IMPLEMENTATION_SLOT}`]: `0x${"0".repeat(24)}${OLD_IMPL.slice(2)}` })).toThrow("ERC-1967 slot reads");
   expect(run({ [`call ${PROXY} isFixedFeePool(address)(bool) ${POOL(0x501)}`]: "false" })).toThrow("no longer vets");
   expect(run({ [`call ${TL} isOperationDone(bytes32)(bool) 0xop`]: "false" })).toThrow("not done");

@@ -27,7 +27,8 @@
 //   pending         as above, with the upg-adapter files.
 //   upgrade check   (after the Safe executes it) the batch reads done, the proxy's ERC-1967 slot and implementation() name the new implementation, its
 //                   code hash is allowed, every basket asset on the proxy vets (its pool reads fixed-fee through the proxy) and NAV reads.
-//              --timelock A --targets CSV --values CSV --datas CSV --predecessor H --salt H --fund A --proxy A --impl A --impl-hash H
+//              --timelock A --targets CSV --values CSV --datas CSV --predecessor H --salt H --fund A --proxy A --impl A --impl-hash H [--done FILE]
+//                   On a pass it writes the batch id to FILE (the done-adapter-upgrade marker the runbook's adapter steps skip on).
 // Reads the chain through cast with ETH_RPC_URL (cast-io.ts). Exit 0 pass, 1 a failed check or call, 2 a usage error.
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -257,6 +258,7 @@ export function upgradeCheck(cast: Cast, o: Record<string, string>): void {
   }
   check(m > 0, "no basket asset uses the adapter proxy");
   console.log(`NAV ${cast(["call", fund!, "totalAssets()(uint256)"])}`);
+  if (o.done) writeState(o.done, id);
 }
 
 const USAGE = "usage: adapter-swap.ts deploy|plan|pending|check|upgrade deploy|upgrade plan|upgrade check --name value ... [-- {cast}] (see the header)";
