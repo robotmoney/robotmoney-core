@@ -15,10 +15,12 @@ notes: |
   What it does. Upgrades every proxy of the live Deploy 4 fund system in place (decision D10-1): Rebalancer, fund, queue, RebalanceGovernance,
   consensus receipt. The live record is the v0.9.0 run ({liveManifestDir}, {liveEvidenceDir}, {liveSheet}); P0.85 copies it, P9.83 proves it unchanged.
 
-  Migrations. No contract at 0.10.0 has a v0.10.0 migration function. Each upgrade carries empty data. The appended fields need none:
-  FlowState.enrollPos 0 is correct because 0.9.0 enrolled whole epochs; a zero depBucketMaxMinHold falls back to maxDepositMinHold;
-  delistWideScale and LendingClaimEpoch.wide false keep open books on their legacy scale. The migrateV090 functions still in the code
-  are spent (reinitializer 2) and must never be the upgrade data.
+  Migrations (issue 2062, ADR-0020 6). Rebalancer, queue, governance, receipt and the swap adapter proxy each upgrade with
+  migrateV0100() (calldata 0x42829c5e, reinitializer 3, upgrade timelock only). It checks the 0.9.0 state the new code relies on and
+  moves no funds; the queue's also gives each live deposit bucket its hold mark (maxDepositMinHold, the value 0.10.0 falls back to).
+  The fund has no migrateV0100: it has 17 B left under EIP-170, less than any gated entry point, so its upgrade data stays empty.
+  delistWideScale and LendingClaimEpoch.wide false keep open books on their legacy scale. The migrateV090 functions still in the
+  code are spent (reinitializer 2) and must never be the upgrade data.
 
   Storage. scripts/ci/check-core-storage-layout.sh --baseline contracts-0.9.0 passes for all five proxies (append-only).
   Size. RobotMoneyFund 24,559 B, 17 B under EIP-170.
@@ -37,7 +39,7 @@ decisions:
   - id: "D10-1"
     question: "Which one-vault contracts does 0.10.0 upgrade, and with which one-time migrations?"
     status: decided
-    answer: "Owner, 2026-11-24: every one-vault contract upgrades, and each runs its one-time migration when in doubt; do not skip an upgrade or a migration because it looks unnecessary. Applied: all five proxies and the swap adapter proxy upgrade. Follow-up owner answer 2026-11-24: add migrateV0100 where it fits (issue 2062); the fund gets one only if it fits its EIP-170 headroom. Until 2062 lands the upgrade data is empty (notes)."
+    answer: "Owner, 2026-11-24: every one-vault contract upgrades, and each runs its one-time migration when in doubt; do not skip an upgrade or a migration because it looks unnecessary. Applied: all five proxies and the swap adapter proxy upgrade. Follow-up owner answer 2026-11-24: add migrateV0100 where it fits (issue 2062); the fund gets one only if it fits its EIP-170 headroom. Applied (2062): migrateV0100() is the upgrade data of the Rebalancer, queue, governance, receipt and swap adapter proxy; the fund's stays empty, since a migration does not fit its 17 B of EIP-170 headroom (notes)."
     decidedOn: "2026-11-24"
     ref: "Owner instruction relayed in the release-0.10.0 runbook session, 2026-11-24"
   - id: "D4-10"
@@ -746,11 +748,11 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P1.85-upg-simulate-upgrades"
     standing: ["4.12"]
-    description: "Simulates the Rebalancer, fund and queue upgrades with empty data from the fund timelock before anything is scheduled (simulate-upgrades.ts). No 0.10.0 contract has a migration (decision D10-1). simulate-upgrades.ts covers only these three proxies"
+    description: "Simulates the Rebalancer, fund, queue, governance and receipt upgrades from the fund timelock before anything is scheduled (simulate-upgrades.ts), each with migrateV0100() but the fund, which has none and upgrades with empty data (decision D10-1). The swap adapter leg is simulated by its own verb (decision D10-3)"
     host: "control"
     phase: 1
     cmds:
-      - ["bun", "scripts/runbook/simulate-upgrades.ts", "--rpc", "{rpcUrl}", "--timelock", "{m:fund-timelock.timelock}", "--out", "{runDir}/v0100/out", "--rebalancer", "{m:rebalancer.rebalancer}", "--rebalancer-impl", "{state:upg-rebalancer-impl}", "--rebalancer-data", "0x", "--fund", "{m:fund.fund}", "--fund-impl", "{state:upg-fund-impl}", "--fund-data", "0x", "--queue", "{m:queue.queue}", "--queue-impl", "{state:upg-queue-impl}", "--queue-data", "0x"]
+      - ["bun", "scripts/runbook/simulate-upgrades.ts", "--rpc", "{rpcUrl}", "--timelock", "{m:fund-timelock.timelock}", "--out", "{runDir}/v0100/out", "--rebalancer", "{m:rebalancer.rebalancer}", "--rebalancer-impl", "{state:upg-rebalancer-impl}", "--rebalancer-data", "0x42829c5e", "--fund", "{m:fund.fund}", "--fund-impl", "{state:upg-fund-impl}", "--fund-data", "0x", "--queue", "{m:queue.queue}", "--queue-impl", "{state:upg-queue-impl}", "--queue-data", "0x42829c5e", "--governance", "{m:fund-governance.governance}", "--governance-impl", "{state:upg-governance-impl}", "--governance-data", "0x42829c5e", "--receipt", "{m:fund-receipt.consensus_receipt}", "--receipt-impl", "{state:upg-receipt-impl}", "--receipt-data", "0x42829c5e"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -778,14 +780,14 @@ steps:
   # ── v0.10.0-onevault-upgrade, flow fund-upgrade, phase 2 ──
   - id: "P2.87-upg-rebalancer-upgrade-schedule"
     standing: ["4.12"]
-    description: "The Safe schedules rebalancer.upgradeToAndCall(the P1.84 implementation, empty data) on the fund timelock, the first operation of the chain (no predecessor), after checking the proxy is unfrozen and on its manifest implementation"
+    description: "The Safe schedules rebalancer.upgradeToAndCall(the P1.84 implementation, migrateV0100()) on the fund timelock, the first operation of the chain (no predecessor), after checking the proxy is unfrozen and on its manifest implementation"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 2
     cmds:
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:rebalancer.rebalancer}\")\" \"{m:rebalancer.rebalancer_implementation}\" && test \"$(cast call \"{m:rebalancer.rebalancer}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:rebalancer.rebalancer}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
-      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.rebalancer.{runDir}\" > {runDir}/state/salt-upg-rebalancer && echo \"{m:rebalancer.rebalancer}\" > {runDir}/state/target-upg-rebalancer && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-rebalancer-impl}\" \"0x\" > {runDir}/state/data-upg-rebalancer && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:rebalancer.rebalancer}\" 0 \"$(cat {runDir}/state/data-upg-rebalancer)\" \"$(cast hash-zero)\" \"$(cat {runDir}/state/salt-upg-rebalancer)\" > {runDir}/state/upg-rebalancer-op && echo \"rebalancer operation $(cat {runDir}/state/upg-rebalancer-op)\""]
+      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.rebalancer.{runDir}\" > {runDir}/state/salt-upg-rebalancer && echo \"{m:rebalancer.rebalancer}\" > {runDir}/state/target-upg-rebalancer && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-rebalancer-impl}\" \"0x42829c5e\" > {runDir}/state/data-upg-rebalancer && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:rebalancer.rebalancer}\" 0 \"$(cat {runDir}/state/data-upg-rebalancer)\" \"$(cast hash-zero)\" \"$(cat {runDir}/state/salt-upg-rebalancer)\" > {runDir}/state/upg-rebalancer-op && echo \"rebalancer operation $(cat {runDir}/state/upg-rebalancer-op)\""]
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-rebalancer}", "--data", "{state:data-upg-rebalancer}", "--salt", "{state:salt-upg-rebalancer}", "--out", "{runDir}/bundles/upgrade-rebalancer-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{ownerSigner2}"]
@@ -803,7 +805,7 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.80-upg-fund-upgrade-schedule"
     standing: ["4.12"]
-    description: "The Safe schedules fund.upgradeToAndCall(the P1.81 implementation, empty data) with the Rebalancer upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation. The migration sets the five fund params, replaces the exclusion ledger and records the Rebalancer"
+    description: "The Safe schedules fund.upgradeToAndCall(the P1.81 implementation, empty data) with the Rebalancer upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation. Empty data: the fund has no migrateV0100 (17 B of EIP-170 headroom, decision D10-1)"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
@@ -828,14 +830,14 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.81-upg-queue-upgrade-schedule"
     standing: ["4.12"]
-    description: "The Safe schedules queue.upgradeToAndCall(the P1.82 implementation, empty data) with the fund upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation"
+    description: "The Safe schedules queue.upgradeToAndCall(the P1.82 implementation, migrateV0100()) with the fund upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 2
     cmds:
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:queue.queue}\")\" \"{m:queue.queue_implementation}\" && test \"$(cast call \"{m:queue.queue}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:queue.queue}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
-      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.queue.{runDir}\" > {runDir}/state/salt-upg-queue && echo \"{m:queue.queue}\" > {runDir}/state/target-upg-queue && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-queue-impl}\" \"0x\" > {runDir}/state/data-upg-queue && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:queue.queue}\" 0 \"$(cat {runDir}/state/data-upg-queue)\" \"{state:upg-fund-op}\" \"$(cat {runDir}/state/salt-upg-queue)\" > {runDir}/state/upg-queue-op && echo \"queue operation $(cat {runDir}/state/upg-queue-op)\""]
+      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.queue.{runDir}\" > {runDir}/state/salt-upg-queue && echo \"{m:queue.queue}\" > {runDir}/state/target-upg-queue && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-queue-impl}\" \"0x42829c5e\" > {runDir}/state/data-upg-queue && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:queue.queue}\" 0 \"$(cat {runDir}/state/data-upg-queue)\" \"{state:upg-fund-op}\" \"$(cat {runDir}/state/salt-upg-queue)\" > {runDir}/state/upg-queue-op && echo \"queue operation $(cat {runDir}/state/upg-queue-op)\""]
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-queue}", "--data", "{state:data-upg-queue}", "--salt", "{state:salt-upg-queue}", "--predecessor", "{state:upg-fund-op}", "--out", "{runDir}/bundles/upgrade-queue-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--signer", "{ownerSigner2}"]
@@ -853,14 +855,14 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.89-upg-governance-upgrade-schedule"
     standing: ["4.12"]
-    description: "The Safe schedules governance.upgradeToAndCall(the new implementation, empty data) with the queue upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation. No migration: the contract has none (decision D10-1)"
+    description: "The Safe schedules governance.upgradeToAndCall(the new implementation, migrateV0100()) with the queue upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation (decision D10-1)"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 2
     cmds:
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund-governance.governance}\")\" \"{m:fund-governance.governance_implementation}\" && test \"$(cast call \"{m:fund-governance.governance}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund-governance.governance}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
-      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.governance.{runDir}\" > {runDir}/state/salt-upg-governance && echo \"{m:fund-governance.governance}\" > {runDir}/state/target-upg-governance && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-governance-impl}\" \"0x\" > {runDir}/state/data-upg-governance && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:fund-governance.governance}\" 0 \"$(cat {runDir}/state/data-upg-governance)\" \"{state:upg-queue-op}\" \"$(cat {runDir}/state/salt-upg-governance)\" > {runDir}/state/upg-governance-op && echo \"governance operation $(cat {runDir}/state/upg-governance-op)\""]
+      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.governance.{runDir}\" > {runDir}/state/salt-upg-governance && echo \"{m:fund-governance.governance}\" > {runDir}/state/target-upg-governance && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-governance-impl}\" \"0x42829c5e\" > {runDir}/state/data-upg-governance && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:fund-governance.governance}\" 0 \"$(cat {runDir}/state/data-upg-governance)\" \"{state:upg-queue-op}\" \"$(cat {runDir}/state/salt-upg-governance)\" > {runDir}/state/upg-governance-op && echo \"governance operation $(cat {runDir}/state/upg-governance-op)\""]
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-governance}", "--data", "{state:data-upg-governance}", "--salt", "{state:salt-upg-governance}", "--predecessor", "{state:upg-queue-op}", "--out", "{runDir}/bundles/upgrade-governance-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--signer", "{ownerSigner2}"]
@@ -878,14 +880,14 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.91-upg-receipt-upgrade-schedule"
     standing: ["4.12"]
-    description: "The Safe schedules receipt.upgradeToAndCall(the new implementation, empty data) with the governance upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation. No migration: the contract has none (decision D10-1)"
+    description: "The Safe schedules receipt.upgradeToAndCall(the new implementation, migrateV0100()) with the governance upgrade as predecessor, after checking the proxy is unfrozen and on its manifest implementation (decision D10-1)"
     signersOnCall: "The two Safe owners on call for this run (ownerSigner and ownerSigner2 of the run sheet, threshold 2), the deployer as gas payer"
     executionWindow: "Opens when the fund timelock delay (TIMELOCK_MIN_DELAY) has passed since this schedule; the Safe owners execute it in this run sitting, at the paired execute step"
     host: "control"
     phase: 2
     cmds:
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund-receipt.consensus_receipt}\")\" \"{m:fund-receipt.consensus_receipt_implementation}\" && test \"$(cast call \"{m:fund-receipt.consensus_receipt}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund-receipt.consensus_receipt}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
-      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.receipt.{runDir}\" > {runDir}/state/salt-upg-receipt && echo \"{m:fund-receipt.consensus_receipt}\" > {runDir}/state/target-upg-receipt && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-receipt-impl}\" \"0x\" > {runDir}/state/data-upg-receipt && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:fund-receipt.consensus_receipt}\" 0 \"$(cat {runDir}/state/data-upg-receipt)\" \"{state:upg-governance-op}\" \"$(cat {runDir}/state/salt-upg-receipt)\" > {runDir}/state/upg-receipt-op && echo \"receipt operation $(cat {runDir}/state/upg-receipt-op)\""]
+      - ["bash", "-c", "cast keccak \"robotmoney.deploy4-upgrade.receipt.{runDir}\" > {runDir}/state/salt-upg-receipt && echo \"{m:fund-receipt.consensus_receipt}\" > {runDir}/state/target-upg-receipt && cast calldata \"upgradeToAndCall(address,bytes)\" \"{state:upg-receipt-impl}\" \"0x42829c5e\" > {runDir}/state/data-upg-receipt && cast call {m:fund-timelock.timelock} \"hashOperation(address,uint256,bytes,bytes32,bytes32)(bytes32)\" \"{m:fund-receipt.consensus_receipt}\" 0 \"$(cat {runDir}/state/data-upg-receipt)\" \"{state:upg-governance-op}\" \"$(cat {runDir}/state/salt-upg-receipt)\" > {runDir}/state/upg-receipt-op && echo \"receipt operation $(cat {runDir}/state/upg-receipt-op)\""]
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-receipt}", "--data", "{state:data-upg-receipt}", "--salt", "{state:salt-upg-receipt}", "--predecessor", "{state:upg-governance-op}", "--out", "{runDir}/bundles/upgrade-receipt-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--signer", "{ownerSigner2}"]
@@ -1028,7 +1030,7 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.93-upg-adapter-upgrade"
     standing: ["4.12"]
-    description: "Decision D10-1, ADR-0019: the swap adapter proxy moves to the 0.10.0 implementation (canonical pool check, AGY-13). adapter-swap.ts upgrade deploys the implementation, schedules one batch after the receipt upgrade (allow the new implementation hash, then upgradeToAndCall with empty data), and after the delay the Safe executes it and the verb checks every basket asset still vets. THE VERB DOES NOT EXIST YET (decision D10-3)"
+    description: "Decision D10-1, ADR-0019: the swap adapter proxy moves to the 0.10.0 implementation (canonical pool check, AGY-13). adapter-swap.ts upgrade deploys the implementation, schedules one batch after the receipt upgrade (allow the new implementation hash, then upgradeToAndCall with migrateV0100(), calldata 0x42829c5e), and after the delay the Safe executes it and the verb checks every basket asset still vets. THE VERB DOES NOT EXIST YET (decision D10-3)"
     host: "control"
     phase: 2
     cmds:
