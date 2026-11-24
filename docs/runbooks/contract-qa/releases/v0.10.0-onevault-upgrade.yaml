@@ -574,6 +574,23 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     writes: ["upg-deployer-usdc"]
     added: "v0.10.0-onevault-upgrade"
+  - id: "P0.97-upg-pre-verify"
+    standing: ["4.3", "4.12"]
+    description: "The fund verifier on the live v0.9.0 system before any send. deploy-implementation --system fund (P1.81 to P1.88) refuses unless the run manifest records a passed fund verify, and the copied 0.9.0 record (P0.85) carries the verify stage as started: the 0.9.0 verify failed on the public RPC role-log scan (accepted under D4-21). This read-only run records the pass. On the Twin the role scan checks holders now plus grants after the fork pin. On 8453 the role scan needs the issue 2047 resolution (a vetted logs RPC) before this step can pass; no RPC is named here"
+    host: "control"
+    phase: 0
+    cmds:
+      - ["bun", "publish-contracts/src/cli.ts", "verify", "{d4live}", "--system", "fund", "{gate}"]
+    env:
+      PUBLISH_MANIFEST_DIR: "{manifestDir}"
+      YES: "{yes}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
+    maxMinutes: 60
+    added: "v0.10.0-onevault-upgrade"
   # ── Phase 1, publish: stages 0 to 11. The first send of the run. ──
   - id: "P1.50-record-go"
     standing: ["4.3"]
@@ -627,6 +644,7 @@ steps:
     receipts:
       - {"dir": "{runDir}/go", "pattern": "publish.json", "required": true}
     irreversible: false
+    notBefore: {"afterStep": "P0.97-upg-pre-verify", "hours": 0}
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
     added: "v0.10.0-onevault-upgrade"
