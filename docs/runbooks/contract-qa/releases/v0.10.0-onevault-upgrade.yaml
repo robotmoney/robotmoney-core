@@ -1115,7 +1115,7 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.94-upg-adapter-upgrade-execute"
     standing: ["4.12", "4.10"]
-    description: "After the delay the Safe executes the adapter upgrade batch, and adapter-swap.ts upgrade check proves it done, the proxy's ERC-1967 slot on the new implementation, its hash allowed, and every basket asset on the proxy still vets (exit 1 otherwise)"
+    description: "After the delay the Safe executes the adapter upgrade batch, and P2.96 proves it (adapter-swap.ts upgrade check). On a rerun the propose, sign and execute report the batch already done"
     host: "control"
     phase: 2
     cmds:
@@ -1123,7 +1123,6 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner2}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{signer}", "{safefee}"]
-      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{state:upg-adapter-proxy}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--done", "{runDir}/state/done-adapter-upgrade"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -1135,6 +1134,38 @@ steps:
     onlyFor: ["twin", "rehearsal"]
     maxMinutes: 60
     gateAbsent: "{runDir}/state/done-adapter-upgrade"
+    added: "v0.10.0-onevault-upgrade"
+  - id: "P2.95-upg-twin-feeds-after-adapter"
+    standing: ["9", "4.4"]
+    description: "On the Twin only: the timelock waits of P2.88 to P2.94 move the fork clock past the feeds' staleness bound with no new rounds, so the fund NAV read of P2.96 would revert FeedUnhealthy (Stale). The feeds are restated as at P6.90 (twin-feeds.ts refresh, decision D4-9). No warp follows before P2.84 and P3.83 in this flow, so this one refresh covers them. Rehearsal and 8453 read live feeds and skip it"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["mkdir", "-p", "{runDir}/twin"]
+      - ["bun", "publish-contracts/src/ci/twin-feeds.ts", "refresh", "--rpc", "{rpcUrl}", "--journal", "{runDir}/twin/feed-refresh.jsonl", "--out", "{runDir}/twin/feed-refresh-P2.95.json"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts:
+      - {"dir": "{runDir}/twin", "pattern": "feed-refresh.jsonl", "required": true}
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: "twin"
+    added: "v0.10.0-onevault-upgrade"
+  - id: "P2.96-upg-adapter-upgrade-check"
+    standing: ["4.12"]
+    description: "adapter-swap.ts upgrade check proves the adapter upgrade batch done, the proxy's ERC-1967 slot on the new implementation, its hash allowed, every basket asset on the proxy still vets, and the fund NAV reads (exit 1 otherwise). It only reads"
+    host: "control"
+    phase: 2
+    cmds:
+      - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{state:upg-adapter-proxy}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--done", "{runDir}/state/done-adapter-upgrade"]
+    env:
+      ETH_RPC_URL: "{rpcUrl}"
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    flow: "fund-upgrade"
+    onlyFor: ["twin", "rehearsal"]
     writes: ["done-adapter-upgrade"]
     added: "v0.10.0-onevault-upgrade"
   - id: "P2.84-upg-after-upgrade"
