@@ -12,7 +12,7 @@ import {
   redact, toSafeSignature, validateRoster, verifySafeSignature, type SafeTxBundle,
 } from "./index.ts";
 import { proxyRuntimeCodeOf } from "./safe.ts";
-import { parseFlags, callsFromFlags } from "./cli.ts";
+import { parseFlags, callsFromFlags, feesFromFlags } from "./cli.ts";
 import { assertNoPlaintextKeys } from "./guard.ts";
 import { revertReasonOf } from "./errors.ts";
 import { MAINNET_CHAIN_ID, TWIN_CHAIN_ID } from "../chains.ts";
@@ -316,6 +316,23 @@ describe("post-broadcast reads on a stale load-balanced RPC (issue 1723)", () =>
     const rpc = fake({ safe: SAFE, stale: { safeNonce: Infinity } });
     const e = await execute(rpc, clock()).catch((x) => x);
     expect(e).toMatchObject({ code: "STALE_READ_TIMEOUT", details: { expected: "1", last: "0", rpc_host: "127.0.0.1" } });
+  });
+
+  test("executeTx: explicit fees reach the send in place of the node default (the run's cast fee level)", async () => {
+    const rpc = fake({ safe: SAFE });
+    const handle = await connectSafe({ rpcUrl: rpc.url, chainId: FAKE_CHAIN_ID, allowChainIds: [FAKE_CHAIN_ID], safeAddress: SAFE });
+    let bundle = await proposeTx(handle, { to: SAFE, data: "0x", action: "self-call" });
+    for (const k of ownerKeys.slice(0, 2)) bundle = await signTx(handle, bundle, loopbackKeySigner(k, handle.chain));
+    const inner = rpc.deployerSigner();
+    const seen: unknown[] = [];
+    const spy = { ...inner, address: () => inner.address(), signSafeHash: inner.signSafeHash.bind(inner), send: (req: Parameters<typeof inner.send>[0], ch: Parameters<typeof inner.send>[1]) => { seen.push(req); return inner.send(req, ch); } };
+    const fees = feesFromFlags(parseFlags(["--priority-gas-price", "1000000", "--gas-price", "20000000"]));
+    expect(fees).toEqual({ maxFeePerGas: 20_000_000n, maxPriorityFeePerGas: 1_000_000n });
+    await executeTx(handle, bundle, spy, { nonceRetry: { sleep: async () => {} }, fees });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ maxFeePerGas: 20_000_000n, maxPriorityFeePerGas: 1_000_000n });
+    expect(feesFromFlags({})).toEqual({});
+    expect(() => feesFromFlags({ "gas-price": "1", "priority-gas-price": "2" })).toThrow("exceeds");
   });
 
   test("executeTx: a Safe nonce that moved by two (another transaction) fails at once with NONCE_DID_NOT_MOVE", async () => {

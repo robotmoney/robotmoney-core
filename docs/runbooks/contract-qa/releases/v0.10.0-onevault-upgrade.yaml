@@ -558,11 +558,14 @@ steps:
     added: "v0.10.0-onevault-upgrade"
   - id: "P0.96-upg-funding"
     standing: ["4.2"]
-    description: "The deployer holds the 1 USDC the flow test requests (with 1 USDC of margin) and gas for two implementation deploys and the Safe executions; the ETH lines of the deployer and the emergency key (two pauses) are advisory"
+    description: "The deployer holds the 1 USDC the flow test requests (with 1 USDC of margin) and the ETH the run's sends need: eth-need.ts counts the implementation deploys and Safe executes this release runs on the target and prices them at the run's max fee ({safefee}, the fee flags of {cast}). A hard check: below it the step fails and the deployer is funded by hand, journaled. The emergency key's ETH line (two pauses) is advisory"
     host: "control"
     phase: 0
     cmds:
-      - ["bash", "-c", "for a in \"{sheet:ADMIN_ADDRESS}\" \"{sheet:EMERGENCY_ADDRESS}\"; do b=$(cast balance \"$a\"); echo \"$a $b\"; bun scripts/runbook/qa-assert.ts ge \"$b\" 300000000000000 || echo \"advisory: $a holds less than 0.0003 ETH\" >&2; done"]
+      - ["bun", "scripts/runbook/eth-need.ts", "--release", "v0.10.0-onevault-upgrade", "--target", "{target}", "--out", "{runDir}/state/upg-deployer-eth-need", "{safefee}"]
+      - ["bash", "-c", "cast balance \"{sheet:ADMIN_ADDRESS}\" > {runDir}/state/upg-deployer-eth"]
+      - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:upg-deployer-eth}", "{state:upg-deployer-eth-need}"]
+      - ["bash", "-c", "b=$(cast balance \"{sheet:EMERGENCY_ADDRESS}\"); echo \"{sheet:EMERGENCY_ADDRESS} $b\"; bun scripts/runbook/qa-assert.ts ge \"$b\" 300000000000000 || echo \"advisory: the emergency key holds less than 0.0003 ETH\" >&2"]
       - ["bash", "-c", "cast call \"{usdc}\" \"balanceOf(address)(uint256)\" \"{sheet:ADMIN_ADDRESS}\" | cut -d\" \" -f1 > {runDir}/state/upg-deployer-usdc"]
       - ["bun", "scripts/runbook/qa-assert.ts", "ge", "{state:upg-deployer-usdc}", "2000000"]
     env:
@@ -572,7 +575,7 @@ steps:
     irreversible: false
     flow: "fund-upgrade"
     onlyFor: ["twin", "rehearsal"]
-    writes: ["upg-deployer-usdc"]
+    writes: ["upg-deployer-usdc", "upg-deployer-eth-need", "upg-deployer-eth"]
     added: "v0.10.0-onevault-upgrade"
   - id: "P0.97-upg-pre-verify"
     standing: ["4.3", "4.12"]
@@ -845,7 +848,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-rebalancer}", "--data", "{state:data-upg-rebalancer}", "--salt", "{state:salt-upg-rebalancer}", "--out", "{runDir}/bundles/upgrade-rebalancer-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--signer", "{signer}", "{safefee}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -870,7 +873,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-fund}", "--data", "{state:data-upg-fund}", "--salt", "{state:salt-upg-fund}", "--predecessor", "{state:upg-rebalancer-op}", "--out", "{runDir}/bundles/upgrade-fund-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-schedule.json", "--signer", "{signer}", "{safefee}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -895,7 +898,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-queue}", "--data", "{state:data-upg-queue}", "--salt", "{state:salt-upg-queue}", "--predecessor", "{state:upg-fund-op}", "--out", "{runDir}/bundles/upgrade-queue-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--signer", "{signer}", "{safefee}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -920,7 +923,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-governance}", "--data", "{state:data-upg-governance}", "--salt", "{state:salt-upg-governance}", "--predecessor", "{state:upg-queue-op}", "--out", "{runDir}/bundles/upgrade-governance-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--signer", "{signer}", "{safefee}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -945,7 +948,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "schedule", "--target", "{state:target-upg-receipt}", "--data", "{state:data-upg-receipt}", "--salt", "{state:salt-upg-receipt}", "--predecessor", "{state:upg-governance-op}", "--out", "{runDir}/bundles/upgrade-receipt-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--signer", "{signer}", "{safefee}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -966,7 +969,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upg-rebalancer}", "--data", "{state:data-upg-rebalancer}", "--salt", "{state:salt-upg-rebalancer}", "--out", "{runDir}/bundles/upgrade-rebalancer-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-rebalancer-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:rebalancer.rebalancer}\")\" \"{state:upg-rebalancer-impl}\" && test \"$(cast call \"{m:rebalancer.rebalancer}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:rebalancer.rebalancer}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
       - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "rebalancer", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-rebalancer-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-rebalancer-execute.json"]
@@ -991,7 +994,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upg-fund}", "--data", "{state:data-upg-fund}", "--salt", "{state:salt-upg-fund}", "--predecessor", "{state:upg-rebalancer-op}", "--out", "{runDir}/bundles/upgrade-fund-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-fund-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-fund-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund.fund}\")\" \"{state:upg-fund-impl}\" && test \"$(cast call \"{m:fund.fund}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund.fund}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
       - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "fund", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-fund-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-fund-execute.json"]
@@ -1016,7 +1019,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upg-queue}", "--data", "{state:data-upg-queue}", "--salt", "{state:salt-upg-queue}", "--predecessor", "{state:upg-fund-op}", "--out", "{runDir}/bundles/upgrade-queue-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-queue-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-queue-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:queue.queue}\")\" \"{state:upg-queue-impl}\" && test \"$(cast call \"{m:queue.queue}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:queue.queue}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
       - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "queue", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-queue-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-queue-execute.json"]
@@ -1041,7 +1044,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upg-governance}", "--data", "{state:data-upg-governance}", "--salt", "{state:salt-upg-governance}", "--predecessor", "{state:upg-queue-op}", "--out", "{runDir}/bundles/upgrade-governance-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-governance-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-governance-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund-governance.governance}\")\" \"{state:upg-governance-impl}\" && test \"$(cast call \"{m:fund-governance.governance}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund-governance.governance}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
       - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "fund-governance", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-governance-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-governance-execute.json"]
@@ -1066,7 +1069,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "execute", "--target", "{state:target-upg-receipt}", "--data", "{state:data-upg-receipt}", "--salt", "{state:salt-upg-receipt}", "--predecessor", "{state:upg-governance-op}", "--out", "{runDir}/bundles/upgrade-receipt-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/upgrade-receipt-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bash", "-c", "test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"{state:upg-receipt-op}\")\" = true"]
       - ["bash", "-c", "bun scripts/runbook/qa-assert.ts eq \"$(cast implementation \"{m:fund-receipt.consensus_receipt}\")\" \"{state:upg-receipt-impl}\" && test \"$(cast call \"{m:fund-receipt.consensus_receipt}\" \"upgradesFrozen()(bool)\")\" = false && bun scripts/runbook/qa-assert.ts eq \"$(cast call \"{m:fund-receipt.consensus_receipt}\" \"upgradeTimelock()(address)\")\" \"{m:fund-timelock.timelock}\""]
       - ["bun", "publish-contracts/src/fund-upgrade-record.ts", "upgrade", "--evidence", "{evidenceDir}", "--manifest-dir", "{manifestDir}", "--rpc", "{rpcUrl}", "--proxy", "fund-receipt", "--upgrade-build", "{runDir}/v0100", "--schedule-bundle", "{runDir}/bundles/upgrade-receipt-schedule.json", "--execute-bundle", "{runDir}/bundles/upgrade-receipt-execute.json"]
@@ -1095,7 +1098,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "scheduleBatch", "--targets", "{state:target-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--values", "{state:values-upg-adapter}", "--salt", "{state:salt-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--out", "{runDir}/bundles/adapter-upgrade-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-schedule.json", "--signer", "{signer}", "{safefee}"]
       - ["bun", "scripts/runbook/adapter-swap.ts", "pending", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--out", "{runDir}/state/upg-adapter-op"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -1119,7 +1122,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "executeBatch", "--targets", "{state:target-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--values", "{state:values-upg-adapter}", "--salt", "{state:salt-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--out", "{runDir}/bundles/adapter-upgrade-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/adapter-upgrade-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bun", "scripts/runbook/adapter-swap.ts", "upgrade", "check", "--timelock", "{m:fund-timelock.timelock}", "--targets", "{state:target-upg-adapter}", "--values", "{state:values-upg-adapter}", "--datas", "{state:data-upg-adapter}", "--predecessor", "{state:upg-receipt-op}", "--salt", "{state:salt-upg-adapter}", "--fund", "{m:fund.fund}", "--proxy", "{state:upg-adapter-proxy}", "--impl", "{state:upg-adapter-new-impl}", "--impl-hash", "{state:upg-adapter-new-impl-hash}", "--done", "{runDir}/state/done-adapter-upgrade"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
@@ -2027,7 +2030,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "scheduleBatch", "--targets", "{state:target-upg-unpause}", "--datas", "{state:data-upg-unpause}", "--values", "0,0", "--salt", "{state:salt-upg-unpause}", "--out", "{runDir}/bundles/unpause-schedule.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-schedule.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-schedule.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-schedule.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-schedule.json", "--signer", "{signer}", "{safefee}"]
     env:
       ETH_RPC_URL: "{rpcUrl}"
     expectExit: 0
@@ -2048,7 +2051,7 @@ steps:
       - ["bun", "publish-contracts/src/safe/cli.ts", "propose", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--safe", "{m:safe.safe}", "--timelock", "{m:fund-timelock.timelock}", "--action", "executeBatch", "--targets", "{state:target-upg-unpause}", "--datas", "{state:data-upg-unpause}", "--values", "0,0", "--salt", "{state:salt-upg-unpause}", "--out", "{runDir}/bundles/unpause-execute.json"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-execute.json", "--signer", "{ownerSigner}"]
       - ["bun", "publish-contracts/src/safe/cli.ts", "sign", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-execute.json", "--signer", "{ownerSigner2}"]
-      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-execute.json", "--signer", "{signer}"]
+      - ["bun", "publish-contracts/src/safe/cli.ts", "execute", "--rpc", "{rpcUrl}", "--chain-id", "{chainId}", "--bundle", "{runDir}/bundles/unpause-execute.json", "--signer", "{signer}", "{safefee}"]
       - ["bash", "-c", "id=$(cast call {m:fund-timelock.timelock} \"hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32)\" \"[{state:target-upg-unpause}]\" \"[0,0]\" \"[{state:data-upg-unpause}]\" $(cast hash-zero) \"{state:salt-upg-unpause}\") && test \"$(cast call {m:fund-timelock.timelock} \"isOperationDone(bytes32)(bool)\" \"$id\")\" = true"]
       - ["bash", "-c", "test \"$(cast call {m:fund.fund} \"depositsPaused()(bool)\")\" = false && test \"$(cast call {m:queue.queue} \"queuePaused()(bool)\")\" = false"]
     env:

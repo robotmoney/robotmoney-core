@@ -78,14 +78,28 @@ export class Resolver {
       throw new Error(`unknown placeholder ${raw}`);
     });
   }
+  /** A list placeholder's argv for the target: the config's list, else the README definition. {safefee} without its own list is the fee flags of {cast}. */
+  list(name: string): readonly string[] {
+    const own = this.cfg.lists?.[name];
+    if (own) return own;
+    if (name === "safefee") return feeFlagsOf(this.list("cast"));
+    return LIST_PLACEHOLDERS[name]!;
+  }
   /** One argv with whole-element list placeholders expanded (the config's list for the target, else the README definition) and every string resolved. */
   argv(cmd: string[]): string[] {
     return cmd.flatMap((a) => {
       const m = /^\{([a-z0-9]+)\}$/i.exec(a);
-      if (m && m[1]! in LIST_PLACEHOLDERS) return (this.cfg.lists?.[m[1]!] ?? LIST_PLACEHOLDERS[m[1]!]!).map((x) => this.text(x));
+      if (m && m[1]! in LIST_PLACEHOLDERS) return this.list(m[1]!).map((x) => this.text(x));
       return [this.text(a)];
     });
   }
+}
+
+/** PURE. The fee flags (--priority-gas-price, --gas-price and their values) of a cast argv list, in order. */
+export function feeFlagsOf(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) if ((argv[i] === "--priority-gas-price" || argv[i] === "--gas-price") && argv[i + 1] !== undefined) out.push(argv[i]!, argv[++i]!);
+  return out;
 }
 
 const resultPath = (runDir: string, id: string): string => join(runDir, "journal", `${id}.result`);

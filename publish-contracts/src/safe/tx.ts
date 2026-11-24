@@ -12,7 +12,7 @@ import { SafeRevertError, SafeToolError, revertReasonOf } from "./errors.ts";
 import { readAfterWrite, type StaleReadRetry } from "./read-after-write.ts";
 import type { SafeHandle } from "./safe.ts";
 import { recoverSafeSigner, splitSignature, verifySafeSignature, type SignMode } from "./sig.ts";
-import type { Signer } from "./signers.ts";
+import { feeFields, type SendFees, type Signer } from "./signers.ts";
 
 export const BUNDLE_FORMAT = "robotmoney-safe-tx/1" as const;
 
@@ -321,6 +321,8 @@ export interface ExecuteOpts {
   nonceRetry?: NonceRetry;
   /** Send every signature in the bundle, not only the threshold. The Safe checks the first `threshold` of them: the rest are readable from the chain by a verifier (the control proof). */
   allSignatures?: boolean;
+  /** Explicit fees for the execTransaction send (the run's cast fee level). Absent, the node default. With a max fee the balance pre-check covers the estimated gas at it. */
+  fees?: SendFees;
 }
 
 export interface ExecuteResult {
@@ -386,6 +388,11 @@ export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender
 
   const balance = await handle.client.getBalance({ address: senderAddr });
   if (balance === 0n) throw new SafeToolError("INSUFFICIENT_FUNDS", `the sender ${senderAddr} has no ETH for gas`);
+  if (opts.fees?.maxFeePerGas !== undefined) {
+    const gas = await handle.client.estimateContractGas({ address: handle.address, abi: SAFE_ABI, functionName: "execTransaction", args, account: senderAddr });
+    const need = gas * opts.fees.maxFeePerGas;
+    if (balance < need) throw new SafeToolError("INSUFFICIENT_FUNDS", `the sender ${senderAddr} holds ${balance} wei, below the ${need} wei the execute may cost at the max fee`, { balance: balance.toString(), need: need.toString() });
+  }
 
   // the exact calldata the SDK would send, signatures packed by the kit
   const sdkTx = await buildSdkTx(handle, bundle.to, bundle.data, bundle.nonce);
@@ -393,7 +400,7 @@ export async function executeTx(handle: SafeHandle, bundle: SafeTxBundle, sender
   const encoded = (await handle.sdk.getEncodedTransaction(sdkTx)) as Hex;
 
   let txHash: Hex;
-  try { txHash = await sender.send({ to: handle.address, data: encoded }, handle.chain); }
+  try { txHash = await sender.send({ to: handle.address, data: encoded, ...feeFields(opts.fees ?? {}) }, handle.chain); }
   catch (e) { throw new SafeToolError("SEND_FAILED", `the send failed: ${revertReasonOf(e)}. Read the chain before retrying.`); }
   const receipt = await handle.client.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== "success") throw new SafeToolError("TX_REVERTED", `the transaction reverted: ${txHash}`, { tx_hash: txHash });

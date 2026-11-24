@@ -106,6 +106,9 @@ export const LIST_PLACEHOLDERS: Readonly<Record<string, readonly string[]>> = {
   // runner's config adds the run's passphrase file, as it does for {cast}.
   keepercast: ["--keystore", "{keeperKeystore}"],
   emergencycast: ["--keystore", "{emergencyKeystore}"],
+  // The fee flags of a Safe send (safe/cli.ts create and execute): the runner takes --priority-gas-price and --gas-price from the target's {cast} list (feeFlagsOf in run.ts),
+  // so a Safe execute pays the same fee level as the cast deploys on the Twin and on 8453. A config may set it explicitly. Empty here: the node default.
+  safefee: [],
   // The fund-upgrade flow: the CLI arguments against the LIVE Deploy 4 deployment, as {v050common} names the live Deploy 3 one. --core-dir is the checkout of the sha Deploy 4 was
   // deployed from (7c23569f8, release/v0.7.0-onevault-rc.5-rehearsal), made and built by the flow ({runDir}/v070): its out/ is the live code the upgrade tools compare with, and
   // the release gate on 8453 runs at that sha (its tag, its green CI, its committed frozen counts). The new build is the --upgrade-build checkout ({runDir}/v080, the run's sha).
