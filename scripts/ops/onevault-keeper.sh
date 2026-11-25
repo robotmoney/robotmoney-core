@@ -129,14 +129,25 @@ read_balance() {
 
 # Sends the call as the bot key: through KeeperAccount.execute(target, calldata), or straight to target in direct mode.
 # Returns 1 and alerts `kind` when the send fails.
+# With GAS_MARGIN=1 the gas limit is 1.5 times the estimate, the TS keeper's default GAS_MULTIPLIER. step() and
+# stepDelisted() catch a failed trade and record a backoff, so eth_estimateGas finds the cheaper caught path. A send at
+# that point estimate starves the trade, and the call returns false with a fresh backoff (issue 2045).
 forward() {
     local kind="$1" target="$2" sig="$3"
     shift 3
-    local calldata out
+    local calldata out est
     calldata=$(cast calldata "$sig" "$@") || { alert "$kind" "cast calldata $sig failed"; return 1; }
     local -a send=("$KEEPER_ACCOUNT_ADDRESS" "execute(address,bytes)" "$target" "$calldata")
     [[ -z "$KEEPER_ACCOUNT_ADDRESS" ]] && send=("$target" "$calldata")
-    out=$(cast send "${send[@]}" --rpc-url "$RPC_URL" \
+    local -a limit=()
+    if [[ "${GAS_MARGIN:-0}" == "1" ]]; then
+        est=$(cast estimate "${send[@]}" --from "$KEEPER_ADDR" --rpc-url "$RPC_URL" 2>&1) || {
+            alert "$kind" "estimate for execute($sig) on $target failed: ${est:0:300}"
+            return 1
+        }
+        limit=(--gas-limit "$(( est * 3 / 2 ))")
+    fi
+    out=$(cast send "${send[@]}" "${limit[@]}" --rpc-url "$RPC_URL" \
         --keystore "$KEEPER_KEYSTORE" --password-file "$PASS_FILE" 2>&1) || {
         alert "$kind" "execute($sig) on $target failed: ${out:0:300}"
         return 1
@@ -296,11 +307,11 @@ tick() {
         (( sent > 1 )) && echo "onevault-keeper: settle() sent $sent times this tick" >&2
     fi
     if (( step_due )); then
-        forward step_failed "$REBALANCER_ADDRESS" "step()" || true
+        GAS_MARGIN=1 forward step_failed "$REBALANCER_ADDRESS" "step()" || true
     fi
     local idx
     for idx in "${delist_send[@]}"; do
-        forward delist_step_failed "$REBALANCER_ADDRESS" "stepDelisted(uint256)" "$idx" || true
+        GAS_MARGIN=1 forward delist_step_failed "$REBALANCER_ADDRESS" "stepDelisted(uint256)" "$idx" || true
     done
 
     [[ $ALERTS -eq 0 ]]
