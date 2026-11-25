@@ -333,7 +333,7 @@ export interface RunContext {
    * Deploy 3 (2026-10-18): where the verifier sends eth_getLogs and how many blocks per call (--logs-rpc, --logs-window). mainnet.base.org throttled the role
    * scan with HTTP 429 for an hour; the canon's 8453 logs endpoint allows 1000 blocks per call. Absent: every read on --rpc, 2000 blocks per call.
    */
-  logs?: { logsRpc?: string; window?: bigint; tries?: number };
+  logs?: { logsRpc?: string; window?: bigint; tries?: number; concurrency?: number };
   /** --check-sources: the verify stage also checks explorer source verification (Blockscout, Sourcify). Off by default: publishing, not a gate (2026-10-19). */
   checkSources?: boolean;
   /** Injected for tests: core's own config-check (bun scripts/ci/config-check.ts). Defaults to the real spawn. */

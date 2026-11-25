@@ -50,7 +50,7 @@ export async function runFundVerifyStage(ctx: RunContext, row: StageRow, manifes
   const report = await deps.verifyDeployment({
     system: "fund", chain: deps.chain, manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildFundVerifySheet(ctx), fromBlock: BigInt(manifest.firstBlock),
     // Issue 2044: --logs-window and --logs-tries reach the fund verifier's role scans.
-    ...(ctx.logs?.window !== undefined ? { logChunk: Number(ctx.logs.window) } : {}), ...(ctx.logs?.tries !== undefined ? { logTries: ctx.logs.tries } : {}),
+    ...(ctx.logs?.window !== undefined ? { logChunk: Number(ctx.logs.window) } : {}), ...(ctx.logs?.tries !== undefined ? { logTries: ctx.logs.tries } : {}), ...(ctx.logs?.concurrency !== undefined ? { logConcurrency: ctx.logs.concurrency } : {}),
     frozenCounts: effectiveCounts(frozenFile, adoptedTxs(manifest)), artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
     deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
     // An in-place upgrade (the fund-upgrade flow): a proxy the run manifest records as upgraded (proxy_upgrades, fund-upgrade-record.ts) is compared with its upgrade's build.

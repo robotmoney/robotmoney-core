@@ -51,7 +51,14 @@ export interface ScanParams {
   chunk: number;
   retryBaseMs: number;
   maxRetries?: number;
+  /** Windows read at once (--logs-concurrency). Absent: DEFAULT_LOG_CONCURRENCY. */
+  concurrency?: number;
 }
+
+/** Issue 2070: how many windows one scan reads at once by default. Each window keeps its own 429 backoff, retries and range-limit halving. */
+export const DEFAULT_LOG_CONCURRENCY = 8;
+/** Issue 2070: a scan of more windows than this prints its progress to stderr every PROGRESS_EVERY windows, so a long scan never looks stuck. */
+export const PROGRESS_EVERY = 100;
 
 type Filter = { address?: Address | Address[]; topics: (Hex | Hex[] | null)[] };
 
@@ -59,7 +66,7 @@ type Filter = { address?: Address | Address[]; topics: (Hex | Hex[] | null)[] };
  * One chunked walk of [from, to]: 429 retries with backoff, a range limit shrinks the window, any other failure throws RPC_REFUSED naming the chunk.
  * An address list is asked in groups of at most MAX_LOG_ADDRESSES (fewer when the RPC names a smaller limit). Each address sits in one group, so its logs keep their order.
  */
-async function walk(chain: ChainReader, f: Filter, from: bigint, to: bigint, chunk: number, retryBaseMs: number, maxRetries: number): Promise<LogEntry[]> {
+async function walk(chain: ChainReader, f: Filter, from: bigint, to: bigint, chunk: number, retryBaseMs: number, maxRetries: number, learned?: { step: bigint }): Promise<LogEntry[]> {
   if (chunk < 1) throw new Error("logChunk must be at least 1");
   const out: LogEntry[] = [];
   const list = Array.isArray(f.address) ? f.address : undefined;
@@ -97,7 +104,44 @@ async function walk(chain: ChainReader, f: Filter, from: bigint, to: bigint, chu
     }
     lo = hi + 1n;
   }
+  if (learned) learned.step = step;
   return out;
+}
+
+/**
+ * Issue 2070: [from, to] split into windows, read `concurrency` at a time. The first window is read alone: it learns the RPC's range limit (and fails the scan
+ * early on a dead RPC), and the rest are cut at the window size it settled on. Each window is one walk (its own retries, backoff and range-limit shrink), the
+ * results join in block order, and a window that fails after its retries fails the whole scan with its RPC_REFUSED error: never a partial answer.
+ */
+export async function walkConcurrent(
+  chain: ChainReader, f: Filter, from: bigint, to: bigint, chunk: number, retryBaseMs: number, maxRetries: number,
+  concurrency = DEFAULT_LOG_CONCURRENCY, progress: (line: string) => void = (l) => process.stderr.write(l + "\n"),
+): Promise<LogEntry[]> {
+  if (chunk < 1) throw new Error("logChunk must be at least 1");
+  if (from > to) return [];
+  if (concurrency <= 1 || to - from + 1n <= BigInt(chunk)) return await walk(chain, f, from, to, chunk, retryBaseMs, maxRetries);
+  const learned = { step: BigInt(chunk) };
+  const firstHi = from + BigInt(chunk) - 1n;
+  const first = await walk(chain, f, from, firstHi, chunk, retryBaseMs, maxRetries, learned);
+  const step = learned.step, rest = firstHi + 1n;
+  const n = Number((to - rest) / step) + 1;
+  const total = to - from + 1n;
+  const results: LogEntry[][] = new Array(n);
+  let next = 0, done = 0, doneBlocks = firstHi - from + 1n, failed: unknown;
+  const worker = async () => {
+    while (failed === undefined && next < n) {
+      const i = next++;
+      const lo = rest + BigInt(i) * step;
+      const hi = lo + step - 1n > to ? to : lo + step - 1n;
+      try { results[i] = await walk(chain, f, lo, hi, Number(step), retryBaseMs, maxRetries); }
+      catch (e) { failed ??= e; return; }
+      done++; doneBlocks += hi - lo + 1n;
+      if (n + 1 > PROGRESS_EVERY && ((done + 1) % PROGRESS_EVERY === 0 || done === n)) progress(`eth_getLogs scan: ${doneBlocks}/${total} blocks (${done + 1}/${n + 1} windows) from block ${from}`);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, n) }, worker));
+  if (failed !== undefined) throw failed;
+  return [...first, ...results.flat()];
 }
 
 /** The index of the first log at or after block `lo` (the logs read so far for the chunk being read again). */
@@ -107,7 +151,7 @@ export async function scanLogs(chain: ChainReader, p: ScanParams): Promise<LogEn
   if (p.chunk < 1) throw new Error("logChunk must be at least 1");
   const shared = (chain as SharedLogReader).sharedLogs?.(p);
   if (shared) return await shared;
-  return await walk(chain, { address: p.address, topics: p.topics }, p.fromBlock, p.toBlock, p.chunk, p.retryBaseMs, p.maxRetries ?? 6);
+  return await walkConcurrent(chain, { address: p.address, topics: p.topics }, p.fromBlock, p.toBlock, p.chunk, p.retryBaseMs, p.maxRetries ?? 6, p.concurrency);
 }
 
 /** The eth_getLogs match of one log against one filter (go-ethereum's filterLogs): a filter with more topic positions than the log has never matches. */
@@ -123,7 +167,7 @@ export function logMatches(l: LogEntry, p: { address?: Address; topics: (Hex | H
 }
 
 /** What the shared pass reads: every log of `addresses` whose topic 0 is one of `topic0s`, from `fromBlock` to `toBlock`. */
-export interface SharedScanPlan { addresses: Address[]; topic0s: Hex[]; fromBlock: bigint; toBlock: bigint; chunk: number; retryBaseMs: number; maxRetries?: number }
+export interface SharedScanPlan { addresses: Address[]; topic0s: Hex[]; fromBlock: bigint; toBlock: bigint; chunk: number; retryBaseMs: number; maxRetries?: number; concurrency?: number }
 export type SharedLogReader = ChainReader & { sharedLogs?: (p: ScanParams) => Promise<LogEntry[]> | undefined };
 
 /**
@@ -143,7 +187,7 @@ export function withSharedLogScan(chain: ChainReader, plan: SharedScanPlan): Sha
   };
   const sharedLogs = (p: ScanParams): Promise<LogEntry[]> | undefined => {
     if (addrs.length === 0 || t0s.length === 0 || !covers(p)) return undefined;
-    all ??= walk(chain, { address: addrs, topics: [t0s] }, plan.fromBlock, plan.toBlock, plan.chunk, plan.retryBaseMs, plan.maxRetries ?? 6);
+    all ??= walkConcurrent(chain, { address: addrs, topics: [t0s] }, plan.fromBlock, plan.toBlock, plan.chunk, plan.retryBaseMs, plan.maxRetries ?? 6, plan.concurrency);
     return all.then((logs) => logs.filter((l) => logMatches(l, p)));
   };
   // a Proxy, not a copy: every other read runs on `chain` itself (its own `this`), so a reader with state behaves as before

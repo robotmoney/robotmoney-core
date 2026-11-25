@@ -277,7 +277,7 @@ export async function runVerifyStage(ctx: RunContext, row: StageRow, manifest: R
   const report = await deps.verifyDeployment({
     chain: verifyReader(ctx), manifestDir: manifestDir(ctx), table: getStageTable(), sheet: buildVerifySheet(ctx, safe, unpaused, expectedTimelockDelay(manifest, ctx.sheet)), fromBlock: BigInt(manifest.firstBlock),
     deployTxs: runDeployTxs(manifest), adoptedContracts: runAdoptedContracts(manifest),
-    logChunk: ctx.logs?.window !== undefined ? Number(ctx.logs.window) : 2000, frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
+    logChunk: ctx.logs?.window !== undefined ? Number(ctx.logs.window) : 2000, ...(ctx.logs?.concurrency !== undefined ? { logConcurrency: ctx.logs.concurrency } : {}), frozenCounts: frozen, artifactsDir: join(ctx.coreDir, "out"), coreDir: ctx.coreDir,
     ...proxyBuildDirsOf(manifest, join(ctx.coreDir, "out")),
     deployerNonceAtDeployEnd: deployEndNonce(manifest),
     ...(ctx.sheet.kind === "rehearsal" ? { deployerStartNonce: manifest.deployerStartNonce } : {}),
