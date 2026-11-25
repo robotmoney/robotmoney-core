@@ -33,6 +33,10 @@ notes: |
 
   Twin. Fork on {stageHost}, tunnelled to {tunnelPort}. It proves only what the upgrade changes. No step scans Base history before the pin.
 
+  Logs RPC. On 8453 the run config's gate list must carry --logs-rpc https://base.gateway.tenderly.co --logs-window 1000, so
+  every verify (P0.97, P3.83, P9.83) and prove-control reads logs there. publicnode answers 403 on archive logs and mainnet.base.org
+  answers 429; 0.9.0's P3.83 and P9.83 failed RPC_REFUSED without it (docs/development/stage-deployment.md, RPC choices).
+
   Builds. P0.91 rebuilds v070 (7c23569f), v080 (fa7c4718) and v090 (26b2dddb) and relocates the copied record's build paths. The
   relocation of the five-entry 0.9.0 history uses relocate-record.ts (D10-3). {runDir}/v0100 is the new build.
 decisions:
