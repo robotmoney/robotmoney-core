@@ -1,4 +1,4 @@
-// Chunked eth_getLogs with retry on 429. A failed chunk throws: a dropped chunk must never read as "no logs".
+// Chunked eth_getLogs with retry on 429 and on timeouts. A failed chunk throws: a dropped chunk must never read as "no logs".
 // Issue 1977: a verify scans each block range once. withSharedLogScan reads every log the address-scoped checks need in one chunked pass (an address list and
 // topic-0 alternatives) and scanLogs serves each check's filter from that set in memory, with the eth_getLogs matching rules. A filter the shared pass does not
 // cover (no address, an address or topic 0 outside the plan, a range outside it) still scans on its own.
@@ -15,6 +15,20 @@ const statusOf = (e: any): number | undefined => { for (let x = e, i = 0; x && i
 const codeOf = (e: any): number | undefined => { for (let x = e, i = 0; x && i < 6; x = x.cause, i++) if (typeof x.code === "number") return x.code; return undefined; };
 /** Issue 2044: a throttle is HTTP 429, JSON-RPC -32011 (publicnode "request limit reached") or -32005 (limit exceeded), or a rate-limit message. It is retried with backoff. */
 const isRateLimit = (e: any) => statusOf(e) === 429 || codeOf(e) === -32011 || codeOf(e) === -32005 || /\b429\b|rate.?limit|too many requests|request limit reached/i.test(errText(e));
+/** The error's name and string code at each level of its cause chain (viem wraps a TimeoutError or a socket error in an HttpRequestError). */
+const namesOf = (e: any): string => { const n: string[] = []; for (let x = e, i = 0; x && i < 6; x = x.cause, i++) n.push(String(x.name ?? ""), typeof x.code === "string" ? x.code : ""); return n.join(" "); };
+/**
+ * Issue 2072: a timeout is a provider or transport answer that a later try can pass: a viem TimeoutError, "took too long to respond" (Tenderly), HTTP 408/502/503/504,
+ * or ECONNRESET/ETIMEDOUT. It is retried with the throttle backoff and --logs-tries. HTTP 401 and 403 are never timeouts: a refused key stays final.
+ */
+export const isTimeout = (e: any): boolean => {
+  const st = statusOf(e);
+  if (st === 401 || st === 403) return false;
+  if (st === 408 || st === 502 || st === 503 || st === 504) return true;
+  const names = namesOf(e);
+  if (/\bTimeoutError\b|\bECONNRESET\b|\bETIMEDOUT\b/.test(names)) return true;
+  return /took too long to respond|timed? ?out|\bECONNRESET\b|\bETIMEDOUT\b|socket hang up/i.test(errText(e));
+};
 /** Issue 2044: the smallest window an unnamed range limit halves down to. Below it the scan fails RPC_REFUSED. */
 export const MIN_LOG_WINDOW = 50n;
 /** Issue 2044: the longest wait between two tries of a throttled call. */
@@ -94,7 +108,7 @@ async function walk(chain: ChainReader, f: Filter, from: bigint, to: bigint, chu
             if (g > 0) { shrunk = true; break; } // the groups already read covered the wider window: read this chunk again from the first group
             continue;
           }
-          if (!isRateLimit(e) || attempt >= maxRetries) throw new Error(`${RPC_REFUSED_DETAIL}: getLogs ${lo}-${hi} failed: ${String(own(e?.message ?? e)).slice(0, 200)}`);
+          if (!(isRateLimit(e) || isTimeout(e)) || attempt >= maxRetries) throw new Error(`${RPC_REFUSED_DETAIL}: getLogs ${lo}-${hi} failed: ${String(own(e?.message ?? e)).slice(0, 200)}`);
           await sleep(Math.min(retryBaseMs * 2 ** attempt, MAX_BACKOFF_MS));
           attempt++;
         }

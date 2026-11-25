@@ -185,7 +185,7 @@ export const USAGE = `publish contracts
                      fails RPC_REFUSED. Verify reads each block range once for all its log checks (issue 1977). On the Twin (918453) the fund verifier reads no log
                      before the fork pin: its role checks prove holders now and grants after the pin (issue 2044).
   --check-sources    verify: also check explorer source verification (Blockscout, Sourcify); publishing, not a gate, so off by default
-  --logs-tries N     prove-control --resume and the verify stage: tries of one throttled eth_getLogs call (HTTP 429, JSON-RPC -32011 or -32005), with
+  --logs-tries N     prove-control --resume and the verify stage: tries of one throttled eth_getLogs call (HTTP 429, JSON-RPC -32011 or -32005; the verify stage also retries timeouts), with
                      exponential backoff (default 6 for prove-control, 7 for verify)
   --logs-concurrency N  the verify stage: eth_getLogs windows read at once (default 8). Each window keeps its own backoff, retries and range-limit
                      shrink; results join in block order; a window that still fails refuses the scan (RPC_REFUSED). Long scans print progress to stderr.
