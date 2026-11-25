@@ -1029,3 +1029,60 @@ describe("verifyFundSystem: the v0.9.0 migrated state", () => {
     expect(await withKey(10n, 25n)).toContain("queue: matchBandBps() equals the sheet");
   });
 });
+
+// Issue 2070: one role scan per release. Every non-enumerable role check reads one shared pass: per window ONE eth_getLogs for every checked contract with
+// topic 0 RoleGranted or RoleRevoked, windows read concurrently, and the verdicts equal the per-check path's.
+describe("verifyFundSystem: one shared, windowed role scan (issue 2070)", () => {
+  const GRANTED_T = keccak256(toHex(SIG_ROLE_GRANTED)).toLowerCase();
+  const REVOKED_T = keccak256(toHex("RoleRevoked(bytes32,address,address)")).toLowerCase();
+  const CHECKED = [TIMELOCK, FUND, REBALANCER, GOVERNANCE, QUEUE, RECEIPT].map(lc).sort();
+  const world = (shared: boolean, tamper = false) => {
+    const f = makeFixture();
+    for (const c of CHECKED) f.chain.nonEnumerableContracts.add(c);
+    f.chain.head = 9_999n;
+    f.opts.logChunk = 1_000;
+    f.opts.sharedLogScan = shared;
+    if (tamper) f.chain.setRole(QUEUE, FUND_ROLES.KEEPER, [KEEPER, A(0xbad)]); // an extra keeper: a verdict must flip both ways
+    const calls: { address?: Address | Address[]; topics: (Hex | Hex[] | null)[]; fromBlock: bigint; toBlock: bigint }[] = [];
+    const inner = f.chain.getLogs.bind(f.chain);
+    f.chain.getLogs = async (p) => { calls.push(p); return inner(p); };
+    return { f, calls };
+  };
+  const verdicts = (r: Awaited<ReturnType<typeof verifyFundSystem>>) => r.checks.map((c) => `${c.ok}|${c.label}|${c.detail.replace(/fund-verify-test-[^/]+/g, "<tmp>")}`);
+
+  test("the request shape: one call per window, every checked contract, topic 0 RoleGranted or RoleRevoked", async () => {
+    const { f, calls } = world(true);
+    const r = await verifyFundSystem(f.opts);
+    expect(r.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(calls.length).toBe(10);
+    expect(calls.map((c) => c.fromBlock).sort((a, b) => Number(a - b))).toEqual(Array.from({ length: 10 }, (_, i) => BigInt(i * 1000)));
+    for (const c of calls) {
+      expect((c.address as Address[]).map(lc).sort()).toEqual(CHECKED);
+      expect(c.topics.length).toBe(1);
+      expect((c.topics[0] as Hex[]).map((t) => t.toLowerCase()).sort()).toEqual([GRANTED_T, REVOKED_T].sort());
+      expect(c.toBlock - c.fromBlock + 1n).toBe(1000n);
+    }
+  });
+
+  test("identical verdicts to the per-check path, healthy and tampered", async () => {
+    for (const tamper of [false, true]) {
+      const a = world(true, tamper), b = world(false, tamper);
+      const ra = await verifyFundSystem(a.f.opts), rb = await verifyFundSystem(b.f.opts);
+      expect(verdicts(ra)).toEqual(verdicts(rb));
+      expect(ra.ok).toBe(!tamper);
+      expect(b.calls.length).toBeGreaterThan(a.calls.length);
+    }
+  });
+
+  test("a window that fails after its retries refuses every role check (RPC_REFUSED), never an empty answer", async () => {
+    const { f } = world(true);
+    const inner = f.chain.getLogs.bind(f.chain);
+    f.chain.getLogs = async (p) => { if (p.fromBlock === 7_000n) throw Object.assign(new Error("HTTP request failed"), { status: 429 }); return inner(p); };
+    f.opts.logTries = 2;
+    const r = await verifyFundSystem(f.opts);
+    const roleChecks = r.checks.filter((c) => c.label === "fund: FLOW_ROLE held exclusively by the queue" || c.label === "timelock: PROPOSER_ROLE held exclusively by the Safe");
+    expect(roleChecks.length).toBe(2);
+    for (const c of roleChecks) { expect(c.ok).toBe(false); expect(c.detail).toContain("RPC_REFUSED"); }
+    expect(r.ok).toBe(false);
+  });
+});

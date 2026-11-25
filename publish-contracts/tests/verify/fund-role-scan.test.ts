@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { keccak256, pad, toHex } from "viem";
 import { Collector } from "../../src/verify/collector.ts";
 import { SIG_ROLE_GRANTED } from "../../src/verify/constants.ts";
+import { walkConcurrent } from "../../src/verify/logs.ts";
 import { FUND_ROLES, TWIN_ROLE_SUFFIX, verifyExclusiveRole } from "../../src/verify/fund.ts";
 import type { Address, ChainReader, Hex, LogEntry, VerifySheet } from "../../src/verify/types.ts";
 import { TWIN_CHAIN_ID } from "../../src/chains.ts";
@@ -40,7 +41,7 @@ function stub(o: { head: bigint; pin?: bigint; logs: LogEntry[]; holders: Addres
 }
 const sheet = (chainId: number) => ({ chainId }) as VerifySheet;
 
-async function run(s: Stub, chainId: number, extra: { logChunk?: number; logTries?: number } = {}) {
+async function run(s: Stub, chainId: number, extra: { logChunk?: number; logTries?: number; logConcurrency?: number } = {}) {
   const c = new Collector();
   await verifyExclusiveRole(c, s.chain, "timelock: PROPOSER_ROLE held exclusively by the Safe", TL, ROLE, [SAFE], { fromBlock: 1000n, sheet: sheet(chainId), retryBaseMs: 0, ...extra });
   return c.report().checks[0]!;
@@ -111,9 +112,53 @@ describe("full history scan (any other chain)", () => {
     expect(s.calls.slice(0, 3).map((c) => c.to - c.from + 1n)).toEqual([2000n, 1000n, 500n]);
 
     const never = stub({ head: 2999n, holders: [SAFE], logs: [], fail: () => new Error("block range too large") });
-    const r2 = await run(never, 8453, { logChunk: 400 });
+    const r2 = await run(never, 8453, { logChunk: 400, logConcurrency: 1 });
     expect(r2.ok).toBe(false);
     expect(r2.detail).toContain("RPC_REFUSED");
     expect(never.calls.map((c) => c.to - c.from + 1n)).toEqual([400n, 200n, 100n, 50n]);
+  });
+});
+
+// Issue 2070: windows read concurrently, results in block order, a failed window still refuses.
+describe("walkConcurrent", () => {
+  const delayed = (logs: LogEntry[], fail?: (from: bigint) => unknown) => {
+    let inFlight = 0, peak = 0;
+    const calls: bigint[] = [];
+    const chain = {
+      getLogs: async (p: { fromBlock: bigint; toBlock: bigint }) => {
+        calls.push(p.fromBlock);
+        inFlight++; peak = Math.max(peak, inFlight);
+        // later windows answer first, so a naive push would come back out of order
+        await new Promise((r) => setTimeout(r, Number(20_000n - p.fromBlock) / 1000));
+        inFlight--;
+        const e = fail?.(p.fromBlock);
+        if (e) throw e;
+        return logs.filter((l) => l.blockNumber >= p.fromBlock && l.blockNumber <= p.toBlock);
+      },
+    } as unknown as ChainReader;
+    return { chain, calls, peak: () => peak };
+  };
+  const logs = Array.from({ length: 40 }, (_, i) => log(GRANTED, SAFE, BigInt(1000 + i * 250)));
+
+  test("bounded concurrency, every window once, results in block order", async () => {
+    const d = delayed(logs);
+    const out = await walkConcurrent(d.chain, { address: TL, topics: [GRANTED] }, 1000n, 10_999n, 1000, 0, 0, 4, () => {});
+    expect(out.map((l) => l.blockNumber)).toEqual(logs.map((l) => l.blockNumber));
+    expect(d.peak()).toBe(4);
+    expect(d.calls.length).toBe(10);
+  });
+
+  test("a window that fails after its retries rejects RPC_REFUSED, never a partial answer", async () => {
+    const d = delayed(logs, (f) => f === 5000n ? Object.assign(new Error("HTTP request failed"), { status: 429 }) : undefined);
+    await expect(walkConcurrent(d.chain, { address: TL, topics: [GRANTED] }, 1000n, 10_999n, 1000, 0, 1, 8, () => {})).rejects.toThrow(/RPC_REFUSED: getLogs 5000-5999/);
+    expect(d.calls.filter((x) => x === 5000n).length).toBe(2);
+  });
+
+  test("progress on stderr every 100 windows: blocks done out of the total", async () => {
+    const lines: string[] = [];
+    const chain = { getLogs: async () => [] } as unknown as ChainReader;
+    await walkConcurrent(chain, { address: TL, topics: [GRANTED] }, 0n, 249_999n, 1000, 0, 0, 8, (l) => lines.push(l));
+    expect(lines.length).toBe(3);
+    expect(lines.at(-1)).toContain("250000/250000 blocks (250/250 windows)");
   });
 });

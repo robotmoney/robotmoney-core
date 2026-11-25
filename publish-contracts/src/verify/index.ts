@@ -211,7 +211,7 @@ export async function verifyDeployment(opts: VerifyOptions): Promise<VerifyRepor
   // contracts, every event the scans name) and filters it in memory. The deployer's role scan has no address (it covers contracts no manifest names), so it scans on its own.
   const lchain = head === undefined || opts.sharedLogScan === false ? chain : withSharedLogScan(chain, {
     addresses: [...governed.map((g) => g.address), gateway, tl, ...(opts.adoptedContracts ?? [])].filter((a) => isAddress(a) && lc(a) !== lc(ZERO)),
-    topic0s: [...SCANNED_TOPIC0S, ...UPGRADE_TOPIC0S], fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs,
+    topic0s: [...SCANNED_TOPIC0S, ...UPGRADE_TOPIC0S], fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs, concurrency: opts.logConcurrency,
   });
   const created = creationProof(lchain, opts.fromBlock, opts.deployTxs, opts.adoptedContracts, head === undefined ? undefined : { head, chunk, retryBaseMs });
   if (head === undefined) {

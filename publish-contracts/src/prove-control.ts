@@ -51,6 +51,8 @@ export interface LogScanOpts {
   window?: bigint;
   /** Tries of one throttled eth_getLogs call (--logs-tries, default LOG_TRIES). */
   tries?: number;
+  /** Issue 2070, the verify stage only: eth_getLogs windows read at once (--logs-concurrency, default 8). */
+  concurrency?: number;
   /** First backoff in ms (default LOG_BACKOFF_MS). It doubles each try, capped at LOG_BACKOFF_MAX_MS. A Retry-After header in seconds wins, same cap. */
   backoffMs?: number;
   /** Test seam: no real sleeping in tests. */

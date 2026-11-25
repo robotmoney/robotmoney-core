@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Collector } from "./collector.ts";
 import { ERC1967_IMPLEMENTATION_SLOT, ERC1967_PROXY_ARTIFACT, compareCode, compareDeployedCode, loadArtifact, logicCode, tryLoadArtifact, verifyLinkedLibraries } from "./codehash.ts";
 import { ADMIN_ROLE, SAFE_141_FALLBACK_HANDLER, SAFE_FALLBACK_SLOT, SAFE_GUARD_SLOT, SAFE_SENTINEL, SIG_ROLE_GRANTED, Z32, ZERO } from "./constants.ts";
-import { scanLogs, topicToAddress } from "./logs.ts";
+import { scanLogs, topicToAddress, withSharedLogScan } from "./logs.ts";
 import { isAddress, lc } from "./manifests.ts";
 import { ERC1967_ADMIN_SLOT, ERC1967_BEACON_SLOT } from "./upgradeability.ts";
 import { manifestBase, scopeTable } from "../stage-table.ts";
@@ -57,7 +57,7 @@ export async function verifyExclusiveRole(
   at: Address,
   r: Hex,
   expected: readonly Address[],
-  opts: Pick<VerifyOptions, "fromBlock" | "logChunk" | "retryBaseMs" | "logTries" | "sheet">,
+  opts: Pick<VerifyOptions, "fromBlock" | "logChunk" | "retryBaseMs" | "logTries" | "logConcurrency" | "sheet">,
   scanCtx: RoleScanCtx = {},
   isFundAdmin = false,
 ): Promise<void> {
@@ -75,7 +75,7 @@ export async function verifyExclusiveRole(
     } catch (e) {
       if (isRpcFailure(e)) throw e;
       const head = scanCtx.head ?? (scanCtx.head = await chain.blockNumber());
-      const scan = { chunk: opts.logChunk ?? 1999, retryBaseMs: opts.retryBaseMs ?? 500, ...(opts.logTries !== undefined ? { maxRetries: Math.max(0, opts.logTries - 1) } : {}) };
+      const scan = { chunk: opts.logChunk ?? 1999, retryBaseMs: opts.retryBaseMs ?? 500, ...(opts.logTries !== undefined ? { maxRetries: Math.max(0, opts.logTries - 1) } : {}), ...(opts.logConcurrency !== undefined ? { concurrency: opts.logConcurrency } : {}) };
       if (twin) return await twinExclusive(chain, at, r, want, head, scan, scanCtx, isFundAdmin);
       const logs = await scanLogs(chain, { address: at, topics: [keccak256(toHex(SIG_ROLE_GRANTED)), r], fromBlock: opts.fromBlock, toBlock: head, ...scan });
       members = [];
@@ -279,13 +279,26 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
 
   // ---- the timelock, the Safe, and keeper smart account checks (DEP-03, E56)
   const scanCtx: RoleScanCtx = {};
+  // Issue 2070: every non-enumerable role check off the Twin reads one shared pass over [fromBlock, head]: per window ONE eth_getLogs for every checked contract
+  // and RoleGranted/RoleRevoked, filtered per check in memory. The pass runs only when the first check falls back to logs. The Twin scans from its fork pin on its own.
+  const rchain = sheet.chainId === TWIN_CHAIN_ID || opts.sharedLogScan === false ? chain : await (async () => {
+    const head = await chain.blockNumber().catch(() => undefined);
+    if (head === undefined) return chain;
+    scanCtx.head = head;
+    return withSharedLogScan(chain, {
+      addresses: [addr.timelock, addr.fund, addr.rebalancer, addr.governance, addr.queue, addr.receipt],
+      topic0s: [keccak256(toHex(SIG_ROLE_GRANTED)), keccak256(toHex(SIG_ROLE_REVOKED))], fromBlock: opts.fromBlock, toBlock: head,
+      chunk: opts.logChunk ?? 1999, retryBaseMs: opts.retryBaseMs ?? 500,
+      ...(opts.logTries !== undefined ? { maxRetries: Math.max(0, opts.logTries - 1) } : {}), ...(opts.logConcurrency !== undefined ? { concurrency: opts.logConcurrency } : {}),
+    });
+  })();
   await c.run("timelock: has code", async () => (await chain.getCode(addr.timelock)).length > 2);
   await c.runEq("timelock: getMinDelay() equals the sheet", async () => Number(await chain.read(addr.timelock, "function getMinDelay() view returns (uint256)")), sheet.timelockDelay);
-  await verifyExclusiveRole(c, chain, "timelock: PROPOSER_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.PROPOSER, [addr.safe], opts, scanCtx);
-  await verifyExclusiveRole(c, chain, "timelock: CANCELLER_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.CANCELLER, [addr.safe], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "timelock: PROPOSER_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.PROPOSER, [addr.safe], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "timelock: CANCELLER_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.CANCELLER, [addr.safe], opts, scanCtx);
   // Owner decision D4-10 (2026-11-13): the fund timelock's only executor is the Safe; the vaults system keeps ADR-0004's open executor.
   c.eq("fund-timelock: manifest executorPolicy is safe-only", tm.executorPolicy, "safe-only");
-  await verifyExclusiveRole(c, chain, "timelock: EXECUTOR_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.EXECUTOR, [addr.safe], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "timelock: EXECUTOR_ROLE held exclusively by the Safe", addr.timelock, FUND_ROLES.EXECUTOR, [addr.safe], opts, scanCtx);
   await c.runEq("timelock: EXECUTOR_ROLE not open (not held by address 0)", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, ZERO), false);
   await c.runEq("timelock: EXECUTOR_ROLE not held by the deployer", () => hasRole(chain, addr.timelock, FUND_ROLES.EXECUTOR, D), false);
   await c.runEq("timelock: PROPOSER_ROLE not held by the deployer", () => hasRole(chain, addr.timelock, FUND_ROLES.PROPOSER, D), false);
@@ -342,34 +355,34 @@ export async function verifyFundSystem(opts: VerifyOptions): Promise<VerifyRepor
   // ---- the handover: the timelock administers every contract exclusively, the deployer holds nothing
   const admins: [string, Address][] = [["fund", addr.fund], ["rebalancer", addr.rebalancer], ["governance", addr.governance], ["queue", addr.queue], ["receipt", addr.receipt]];
   for (const [n, at] of admins) {
-    await verifyExclusiveRole(c, chain, `${n}: ADMIN_ROLE held exclusively by the timelock`, at, ADMIN_ROLE, [addr.timelock], opts, scanCtx, n === "fund");
+    await verifyExclusiveRole(c, rchain, `${n}: ADMIN_ROLE held exclusively by the timelock`, at, ADMIN_ROLE, [addr.timelock], opts, scanCtx, n === "fund");
     await c.runEq(`${n}: ADMIN_ROLE not held by the deployer`, () => hasRole(chain, at, ADMIN_ROLE, D), false);
     await c.runEq(`${n}: DEFAULT_ADMIN not held by the deployer`, () => hasRole(chain, at, Z32, D), false);
   }
-  await verifyExclusiveRole(c, chain, "receipt: DEFAULT_ADMIN held exclusively by the timelock", addr.receipt, Z32, [addr.timelock], opts, scanCtx);
-  await verifyExclusiveRole(c, chain, "receipt: RECEIPT_RELEASER_ROLE held exclusively by governance", addr.receipt, FUND_ROLES.RELEASER, [addr.governance], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "receipt: DEFAULT_ADMIN held exclusively by the timelock", addr.receipt, Z32, [addr.timelock], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "receipt: RECEIPT_RELEASER_ROLE held exclusively by governance", addr.receipt, FUND_ROLES.RELEASER, [addr.governance], opts, scanCtx);
   if (f.receiptSubmitters !== undefined) {
-    await verifyExclusiveRole(c, chain, "receipt: RECEIPT_SUBMITTER_ROLE held exclusively by sheet submitters", addr.receipt, FUND_ROLES.SUBMITTER, f.receiptSubmitters, opts, scanCtx);
+    await verifyExclusiveRole(c, rchain, "receipt: RECEIPT_SUBMITTER_ROLE held exclusively by sheet submitters", addr.receipt, FUND_ROLES.SUBMITTER, f.receiptSubmitters, opts, scanCtx);
   } else {
     await c.runEq("receipt: RECEIPT_SUBMITTER_ROLE not held by the deployer", () => hasRole(chain, addr.receipt, FUND_ROLES.SUBMITTER, D), false);
     await c.runEq("receipt: RECEIPT_SUBMITTER_ROLE not held by the timelock", () => hasRole(chain, addr.receipt, FUND_ROLES.SUBMITTER, addr.timelock), false);
   }
   await c.runEq("receipt: ADMIN_ROLE not held by governance", () => hasRole(chain, addr.receipt, ADMIN_ROLE, addr.governance), false);
-  await verifyExclusiveRole(c, chain, "governance: TARGET_SETTER_ROLE held exclusively by the timelock", addr.governance, FUND_ROLES.TARGET_SETTER, [addr.timelock], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "governance: TARGET_SETTER_ROLE held exclusively by the timelock", addr.governance, FUND_ROLES.TARGET_SETTER, [addr.timelock], opts, scanCtx);
   await c.runEq("governance: TARGET_SETTER_ROLE not held by the deployer", () => hasRole(chain, addr.governance, FUND_ROLES.TARGET_SETTER, D), false);
   for (const [n, at] of [["fund", addr.fund], ["queue", addr.queue]] as [string, Address][]) {
-    await verifyExclusiveRole(c, chain, `${n}: EMERGENCY_ROLE held exclusively by the emergency key`, at, FUND_ROLES.EMERGENCY, [sheet.emergency], opts, scanCtx);
+    await verifyExclusiveRole(c, rchain, `${n}: EMERGENCY_ROLE held exclusively by the emergency key`, at, FUND_ROLES.EMERGENCY, [sheet.emergency], opts, scanCtx);
     await c.runEq(`${n}: EMERGENCY_ROLE not held by the deployer`, () => hasRole(chain, at, FUND_ROLES.EMERGENCY, D), false);
   }
   for (const [n, at] of [["queue", addr.queue], ["rebalancer", addr.rebalancer]] as [string, Address][]) {
-    await verifyExclusiveRole(c, chain, `${n}: KEEPER_ROLE held exclusively by the keeper`, at, FUND_ROLES.KEEPER, [f.keeper], opts, scanCtx);
+    await verifyExclusiveRole(c, rchain, `${n}: KEEPER_ROLE held exclusively by the keeper`, at, FUND_ROLES.KEEPER, [f.keeper], opts, scanCtx);
     await c.runEq(`${n}: KEEPER_ROLE not held by the deployer`, () => hasRole(chain, at, FUND_ROLES.KEEPER, D), false);
   }
 
   // ---- the one-time bindings (exclusive role membership)
-  await verifyExclusiveRole(c, chain, "fund: GOVERNANCE_ROLE held exclusively by governance", addr.fund, FUND_ROLES.GOVERNANCE, [addr.governance], opts, scanCtx);
-  await verifyExclusiveRole(c, chain, "fund: REBALANCER_ROLE held exclusively by the rebalancer", addr.fund, FUND_ROLES.REBALANCER, [addr.rebalancer], opts, scanCtx);
-  await verifyExclusiveRole(c, chain, "fund: FLOW_ROLE held exclusively by the queue", addr.fund, FUND_ROLES.FLOW, [addr.queue], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "fund: GOVERNANCE_ROLE held exclusively by governance", addr.fund, FUND_ROLES.GOVERNANCE, [addr.governance], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "fund: REBALANCER_ROLE held exclusively by the rebalancer", addr.fund, FUND_ROLES.REBALANCER, [addr.rebalancer], opts, scanCtx);
+  await verifyExclusiveRole(c, rchain, "fund: FLOW_ROLE held exclusively by the queue", addr.fund, FUND_ROLES.FLOW, [addr.queue], opts, scanCtx);
   await c.runEq("fund: flowQueue() is the queue", async () => lc((await chain.read(addr.fund, "function flowQueue() view returns (address)")) as string), lc(addr.queue));
   // v0.9.0 (contracts 588a68598): a fresh fund writes rebalancer() in bindRebalanceRoles; a fund upgraded in place from 0.8.0 writes it in migrateV090. Either way it is the Rebalancer proxy.
   await c.runEq("fund: rebalancer() is the rebalancer", async () => lc((await chain.read(addr.fund, "function rebalancer() view returns (address)")) as string), lc(addr.rebalancer));

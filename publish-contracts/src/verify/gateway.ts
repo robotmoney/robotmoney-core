@@ -116,7 +116,7 @@ export async function verifyGatewaySystem(opts: VerifyOptions): Promise<VerifyRe
     const to = opts.handoverBlock !== undefined && opts.handoverBlock < head ? opts.handoverBlock : head;
     // Issue 1977: the three gateway scans read one shared pass over [fromBlock, head] and filter it in memory.
     const lchain = opts.sharedLogScan === false ? chain : withSharedLogScan(chain, {
-      addresses: [gateway], topic0s: [SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED].map((s) => keccak256(toHex(s))), fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs,
+      addresses: [gateway], topic0s: [SIG_AGENT_AUTHORIZED, SIG_ROLE_GRANTED].map((s) => keccak256(toHex(s))), fromBlock: opts.fromBlock, toBlock: head, chunk, retryBaseMs, concurrency: opts.logConcurrency,
     });
     const scan = { address: gateway, fromBlock: opts.fromBlock, toBlock: to, chunk, retryBaseMs };
     await c.run(GATEWAY_AGENT_LABELS[0], async () => {

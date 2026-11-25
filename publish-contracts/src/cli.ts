@@ -187,6 +187,8 @@ export const USAGE = `publish contracts
   --check-sources    verify: also check explorer source verification (Blockscout, Sourcify); publishing, not a gate, so off by default
   --logs-tries N     prove-control --resume and the verify stage: tries of one throttled eth_getLogs call (HTTP 429, JSON-RPC -32011 or -32005), with
                      exponential backoff (default 6 for prove-control, 7 for verify)
+  --logs-concurrency N  the verify stage: eth_getLogs windows read at once (default 8). Each window keeps its own backoff, retries and range-limit
+                     shrink; results join in block order; a window that still fails refuses the scan (RPC_REFUSED). Long scans print progress to stderr.
   --owner-signer S   prove-control and govern: a Safe owner signer spec (repeat for each owner: prove-control needs EVERY owner, govern the threshold). On chain 918453 with none given: the SAFE_OWNER_A/B/C keystores
                      beside the DEPLOYER keystore, under the same passphrase file (the rehearsal key layout). Never on 8453: there every owner is named, as keystore:PATH (passphrase typed at the hidden
                      prompt) or a device bound to its owner, ledger:PATH@0xOWNER / trezor:PATH@0xOWNER. Hardware is optional, never required. A run on 8453 that reaches prove-control with fewer
@@ -301,7 +303,7 @@ export function parseCli(argv: string[]): Parsed {
         chain: { type: "string" }, "chain-id": { type: "string" }, rpc: { type: "string" }, sheet: { type: "string" }, signer: { type: "string" },
         environment: { type: "string" }, "core-sha": { type: "string" }, "deploy-sha": { type: "string" }, stage: { type: "string" }, row: { type: "string" },
         resume: { type: "boolean" }, "dry-run": { type: "boolean" }, "core-dir": { type: "string" }, evidence: { type: "string" }, "counts-dir": { type: "string" }, "counts-require-origin-dev": { type: "boolean" }, system: { type: "string" },
-        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, contract: { type: "string" }, migration: { type: "string" }, help: { type: "boolean" },
+        measure: { type: "boolean" }, "owner-signer": { type: "string", multiple: true }, "emergency-signer": { type: "string" }, "compare-sheet": { type: "string" }, "max-wait": { type: "string" }, "no-warp": { type: "boolean" }, "call-label": { type: "string" }, "call-target": { type: "string" }, "call-data": { type: "string" }, "receipt-id": { type: "string" }, "admin-arg": { type: "string", multiple: true }, payload: { type: "string" }, submitter: { type: "string" }, "payload-digest": { type: "string" }, "payload-uri": { type: "string" }, vault: { type: "string" }, "prior-out": { type: "string" }, "logs-rpc": { type: "string" }, "check-sources": { type: "boolean" }, "logs-window": { type: "string" }, "logs-tries": { type: "string" }, "logs-concurrency": { type: "string" }, proxy: { type: "string" }, implementation: { type: "string" }, "upgrade-build": { type: "string" }, contract: { type: "string" }, migration: { type: "string" }, help: { type: "boolean" },
       },
     }));
   } catch (e) { throw new PublishError("USAGE", `${(e as Error).message}\n${USAGE}`); }
@@ -424,7 +426,7 @@ export function parseCli(argv: string[]): Parsed {
   if (stage !== "plan") need("signer", v.signer); // for record-receipt it is the submitter
   if (!/^https?:\/\//.test(v.rpc as string)) throw new PublishError("USAGE", "--rpc must be an http(s) URL");
   let logs: LogScanOpts | undefined;
-  if (v["logs-rpc"] !== undefined || v["logs-window"] !== undefined || v["logs-tries"] !== undefined) {
+  if (v["logs-rpc"] !== undefined || v["logs-window"] !== undefined || v["logs-tries"] !== undefined || v["logs-concurrency"] !== undefined) {
     const count = (n: string): number | undefined => {
       const x = v[n] as string | undefined;
       if (x === undefined) return undefined;
@@ -434,7 +436,7 @@ export function parseCli(argv: string[]): Parsed {
     const logsRpc = v["logs-rpc"] as string | undefined;
     if (logsRpc !== undefined && !/^https?:\/\//.test(logsRpc)) throw new PublishError("USAGE", "--logs-rpc must be an http(s) URL");
     const window = count("logs-window");
-    logs = { logsRpc, window: window === undefined ? undefined : BigInt(window), tries: count("logs-tries") };
+    logs = { logsRpc, window: window === undefined ? undefined : BigInt(window), tries: count("logs-tries"), concurrency: count("logs-concurrency") };
   }
   return {
     system: system as SystemName, chain: Number(chainRaw), rpc: v.rpc as string, sheet: v.sheet as string, signer: v.signer as string | undefined, environment: (v.environment as string | undefined) ?? "local",

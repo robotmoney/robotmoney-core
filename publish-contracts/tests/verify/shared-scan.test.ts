@@ -262,7 +262,8 @@ describe("an address list longer than the RPC allows is read in groups (issue 19
     const s = withSharedLogScan(c, { addresses: addrs, topic0s: [keccak256(toHex(SIG_ROLE_GRANTED))], fromBlock: 0n, toBlock: 4_999n, chunk: 2_000, retryBaseMs: 0 });
     await perAddress(c, s, addrs);
     const shared = c.logFilters.filter((x) => Array.isArray(x.address));
-    expect(shared.map((x) => (x.address as string[]).length)).toEqual([10, 10, 3, 10, 10, 3, 10, 10, 3]);
+    // issue 2070: windows after the first are read concurrently, so the groups of different windows interleave
+    expect(shared.map((x) => (x.address as string[]).length).sort((p, q) => p - q)).toEqual([3, 3, 3, 10, 10, 10, 10, 10, 10]);
   });
   test("\"A maximum of 4 addresses is allowed\" shrinks the group and the scan completes with the same logs", async () => {
     expect(addressLimit(new Error("A maximum of 10 addresses is allowed. No limit on a dedicated node"))).toBe(10);

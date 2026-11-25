@@ -249,6 +249,8 @@ export interface VerifyOptions {
   retryBaseMs?: number;
   /** Issue 2044: tries of one throttled eth_getLogs call (--logs-tries). Absent: the scan's default (7 tries). */
   logTries?: number;
+  /** Issue 2070: eth_getLogs windows read at once (--logs-concurrency). Absent: the scan's default (8). */
+  logConcurrency?: number;
 }
 
 /** Issue 1851: what the creation proof of the log scans reads from one deploy transaction's receipt. */
