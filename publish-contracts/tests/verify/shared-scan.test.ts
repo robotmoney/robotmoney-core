@@ -275,9 +275,9 @@ describe("an address list longer than the RPC allows is read in groups (issue 19
   });
   test("an error whose request body holds \"429\" by chance is not a rate limit: one call, then RPC_REFUSED", async () => {
     const c = new FakeChain();
-    c.getLogs = async (p) => { c.logFilters.push(p); throw new Error('The request took too long to respond.\n\nURL: http://127.0.0.1:18997/\nRequest body: {"address":["0x5841723442960000000000000000000000000000"]}'); };
+    c.getLogs = async (p) => { c.logFilters.push(p); throw new Error('header not found\n\nURL: http://127.0.0.1:18997/\nRequest body: {"address":["0x5841723442960000000000000000000000000000"]}'); };
     const s = withSharedLogScan(c, { addresses: [addr(0xa)], topic0s: [txOf(1)], fromBlock: 0n, toBlock: 10n, chunk: 100, retryBaseMs: 0 });
-    await expect(scanLogs(s, { address: addr(0xa), topics: [txOf(1)], fromBlock: 0n, toBlock: 10n, chunk: 100, retryBaseMs: 0 })).rejects.toThrow(/^RPC_REFUSED: getLogs 0-10 failed: The request took too long to respond\.$/);
+    await expect(scanLogs(s, { address: addr(0xa), topics: [txOf(1)], fromBlock: 0n, toBlock: 10n, chunk: 100, retryBaseMs: 0 })).rejects.toThrow(/^RPC_REFUSED: getLogs 0-10 failed: header not found$/);
     expect(c.logFilters).toHaveLength(1);
   });
 });
