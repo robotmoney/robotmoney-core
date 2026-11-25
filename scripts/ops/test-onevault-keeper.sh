@@ -336,7 +336,9 @@ check "a backoff skip logs, raises no alert, and exits 0" \
     'grep -q "in backoff until" "$WORK/backoff.err" && ! grep -q "\"alert\"" "$WORK/backoff.err" && [[ "$RC" == "0" ]]'
 
 # Case D: the router opens and the backoff ends. The due stepDelisted is sent through KeeperAccount.execute, and the
-# asset leaves sale.
+# asset leaves sale. The plan from the step case is closed first. Otherwise the warp past the backoff can also make a
+# plan step due, and a step() sent in the same tick leaves the asset in sale (issue 2045).
+send_from "$DEPLOYER" "$FUND" "closePlan()"
 send_from "$DEPLOYER" "$BASKET_ROUTER" "setClosed(bool)" false
 check "the router is open before the due case" '[[ "$(cast call "$BASKET_ROUTER" "closed()(bool)" --rpc-url "$RPC_URL" | awk '"'"'{print $1}'"'"')" == "false" ]]'
 # Warp anvil by the exact delta between the chain time and the backoff the keeper reads. evm_increaseTime plus evm_mine
@@ -348,6 +350,7 @@ refresh_feeds
 RC=$(run_keeper_once "$WORK/delistok.err")
 check "a due stepDelisted is sent through KeeperAccount.execute and the asset leaves sale" \
     'grep -q "sent stepDelisted(uint256) to" "$WORK/delistok.err" && [[ "$RC" == "0" && "$(in_sale)" == "false" ]]'
+check "with the plan closed the delist tick sends no step()" '! grep -q "sent step()" "$WORK/delistok.err"'
 
 # ─── Concluded: a plan past its end is only recorded by a step() call (safety review 0.9.0, MISSED-07) ───────────────
 # A fresh one-day plan on the lending asset (the basket asset left the fund in the sale above). Nine days on it is past
